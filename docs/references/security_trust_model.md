@@ -52,12 +52,16 @@ daemons separately).
 ### Two-process split
 
 <!-- src: safety_reports/weekly_send.py:1-12 | verified 2026-07-14 -->
-Every workstream that can produce customer-facing output is split into a **generation
-script** (which may call the Anthropic API but has zero send capability) and a
-**send script** (which transmits but has zero AI capability). For Safety Reports the
-pair is `weekly_generate.py` (compile) and `weekly_send.py` (transmit); Purchase
+Every workstream that can produce output for **any external recipient — a customer,
+vendor, or subcontractor** (Foundation Mission v11 Invariant 1) — is split into a
+**generation script** (which may call the Anthropic API but has zero send capability)
+and a **send script** (which transmits but has zero AI capability). For Safety Reports
+the pair is `weekly_generate.py` (compile) and `weekly_send.py` (transmit); Purchase
 Orders mirror it with `po_generate.py` / `po_send.py`; Progress Reporting with
-`progress_weekly_generate.py` / `progress_send.py`. The split is the structural
+`progress_weekly_generate.py` / `progress_send.py`; Subcontracts with
+`subcontract_generate.py` / `subcontract_send.py`; and the RFQ lane with
+`rfq_generate.py` / `rfq_send.py` — the last two transmit to subcontractors and
+vendors respectively, which the older "customer-facing" phrasing excluded. The split is the structural
 reason a prompt injection cannot cause a send: the transmitter is a different OS
 process that never imported the model.
 

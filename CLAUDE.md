@@ -81,9 +81,12 @@ These are non-negotiable. Every workstream inherits both.
 No external transmission without explicit human approval. **Permanent, not time-bounded.**
 Earlier framing in Op Stds v4 that described review as a 30–60 day window is superseded.
 
-- Every workstream that produces customer-facing output uses a `<Workstream>_Pending_Review`
-  Smartsheet sheet with `Approved for Send` / `Approved By` / `Approved At` / `Sent At` /
-  `Send Status` columns.
+- Every workstream that produces output destined for **any external recipient — a customer,
+  vendor, or subcontractor** — uses a `<Workstream>_Pending_Review` Smartsheet sheet with
+  `Approved for Send` / `Approved By` / `Approved At` / `Sent At` / `Send Status` columns.
+  (Foundation Mission v11 wording. The earlier "customer-facing" phrasing under-scoped the
+  gate: `po_send` and `rfq_send` transmit to **vendors**, `subcontract_send` to
+  **subcontractors** — all three are in scope.)
 - **Two-process model.** Generation scripts (which call the Anthropic API) have zero send
   capability. Send scripts (which transmit) have zero AI step. Successful prompt injection at
   the AI layer cannot cause external transmission — the AI is in a different process from the
