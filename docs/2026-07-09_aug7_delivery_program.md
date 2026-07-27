@@ -249,7 +249,9 @@ dictionary (1.25d) → D2-3 Box publish (0.5d).
   `scheduled_send_local`, Box user, publish_daemon watchdog slug, meta-002 SLA doc).
 - **Aug-7 runbook** (`docs/operations/aug7_delivery_runbook.md`): MAINTENANCE + Healthchecks.io
   window transport; on-site install gates (network → Tailscale reverse-access over hotspot →
-  15 daemons healthy → verify_cutover re-run); 40-min demo arc (field submit → **PO built
+  the must-load daemon set healthy (VC-02 derives it: shipped plists minus
+  `DARK_UNLOADED_LABELS` — 18 of 20 at last count; don't hardcode) → verify_cutover re-run);
+  40-min demo arc (field submit → **PO built
   live** → F22 approval → send lands in supplier-stand-in inbox → dashboard tour → manuals
   handoff; pre-empt the Friday 14:00 cycle with Compile Now, rehearsed); 60-min training (PM
   track + owner Step-8 drills demonstrated BY them); acceptance sign-off with v10 amendment

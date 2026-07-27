@@ -58,12 +58,24 @@ portal-poll, po-poll, fieldops-sync, …) **loads but is runtime-gated dark**: g
 daemons transmit nothing, so loaded-but-gated is fine for them; only the SEND daemon is held
 unloaded.
 
-**Code.** VC-02 encodes this with `DARK_UNLOADED_LABELS = {org.solutionsmith.its.po-send}`:
-`_expected_labels()` returns shipped-minus-dark-unloaded (14), and the check **FAILS if a
-dark-unloaded send daemon IS loaded** — a send daemon live at cutover is a distinct, named
-send-gate violation, not a plain orphan. First-enabling PO send = remove `po-send` from
+**Code.** VC-02 encodes this with `DARK_UNLOADED_LABELS`, which now holds **two** labels —
+`org.solutionsmith.its.po-send` **and** `org.solutionsmith.its.rfq-send` (RFQ send joined at
+ADR-0004 R3). `_expected_labels()` returns shipped-minus-dark-unloaded — **derive it, don't
+hardcode it** (18 of the 20 shipped plists at last count) — and the check **FAILS if a
+dark-unloaded send daemon IS loaded**: a send daemon live at cutover is a distinct, named
+send-gate violation, not a plain orphan. First-enabling a send lane = remove its label from
 `DARK_UNLOADED_LABELS` + load its plist + enroll its `polling_enabled` — a FIXED high-class
-External-Send-Gate decision (Seth). A future `subcontract-send` joins `DARK_UNLOADED_LABELS`.
+External-Send-Gate decision (Seth).
+
+> **Do not confuse the two label sets.** `DARK_UNLOADED_LABELS`
+> (`scripts/verify_cutover.py`) is the **2** send daemons VC-02 requires to stay UNLOADED.
+> `SEND_DISPATCH_LABELS` (`scripts/migrations/standup.py`) is all **5** send dispatchers —
+> po-send, rfq-send, subcontract-send, weekly-send, progress-send — which `standup.py finish
+> --posture dark` leaves unloaded. They are not the same set, and the difference is exactly
+> the three ESTABLISHED lanes (`weekly-send`, `progress-send`, `subcontract-send`) that VC-02
+> expects LOADED. **`subcontract-send` is deliberately NOT in `DARK_UNLOADED_LABELS`** — it
+> shipped as a must-load established lane at SC-S4 (2026-07-15), so the earlier prediction
+> that it would "join `DARK_UNLOADED_LABELS`" did not happen.
 
 **Why the alternative over loaded-but-dark.** It matches the daemon's actual dev-box state
 (`po-send` was already the one unloaded plist), and a send daemon that isn't loaded *cannot*

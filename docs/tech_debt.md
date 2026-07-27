@@ -358,11 +358,10 @@ CRITICAL storm on every cycle until the deploy catches up. Root-caused this sess
   in fact be live on the mirror, or the flip was premature; (2) whether the console's activation tier for
   this class of gate should be `elevated_confirm` (PIN + typed confirm + attestation) rather than the
   faster-brake "A" tier, given `apply_elevated_edit` can already complete a false→true send-gate flip
-  today. Also stale from the same finding: `CLAUDE.md` lines ~148/249 still say "16 tracked jobs" —
-  `TRACKED_JOBS` grew to 18 in PR #642 (`config_actuator` + `publish_daemon` markers) and neither
-  CLAUDE.md line was updated in that PR — a small docs-currency fix, unrelated in cause but adjacent in
-  kind to the rfq_send staleness above (CLAUDE.md's own "What's stubbed vs. real" table is not one of
-  this agent's living-doc surfaces, so left for a normal PR rather than edited here). Trigger: next
+  ~~Also stale from the same finding: `CLAUDE.md` lines ~148/249 still say "16 tracked jobs"~~ —
+  **RESOLVED 2026-07-26 (documentation-consolidation pass):** both CLAUDE.md surfaces now read
+  **18 tracked jobs**, matching `watchdog.TRACKED_JOBS` (verified: 18 entries). The rest of this
+  entry — the `rfq_send` activation-posture questions — remains OPEN and is unaffected. Trigger: next
   operator RFQ-send go-live/activation-posture session. See blueprint memory-archive §G72.2.
 
 - **[OPEN 2026-07-21, low, Seth-owned] `config_actuator` reads `safety_reports.portal.worker_base_url`
