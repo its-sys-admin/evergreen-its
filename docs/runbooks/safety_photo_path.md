@@ -269,7 +269,7 @@ detail. (A single transient Graph blip self-heals on the next retry — only a
    item photos (`safety_reports.portal_poll`, every ~60 s). Check the
    **ITS_Daemon_Health** row for `safety_reports.portal_poll` — a stale
    `Last Run` / ERROR status means the daemon (or the whole Mac) is down, and the
-   watchdog / UptimeRobot pages will already be firing. Fix the daemon (the
+   watchdog / Healthchecks.io alerts will already be firing. Fix the daemon (the
    standard "re-run a daemon" Tier-2 repair) and the backlog drains itself on the
    next cycles — no photo action needed.
 2. **Are submissions filing but photos NOT?** If submissions flow fine, look in

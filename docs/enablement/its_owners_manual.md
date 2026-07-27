@@ -112,8 +112,10 @@ tiers, and knowing which tier you're in tells you what to do:
 
 1. **It fixes itself.** A worker that crashes is simply re-run on its next scheduled wake-up. The
    **watchdog** notices a worker that has gone quiet, a review item that's been sitting too long,
-   or an unresolved critical error, and raises a flag. An external service (UptimeRobot) watches
-   the whole Mac, so even "the office computer died" gets noticed. *You do nothing.*
+   or an unresolved critical error, and raises a flag. An external service (Healthchecks.io) is
+   set up to watch the whole Mac, so even "the office computer died" gets noticed — **this last
+   piece is not switched on yet**, so right now a total computer failure would not raise an
+   outside alarm. *You do nothing.*
 2. **The operator fixes it.** For a **known, low-risk** problem — re-run a worker, flip a
    documented setting, re-send an approval, clear a stuck lock — the trained operator follows the
    matching runbook (`docs/runbooks/`) and resolves it. *No code, no passwords.*

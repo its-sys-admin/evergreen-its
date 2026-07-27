@@ -46,7 +46,7 @@ capability class, not by severity. The three tiers are:
 
 | Tier | Owner | What happens | Human action |
 |------|-------|--------------|--------------|
-| **Tier 1 — self-heal** | The daemons + watchdog | Interval daemons recover on their own via launchd re-invocation; watchdog **Check C** catches a stale daemon; the external UptimeRobot ping is the dead-man's switch for total-host death | **None** |
+| **Tier 1 — self-heal** | The daemons + watchdog | Interval daemons recover on their own via launchd re-invocation; watchdog **Check C** catches a stale daemon; the external **Healthchecks.io** ping is the intended dead-man's switch for total-host death — **not armed yet**, so total-host death is currently silent | **None** (until the beacon is armed — see below) |
 | **Tier 2 — Claude-assisted repair** | The **Successor-Operator** | A trained operator runs Claude Code, follows the matching `§43` runbook, and performs a **low-capability-class** repair | Operator acts, with Claude driving from the runbook |
 | **Tier 3 — escalate** | The **Developer-Operator (Seth)** | The fault is novel or high-class; it is handed up to the developer of record | Escalate + co-resolve |
 
@@ -54,8 +54,11 @@ capability class, not by severity. The three tiers are:
 **Tier 1 (self-heal)** is the default and covers the vast majority of transient faults. Interval
 daemons are one-shot-per-`StartInterval` under launchd, so a crashed cycle is simply re-invoked on
 the next interval. Watchdog **Check C** enforces a marker-file staleness floor across all tracked
-jobs (`TRACKED_JOBS`), and the external UptimeRobot heartbeat is the dead-man's switch that fires if
-the whole host dies (the watchdog cannot alert about its own death). No human acts at Tier 1.
+jobs (`TRACKED_JOBS`), and the external **Healthchecks.io** heartbeat is the intended dead-man's
+switch for whole-host death (the watchdog cannot alert about its own death). **That beacon is not
+armed** — `scripts/watchdog.py` skips the ping while `system.heartbeat_url` holds its seed
+placeholder, so today a total-host death produces no external alert at all. Arming it is a config
+change (VC-09 requires an https URL). No human acts at Tier 1.
 
 <!-- src: CLAUDE.md:152-155 (Tier 2 Successor-Operator scope) | verified 2026-07-14 -->
 **Tier 2 (Claude-assisted repair)** is owned by the **Successor-Operator** — a *trained* operator

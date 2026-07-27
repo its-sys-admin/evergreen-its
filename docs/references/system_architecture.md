@@ -430,9 +430,11 @@ capability and no network egress.
   D1 error during login propagates and login fails closed (500). Session
   validity is cookie-derived — there is no server-side session revocation.
 - **The Mac plane is a single host (SPOF).** Every daemon runs one MacBook. If
-  the host dies, an external UptimeRobot ping (the dead-man's switch) and the
-  watchdog's staleness checks are what surface it — ITS cannot alert about its
-  own total-host death from the same host.
+  the host dies, an external **Healthchecks.io** ping (the dead-man's switch) and
+  the watchdog's staleness checks are what surface it — ITS cannot alert about its
+  own total-host death from the same host. **The ping is not armed yet**
+  (`system.heartbeat_url` still holds its seed placeholder, and the watchdog skips
+  the ping while it does), so the SPOF is currently undetected from outside.
 <!-- src: shared/box_client.py:31-36 | verified 2026-07-14 -->
 - **Box refresh-token expiry window.** If ITS goes dark for more than ~60 days,
   the Box refresh token expires and the operator must re-run

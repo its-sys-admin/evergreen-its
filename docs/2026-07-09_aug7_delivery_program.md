@@ -39,7 +39,7 @@ ROADMAP Track 5 points here; the operator-approved plan of record it was landed 
 | 1 | Triple-fire CRITICAL fired-and-triaged | LIKELY MET — compile the evidence record (e.g. 2026-07-05 Task-column KeyError); don't re-fire |
 | 2 | Phase-1.4 hardening | Picklist + trusted-contacts delivered; photo screening live; residue = ClamAV enablement + EICAR verify |
 | 3 | Teala-coordinated real-recipient wiring | OPEN — external dependency, fire request Day 1 |
-| 4 | Tier-1 self-heal complete | MET (Check C all daemons, Check I, F16 UptimeRobot) |
+| 4 | Tier-1 self-heal complete | **PARTIAL** — Check C (all tracked daemons) and Check I are complete and live. The F16 external beacon is **NOT** complete: the vendor is Healthchecks.io (`shared/heartbeat_client.py`), and the ping is skipped while `system.heartbeat_url` holds its seed placeholder, so total-host death has never been externally detectable on any host. Arming it is a config change (VC-09 requires https). |
 | 5 | Tier-2 operator trained | DELIBERATELY SOFTENED → post-delivery milestone (handover v10 amendment, D17) |
 
 - Also verified: `worker/auth.ts` is **bcryptjs cost-10, not PBKDF2** — mitigation of record is
@@ -232,7 +232,7 @@ dictionary (1.25d) → D2-3 Box publish (0.5d).
   re-seed argv-form EXCEPT Box, plists installed UNLOADED, read-only smokes); Phase B one-way
   flip Jul 13 (~30-min ordered window — dev box unload + plist REMOVAL + `launchctl list`
   empty → copy `state/` + markers → Box re-seed ONLY on new host → load 11 → verification
-  gates incl. UptimeRobot prove-it-bites); Phase C burn-in Jul 14→Aug 3 (Friday cycles Jul
+  gates incl. the Healthchecks.io prove-it-bites); Phase C burn-in Jul 14→Aug 3 (Friday cycles Jul
   17/24; Jul 25–30 gap = unattended Tier-1 trial; Jul 31 go/no-go).
 - **Tenant cutover** (Aug 3; artifacts: `cutover_checklist.md` v2 + `scripts/verify_cutover.py`
   + `docs/operations/production_rollback.md`): M365 flip (app registration, EXO
@@ -247,7 +247,7 @@ dictionary (1.25d) → D2-3 Box publish (0.5d).
 - **Hardening gate** (~1d): Paid-plan confirm (else PBKDF2 swap first), WAF rules, ClamAV +
   EICAR bites, verify-only items, cutover-blocking debt only (its#460 mailboxes, D1 hygiene,
   `scheduled_send_local`, Box user, publish_daemon watchdog slug, meta-002 SLA doc).
-- **Aug-7 runbook** (`docs/operations/aug7_delivery_runbook.md`): MAINTENANCE + UptimeRobot
+- **Aug-7 runbook** (`docs/operations/aug7_delivery_runbook.md`): MAINTENANCE + Healthchecks.io
   window transport; on-site install gates (network → Tailscale reverse-access over hotspot →
   15 daemons healthy → verify_cutover re-run); 40-min demo arc (field submit → **PO built
   live** → F22 approval → send lands in supplier-stand-in inbox → dashboard tour → manuals

@@ -42,7 +42,7 @@ Related audiences overlap: the operator reads all three; an end-user rarely leav
 | [system_architecture.md](system_architecture.md) | operator | The whole machine — portal plane, Mac daemon plane, the two-process Send Gate, the data doctrine, Tailscale, trust boundaries. Start here. |
 | [daemon_reference.md](daemon_reference.md) | operator | Every background daemon: purpose, interval, source-of-work, config gate, heartbeat, log path, failure modes, restart. |
 | [data_model_reference.md](data_model_reference.md) | operator | Every Smartsheet sheet, every D1 table, the Box folder topology, and the platform caps (cells/columns/rate). |
-| [integration_reference.md](integration_reference.md) | operator | Each external system (Graph, Box, Smartsheet, Resend, Sentry, Tailscale, UptimeRobot, Cloudflare): auth, config keys, constraints, failure signatures. |
+| [integration_reference.md](integration_reference.md) | operator | Each external system (Graph, Box, Smartsheet, Resend, Sentry, Tailscale, Healthchecks.io, Cloudflare): auth, config keys, constraints, failure signatures. |
 | [security_trust_model.md](security_trust_model.md) | operator | The Send Gate, the six-layer adversarial-input defense, capability gating, the secrets model, and dashboard auth tiers — operator-facing. |
 | [escalation_matrix.md](escalation_matrix.md) | operator / successor | The three-tier maintenance model, the both-rule, the four fixed escalate-to-Seth categories, and a symptom→class quick table. |
 | [glossary.md](glossary.md) | all | The controlled vocabulary — HELD states, F22, §-numbers, gate/breaker/heartbeat terms, workstream tags. |

@@ -44,7 +44,7 @@ leave-behind package.
 1. **Enter MAINTENANCE** — ITS_Config `system.state [global]` → `MAINTENANCE`
    (alerts suppressed-but-recorded; watchdog Check G defers summaries).
    Verify: `python -c "from shared import smartsheet_client as s; print(s.get_setting('system.state', workstream='global'))"` → `MAINTENANCE`.
-2. **UptimeRobot maintenance window** covering transport (dashboard →
+2. **Healthchecks.io maintenance window** covering transport (dashboard →
    monitor → Maintenance Windows) so the dead-man ping doesn't page during
    the drive. Verify: window shows scheduled/active on the monitor.
 3. **Graceful shutdown:** wait for the current portal_poll cycle to complete
@@ -61,7 +61,7 @@ leave-behind package.
 | 2 | Network up — creds obtained BEFORE today; outbound 443 suffices (no inbound holes, no public SSH — Tailscale only) | `curl -sI https://api.smartsheet.com | head -1` returns a response |
 | 3 | Boot + login (FileVault posture per `host_migration_runbook.md` A1 — login unlocks the keychain; LaunchAgents start) | `launchctl list \| grep -c solutionsmith` → 14 (po-send stays unloaded — send-gate) |
 | 4 | Tailscale reverse-access from Seth's laptop **over the hotspot** (proves Tier-3 access survives Evergreen's NAT) | SSH session opens |
-| 5 | Clear MAINTENANCE → `system.state` → `ACTIVE`; close the UptimeRobot window | config read-back → `ACTIVE`; monitor green |
+| 5 | Clear MAINTENANCE → `system.state` → `ACTIVE`; close the Healthchecks.io window | config read-back → `ACTIVE`; monitor green |
 | 6 | **`verify_cutover` re-run on-site** | `python -m scripts.verify_cutover` exits 0 — paste output in the session log |
 | 7 | Fresh Check-C markers post-boot | `ls -l ~/its/.watchdog/*.last_run` — mtimes advancing on the interval jobs within ~2 cycles |
 

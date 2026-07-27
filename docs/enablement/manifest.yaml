@@ -80,7 +80,7 @@ docs:
     title: "The ITS Owner's Manual"
     version: v1
     source: docs/enablement/its_owners_manual.md
-    sha256: 49563264ca6e42e9ab51d12b3bbf516387b219c23b520b6222bb7998946f2054
+    sha256: 6e098235e076622f2f80bdd2d2e4d839404461d62386f6be9fde5b205113cf51
 
   - key: safety_reports_guide
     title: "Safety Reports — Submit, Review, Weekly Packet"
@@ -125,14 +125,14 @@ docs:
     title: "ITS System Architecture"
     version: v1
     source: docs/references/system_architecture.md
-    sha256: 932c5c774504916ab83254bc779d535d9a9c9441ff95e2b967e2eb3be94d485c
+    sha256: 4015eb2c7d90c957dd04e2a2bfafeb9069a235ad1eb1a3f95e4bd4bc873efc18
     audience: operator
 
   - key: daemon_reference
     title: "ITS Daemon Reference"
     version: v1
     source: docs/references/daemon_reference.md
-    sha256: 640173c6180c34c7cc7f4521213b9dab7671cc70c8eb4c8abe2793296767d37c
+    sha256: a5211e1a670620b95dee085695d803869eded65a1f2ef94189945db13e80d530
     audience: operator
 
   - key: data_model_reference
@@ -146,7 +146,7 @@ docs:
     title: "ITS Integration Reference"
     version: v1
     source: docs/references/integration_reference.md
-    sha256: 60bebee330c9b73606b7065d486dfacd2b5ddaf607b17c7a0ac567135e6e2b9b
+    sha256: fa7feef1dfc16b16ac7e60c3a1c6f3d4e33d12ee6c71fd6171877f7704e86e93
     audience: operator
 
   - key: security_trust_model
@@ -160,7 +160,7 @@ docs:
     title: "ITS Escalation Matrix"
     version: v1
     source: docs/references/escalation_matrix.md
-    sha256: d74e1c5aabb108c7f11485db78e70dd091300e496c4905c97109ad5b5d246037
+    sha256: 3640557367df6e46c270fefa48ef77afa03cf02e3a5a9afaa3b7ef215447f704
     audience: "operator / successor-operator"
 
   - key: glossary
@@ -174,7 +174,7 @@ docs:
     title: "ITS Documentation Index"
     version: v1
     source: docs/references/documentation_index.md
-    sha256: 643090b3dd1c376727864418fcafc3c55f8db35dc17c592537fbc71c3faf212a
+    sha256: 062ae8162af46c31f432272657e2eac32287a5c0d6a78d49e818106d80681bc7
     audience: all
 
   # ── Troubleshooting guide (documentation-corpus, Tranche B). GENERATED from

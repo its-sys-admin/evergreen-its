@@ -122,7 +122,7 @@ wipe; rebuild on demand via the rehearsal-proven stand-up tooling
 
 `system.operator_email` repoints to `its@evergreenrenewables.com` as a staged
 repoint value (`production_repoint.py` sweep). Escalation ROUTING (Resend /
-Sentry / UptimeRobot destinations) stays Seth through the Day-7 gate — CL-32
+Sentry / Healthchecks.io destinations) stays Seth through the Day-7 gate — CL-32
 is unchanged by this decision.
 
 ## Execution plan pointer (parallel tracks A–F)

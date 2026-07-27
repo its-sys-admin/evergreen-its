@@ -76,7 +76,7 @@ to the production custom domain.
 | Setting | Workstream | from | to | In VC-03? |
 |---|---|---|---|---|
 | `system.operator_email` | `global` | `seths@evergreenmirror.com` | `its@evergreenrenewables.com` (operator alert recipient) | ⬜ (candidate — see below) |
-| `system.heartbeat_url` | `global` | UptimeRobot placeholder | real UptimeRobot ping URL | ✅ (VC-09, shape only) |
+| `system.heartbeat_url` | `global` | seed placeholder (`PLACEHOLDER_uptimerobot_heartbeat_url`) | real Healthchecks.io ping URL | ✅ (VC-09, shape only) |
 
 ### D. Box root folder IDs (numeric — repoint to production folder IDs, CL-17)
 

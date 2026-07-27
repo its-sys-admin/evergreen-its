@@ -89,7 +89,7 @@ memory fences), an on-demand compile has **no timeout**. A genuinely hung compil
 indefinitely; the fix is a **manual process kill** (Tier-3), not a re-run.
 
 **Check (read-only).** (1) Is `Last Cycle At` advancing at all, or frozen? (2) Are OTHER daemons'
-`ITS_Daemon_Health` rows also stale (→ host-level problem, see the watchdog/UptimeRobot path) or is
+`ITS_Daemon_Health` rows also stale (→ host-level problem, see the watchdog/Healthchecks.io path) or is
 only this one frozen? (3) Watchdog Check-C should already have WARNed on the stale
 `safety_compile_now_poll` marker.
 

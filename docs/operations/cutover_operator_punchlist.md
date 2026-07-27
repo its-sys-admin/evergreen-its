@@ -63,8 +63,12 @@ Ref: `host_migration_runbook.md` Phase B. #1 hazard = daemon double-run. **Must 
   on the dev box again.
 - [ ] (6) `git pull origin main` on the new host, then load all daemons but `po-send` **and `rfq-send`** (both SEND daemons stay unloaded — send-gate; both in `DARK_UNLOADED_LABELS`). Their go-live is a FIXED External-Send-Gate flip + load done with Seth, never at cutover.
 - [ ] (7) verification gate: labels loaded, fresh Check-C markers, ITS_Daemon_Health advancing, portal
-  round-trip, **and the UptimeRobot prove-it-bites** (unload watchdog → wait 35 min → alert must
-  ARRIVE → reload).
+  round-trip, **and the Healthchecks.io prove-it-bites**. Note the watchdog pings **once per day
+  at 07:00** (`StartCalendarInterval`), so an unload-and-wait-35-min drill proves nothing — run the
+  drill at the monitor instead (make the check overdue there, confirm the alert ARRIVES, restore
+  period = 1 day, re-run the watchdog → green). **Prerequisite:** the beacon must be armed first —
+  see CL-27; while `system.heartbeat_url` holds its seed placeholder the watchdog skips the ping
+  entirely and this gate cannot pass.
 
 ## ③ Jul 14 → Aug 3 — Phase C burn-in + hardening gate
 Ref: `host_migration_runbook.md` Phase C. Fri Jul 24 = CODE FREEZE on daemon paths; Jul 25-30 operator
@@ -151,7 +155,7 @@ Ref: `cutover_checklist.md` + `production_rollback.md`. Gated by the Jul-31 go/n
   applying migration **0047** (`config_requests.cleared_at`, Feature 1) before the Worker deploy.
 - [ ] CL-20 real PM accounts (`portal_admin add-user`), after CL-21 if PBKDF2 was needed.
 - [ ] **Send paths LAST (CL-24 → CL-28, safest-first order):** CL-24 daemon-health, CL-25 review-queue,
-  CL-26 alerting, CL-27 UptimeRobot — all `verify_cutover --only <check>` PASS. Then **CL-28 fail-closed
+  CL-26 alerting, CL-27 Healthchecks.io heartbeat — all `verify_cutover --only <check>` PASS. Then **CL-28 fail-closed
   send smoke**: a member-approved review row DISPATCHES, a non-member-approved row is BLOCKED +
   `approval_unverified` lands in ITS_Errors (proves F22 against prod identities BEFORE real recipients).
 - [ ] **CL-29 real-recipient wiring** (Teala-coordinated) — ITS_Active_Jobs contact + CC columns carry
@@ -162,7 +166,7 @@ Ref: `cutover_checklist.md` + `production_rollback.md`. Gated by the Jul-31 go/n
 
 ## ⑤ Aug 7 — Delivery (system already in production since Aug 3)
 Ref: `aug7_delivery_runbook.md`. Thu Aug 6 = T-1 buffer (no build work). HARD CODE FREEZE since Aug 5.
-- [ ] Transport window: enter `system.state=MAINTENANCE` + UptimeRobot maintenance window; graceful
+- [ ] Transport window: enter `system.state=MAINTENANCE` + Healthchecks.io maintenance window; graceful
   shutdown after portal_poll quiets.
 - [ ] On-site: the **7 ordered install gates** (do not demo past a red gate) — power/placement, network
   (outbound 443), boot+login → `launchctl list | grep -c solutionsmith` matches the must-load count (the

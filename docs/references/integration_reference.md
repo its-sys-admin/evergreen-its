@@ -68,7 +68,8 @@ exception so it is grep-distinguishable from a rate-limit or auth failure.
       HMAC-signs every submission                      pulls /api/internal/pending,
       never sends externally                           verifies HMAC, files via intake
 
-   scripts/watchdog.py ──GET──▶ external heartbeat monitor (UptimeRobot / audit F16)
+   scripts/watchdog.py ──GET──▶ external heartbeat monitor (Healthchecks.io / audit F16)
+         daily 07:00, one ping — skipped while system.heartbeat_url is the seeded placeholder
       Tailscale-only network posture — nothing ITS-owned is exposed to the public net
 ```
 
@@ -536,7 +537,7 @@ below), not an ITS host service.
 
 ---
 
-## UptimeRobot (external heartbeat / dead-man's switch)
+## Healthchecks.io (external heartbeat / dead-man's switch)
 
 <!-- src: shared/heartbeat_client.py (module docstring + ping) | verified 2026-07-14 -->
 The external heartbeat is the **only detector for total-host failure** — a crash,
@@ -572,13 +573,31 @@ The ping fires on **every non-PAUSED run, including MAINTENANCE** — suppressin
 maintenance would trip a false "host dead" alert. A PAUSED system skips all checks and
 the ping (a deliberate operator pause is not host death).
 
-> ### Naming note
-> <!-- src: shared/heartbeat_client.py (docstring) vs CLAUDE.md/watchdog | verified 2026-07-14 -->
-> CLAUDE.md and the watchdog comments name the external monitor **UptimeRobot** (audit
-> F16), while the `heartbeat_client.py` module docstring describes the ping endpoint in
-> **Healthchecks.io** terms. The mechanism is identical either way — a single outbound
-> GET to a configured ping URL — and it works with whichever monitor the operator has
-> provisioned at `system.heartbeat_url`.
+> ### Naming note — resolved: the monitor is **Healthchecks.io**
+> <!-- src: shared/heartbeat_client.py:1 (docstring), tests/test_heartbeat_client.py (hc-ping.com), scripts/seed_its_config.py (row Description) | verified 2026-07-26 -->
+> This is **not** a coin-flip between two equivalent names. The shipped client, the live
+> tests and the seeded ITS_Config row all say Healthchecks.io: `shared/heartbeat_client.py`
+> line 1 is "Healthchecks.io heartbeat client", the tests ping `hc-ping.com`, and the
+> `system.heartbeat_url` row's own Description reads "Healthchecks.io heartbeat URL pinged
+> by scripts/watchdog.py" (`scripts/seed_its_config.py`). The operator's provisioning
+> decision and its reason are recorded in
+> `docs/session_logs/2026-05-28_f16-heartbeat-ping.md`: UptimeRobot's free tier gates
+> heartbeat monitoring behind Pro and restricts commercial use, so a Healthchecks.io check
+> was provisioned instead. Everywhere "UptimeRobot" still appears in exec-repo prose it is
+> **stale prose**, not a second supported vendor.
+>
+> **Open cross-repo inconsistency (flagged, not resolved here):** blueprint doctrine still
+> names UptimeRobot (`doctrine/vision-and-roadmap.md`), following a 2026-06-01 edit made on
+> the grounds that "Healthchecks.io appears nowhere in the blueprint". Per CLAUDE.md the
+> planning layer wins on doctrine, so this must be reconciled blueprint-side — it cannot be
+> declared closed from this repo.
+>
+> **One deliberate exception — do not "fix" it.** The seeded placeholder literal
+> `PLACEHOLDER_uptimerobot_heartbeat_url` is a **frozen token** that must stay
+> byte-identical across `scripts/seed_its_config.py`, `scripts/watchdog.py`,
+> `tests/test_watchdog.py` and `tests/test_heartbeat_client_integration.py` — the watchdog
+> compares against it to decide whether the beacon is armed. Renaming it is a code change,
+> not a doc change.
 
 ---
 

@@ -80,7 +80,9 @@ error-log-wrapped, and heartbeating to the `ITS_Daemon_Health` sheet:
 `fieldops-sync` (D1→Smartsheet mirror) · `po-poll` / `po-send` (Purchase Orders) ·
 `subcontract-poll` (subcontracts) · `config-actuator` (§50 config code-actuator) ·
 `publish-daemon` (form-editor code actuator, §50) · `picklist-sync` / `picklist-audit` ·
-`watchdog` (staleness floor + catch-up + the external UptimeRobot dead-man's switch).
+`watchdog` (staleness floor + catch-up + the external Healthchecks.io dead-man's
+switch — which only fires once `system.heartbeat_url` is configured; see
+`docs/references/integration_reference.md`).
 
 **15** daemon plists ship; **14 load at cutover** — `po-send` (a send daemon) stays
 launchd-**unloaded** (send-gate defense-in-depth, VC-02-enforced), while the dark generation

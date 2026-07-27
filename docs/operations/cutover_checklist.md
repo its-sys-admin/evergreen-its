@@ -272,9 +272,14 @@ Order: intake → mirrors/trackers → compile → **send paths last**.
   Verify: `python -m scripts.verify_cutover --only review-queue` → PASS. (VC-05)
 - [ ] **CL-26 — alerting legs shape-valid** (Sentry DSN + Resend key).
   Verify: `python -m scripts.verify_cutover --only alerting` → PASS. (VC-06)
-- [ ] **CL-27 — UptimeRobot heartbeat configured** (`system.heartbeat_url`).
+- [ ] **CL-27 — Healthchecks.io heartbeat configured** (`system.heartbeat_url`).
+  This has **never been armed on any host** — the row still holds its seed
+  placeholder, and `scripts/watchdog.py` skips the ping while it does, so there
+  is currently no external dead-man's switch at all. Create the check with
+  **period = 1 day, grace = 1 hour** (the watchdog pings once daily at 07:00),
+  then write its https ping URL into the row.
   Verify: `python -m scripts.verify_cutover --only heartbeat-url` → PASS;
-  monitor green in the UptimeRobot dashboard. (VC-09)
+  check green in the Healthchecks.io dashboard. (VC-09)
 - [ ] **CL-28 — fail-closed send smoke, per send-bearing workstream (safety,
   progress; PO when live).** On the production review sheet: one row approved
   by a workspace member → `*_send_poll` DISPATCHES it; one row approved by a
@@ -387,11 +392,11 @@ Order: intake → mirrors/trackers → compile → **send paths last**.
   for the on-site binder.
   Verify: `curl -sI https://safety.evergreenmirror.com/ | head -1` → 200 (the
   mirror rollback target is alive).
-- [ ] **CL-32 — Day-7 routing gate armed.** Alerts (Resend/Sentry/UptimeRobot)
+- [ ] **CL-32 — Day-7 routing gate armed.** Alerts (Resend/Sentry/Healthchecks.io)
   stay routed to Seth beyond Day 7 until the Tier-2 clearance milestone
   (handover v10 amendment, D17).
   Verify: alert-destination fields in Resend templates / Sentry alert rules /
-  UptimeRobot contacts list Seth's addresses; a dated tech-debt or session-log
+  Healthchecks.io contacts list Seth's addresses; a dated tech-debt or session-log
   entry names the Day-7 review date.
 - [ ] **CL-33 — Day-7 review executed (T+7):** zero unexplained CRITICALs,
   Check-C markers continuous, dedupe summaries reviewed; only THEN disable
