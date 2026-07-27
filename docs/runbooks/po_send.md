@@ -237,10 +237,13 @@ or is **not in the app's Application Access Policy scope**, so Graph 403s the se
 - The poller is the launchd job **`org.solutionsmith.its.po-send`** (interval 15 min,
   RunAtLoad). Confirm it is loaded:
   `scripts/launchd/install.sh status org.solutionsmith.its.po-send`.
-- **The send gate is the seeded `po_materials.po_send.polling_enabled = false` row** — POs
-  ship **dark**: NO vendor email fires until the operator flips it at go-live. (The code
-  default if the row were missing is `true`, but the seed sets it `false`; belt-and-suspenders,
-  since nothing sends without an approved row AND approvers in the workspace regardless.) Flip
+- **The send gate is `po_materials.po_send.polling_enabled` (Workstream `po_materials`),
+  seeded `false` at merge — read ITS_Config, never this runbook, for the CURRENT value.**
+  While the row reads `false` no vendor email can fire; while it reads `true` a
+  human-approved review row dispatches on the next 15-minute cycle. A MISSING or malformed
+  row also fails SAFE — `po_send_poll.py` `DEFAULT_POLLING_ENABLED` is `False` (CO-1, PR #585:
+  "a send gate never fails open") — and nothing sends without an approved row AND approvers
+  in the workspace regardless. Flip
   to `true` ONLY after (a) `smoke_test_po_send.py` passed on the mirror, (b) `procurement@`
   exists on the tenant, (c) PO approvers are shared into the `ITS — Purchase Orders` workspace.
   **Read the gate row's Description before flipping** (HOUSE_REFLEXES §5).

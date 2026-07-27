@@ -129,8 +129,18 @@ how it was created and escalate to Seth** (a non-compile writer on the send shee
 
 - The poller is the launchd job **`org.solutionsmith.its.progress-send`** (interval, RunAtLoad=true).
   Confirm it is loaded: `scripts/launchd/install.sh status org.solutionsmith.its.progress-send`.
-- Runtime gate: ITS_Config `progress_reports.progress_send.polling_enabled` (default ON). A
-  disabled value short-circuits the cycle (this is an operator pause, not an error).
+- Runtime gate: ITS_Config `progress_reports.progress_send.polling_enabled` — read that row
+  for its live value; this runbook never states it. A `false` value short-circuits the cycle
+  (an operator pause, not an error).
+  > **⚠ This gate FAILS OPEN — it is the exception, not the pattern.**
+  > `progress_send_poll.py` sets `DEFAULT_POLLING_ENABLED = True`, so a **missing or
+  > unreadable** row is treated as **enabled** and the lane dispatches. Every other send
+  > lane (`po_send`, `rfq_send`, `subcontract_send`) defaults `False` and fails safe.
+  > `safety_reports/weekly_send_poll.py` shares this fail-open default.
+  > Consequence: for this lane the loaded/unloaded state of
+  > `org.solutionsmith.its.progress-send` may be the ONLY thing preventing external send —
+  > a deleted or never-seeded config row will not stop it. Verify the row exists and reads
+  > `false` before assuming the lane is quiet.
 - Env prereqs: `python scripts/smoke_test_progress_send.py` (kill switch, Graph creds, WPR
   schema, F22 approvers, ITS_Daemon_Health).
 - **Staleness monitoring:** the marker slug `progress_send_poll` **is** in `watchdog.TRACKED_JOBS`

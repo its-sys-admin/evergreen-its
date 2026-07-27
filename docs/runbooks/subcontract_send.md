@@ -77,10 +77,13 @@ never by forcing the send.
 - The poller is the launchd job **`org.solutionsmith.its.subcontract-send`** (interval 15 min,
   RunAtLoad). Confirm it is loaded:
   `scripts/launchd/install.sh status org.solutionsmith.its.subcontract-send`.
-- **The send gate is the seeded `subcontracts.subcontract_send.polling_enabled = false` row** —
-  subcontracts ship **dark**: NO subcontractor email fires until the operator flips it at
-  go-live. Flipping it is a **FIXED high-capability-class External-Send-Gate decision →
-  escalate to Seth**. **Read the gate row's ITS_Config Description before any flip**
+- **The send gate is `subcontracts.subcontract_send.polling_enabled` (Workstream
+  `subcontracts`), seeded `false` at merge — read ITS_Config, never this runbook, for the
+  CURRENT value.** While the row reads `false` no subcontractor email can fire; while it
+  reads `true` a human-approved review row dispatches on the next 15-minute cycle. A missing
+  or malformed row fails SAFE — `subcontract_send_poll.py` `DEFAULT_POLLING_ENABLED` is
+  `False`. Flipping it either way is a **FIXED high-capability-class External-Send-Gate
+  decision → escalate to Seth**. **Read the gate row's ITS_Config Description before any flip**
   (HOUSE_REFLEXES §5) — it names the three go-live preconditions.
 - **Go-live preconditions** (in the gate row's Description; Seth confirms each): (a)
   `smoke_test_subcontract_send.py` passed on the mirror; (b) `procurement@` exists on the tenant

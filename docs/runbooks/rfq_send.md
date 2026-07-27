@@ -4,7 +4,7 @@ date: 2026-07-19
 status: active
 related_prs: []
 workstream: po_materials
-tags: [runbook, successor-remediation, purchase_orders, rfq, rfq_send, external-send-gate, f22, tier-2, tier-3, ships-dark]
+tags: [runbook, successor-remediation, purchase_orders, rfq, rfq_send, external-send-gate, f22, tier-2, tier-3]
 ---
 
 # Runbook — RFQ send daemon (`rfq_send`) (an RFQ row stuck HELD / blocked / "contamination") (Successor-Remediation, Op Stds §43)
@@ -36,7 +36,11 @@ transmit a half-formed, wrong-lane, or numberless RFQ — it marks the row `Send
 instead. From `procurement@`. Recipients resolve at send time from `ITS_Vendors` by Vendor
 Key, never the display columns.
 
-**This lane SHIPS DARK.** Go-live — flipping `po_materials.rfq_send.polling_enabled` true AND
+**This lane's send gate is `po_materials.rfq_send.polling_enabled` (Workstream
+`po_materials`), seeded `false` at merge — read ITS_Config, never this runbook, for the
+CURRENT value.** While the row reads `false` and the plist is unloaded the lane is inert;
+the code default is also `False` (`rfq_send_poll.py`), so a missing row fails safe.
+Go-live — flipping that gate true AND
 `install.sh load org.solutionsmith.its.rfq-send` — is a **FIXED high-capability-class
 External-Send-Gate decision → Seth**, never a Successor-Operator action.
 

@@ -354,9 +354,10 @@ state — it never authorises a send.
 
 ### What it means
 
-`po_poll` **ships dark**: all three pass gates
-(`po_materials.po_poll.polling_enabled` / `.vendors_sync_enabled` / `.status_sync_enabled`)
-seed to **`false`**. With every gate false the daemon is a deliberate **no-op** — it writes
+`po_poll` is governed by three pass gates
+(`po_materials.po_poll.polling_enabled` / `.vendors_sync_enabled` / `.status_sync_enabled`),
+each **seeded `false` at merge — read ITS_Config for their current values**. With every
+gate false the daemon is a deliberate **no-op** — it writes
 no heartbeat/marker each cycle, so Check C correctly WARNs *until at least one gate is
 flipped at go-live*. This is expected, not a fault (the register-and-activate-together
 pattern — the plist is loaded before the gate flip).
