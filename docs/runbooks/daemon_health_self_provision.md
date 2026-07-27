@@ -26,7 +26,7 @@ code-reader rationale for the same capability lives in the
 ## Purpose
 
 Each polling daemon publishes its health to one row in **ITS_Daemon_Health**
-(sheet `4529351700729732`), keyed by its daemon name (e.g.
+(sheet `6272022823784324`), keyed by its daemon name (e.g.
 `safety_reports.intake_poll`, `safety_reports.weekly_send_poll`). As of the A1
 fix, a daemon whose row is **missing self-provisions it** on the next cycle —
 it creates its own row instead of going dark. So the common "a daemon has no
@@ -66,7 +66,7 @@ One of:
    rejects, a missing/renamed column, or an auth error).
 3. **ITS_Config `system.state`** — `MAINTENANCE` does **not** stop heartbeat
    writes, so this is not a kill-switch effect; rule it out and move on.
-4. Confirm you are reading the **canonical** ITS_Daemon_Health (`4529351700729732`,
+4. Confirm you are reading the **canonical** ITS_Daemon_Health (`6272022823784324`,
    under `ITS — System / 04 — Daemons`), not the empty duplicate sheet pending
    operator deletion.
 

@@ -238,7 +238,7 @@ To exercise the review-queue branch, send a smoke email whose project is ambiguo
 
 ## Operator visibility — ITS_Daemon_Health (PR #59.5)
 
-Every poll cycle writes a heartbeat row to `ITS_Daemon_Health` (sheet `4529351700729732`,
+Every poll cycle writes a heartbeat row to `ITS_Daemon_Health` (sheet `6272022823784324`,
 under `ITS — System / 04 — Daemons`). The row keyed `safety_reports.intake_poll`
 carries the canonical operator-facing status. **Self-provision (A1):** if a
 daemon's row is absent, the daemon creates its own row (registration columns —

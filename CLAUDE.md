@@ -332,7 +332,8 @@ LangChain, Kubernetes.
 
 ## Operator visibility surface
 
-ITS_Daemon_Health sheet (System workspace / folder 04 — Daemons / sheet 4529351700729732) is
+ITS_Daemon_Health sheet (System workspace / folder 04 — Daemons / sheet 6272022823784324 —
+`shared/sheet_ids.SHEET_DAEMON_HEALTH` is the value of record) is
 the canonical operator-visibility surface for all polling daemons. One row per daemon,
 update-in-place per cycle. Push surface per Op Stds v21 §3.1 + §32.
 

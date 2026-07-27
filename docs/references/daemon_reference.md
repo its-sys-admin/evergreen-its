@@ -76,7 +76,7 @@ report its own death:
 
 | Surface | Mechanism | Who writes it | Who reads it |
 |---|---|---|---|
-| **ITS_Daemon_Health** sheet (id `4529351700729732`, System workspace / 04 — Daemons) | One row per daemon, updated in place each cycle via `shared/heartbeat.py` `HeartbeatReporter` | The **14** daemons that construct a `HeartbeatReporter` (see roster) | Operator (obs), dashboard daemons panel, watchdog Check G |
+| **ITS_Daemon_Health** sheet (id `6272022823784324`, System workspace / 04 — Daemons) | One row per daemon, updated in place each cycle via `shared/heartbeat.py` `HeartbeatReporter` | The **14** daemons that construct a `HeartbeatReporter` (see roster) | Operator (obs), dashboard daemons panel, watchdog Check G |
 | **Watchdog marker files** (`~/its/.watchdog/<slug>.last_run`) | ISO timestamp written each cycle | The **16** `TRACKED_JOBS` daemons | Watchdog **Check C** (marker-staleness floor) |
 
 <!-- src: scripts/watchdog.py:408-455 (Check C body); scripts/watchdog.py:240-287 (TRACKED_JOB_WINDOWS) | verified 2026-07-14 -->
