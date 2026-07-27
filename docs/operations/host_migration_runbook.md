@@ -10,14 +10,33 @@ tags: [aug7_delivery, host_migration, cutover, phase_1.5]
 # Production-Host Migration Runbook (old MacBook Pro)
 
 Phases A/B/C for migrating ITS off the development MacBook and onto the old
-MacBook Pro that becomes the **production host** installed at Evergreen on
-Aug 7. Program of record: `docs/2026-07-09_aug7_delivery_program.md` (WS4).
-Calendar: **Phase A** provision Thu Jul 10 · **Phase B** one-way flip Mon
-Jul 13 (~30-min ordered window) · **Phase C** burn-in Jul 14 → Aug 3.
+MacBook Pro that becomes the **production host** installed at Evergreen.
+Program of record: `docs/2026-07-09_aug7_delivery_program.md` (WS4).
+
+> **Amendment 2026-07-26 — the July calendar in this runbook did NOT happen.**
+> The Jul-10 / Jul-13 / Jul-14→Aug-3 A/B/C calendar was never executed. The dev
+> box kept the entire fleet loaded until **2026-07-25**: every
+> `~/its/.watchdog/*.last_run` marker and `logs/2026-07-25.log` stop at 11:52
+> local, and the fleet was torn down at **2026-07-25T15:53:15Z**. The real
+> migration therefore starts from a torn-down dev box, not from a live one.
+>
+> **Already complete on this host (verified, do not redo):** Phase-B steps 1–3.
+> `launchctl list | grep solutionsmith` prints nothing **AND**
+> `ls ~/Library/LaunchAgents/org.solutionsmith.its.*` matches nothing. BOTH
+> assertions are required — a bare `launchctl bootout` leaves the plist file in
+> `~/Library/LaunchAgents/`, which re-bootstraps at the next login and looks
+> identical on `launchctl list`; only `install.sh unload` removes the file.
+>
+> **What remains:** Phase A on the production host (A1–A7 below) → Phase B steps
+> 4–7 (state copy → Box re-auth on the new host → load the 18 must-load plists →
+> verification gates) → `docs/operations/cutover_checklist.md`.
+> **Phase C as written is obsolete** — see the Phase C section for the
+> replacement framing.
 
 Phase A facts below were verified live against the dev box + repo HEAD on
-2026-07-09 — treat later re-runs per brief-validator discipline (re-verify
-versions/paths before acting; zero grep hits beat confident memory).
+2026-07-09 and re-verified 2026-07-26 — treat later re-runs per
+brief-validator discipline (re-verify versions/paths before acting; zero grep
+hits beat confident memory).
 
 ## Purpose
 
@@ -52,7 +71,9 @@ tenant cutover lands on the same machine (no second migration).
    `~/Library/LaunchAgents/` would come alive at the next login. Therefore
    **Phase A does not install plists at all** — it only renders + lints via
    `scripts/launchd/install.sh dry-run <name>` and verifies no `__…__`
-   placeholder survives. The actual `load` of the 14 (all but the send-gated `po-send`) happens in **Phase B**,
+   placeholder survives. The actual `load` of the **18 must-load plists** (all 20
+   shipped, minus the two dark-unloaded SEND daemons `po-send` + `rfq-send` —
+   `scripts/verify_cutover.py` `DARK_UNLOADED_LABELS`) happens in **Phase B**,
    AFTER the dev box is verified empty.
    > **Program-doc amendment (explicit):** the program doc's Phase-A line
    > "plists installed UNLOADED" is **amended by this runbook** — there is no
@@ -105,9 +126,22 @@ Install and verify each (targets verified on the dev box 2026-07-09):
 
 ```bash
 cd ~
-git clone git@github.com:SolutionSmith-debug/its.git its
-git clone git@github.com:SolutionSmith-debug/its-blueprint.git its-blueprint
+gh auth login   # HTTPS + git credential helper — matches the live setup
+                # (`gh auth status` → "Git operations protocol: https")
+
+# Confirm the ORG/REPO against the machine you are migrating FROM before running
+# these — do not trust the names below. `git -C ~/its remote -v` on the source
+# host is the URL of record (this repo has been mirrored at least once, so the
+# customer checkout and the blueprint can live under different orgs):
+git clone https://github.com/<org>/<its-repo>.git its
+git clone https://github.com/<org>/its-blueprint.git its-blueprint
 ```
+
+> **Why HTTPS, not SSH.** Both live checkouts are HTTPS and `gh auth status`
+> reports `Git operations protocol: https` with a keyring token. Phase A
+> provisions no SSH key anywhere (see the A2 toolchain table — there is no
+> `ssh-keygen` or key-upload step), so an `ssh://`/`git@` clone recipe has no
+> credential to use and fails on a fresh host.
 
 The blueprint's `.claude/hooks` + `.claude/agents` entries are **relative
 symlinks into `../../its/...`**. A non-sibling layout does not error — the
@@ -136,7 +170,7 @@ All three green = the host can run ITS code. Any failure here is a
 provisioning defect — fix before proceeding (do not carry a red gate into
 Phase B).
 
-### A5 — Keychain re-seed: the 11 non-Box secrets (+ 4 pending)
+### A5 — Keychain re-seed: the 11 non-Box secrets (+ 6 pending; 20 total at cutover)
 
 Seed each with the interactive form (Hazard 1):
 
@@ -158,12 +192,16 @@ security add-generic-password -a "$USER" -s ITS_SMARTSHEET_TOKEN -w
 | 10 | `ITS_PORTAL_ADMIN_TOKEN` | portal admin CLI |
 | 11 | `ITS_PORTAL_FIELDOPS_TOKEN` | fieldops_sync bearer |
 | — | `ITS_PORTAL_PO_TOKEN` | **PENDING** — seed once the operator provisions it (WS1 S2); required by cutover day (`verify_cutover` VC-01 names it until then) |
-| — | `ITS_PORTAL_CONFIG_TOKEN` | **PENDING** — config-actuator (§50) daemon bearer; loaded-but-runtime-dark, required by cutover (VC-01) |
-| — | `ITS_PORTAL_SUB_TOKEN` | **PENDING** — subcontract-poll daemon bearer; loaded-but-runtime-dark, required by cutover (VC-01) |
-| — | `ITS_OPERATOR_PIN` | **PENDING** — operator-dashboard ACT-surface PIN (manual-start, no plist); required by cutover (VC-01) |
+| — | `ITS_PORTAL_CONFIG_TOKEN` | **PENDING** — config-actuator (§50) daemon bearer; required by cutover (VC-01) |
+| — | `ITS_PORTAL_SUB_TOKEN` | **PENDING** — subcontract-poll daemon bearer; required by cutover (VC-01) |
+| — | `ITS_PORTAL_ESTIMATE_TOKEN` | **PENDING** — estimate-poll daemon bearer (ADR-0004; scopes only `/api/po/estimates/internal/*`, deliberately NOT the PO or RFQ token); required by cutover (VC-01) |
+| — | `ITS_PORTAL_RFQ_TOKEN` | **PENDING** — rfq-poll daemon bearer (ADR-0004 decision 4; scopes only `/api/po/rfqs/internal/*`); required by cutover (VC-01) |
+| — | `ITS_OPERATOR_PIN` | **PENDING** — operator-dashboard ACT-surface PIN (the dashboard is launchd-managed, `org.solutionsmith.its.dashboard`, and ships fail-closed DARK until this is set); required by cutover (VC-01) |
 
-**Box triplet deliberately absent** (Hazard 2). Total VC-01 required = **18** (11
-core non-Box seeded here + Box triplet in Phase B + 4 pending above).
+**Box triplet deliberately absent** (Hazard 2). Total VC-01 required = **20** (11
+core non-Box seeded here + Box triplet in Phase B + 6 pending above).
+`scripts/verify_cutover.py` `REQUIRED_SECRETS` is the composition of record — re-derive
+rather than trusting this count.
 
 Verify loop — presence + plausible length, values never printed:
 
@@ -190,7 +228,9 @@ loop run on the dev box (a truncated paste shows up as a length mismatch).
 
 ### A6 — launchd render + lint ONLY (no load — Hazard 3)
 
-For each of the 15 daemon plists in `scripts/launchd/`:
+For each of the 20 daemon plists in `scripts/launchd/` (`org.solutionsmith.its.*.plist`;
+`template.plist` is the scaffold, not an agent — the loop below globs the right set, so
+don't count by hand):
 
 ```bash
 cd ~/its/scripts/launchd
@@ -239,7 +279,9 @@ The #1 program hazard is a **daemon double-run**: Box refresh-token rotation
 is single-consumer, double polls double-write, and two watchdogs mask one
 dead heartbeat. The order below is non-negotiable; do not parallelize.
 
-1. **Dev box — unload all 15:**
+1. **Dev box — unload every installed daemon** (do not trust a hardcoded count —
+   `launchctl list | grep -c solutionsmith` is the number of record; the loop is
+   a harmless no-op for any plist that was never installed):
 
    ```bash
    cd ~/its/scripts/launchd
@@ -273,18 +315,40 @@ dead heartbeat. The order below is non-negotiable; do not parallelize.
    `ITS_BOX_CLIENT_ID` / `ITS_BOX_CLIENT_SECRET` / `ITS_BOX_REFRESH_TOKEN`).
    From this moment, **never run Box-consuming code on the dev box again** —
    the first refresh on the new host invalidates the dev box's token lineage.
-6. **New host — bring the repo current, then load all daemons EXCEPT the dark-unloaded send daemon (`po-send`):**
+6. **New host — bring the repo current, then load the must-load daemons (all
+   shipped plists EXCEPT the two dark-unloaded SEND daemons, `po-send` and
+   `rfq-send` — `scripts/verify_cutover.py` `DARK_UNLOADED_LABELS`):**
 
    ```bash
    git -C ~/its pull origin main   # never load from a stale checkout
    cd ~/its/scripts/launchd
    for p in org.solutionsmith.its.*.plist; do
      name="${p%.plist}"
-     [ "$name" = "org.solutionsmith.its.po-send" ] && continue   # send-gate: stays UNLOADED
+     case "$name" in
+       org.solutionsmith.its.po-send|org.solutionsmith.its.rfq-send)
+         continue ;;                 # send-gate: BOTH stay UNLOADED
+     esac
      ./install.sh load "$name"
    done
-   ./install.sh status             # 14 loaded (po-send UNLOADED — send-gate; subcontract-poll loaded, runtime-dark)
+   ./install.sh status              # the must-load set = shipped plists minus DARK_UNLOADED_LABELS
+                                    # (18 of the 20 shipped at last count — VC-02 derives it;
+                                    #  don't trust a hardcoded number). po-send + rfq-send
+                                    #  UNLOADED — send-gate.
    ```
+
+   > **Do not skip only `po-send`.** `DARK_UNLOADED_LABELS` holds **two** labels.
+   > A loop that skips just `po-send` LOADS `rfq-send` — a live external-send
+   > daemon, which VC-02 reports as `dark_loaded` and which is the exact FIXED
+   > high-capability-class External-Send-Gate event the posture exists to prevent.
+   >
+   > **If the fleet was (re)built by `scripts/migrations/standup.py finish`:** its
+   > default `--posture dark` leaves ALL FIVE send-dispatch plists unloaded
+   > (`SEND_DISPATCH_LABELS` — po-send, rfq-send, subcontract-send, weekly-send,
+   > progress-send). VC-02 expects the three ESTABLISHED lanes loaded, so the
+   > bridge step is to load exactly `weekly-send`, `progress-send` and
+   > `subcontract-send` per-plist. See `docs/operations/cutover_checklist.md`
+   > ("Bridge step"). `--posture full` is NOT the bridge — it also loads po-send +
+   > rfq-send, failing VC-02 the other way.
 
 7. **Verification gates (all must pass before declaring the flip done):**
 
@@ -294,22 +358,41 @@ dead heartbeat. The order below is non-negotiable; do not parallelize.
    | Fresh Check-C markers | `ls -l ~/its/.watchdog/*.last_run` — every tracked job's marker mtime advances past the flip time within its window |
    | ITS_Daemon_Health advancing | `python -m scripts.verify_cutover --only daemon-health` → PASS (mirror tenant: add `--allow-sandbox` to any `config` runs; `keychain` will name `ITS_PORTAL_PO_TOKEN` until it is provisioned) |
    | Portal round trip | test submission on the mirror portal → `portal_poll` pulls within ~60s → PDF filed in Box (mirror ROOT → job → week) |
-   | **UptimeRobot prove-it-bites** | `./install.sh unload org.solutionsmith.its.watchdog` → wait 35 min → UptimeRobot alert ARRIVES → `./install.sh load org.solutionsmith.its.watchdog` → monitor returns green. A control that never fired is not a control. |
+   | **External heartbeat prove-it-bites (Healthchecks.io)** | **Prerequisite: the beacon must actually be armed.** ITS_Config `system.heartbeat_url [global]` still holds the literal seed placeholder, and `scripts/watchdog.py` skips the ping while it does — so no external dead-man's switch has ever fired on any host. Arming + drill: (1) create the Healthchecks.io check (`shared/heartbeat_client.py` is written against it) with **period = 1 day, grace = 1 hour** — the watchdog plist is `StartCalendarInterval` Hour 7, i.e. **one ping per day**, so a short-period monitor would go red every morning regardless of host health; (2) paste its https ping URL into that ITS_Config row (VC-09 requires https); (3) run `python -m scripts.watchdog` by hand → the check turns **green** and the run logs no `heartbeat_ping_failed` WARN; (4) prove the alarm bites by making the check overdue at the monitor (shorten its period there, or simply do not re-ping and wait past period+grace) → the down-alert **ARRIVES** at the operator address; (5) restore period = 1 day and re-run the watchdog → green. A control that never fired is not a control. **Do not use an unload-and-wait drill** — on a daily beacon it would take >24 h to signal anything. |
 
-## Procedure — Phase C: burn-in (Jul 14 → Aug 3)
+## Procedure — Phase C: burn-in (RESCHEDULED — the July window did not run)
 
-Per the program master calendar:
+> **The original Jul-14→Aug-3 burn-in never happened.** It is replaced by a
+> burn-in window that starts when the production host completes Phase B, and it
+> runs under a materially different risk posture than the one this section was
+> written for.
 
-- **Jul 14–16** — passive burn-in; hardening-gate work happens beside it
-  (ClamAV/EICAR, Paid-plan/PBKDF2 verdict — program §4.3).
-- **Fri Jul 17** — burn-in Friday cycle #1 (`weekly_generate` 14:00 +
-  `progress` compile): verify packets + review rows land unattended.
-- **Fri Jul 24** — Friday cycle #2; **code freeze on daemon paths** after it.
-- **Jul 25–30 (operator away)** — the gap IS the test: an unattended Tier-1
-  live trial (mirror-only blast radius). Nothing merges to live.
-- **Fri Jul 31** — gap telemetry review = host **go/no-go**: zero unexplained
-  CRITICALs, Check-C markers continuous, UptimeRobot uninterrupted, dedupe
-  summaries reviewed. The same host then receives the Aug-3 tenant cutover
+**Blast radius is NO LONGER mirror-only.** `shared/sheet_ids.py` was repointed to
+the production Smartsheet tenant at commit `885d4a4` (PR #710, 2026-07-24), so
+every daemon cycle during burn-in writes **production** Smartsheet rows. The
+portal is the opposite way round: `safety_reports.portal.worker_base_url` still
+reads the mirror Worker on purpose — the Phase-1 hybrid posture
+(`scripts/verify_cutover.py` `PROFILES['phase1-hybrid']`, decision D2 in
+`docs/operations/phase1_cutover_decisions.md`). Consequences:
+
+- An "unattended Tier-1 live trial" is now a live-tenant trial. Run it only with
+  the send lanes in their intended posture and `system.state` understood.
+- "Nothing merges to live" still holds for the code freeze, but a bad row is now
+  a production row — the rollback path is `production_rollback.md`, whose R1
+  (portal repoint) is a **no-op** in this posture (see that doc).
+
+**Burn-in exit criteria (unchanged in substance, dates to be set at Phase-B
+completion):**
+
+- ≥10 days continuous operation on the production host.
+- Two Friday compile cycles observed unattended (`weekly_generate` 14:00 +
+  `progress` compile) — packets and review rows land with no human touch.
+- A dated **go/no-go** recorded in `docs/session_logs/`: zero unexplained
+  CRITICALs, Check-C markers continuous across all 18 `TRACKED_JOBS`, external
+  heartbeat uninterrupted (see the heartbeat row in Phase B step 7 — this is
+  Healthchecks.io, and it must be **armed first**; it never has been), dedupe
+  summaries reviewed.
+- Only then does the same host take the tenant cutover
   (`docs/operations/cutover_checklist.md`).
 
 ## §43 successor-remediation entries (symptom → repair → escalate)
@@ -319,18 +402,19 @@ Per the program master calendar:
 | A daemon shows `not loaded` in `install.sh status` after the flip | `cd ~/its/scripts/launchd && ./install.sh load <label>`; re-check `status` | `install.sh load` fails `plutil -lint`, or a `__…__` placeholder survives dry-run (plist/installer change = code change, high-class) |
 | Daemons dead after a reboot | Log in at the machine (login keychain unlocks; LaunchAgents start); verify `install.sh status` | Daemons stay dead after login, or the keychain prompts for a password that doesn't work (secrets/auth = high-class) |
 | Box calls failing `invalid_grant` after the flip | None — do not touch Box credentials | Immediately: refresh-token lineage is a secrets/auth repair (re-run `setup_box_oauth.py` is Seth's call) |
-| UptimeRobot alert during burn-in with the host apparently up | Check `launchctl list \| grep solutionsmith`; if the watchdog label is missing, `install.sh load org.solutionsmith.its.watchdog` | Watchdog is loaded but the monitor stays red (config/network diagnosis) |
+| Healthchecks.io alert during burn-in with the host apparently up | Check `launchctl list \| grep solutionsmith`; if the watchdog label is missing, `install.sh load org.solutionsmith.its.watchdog` | Watchdog is loaded but the check stays red, or `system.heartbeat_url` is still the seed `PLACEHOLDER_…` value (the beacon was never armed — config change, Seth) |
 | Keychain read errors (`KeychainLockedError`) in daemon logs | `security unlock-keychain` after logging in at the machine | Errors persist while logged in |
 
 ## Validation
 
 - Phase A done = A4 three-gate green + A5 verify loop 11/11 (the 11 core non-Box
-  secrets; the 4 pending are provisioned separately) + A6 loop prints 15 `ok:`
-  lines + A7 smokes green.
-- Phase B done = step-7 table fully green, **including** the UptimeRobot
-  prove-it-bites.
-- Phase C done = Jul-31 go/no-go recorded (session log), zero unexplained
-  CRITICALs across the gap.
+  secrets; the 6 pending are provisioned separately — 20 total at cutover) +
+  A6 loop prints 20 `ok:` lines + A7 smokes green.
+- Phase B done = step-7 table fully green, **including** the Healthchecks.io
+  external-heartbeat prove-it-bites (which first requires arming the beacon —
+  see step 7).
+- Phase C done = go/no-go recorded (session log) at the end of the rescheduled
+  burn-in window, zero unexplained CRITICALs across the gap.
 - The tenant cutover then runs `python -m scripts.verify_cutover` (full, no
   `--allow-sandbox`) per `docs/operations/cutover_checklist.md`.
 
