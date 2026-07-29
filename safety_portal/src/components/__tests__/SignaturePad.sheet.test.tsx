@@ -314,7 +314,7 @@ describe("SignaturePad — 600x180 coordinate space", () => {
     ]);
   });
 
-  it("refuses a zero-sized rect rather than emitting Infinity into the path", () => {
+  it("refuses a zero-sized rect rather than dividing by it", () => {
     const onChange = vi.fn();
     const { container } = render(<SignaturePad onChange={onChange} />);
     openSheet(container);
@@ -327,6 +327,139 @@ describe("SignaturePad — 600x180 coordinate space", () => {
 
     const d = onChange.mock.calls[0][0] as string;
     expect(d).not.toMatch(/Infinity|NaN/);
+    // Pin the GUARD, not the clamp. Without the early return the division yields
+    // Infinity, which the clamp would quietly pin to the far corner (600,180) — a
+    // bottom-right dot that still reads as "signed". Asserting only "no Infinity"
+    // would pass in that world, so assert the guard's actual contract.
+    expect(coords(d).every(([x, y]) => x === 0 && y === 0)).toBe(true);
+  });
+});
+
+// ── concurrent contacts ──────────────────────────────────────────────────────
+
+describe("SignaturePad — multi-touch", () => {
+  it("ignores a resting palm / second finger instead of re-anchoring the signature", () => {
+    // Web content gets NO palm rejection: iOS delivers every simultaneous touch as
+    // its own pointer. On the old small strip this was unlikely; on a near-full-width
+    // canvas a resting hand is the normal posture.
+    const onChange = vi.fn();
+    const { container } = render(<SignaturePad onChange={onChange} />);
+    openSheet(container);
+    const pad = surface();
+    mockRect(pad, { width: 600, height: 180 });
+
+    fireEvent.pointerDown(pad, { clientX: 10, clientY: 90, pointerId: 1 });
+    fireEvent.pointerMove(pad, { clientX: 60, clientY: 40, pointerId: 1 });
+    // the palm lands mid-signature and drags a little
+    fireEvent.pointerDown(pad, { clientX: 500, clientY: 170, pointerId: 2 });
+    fireEvent.pointerMove(pad, { clientX: 520, clientY: 175, pointerId: 2 });
+    // the writing finger carries on, then both lift
+    fireEvent.pointerMove(pad, { clientX: 110, clientY: 140, pointerId: 1 });
+    fireEvent.pointerUp(pad, { clientX: 110, clientY: 140, pointerId: 1 });
+    fireEvent.pointerUp(pad, { clientX: 520, clientY: 175, pointerId: 2 });
+    fireEvent.click(sheetButton("Done"));
+
+    expect(onChange.mock.calls[0][0]).toBe("M 10 90 L 60 40 L 110 140");
+  });
+
+  it("a lost pointerup cannot wedge the pad — the next contact starts a fresh stroke", () => {
+    const onChange = vi.fn();
+    const { container } = render(<SignaturePad onChange={onChange} />);
+    openSheet(container);
+    const pad = surface();
+    mockRect(pad, { width: 600, height: 180 });
+
+    fireEvent.pointerDown(pad, { clientX: 10, clientY: 90, pointerId: 1 });
+    fireEvent.pointerMove(pad, { clientX: 60, clientY: 40, pointerId: 1 });
+    fireEvent.pointerCancel(pad, { clientX: 60, clientY: 40, pointerId: 1 });
+
+    fireEvent.pointerDown(pad, { clientX: 200, clientY: 20, pointerId: 7 });
+    fireEvent.pointerMove(pad, { clientX: 260, clientY: 60, pointerId: 7 });
+    fireEvent.pointerUp(pad, { clientX: 260, clientY: 60, pointerId: 7 });
+    fireEvent.click(sheetButton("Done"));
+
+    expect(onChange.mock.calls[0][0]).toContain("M 200 20 L 260 60");
+  });
+});
+
+// ── the non-passive touchmove belt ───────────────────────────────────────────
+
+describe("SignaturePad — touchmove suppression", () => {
+  it("preventDefaults touchmove ONLY while a stroke is in flight", () => {
+    // This is the commit's belt-and-braces against the page panning under the finger.
+    // A React synthetic onTouchMove would be attached PASSIVELY, making
+    // preventDefault a no-op — so this also pins the listener's non-passive-ness.
+    const { container } = render(<SignaturePad />);
+    const s = openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    const canvas = s.querySelector(".sigsheet__canvas") as HTMLElement;
+
+    const idle = new Event("touchmove", { bubbles: true, cancelable: true });
+    canvas.dispatchEvent(idle);
+    expect(idle.defaultPrevented, "an idle canvas must not block panning").toBe(false);
+
+    fireEvent.pointerDown(surface(), { clientX: 10, clientY: 10, pointerId: 1 });
+    const during = new Event("touchmove", { bubbles: true, cancelable: true });
+    canvas.dispatchEvent(during);
+    expect(during.defaultPrevented, "a stroke in flight must suppress the pan").toBe(true);
+  });
+});
+
+// ── focus containment ────────────────────────────────────────────────────────
+
+describe("SignaturePad — focus trap", () => {
+  it("Shift+Tab as the FIRST keystroke wraps to the last control, not out of the dialog", () => {
+    // Regression: root.contains(root) is true, so the open state fell through to the
+    // browser default and walked focus backwards onto the covered page — invisibly.
+    const { container } = render(<SignaturePad />);
+    const s = openSheet(container);
+    expect(document.activeElement).toBe(s);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(sheetButton("Done"));
+  });
+
+  it("Tab as the first keystroke moves to the first enabled control", () => {
+    const { container } = render(<SignaturePad />);
+    openSheet(container);
+    // Clear is disabled while the draft is empty, so Cancel is first.
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(sheetButton("Cancel"));
+  });
+
+  it("Tab wraps from the last control back to the first", () => {
+    const { container } = render(<SignaturePad />);
+    openSheet(container);
+    sheetButton("Done").focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(sheetButton("Cancel"));
+  });
+
+  it("recaptures focus that drifted to <body> — drawing blurs onto a non-focusable svg", () => {
+    const { container } = render(<SignaturePad />);
+    const s = openSheet(container);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(s.contains(document.activeElement)).toBe(true);
+  });
+
+  it("Clear parks focus back on the dialog instead of dropping it to <body>", () => {
+    const onChange = vi.fn();
+    const { container } = render(<SignaturePad onChange={onChange} />);
+    const s = openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    draw(surface(), [
+      [10, 10],
+      [20, 24],
+    ]);
+
+    const clear = sheetButton("Clear");
+    clear.focus();
+    fireEvent.click(clear);
+
+    expect(clear.disabled, "Clear disables itself once the draft is empty").toBe(true);
+    expect(document.activeElement).toBe(s);
   });
 });
 

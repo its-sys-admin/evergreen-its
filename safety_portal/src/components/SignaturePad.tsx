@@ -62,6 +62,14 @@ function SignatureSheet({
   const [paths, setPaths] = useState<string[]>(initialPaths);
   const currentRef = useRef<string>(""); // in-progress `d`
   const drawingRef = useRef(false);
+  // The pointer that owns the in-flight stroke. Web content gets NO palm rejection:
+  // iOS delivers every simultaneous touch as its own pointer, and touch-action:none
+  // guarantees each one lands here rather than being eaten as a gesture. On the old
+  // ~350x105 strip a resting hand was unlikely; on this sheet's near-full-width
+  // canvas it is the normal posture, and without this an unrelated contact would
+  // overwrite currentRef and re-anchor the signature at the palm — silently, since
+  // the preview re-renders from the same corrupted ref and agrees with the PDF.
+  const activePointerRef = useRef<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -147,7 +155,14 @@ function SignatureSheet({
       const first = nodes[0];
       const last = nodes[nodes.length - 1];
       const active = document.activeElement;
-      if (!(active instanceof Node) || !root.contains(active)) {
+      // `active === root` is the OPEN state (the dialog itself holds focus) and must
+      // be treated as a boundary: root.contains(root) is true, so without this the
+      // very first Shift+Tab fell through to the browser default and walked focus
+      // BACKWARDS out of the dialog onto the covered page — invisibly, since the
+      // sheet is opaque and the body is position:fixed so it cannot even scroll the
+      // focused control into view. A field PM could then Enter on the form's Submit
+      // button and file the report with the signature still empty.
+      if (!(active instanceof Node) || !root.contains(active) || active === root) {
         e.preventDefault();
         (e.shiftKey ? last : first).focus();
       } else if (e.shiftKey && active === first) {
@@ -180,6 +195,12 @@ function SignatureSheet({
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<SVGSVGElement>) => {
       e.preventDefault();
+      // Ignore any contact that arrives while a stroke is already in flight (palm,
+      // second finger). Gated on drawingRef rather than activePointerRef so it
+      // self-heals: up/cancel always clears drawingRef, so a lost pointerup can
+      // never wedge the pad.
+      if (drawingRef.current) return;
+      activePointerRef.current = e.pointerId;
       // Keep receiving move/up if the finger/stylus drifts outside the surface.
       // setPointerCapture can throw (detached element / released pointer) — never
       // let that abort the stroke.
@@ -200,7 +221,7 @@ function SignatureSheet({
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<SVGSVGElement>) => {
-      if (!drawingRef.current) return;
+      if (!drawingRef.current || e.pointerId !== activePointerRef.current) return;
       e.preventDefault();
       const native = e.nativeEvent;
       // getCoalescedEvents() yields the high-frequency points batched into one move
@@ -226,9 +247,12 @@ function SignatureSheet({
   // drifting off the small strip terminated the stroke early. Up + Cancel are the
   // real stroke terminators.
   const endStroke = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
-    if (!drawingRef.current) return;
+    // Only the pointer that started the stroke may end it — otherwise a palm lifting
+    // first would commit the fragment and strand the still-drawing finger.
+    if (!drawingRef.current || e.pointerId !== activePointerRef.current) return;
     e.preventDefault();
     drawingRef.current = false;
+    activePointerRef.current = null;
     const finished = currentRef.current;
     currentRef.current = "";
     if (finished.includes("L")) {
@@ -243,6 +267,11 @@ function SignatureSheet({
     setPaths([]);
     currentRef.current = "";
     drawingRef.current = false;
+    activePointerRef.current = null;
+    // Clear disables itself once the draft is empty, which would drop focus to
+    // <body>: no ring, nothing announced, and the next keypress does nothing inside
+    // a full-screen overlay. Park focus back on the dialog so the trap still owns it.
+    rootRef.current?.focus();
     force((n) => n + 1);
   }, []);
 

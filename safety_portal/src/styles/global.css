@@ -545,10 +545,20 @@ h3 {
   padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
     env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
   overscroll-behavior: contain;
-  /* Height allowance for head + foot + body padding, consumed by the canvas width
-     clamp below. Deliberately generous: over-reserving only letterboxes a little
-     more, whereas under-reserving would push the action bar off-screen. */
-  --sigsheet-chrome: 220px;
+  /* Vertical chrome above and below the canvas, consumed by the canvas width clamp
+     below. COMPUTED, not guessed:
+         48  .sigsheet__head   (min-height var(--tap); its 1px border sits inside,
+                                under the global border-box reset)
+       + 73  .sigsheet__foot   (.btn min-height 48 + 2 x var(--space-3) + 1px border)
+       + 32  .sigsheet__body   (2 x var(--space-4) padding)
+       = 153, + 8px slack for sub-pixel and font rounding.
+     Over-reserving is NOT free: the allowance is multiplied by 600/180, so every
+     wasted pixel of height costs 3.3px of pad width. Under-reserving does NOT push
+     the action bar off-screen — the foot is flex:none and the canvas flex:0 0 auto,
+     so the canvas would overflow and the foot would paint over it, swallowing taps
+     on the bottom of the signing surface. Safe-area insets are subtracted separately
+     below (they shrink this element's content box, not 100dvh). */
+  --sigsheet-chrome: 161px;
 }
 
 .sigsheet__head {
@@ -601,7 +611,15 @@ h3 {
      by narrowing instead. Progressive fallbacks: the last valid declaration wins. */
   width: 100%;
   width: min(100%, calc((100vh - var(--sigsheet-chrome)) * 600 / 180));
-  width: min(100%, calc((100dvh - var(--sigsheet-chrome)) * 600 / 180));
+  width: min(
+    100%,
+    calc(
+      (
+          100dvh - var(--sigsheet-chrome) - env(safe-area-inset-top, 0px) -
+            env(safe-area-inset-bottom, 0px)
+        ) * 600 / 180
+    )
+  );
 }
 
 .sigsheet__surface {
