@@ -429,7 +429,12 @@ export function FormFillPage({
           <>
             {amendsUuid ? <p className="jha__notice"><strong>Amending</strong> a previous submission.</p> : null}
             <section className="card">
-              <FormRenderer def={def} values={values} setValues={editValues} />
+              {/* onDraftDirty: a signature does not reach setValues until Done, so a user
+                  whose FIRST action is signing was invisible to BOTH guards above — no
+                  beforeunload on tab close, no popstate confirm on hardware Back — and the
+                  form was discarded silently. The first completed stroke arms them. */}
+              <FormRenderer def={def} values={values} setValues={editValues}
+                onDraftDirty={() => setDirty(true)} />
             </section>
             {error ? <p className="login__error" role="alert">{error}</p> : null}
             <div className="jha__actions">

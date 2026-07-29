@@ -18,10 +18,15 @@ export const ERROR_COPY: Record<string, string> = {
   forbidden: "You don't have permission to do that.",
   forbidden_role: "The daily field report is for crew-lead managers and the office \u2014 this account can't file it.",
 
+  forbidden_job: "You're not assigned to that job.",
+
   // ── generic request shape ──────────────────────────────────────────────────────────────────────
   bad_request: "The request couldn't be read — please try again.",
   not_found: "That item no longer exists — refresh and try again.",
   internal_error: "Something went wrong on the server — please try again.",
+  // 503, signing secret absent. Retrying cannot help — mirrors hmac_secret_missing below.
+  server_misconfigured: "The server isn't fully set up — contact the operator.",
+  invalid_date: "That date couldn't be read — pick it again.",
 
   // ── tasks ──────────────────────────────────────────────────────────────────────────────────────
   forbidden_task: "You can only update tasks assigned to you.",
@@ -62,6 +67,27 @@ export const ERROR_COPY: Record<string, string> = {
   auto_close_only: "This item completes automatically when the linked form is filed — it can't be checked by hand.",
   no_instance: "There's no daily checklist for you today.",
   not_complete: "Finish the remaining checklist items first.",
+  photo_required: "This item needs a photo before it can be completed — add one first.",
+  invalid_status_filter: "That isn't a valid status filter.",
+
+  // ── checklist sign-off → progress report (POST .../progress-log) ───────────────────────────────
+  // The branch codes of the "Sign & log to progress report" flow. Every one of these used to
+  // fall through to "Something went wrong (…). Please try again." — advice that is actively
+  // false for a size failure or a dark gate, which is the exact failure the R3-F2 `too_large`
+  // copy above was written to kill.
+  signature_required: "Sign before logging this inspection.",
+  signature_too_large:
+    "That signature is too detailed to save — tap Clear and sign again with fewer strokes.",
+  already_submitted: "This inspection has already been logged — refresh to see the filed copy.",
+  progress_logging_disabled:
+    "Logging inspections to the progress report is turned off — ask the office to enable it.",
+
+  // ── recurring checklists (dark-gated behind RECURRING_CHECKLISTS_ENABLED) ──────────────────────
+  recurring_disabled: "Repeating checklists are turned off — ask the office to enable them.",
+  invalid_recurrence: "The repeat settings couldn't be read — set the schedule again.",
+  invalid_cadence: "Pick a valid repeat schedule.",
+  invalid_anchor_date: "That start date isn't a real calendar date — pick it again.",
+  job_required: "A repeating checklist needs a job — pick one first.",
 
   // ── time entries ───────────────────────────────────────────────────────────────────────────────
   invalid_hours: "Hours must be a number greater than 0 and at most 24.",
@@ -99,6 +125,8 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_email: "Enter a valid email address.",
   invalid_phone: "The phone number isn't valid.",
   invalid_cc: "CC lists take up to 5 valid email addresses.",
+  // Create-only: the /contacts edit route deliberately still allows blanking the list.
+  safety_cc_required: "Add at least one safety CC contact — it's required when creating a job.",
   invalid_contact_name: "The contact name isn't valid.",
   invalid_client_name: "Enter a client name.",
   invalid_client_id: "Pick a valid client.",
@@ -157,6 +185,14 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_detail: "The detail text isn't valid.",
   invalid_window: "That isn't a valid reporting window.",
   invalid_source_files: "The source-file list isn't valid.",
+  invalid_material_id: "Pick a material from the catalog.",
+  already_actioned: "That material was already actioned — refresh to see the current status.",
+  not_editable: "That material can no longer be edited — it's already been received or flagged.",
+
+  // ── job daily requirements ─────────────────────────────────────────────────────────────────────
+  daily_tab_form_code:
+    "That form is filed from the Daily Report tab — it can't be added as a daily requirement.",
+  too_many_items: "This job already has the maximum number of daily requirements — remove one first.",
 
   // ── purchase orders (worker/po.ts vocabulary — S6) ─────────────────────────────────────────────
   invalid_vendor_key: "That vendor reference isn't valid — refresh and pick again.",

@@ -7,6 +7,35 @@ interface SignaturePadProps {
   height?: number;
   strokeWidth?: number;
   /**
+   * CONTROLLED when provided — including "" — : the committed signature `d`. The
+   * preview AND the capture sheet's draft seed both read THIS, so the pad can never
+   * disagree with the value that will actually be filed. Omit (`undefined`) for
+   * uncontrolled mode (internal state).
+   *
+   * Why it exists: on an AMEND the prior signature is repopulated into form values,
+   * but the host does NOT remount the pad — so without `value` the pad rendered blank
+   * over a real, submittable signature. Since the inline element became a read-only
+   * preview, blank reads as "not signed", so a user could amend, never tap it, submit,
+   * and file the amended legal PDF carrying the OLD ink. It also closes the
+   * index-keyed `signature_table` desync: removing a row shifts values up while React
+   * reuses the component instance, so an uncontrolled pad paints the DELETED person's
+   * signature onto the next row.
+   *
+   * If a parent passes `value` but never echoes it back, the pad is inert by design:
+   * Done fires `onChange` and the preview reverts to the prop. All live hosts round-trip.
+   */
+  value?: string;
+  /**
+   * Fires ONCE per sheet session, the first time a real stroke completes (movement,
+   * not a stray tap). Hosts use it to arm an unsaved-work guard.
+   *
+   * With commit-on-Done, a user whose FIRST action is signing is invisible to a dirty
+   * flag until Done — so hardware Back or a tab close mid-signing discarded the form
+   * with no prompt, where every completed stroke used to arm one. Deliberately NOT
+   * fired on sheet OPEN: open-then-Cancel must stay clean.
+   */
+  onDraftDirty?: () => void;
+  /**
    * Fires when the capture sheet is COMMITTED via Done, and on Clear.
    * svgPath = combined SVG path `d`; empty = no signature.
    *
@@ -43,6 +72,8 @@ interface SignatureSheetProps {
   initialPaths: string[];
   onCommit: (paths: string[]) => void;
   onCancel: () => void;
+  /** Fired once, on the first COMPLETED stroke of this sheet session. */
+  onDraftDirty?: () => void;
 }
 
 /**
@@ -58,6 +89,7 @@ function SignatureSheet({
   initialPaths,
   onCommit,
   onCancel,
+  onDraftDirty,
 }: SignatureSheetProps) {
   const [paths, setPaths] = useState<string[]>(initialPaths);
   const currentRef = useRef<string>(""); // in-progress `d`
@@ -70,6 +102,8 @@ function SignatureSheet({
   // overwrite currentRef and re-anchor the signature at the palm — silently, since
   // the preview re-renders from the same corrupted ref and agrees with the PDF.
   const activePointerRef = useRef<number | null>(null);
+  /** Latch so onDraftDirty fires once per sheet session, not once per stroke. */
+  const notifiedRef = useRef(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -246,21 +280,31 @@ function SignatureSheet({
   // setPointerCapture is best-effort — see the try/catch — so on a phone a finger
   // drifting off the small strip terminated the stroke early. Up + Cancel are the
   // real stroke terminators.
-  const endStroke = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
-    // Only the pointer that started the stroke may end it — otherwise a palm lifting
-    // first would commit the fragment and strand the still-drawing finger.
-    if (!drawingRef.current || e.pointerId !== activePointerRef.current) return;
-    e.preventDefault();
-    drawingRef.current = false;
-    activePointerRef.current = null;
-    const finished = currentRef.current;
-    currentRef.current = "";
-    if (finished.includes("L")) {
-      // ignore stray taps with no movement
-      setPaths((prev) => [...prev, finished]);
-    }
-    force((n) => n + 1);
-  }, []);
+  const endStroke = useCallback(
+    (e: ReactPointerEvent<SVGSVGElement>) => {
+      // Only the pointer that started the stroke may end it — otherwise a palm lifting
+      // first would commit the fragment and strand the still-drawing finger.
+      if (!drawingRef.current || e.pointerId !== activePointerRef.current) return;
+      e.preventDefault();
+      drawingRef.current = false;
+      activePointerRef.current = null;
+      const finished = currentRef.current;
+      currentRef.current = "";
+      if (finished.includes("L")) {
+        // ignore stray taps with no movement
+        setPaths((prev) => [...prev, finished]);
+        // First REAL stroke of this session arms the host's unsaved-work guard. Latched
+        // so a multi-stroke signature notifies once, and gated on the same
+        // movement check so a stray tap never marks the form dirty.
+        if (!notifiedRef.current) {
+          notifiedRef.current = true;
+          onDraftDirty?.();
+        }
+      }
+      force((n) => n + 1);
+    },
+    [onDraftDirty],
+  );
 
   /** Clears the DRAFT only — the committed value is untouched until Done. */
   const clearDraft = useCallback(() => {
@@ -351,9 +395,17 @@ export function SignaturePad({
   width = 600,
   height = 180,
   strokeWidth = 2.5,
+  value,
   onChange,
+  onDraftDirty,
 }: SignaturePadProps) {
-  const [paths, setPaths] = useState<string[]>([]); // each committed stroke = one `d`
+  // CONTROLLED when `value` is a string (including ""), uncontrolled when undefined —
+  // the standard <input value>/defaultValue duality. A mount-time seed would NOT be
+  // enough: an amend rewrites form values WITHOUT remounting the pad, which is exactly
+  // the path that filed the old signature under a blank-looking preview.
+  const controlled = value !== undefined;
+  const [internal, setInternal] = useState(""); // uncontrolled mode only
+  const committed = controlled ? value : internal;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
@@ -367,23 +419,22 @@ export function SignaturePad({
 
   const handleCommit = useCallback(
     (next: string[]) => {
-      setPaths(next);
       const d = next.join(" ");
+      if (!controlled) setInternal(d);
       onChange?.(d, d.length === 0);
       setOpen(false);
     },
-    [onChange],
+    [controlled, onChange],
   );
 
   const handleCancel = useCallback(() => setOpen(false), []);
 
   const clear = useCallback(() => {
-    setPaths([]);
+    if (!controlled) setInternal("");
     onChange?.("", true);
-  }, [onChange]);
+  }, [controlled, onChange]);
 
-  const combined = paths.join(" ");
-  const isEmpty = combined.length === 0;
+  const isEmpty = committed.length === 0;
 
   return (
     <div className="sig">
@@ -407,7 +458,7 @@ export function SignaturePad({
           aria-label="Signature capture area"
         >
           <path
-            d={combined}
+            d={committed}
             fill="none"
             stroke="#0e0e0e"
             strokeWidth={strokeWidth}
@@ -429,9 +480,14 @@ export function SignaturePad({
               width={width}
               height={height}
               strokeWidth={strokeWidth}
-              initialPaths={paths}
+              /* LOAD-BEARING: the sheet seeds from the SAME resolved value as the
+                 preview. Controlling only the preview would let the user tap a row
+                 showing person B's ink and open a sheet holding person A's — Done
+                 would then write A's signature onto B's row. */
+              initialPaths={committed ? [committed] : []}
               onCommit={handleCommit}
               onCancel={handleCancel}
+              onDraftDirty={onDraftDirty}
             />,
             document.body,
           )

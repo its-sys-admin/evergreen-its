@@ -556,3 +556,158 @@ describe("SignaturePad — inline preview contract", () => {
     expect(container.querySelector(".sig__hint")?.textContent).toBe("Tap to edit");
   });
 });
+
+// ── controlled `value` ───────────────────────────────────────────────────────
+
+describe("SignaturePad — controlled value", () => {
+  const PRIOR = "M 10 20 L 30 40 L 60 25";
+
+  it("renders the prop as the preview with ZERO interaction — the AMEND case", () => {
+    // The bug: an amend repopulates form values WITHOUT remounting the pad, so an
+    // uncontrolled pad showed blank over a real, submittable signature — and since the
+    // inline element is a preview, blank reads as "not signed".
+    const { container } = render(<SignaturePad value={PRIOR} />);
+    const preview = container.querySelector('svg[role="img"] path') as SVGPathElement;
+    expect(preview.getAttribute("d")).toBe(PRIOR);
+    expect(container.querySelector(".sig__hint")?.textContent).toBe("Tap to edit");
+  });
+
+  it("seeds the SHEET from the prop too, not from internal state", () => {
+    // Controlling only the preview would let a user tap a row showing person B's ink and
+    // open a sheet holding person A's — Done would then write A's signature onto B's row.
+    const onChange = vi.fn();
+    const { container, rerender } = render(<SignaturePad value={PRIOR} onChange={onChange} />);
+
+    // Commit something else while controlled; the parent then supplies a DIFFERENT value.
+    openSheet(container);
+    expect((surface().querySelector("path") as SVGPathElement).getAttribute("d")).toBe(PRIOR);
+    fireEvent.click(sheetButton("Cancel"));
+
+    const OTHER = "M 1 2 L 3 4";
+    rerender(<SignaturePad value={OTHER} onChange={onChange} />);
+    openSheet(container);
+    expect((surface().querySelector("path") as SVGPathElement).getAttribute("d")).toBe(OTHER);
+  });
+
+  it("editing a controlled signature APPENDS — edit, not restart", () => {
+    const onChange = vi.fn();
+    const { container } = render(<SignaturePad value={PRIOR} onChange={onChange} />);
+    openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    draw(surface(), [
+      [100, 100],
+      [200, 150],
+    ]);
+    fireEvent.click(sheetButton("Done"));
+
+    const d = onChange.mock.calls[0][0] as string;
+    expect(d.startsWith(PRIOR + " ")).toBe(true);
+    expect(d.length).toBeGreaterThan(PRIOR.length);
+  });
+
+  it("passes the value through BYTE-IDENTICALLY — never re-normalised", () => {
+    // The 600x180 space is an out-of-band contract with form_pdf.py; a "helpful"
+    // normalisation here would bake a permanent stretch into the filed PDF.
+    const odd = "M 0.01 179.99 L 599.99 0.01";
+    const { container } = render(<SignaturePad value={odd} />);
+    expect(
+      (container.querySelector('svg[role="img"] path') as SVGPathElement).getAttribute("d"),
+    ).toBe(odd);
+  });
+
+  it("a controlled parent that does not echo leaves the pad inert — pinned as contract", () => {
+    const onChange = vi.fn();
+    const { container } = render(<SignaturePad value="" onChange={onChange} />);
+    openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    draw(surface(), [
+      [10, 10],
+      [20, 24],
+    ]);
+    fireEvent.click(sheetButton("Done"));
+
+    expect(onChange).toHaveBeenCalledTimes(1); // the parent WAS told
+    // ...but it did not echo, so the preview reflects the prop, not the draft.
+    expect(
+      (container.querySelector('svg[role="img"] path') as SVGPathElement).getAttribute("d"),
+    ).toBe("");
+    expect(container.querySelector(".sig__hint")?.textContent).toBe("Tap to sign");
+  });
+
+  it("omitting `value` keeps the uncontrolled behaviour every other test relies on", () => {
+    const onChange = vi.fn();
+    const { container } = render(<SignaturePad onChange={onChange} />);
+    openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    draw(surface(), [
+      [10, 10],
+      [20, 24],
+    ]);
+    fireEvent.click(sheetButton("Done"));
+
+    const committed = onChange.mock.calls[0][0] as string;
+    expect(
+      (container.querySelector('svg[role="img"] path') as SVGPathElement).getAttribute("d"),
+    ).toBe(committed);
+  });
+});
+
+// ── onDraftDirty (unsaved-work guard) ────────────────────────────────────────
+
+describe("SignaturePad — onDraftDirty", () => {
+  it("does NOT fire on sheet open — open-then-Cancel must stay clean", () => {
+    const onDraftDirty = vi.fn();
+    const { container } = render(<SignaturePad onDraftDirty={onDraftDirty} />);
+    openSheet(container);
+    expect(onDraftDirty).not.toHaveBeenCalled();
+    fireEvent.click(sheetButton("Cancel"));
+    expect(onDraftDirty).not.toHaveBeenCalled();
+  });
+
+  it("fires on the first COMPLETED stroke — long before Done", () => {
+    const onDraftDirty = vi.fn();
+    const { container } = render(<SignaturePad onDraftDirty={onDraftDirty} />);
+    openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    draw(surface(), [
+      [10, 10],
+      [20, 24],
+    ]);
+    expect(onDraftDirty).toHaveBeenCalledTimes(1);
+    expect(sheet(), "still open — the guard must arm BEFORE commit").not.toBeNull();
+  });
+
+  it("fires ONCE for a multi-stroke signature", () => {
+    const onDraftDirty = vi.fn();
+    const { container } = render(<SignaturePad onDraftDirty={onDraftDirty} />);
+    openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    for (const stroke of [
+      [
+        [10, 10],
+        [20, 24],
+      ],
+      [
+        [40, 40],
+        [50, 60],
+      ],
+      [
+        [80, 20],
+        [90, 30],
+      ],
+    ] as Array<Array<[number, number]>>) {
+      draw(surface(), stroke);
+    }
+    expect(onDraftDirty).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire on a stray tap with no movement", () => {
+    const onDraftDirty = vi.fn();
+    const { container } = render(<SignaturePad onDraftDirty={onDraftDirty} />);
+    openSheet(container);
+    mockRect(surface(), { width: 600, height: 180 });
+    fireEvent.pointerDown(surface(), { clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerUp(surface(), { clientX: 10, clientY: 10, pointerId: 1 });
+    expect(onDraftDirty).not.toHaveBeenCalled();
+  });
+});

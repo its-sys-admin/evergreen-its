@@ -139,9 +139,14 @@ interface Props {
    *  the definition's own headings) carry a time-of-day eyebrow. Absent (the generic
    *  fill page and every other form) → markup is byte-identical to before. */
   dayRail?: boolean;
+  /** Fired once the first time a signature stroke completes in ANY pad in this form.
+   *  Hosts OR it into their unsaved-work flag: with commit-on-Done a signature does not
+   *  reach `setValues` until Done, so a user whose first action is signing was otherwise
+   *  invisible to the beforeunload / popstate guards. */
+  onDraftDirty?: () => void;
 }
 
-export function FormRenderer({ def, values, setValues, formLinks, requirements, expectedMaterials, additionalPhotos, dayRail }: Props) {
+export function FormRenderer({ def, values, setValues, formLinks, requirements, expectedMaterials, additionalPhotos, dayRail, onDraftDirty }: Props) {
   const setField = (key: string, val: string) =>
     setValues((v) => ({ ...v, [key]: val }));
 
@@ -210,6 +215,7 @@ export function FormRenderer({ def, values, setValues, formLinks, requirements, 
           additionalPhotos={additionalPhotos}
           setPhotoRefs={setPhotoRefs}
           dayRail={dayRail}
+          onDraftDirty={onDraftDirty}
         />
       ))}
     </div>
@@ -232,6 +238,7 @@ interface SectionProps {
   additionalPhotos?: AdditionalPhotosAdapter;
   setPhotoRefs: (sec: string, next: AdditionalPhotoRef[]) => void;
   dayRail?: boolean;
+  onDraftDirty?: () => void;
 }
 
 function SectionView(p: SectionProps) {
@@ -251,7 +258,7 @@ function SectionView(p: SectionProps) {
                   onChange={(next) => p.setPhotos(f.key, next)} />
               ) : (
                 <FieldView key={f.key} field={f} value={String(p.values[f.key] ?? "")}
-                  onChange={(v) => p.setField(f.key, v)} />
+                  onChange={(v) => p.setField(f.key, v)} onDraftDirty={p.onDraftDirty} />
               ))}
           </div>
         </section>
@@ -278,7 +285,8 @@ function SectionView(p: SectionProps) {
     case "signature_table":
       return <TableView section={s} rows={(p.values[s.key] as Row[]) ?? []}
         onCell={(i, c, v) => p.setCell(s.key, i, c, v)}
-        onAdd={() => p.addRow(s.key, s.columns)} onRemove={(i) => p.removeRow(s.key, i)} />;
+        onAdd={() => p.addRow(s.key, s.columns)} onRemove={(i) => p.removeRow(s.key, i)}
+        onDraftDirty={p.onDraftDirty} />;
     case "checklist":
       return <ChecklistView section={s} state={(p.values[s.key] as ChecklistState) ?? {}}
         onChange={(item, patch) => p.setChecklist(s.key, item, patch)} />;
@@ -580,12 +588,16 @@ const StaticSectionView = memo(function StaticSectionView({
   }
 });
 
-function FieldView({ field, value, onChange }: { field: Field; value: string; onChange: (v: string) => void }) {
+function FieldView({ field, value, onChange, onDraftDirty }: { field: Field; value: string; onChange: (v: string) => void; onDraftDirty?: () => void }) {
   if (field.input === "signature") {
     return (
       <div className="field">
         <span className="field__label">{field.label}</span>
-        <SignaturePad onChange={(svg, empty) => onChange(empty ? "" : svg)} />
+        {/* CONTROLLED: `value` already arrives String()-normalized. Without it an amend
+            repopulates form values while the pad renders blank — and the old signature
+            gets filed under a preview that says "Tap to sign". */}
+        <SignaturePad value={value} onChange={(svg, empty) => onChange(empty ? "" : svg)}
+          onDraftDirty={onDraftDirty} />
       </div>
     );
   }
@@ -618,10 +630,10 @@ function FieldView({ field, value, onChange }: { field: Field; value: string; on
   );
 }
 
-function TableView({ section, rows, onCell, onAdd, onRemove }: {
+function TableView({ section, rows, onCell, onAdd, onRemove, onDraftDirty }: {
   section: Extract<Section, { type: "repeating_table" | "signature_table" }>;
   rows: Row[]; onCell: (i: number, c: string, v: string) => void;
-  onAdd: () => void; onRemove: (i: number) => void;
+  onAdd: () => void; onRemove: (i: number) => void; onDraftDirty?: () => void;
 }) {
   return (
     <section className="fr__section">
@@ -637,7 +649,13 @@ function TableView({ section, rows, onCell, onAdd, onRemove }: {
               <div className="fr__cell" key={c.key}>
                 <span className="fr__cell-label">{c.label}</span>
                 {c.input === "signature" ? (
-                  <SignaturePad onChange={(svg, empty) => onCell(i, c.key, empty ? "" : svg)} />
+                  /* CONTROLLED — mirrors the sibling <input value=...> below. Rows are
+                     index-keyed, so removing a row shifts values up while React reuses
+                     the instance: an uncontrolled pad would paint the DELETED person's
+                     signature onto the next row. */
+                  <SignaturePad value={String(row[c.key] ?? "")}
+                    onChange={(svg, empty) => onCell(i, c.key, empty ? "" : svg)}
+                    onDraftDirty={onDraftDirty} />
                 ) : (
                   <input className="field__input"
                     type={c.input === "date" || c.input === "time" || c.input === "number" ? c.input : "text"}

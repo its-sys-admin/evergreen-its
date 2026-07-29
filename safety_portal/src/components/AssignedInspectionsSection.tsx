@@ -401,7 +401,9 @@ export function AssignedInspectionsSection({
                           <p className="dash-card__sub">
                             Sign to log this completed inspection to the weekly progress report.
                           </p>
-                          <SignaturePad onChange={(svg, empty) => setSig(empty ? "" : svg)} />
+                          {/* CONTROLLED — `sig` is what the Log button gates on, so the
+                              preview and the gate can never disagree. */}
+                          <SignaturePad value={sig} onChange={(svg, empty) => setSig(empty ? "" : svg)} />
                           {progressErr ? <InlineRowMsg msg={{ ok: false, text: progressErr }} /> : null}
                           <div className="checklist-progress-log__actions">
                             <button

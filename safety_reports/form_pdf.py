@@ -144,6 +144,27 @@ def _parse_ml_path(d: str) -> list[list[tuple[float, float]]]:
 class SignatureDrawing(Flowable):
     """Draw SVG-path signature data scaled into a target box (Y flipped for PDF)."""
 
+    @classmethod
+    def for_signature(cls, path_d: str, width: float) -> SignatureDrawing:
+        """Ink-bearing signature box: height DERIVED from width at the pad's exact
+        600:180 capture aspect (``_SIG_W``:``_SIG_H``).
+
+        ``draw()`` scales PER AXIS, so any other ratio bakes a permanent stretch into
+        a FILED LEGAL DOCUMENT — and it is invisible, because the portal's on-screen
+        preview re-normalises the same path into its own 600:180 viewBox and looks
+        correct on screen. The table box was 140x44 (a 4.76% vertical over-stretch)
+        until this existed; nothing structural had prevented it.
+
+        EVERY call site that may receive real signature data MUST use this
+        constructor — ``tests/test_form_pdf.py`` enforces that with an AST fence.
+        Direct ``__init__`` with an explicit height is reserved for the blank-form
+        ruled line (``_blank_field_cell``), which passes a literal ``""`` and so
+        never draws strokes: ``draw()`` returns before ``sx``/``sy`` are computed,
+        making the aspect irrelevant there. Deriving its height would inflate every
+        blank form's row for zero fidelity gain.
+        """
+        return cls(path_d, width=width, height=width * _SIG_H / _SIG_W)
+
     def __init__(self, path_d: str, width: float = 200, height: float = 60) -> None:
         super().__init__()
         self.width = width
@@ -604,7 +625,8 @@ def _header_section(fields: list[dict], values: dict, st: dict) -> list[Flowable
             continue
         val = values.get(f["key"], "")
         if f["input"] == "signature":
-            cell: Any = SignatureDrawing(str(val)) if val else _p("", st["cell"])
+            # 200x60 — byte-identical to the previous default, now self-evidently 600:180.
+            cell: Any = SignatureDrawing.for_signature(str(val), 200) if val else _p("", st["cell"])
         else:
             cell = _p(val, st["cell"])
         rows.append([_p(f["label"], st["colhead"]), cell])
@@ -631,7 +653,10 @@ def _table_section(section: dict, values: dict, st: dict) -> list[Flowable]:
         for c in cols:
             v = row.get(c["key"], "")
             if c["input"] == "signature" and v:
-                cells.append(SignatureDrawing(str(v), width=140, height=44))
+                # Was 140x44 — a 4.76% vertical over-stretch of every table signature.
+                # 140 * 180/600 = 42.0 exactly; the row shrinks 51pt -> 49pt and no
+                # active form's pagination changes.
+                cells.append(SignatureDrawing.for_signature(str(v), 140))
             elif c["input"] == "photo":
                 # Photos are header-level only (publishValidation-enforced); a photo in a
                 # table column is an illegal/malformed definition. NEVER dump the raw

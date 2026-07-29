@@ -5,6 +5,7 @@ asserts the source labels / mandatory legal text / N/A-vs-blank render faithfull
 """
 from __future__ import annotations
 
+import ast
 import io
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import pypdf
 import pytest
 
+from safety_reports import form_pdf
 from safety_reports.form_pdf import (
     _parse_ml_path,
     incomplete_checklist_items,
@@ -836,3 +838,71 @@ def test_material_incident_v1_renders_filled_values() -> None:
     assert "Damaged" in text
     assert "crushed corners" in text
     assert "notified the CM before signing" in text
+
+
+# ── signature-box aspect: the 600:180 contract with the portal's SignaturePad ──────
+#
+# form_pdf scales signature paths PER AXIS (`sx, sy = width/_SIG_W, height/_SIG_H`),
+# so a box whose ratio is not exactly 600:180 permanently stretches the ink in a
+# FILED LEGAL DOCUMENT. It is invisible on screen — the portal preview re-normalises
+# the same path into its own 600:180 viewBox — so only a test can hold this.
+# The table box was 140x44 (4.76% vertical over-stretch) before `for_signature`.
+
+def test_for_signature_derives_height_at_the_pad_aspect() -> None:
+    for width in (140.0, 200.0, 97.12, 333.0):
+        d = form_pdf.SignatureDrawing.for_signature("M 0 0 L 10 10", width)
+        assert d.width == width
+        assert d.height / d.width == pytest.approx(form_pdf._SIG_H / form_pdf._SIG_W)
+        # the per-axis scales draw() computes must be EQUAL — that is the whole point
+        assert d.width / form_pdf._SIG_W == pytest.approx(d.height / form_pdf._SIG_H)
+
+
+def test_table_signature_box_is_140x42_not_140x44() -> None:
+    """Regression pin for the actual defect (was height=44)."""
+    d = form_pdf.SignatureDrawing.for_signature("M 0 0 L 10 10", 140)
+    assert (d.width, d.height) == (140, 42.0)
+
+
+def test_class_default_box_is_already_on_aspect() -> None:
+    """200x60 is exactly 600:180 — header signatures were never distorted."""
+    d = form_pdf.SignatureDrawing("M 0 0 L 10 10")
+    assert d.width / form_pdf._SIG_W == pytest.approx(d.height / form_pdf._SIG_H)
+
+
+def test_blank_form_ruled_line_never_draws_strokes() -> None:
+    """_blank_field_cell's off-aspect 28pt box is legitimate BECAUSE it is inert.
+
+    It passes a literal "" so draw() returns at the baseline before sx/sy exist.
+    If that ever changes, the AST fence below must start covering it.
+    """
+    d = form_pdf.SignatureDrawing("", width=200, height=28)
+    assert d._strokes == []
+
+
+def test_ast_fence_every_ink_bearing_signature_box_uses_for_signature() -> None:
+    """No call site can hand-pick a height for real signature data again.
+
+    Any `SignatureDrawing(...)` whose first argument is not a literal empty string is
+    a potential ink-bearing box and MUST go through `for_signature`. Mirrors the
+    AST-enrollment precedent in tests/test_transient_fence.py.
+    """
+    src = (_ROOT / "safety_reports" / "form_pdf.py").read_text()
+    tree = ast.parse(src)
+    offenders: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        # `SignatureDrawing(...)` — the raw constructor. `SignatureDrawing.for_signature(...)`
+        # is an ast.Attribute and is exempt by construction.
+        if not (isinstance(func, ast.Name) and func.id == "SignatureDrawing"):
+            continue
+        first = node.args[0] if node.args else None
+        inert = isinstance(first, ast.Constant) and first.value == ""
+        if not inert:
+            offenders.append(node.lineno)
+    assert offenders == [], (
+        "SignatureDrawing(...) constructed directly with non-empty path data at "
+        f"lines {offenders} — use SignatureDrawing.for_signature(path, width) so the "
+        "height is derived at the 600:180 capture aspect (see the classmethod docstring)."
+    )
