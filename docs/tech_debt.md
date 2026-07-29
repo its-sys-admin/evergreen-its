@@ -147,6 +147,81 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 
 ---
 
+## Documentation-consolidation audit — ~41 findings remain unapplied [OPEN 2026-07-29, medium]
+
+A 12-agent audit (6 auditors + 6 adversarial verifiers, against HEAD `885d4a4`) produced **172
+confirmed findings** across 63 files. The 2026-07-26→29 session landed **six themed PRs**
+(#2–#7) and took exactly one file to completion (`host_migration_runbook.md`, all 19). Honest
+accounting:
+
+```
+172  total findings
+113  live in files those PRs touched  <- only the themed subset was applied
+ 59  in files never opened
+```
+
+True applied count ≈ **60–70**. Of the 59 untouched, **~13 are out of scope by rule** (code:
+`verify_cutover.py` 4, `generate_config_dictionary.py` 3, `watchdog.py` 1, `system_map.py` 1;
+historical: `docs/reports/` 4), **5 are blueprint-repo**, leaving **~41 legitimate docs items**.
+Largest clusters: `docs/doctrine_manifest.yaml` (4), `docs/runbooks/its_errors_triage.md` (3),
+`context-pack/repo-overview.md` (3), `docs/ROADMAP.md` (3), `docs/troubleshooting/tree.yaml` (3),
+`docs/operations/production_rollback.md` (2), `docs/runbooks/estimate_import_path.md` (2),
+`docs/runbooks/subcontract_generation_path.md` (2), `docs/references/picklist_sync.md` (2).
+
+The findings file (with verbatim stale text, file:line evidence and pre-reviewed `draft_fix`
+for each) is NOT in the repo — it was a session artifact at `~/doc_findings.md` on the
+production host. **Re-running the audit is cheaper than reconstructing it** if that file is gone.
+
+**Trigger:** next docs-focused session, or before the Aug-7 delivery if any of the remaining
+files are operator-facing on the day.
+
+**Two traps for whoever picks this up:**
+1. **The sha-pin set is 22 sources, not 12** — see the entry below.
+2. `check_doctrine_drift --strict` is BLOCKING in CI (M1/M4/M7); `doctrine_manifest.yaml` edits
+   are exactly the kind that trip it. Run it locally before pushing.
+
+---
+
+## Enablement sha-pinning covers `docs/references/` too, not just `docs/enablement/` [OPEN 2026-07-29, low]
+
+`docs/enablement/manifest.yaml` records a sha256 for **22 source files**, and CI
+(`test_docs_pdf` → `build_docs_pdfs --check`) goes RED when any drifts. The commonly-documented
+warning names only `docs/enablement/`. In fact **10 pinned files live under `docs/references/`
+and `docs/troubleshooting/`**: `daemon_reference.md`, `integration_reference.md`,
+`escalation_matrix.md`, `system_architecture.md`, `documentation_index.md`,
+`its_config_dictionary.md`, `security_trust_model.md`, `glossary.md`, `data_model_reference.md`,
+`troubleshooting_guide.md`.
+
+There is **no `--record`/`--update` flag** — `build_docs_pdfs` only offers `--check`. Re-recording
+is manual: `shasum -a 256 <file>` → paste into the matching `sha256:` line. The 2026-07-26→29
+consolidation re-recorded 8 values this way.
+
+**Fix candidates:** (a) add a `--record` mode to `scripts/build_docs_pdfs.py`; (b) at minimum,
+state the true pinned scope wherever the enablement-sha trap is documented. **Trigger:** next
+session that edits a `docs/references/` file, or any `docs_pdf` work.
+
+---
+
+## `its_config_dictionary.md` asserts fail-OPEN for every config read — wrong for send gates [OPEN 2026-07-29, medium]
+
+`docs/references/its_config_dictionary.md` states: *"**Default** is what ITS uses when the row is
+**missing, blank, or unreadable** — every read is fail-open to this value."*
+
+That is **false for the send gates**, which are the reads where it matters most.
+`po_send_poll.py`, `rfq_send_poll.py` and `subcontract_send_poll.py` all set
+`DEFAULT_POLLING_ENABLED = False` (CO-1, PR #585 `45fe4df`: *"a send gate never fails open"*), so
+a missing row fails **safe**. Conversely `progress_send_poll.py:76` and
+`safety_reports/weekly_send_poll.py:69` DO default `True` — those two genuinely fail open, which
+the same sentence obscures by making fail-open sound universal and benign.
+
+It is a **GENERATED file** (`<!-- GENERATED FILE — do not hand-edit -->`); the string lives in
+`scripts/generate_config_dictionary.py`, so this needs a **code PR**, and the regen must be
+followed by re-recording the doc's sha256 in the enablement manifest.
+
+**Trigger:** any `generate_config_dictionary.py` work, or the next send-gate documentation pass.
+
+---
+
 ## WS2 operator dashboard — completion parked items [OPEN 2026-07-13]
 
 From the dashboard-completion session (Blocks 1-5 landed #567/#570/#574/#576). None blocks the ship; each
