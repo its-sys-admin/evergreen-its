@@ -501,12 +501,137 @@ h3 {
   margin-top: 8px;
 }
 
+/* The inline pad is a read-only PREVIEW and the tap target that opens the capture
+   sheet — it captures nothing itself. Button reset only; no appearance of its own. */
+.sig__trigger {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  /* `manipulation`, NOT `none`: the preview sits inside a scrolling form, so the
+     page must still pan under a finger dragged across it. (The old `touch-action:
+     none` here made it a dead scroll zone — and iOS Safari ignored it on the <svg>
+     anyway, which is why the page scrolled mid-stroke.) */
+  touch-action: manipulation;
+}
+
 .sig__surface {
+  display: block;
   width: 100%;
   background: var(--c-white);
   border: 1.5px dashed var(--c-brg);
   border-radius: var(--radius-sm);
-  touch-action: none; /* LOAD-BEARING: stops mobile scroll/zoom stealing the stroke */
+}
+
+/* ── Full-screen signature capture sheet ─────────────────────────────────────
+   Portaled to <body> (role="dialog"), so it escapes the sticky / overflow ancestors
+   of whichever form it was opened from. */
+.sigsheet {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+  height: 100dvh; /* dvh tracks the iOS URL-bar collapse; vh is the fallback */
+  z-index: var(--z-sheet);
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  /* index.html sets viewport-fit=cover, so on notched iPhones a full-bleed sheet
+     runs under the sensor housing and the home indicator — which is exactly where
+     the Done button would otherwise land. */
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  overscroll-behavior: contain;
+  /* Height allowance for head + foot + body padding, consumed by the canvas width
+     clamp below. Deliberately generous: over-reserving only letterboxes a little
+     more, whereas under-reserving would push the action bar off-screen. */
+  --sigsheet-chrome: 220px;
+}
+
+.sigsheet__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--tap);
+  padding: 0 var(--space-4);
+  background: var(--c-white);
+  border-bottom: 1px solid var(--c-line);
+}
+
+.sigsheet__title {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--c-brg);
+}
+
+/* Passive hint only — portrait signing is never blocked, and screen.orientation.lock
+   is unsupported in iOS Safari. */
+.sigsheet__rotate {
+  display: none;
+  font-size: var(--fs-sm);
+  color: var(--c-muted);
+}
+
+.sigsheet__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.sigsheet__canvas {
+  flex: 0 0 auto;
+  /* LOAD-BEARING: stops mobile scroll/zoom stealing the stroke. It lives on this
+     block-level <div> and NOT on the <svg> — WebKit does not reliably honour
+     touch-action on an SVG element, which is the root cause of the iOS scroll bug
+     this sheet fixes. touch-action combines across ancestors, so the surface inside
+     is covered. Do not "tidy" this back onto the svg. */
+  touch-action: none;
+  /* WIDTH-ONLY clamp. The surface's 600:180 aspect-ratio IS the coordinate-space
+     contract (see SignaturePad.tsx) — constraining its HEIGHT would override that
+     ratio and silently skew every captured signature, so the canvas is letterboxed
+     by narrowing instead. Progressive fallbacks: the last valid declaration wins. */
+  width: 100%;
+  width: min(100%, calc((100vh - var(--sigsheet-chrome)) * 600 / 180));
+  width: min(100%, calc((100dvh - var(--sigsheet-chrome)) * 600 / 180));
+}
+
+.sigsheet__surface {
+  display: block;
+  width: 100%;
+  background: var(--c-white);
+  border: 1.5px dashed var(--c-brg);
+  border-radius: var(--radius-sm);
+}
+
+.sigsheet__foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--c-white);
+  border-top: 1px solid var(--c-line);
+}
+
+.sigsheet__spacer {
+  flex: 1 1 auto;
+}
+
+/* First orientation query in the SPA. Portrait phones give a genuinely cramped
+   600:180 strip, so nudge — but never gate — a rotation. */
+@media (orientation: portrait) and (max-width: 640px) {
+  .sigsheet__rotate {
+    display: inline;
+  }
 }
 
 .sig__bar {

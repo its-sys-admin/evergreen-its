@@ -75,4 +75,10 @@
   --maxw: 920px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 8px 24px rgba(1, 61, 43, 0.14);
+
+  /* Layering — the SPA's first and only z-index. Everything else in the portal
+     stacks by DOM order, so this is a scale to slot into rather than a number to
+     out-bid: a full-viewport sheet portaled to <body> sits above all page chrome.
+     Add new layers here (e.g. a future toast) instead of inventing bare numbers. */
+  --z-sheet: 1000;
 }

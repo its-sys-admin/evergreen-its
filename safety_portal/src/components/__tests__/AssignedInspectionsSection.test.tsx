@@ -43,12 +43,38 @@ function inspection(overrides: Partial<checklist.AssignedInstance> = {}, items: 
   };
 }
 
-/** Drive the SignaturePad (svg[role=img]) to capture a non-empty SVG path so the Log button enables. */
+// jsdom's window.scrollTo is a not-implemented stub; the signature sheet's scroll
+// lock restores the offset on close. Silence the noise.
+window.scrollTo = () => {};
+
+/**
+ * Drive the SignaturePad to capture a non-empty SVG path so the Log button enables.
+ *
+ * The inline pad is now a read-only PREVIEW and a tap target — capture happens in a
+ * full-screen sheet portaled to document.body, so the drawing surface is NOT inside
+ * RTL's `container`. Open it, draw on the sheet's surface, then commit with Done.
+ */
 function signOn(container: HTMLElement) {
-  const pad = container.querySelector('[aria-label="Signature capture area"]') as SVGSVGElement;
+  fireEvent.click(container.querySelector('[aria-label="Open signature pad"]') as HTMLElement);
+
+  const sheet = document.body.querySelector('[role="dialog"][aria-label="Sign"]');
+  if (!sheet) throw new Error("signature sheet did not open");
+
+  const pad = sheet.querySelector('[aria-label="Signature drawing surface"]') as SVGSVGElement;
+  // jsdom reports an all-zero rect, which the pad refuses (dividing by it would emit
+  // Infinity into the path). Give it a real 600x180 box so a true path is captured.
+  pad.getBoundingClientRect = () =>
+    ({ x: 0, y: 0, left: 0, top: 0, right: 600, bottom: 180, width: 600, height: 180 }) as DOMRect;
+
   fireEvent.pointerDown(pad, { clientX: 10, clientY: 10, pointerId: 1 });
   fireEvent.pointerMove(pad, { clientX: 20, clientY: 24, pointerId: 1 });
   fireEvent.pointerUp(pad, { clientX: 20, clientY: 24, pointerId: 1 });
+
+  const done = Array.from(sheet.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === "Done",
+  );
+  if (!done) throw new Error("signature sheet has no Done button");
+  fireEvent.click(done);
 }
 
 function respOk(inspections: checklist.AssignedInspection[]) {
