@@ -103,6 +103,7 @@ outside the sentinel block.
 | 2026-07-10 | session_log | active | _–_ | [Cutover readiness gap — CL-01…CL-33 disposition + verify_cutover baseline (2026-07-10)](2026-07-10_cutover-gap.md) | _–_ |
 | 2026-07-10 | session_log | active | _–_ | [Overnight (autonomous): §50 config-editor Features 1 & 2 + Aug-7 cutover readiness](2026-07-10_overnight-config-editor-features-and-cutover-readiness.md) | #524, #525, #526 |
 | 2026-06-10 | session_log | active | safety_portal | [Session — Agent Optimization (Brief 2) + Safety Portal Hardening (Brief 1)](2026-06-10_agent-optimization-and-portal-hardening.md) | #260, #261, #263, #264, #265, #266 |
+| 2026-07-29 | session_log | closed | _–_ | [2026-07-26 → 2026-07-29 — Documentation consolidation: six themed PRs against a 172-finding audit](2026-07-29_documentation-consolidation.md) | #2, #3, #4, #5, #6, #7 |
 | 2026-07-26 | session_log | closed | infrastructure | [2026-07-25 → 2026-07-26 — ITS production host stand-up (Florida MacBook), fleet live at 15 daemons](2026-07-26_production-host-standup.md) | _–_ |
 | 2026-07-24 | session_log | closed | operator_dashboard | [2026-07-24 — The three M365 / Graph secrets become dashboard-rotatable (Developer-Operator self-service), detection gap logged](2026-07-24_m365-secrets-dashboard-rotatable.md) | #705, #707 |
 | 2026-07-23 | session_log | closed | _–_ | [2026-07-23 — Brief B: project-archive path (§51 closure) — verification + doc deliverables](2026-07-23_archive-path-closure-docs.md) | #678 |
