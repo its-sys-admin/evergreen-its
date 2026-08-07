@@ -48,6 +48,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
 | `field_ops.box.archive_root_folder_id` | str | *(unset)* | Box root the Track 6 job archive relocates a closed job's Safety and Progress containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py. | field_ops.job_archive |
+| `field_ops.fieldops_sync.archive_enabled` | bool | false | Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's six Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.equipment_enabled` | bool | false | Per-stream gate: mirror equipment status from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.hours_enabled` | bool | false | Per-stream gate: mirror crew hours from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.incidents_enabled` | bool | false | Per-stream gate: mirror material incidents from the portal into Smartsheet. | field_ops.fieldops_sync |

@@ -50,6 +50,7 @@ sandbox scan):
     field_ops.fieldops_sync.equipment_enabled         / field_ops        / false
     field_ops.fieldops_sync.materials_enabled         / field_ops        / false
     field_ops.fieldops_sync.incidents_enabled         / field_ops        / false
+    field_ops.fieldops_sync.archive_enabled           / field_ops        / false
 
 Blank-value repair: a row that EXISTS with an empty Value is a half-written
 misconfiguration (seen live: seed_config_actuator_config mirrored the po_materials
@@ -386,6 +387,19 @@ CONFIG_ROWS: list[dict[str, Any]] = [
         "Description": (
             "M3 Slice 2 — the Material Incidents append-only ledger up-sync pass in "
             "fieldops_sync (true = ON; false = pass skipped). " + _REHEARSAL_NOTE
+        ),
+    },
+    {
+        "Setting": "field_ops.fieldops_sync.archive_enabled",
+        "Workstream": "field_ops",
+        "Value": "false",
+        "Description": (
+            "ROADMAP Track 6 — the job-archive pass in fieldops_sync (true = ON; false = pass "
+            "skipped). Drains the portal's archive queue and RELOCATES a closed job's six "
+            "containers (four Smartsheet folders, two Box) into the archive, and back on "
+            "un-archive. Turning this ON is what makes the portal's Archive button move folders; "
+            "while it is off a press records intent that nothing acts on. Pause anytime by "
+            "setting it back to false — in-flight jobs stay queued and resume. " + _REHEARSAL_NOTE
         ),
     },
 ]

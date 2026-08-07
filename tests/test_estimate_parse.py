@@ -697,3 +697,112 @@ def test_xlsx_child_fn_is_sandbox_allowlisted():
     which parses in-process — defensible only for ITS's own HMAC-verified form.)"""
     assert "parse_xlsx_grid" in estimate_sandbox._ALLOWED_FNS
     assert estimate_sandbox.XLSX_TIMEOUT_S > 0
+
+
+# ---- Header keyword matching: not-inside-a-larger-word --------------------------------
+
+
+def test_red_um_keyword_must_not_match_inside_part_number():
+    """RED must. `_COLUMN_CONCEPTS` gives `unit` the short keyword "um", and plain
+    SUBSTRING matching found it inside "Part N-um-ber" — so `unit` claimed the
+    part-number column and `part_number`, checked later and barred from re-claiming a
+    taken cell, was dropped entirely. Revert `_kw_matches` to `kw in cell` and this fails.
+
+    This is the REAL RFQ quote-form header (`quote_form.render_quote_form`), which is why
+    synthetic fixtures using a bare "Part" header never surfaced it.
+    """
+    header = ["#", "Part Number", "Description", "Qty", "Unit", "Unit Price", "Extended"]
+    cols = estimate_parse._infer_columns(header)
+    assert cols is not None
+    assert header[cols["unit"]] == "Unit"
+    assert header[cols["part_number"]] == "Part Number"
+
+
+def test_kw_matching_keeps_legitimate_substring_labels():
+    """The guard must not over-tighten: richer keywords are listed FIRST and still win,
+    so "Extended"/"Description" keep matching even though "ext"/"desc" would not."""
+    header = ["Item", "Description", "Qty", "UOM", "Unit Price", "Extended"]
+    cols = estimate_parse._infer_columns(header)
+    assert cols is not None
+    assert header[cols["extended"]] == "Extended"
+    assert header[cols["description"]] == "Description"
+    assert header[cols["unit"]] == "UOM"
+
+
+# ---- The REAL RFQ quote form through the xlsx tier ------------------------------------
+
+
+def _filled_rfq_quote_form(secret: bytes = b"test-quote-form-secret") -> bytes:
+    """Render ITS's OWN fillable RFQ quote form and fill it the way a vendor would.
+
+    This is the artifact `rfq_poll` sends to every vendor, so it is the single most likely
+    spreadsheet to arrive back — worth pinning against the real renderer rather than a
+    hand-written fixture.
+    """
+    import openpyxl
+
+    from po_materials import quote_form
+
+    lines = [
+        {"part_number": "PVW10BLK", "description": "PV WIRE 10AWG 2000V BLACK",
+         "qty": 2500, "unit": "M"},
+        {"part_number": "CQD230", "description": "SQ D CIRCUIT BREAKER 30A",
+         "qty": 4, "unit": "EA"},
+    ]
+    blank = quote_form.render_quote_form(
+        "RFQ-2201", "platt", "Kiwi Solar", lines, secret=secret
+    )
+    wb = openpyxl.load_workbook(io.BytesIO(blank))
+    ws = wb[quote_form.SHEET_FORM]
+    header = [c.value for c in ws[quote_form.TABLE_HEADER_ROW]]
+    up = next(i for i, h in enumerate(header, 1) if h and "unit price" in str(h).lower())
+    ext = next(i for i, h in enumerate(header, 1) if h and "extended" in str(h).lower())
+    for off, (price, extended) in enumerate([(1098.90, 2747.25), (45.10, 180.40)]):
+        ws.cell(row=quote_form.FIRST_LINE_ROW + off, column=up, value=price)
+        ws.cell(row=quote_form.FIRST_LINE_ROW + off, column=ext, value=extended)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_real_rfq_quote_form_parses_through_the_xlsx_tier():
+    """The operator's acceptance bar: the tier must handle the RFQ Excel sheets.
+
+    Tier 0 claims a form whose HMAC verifies; this is the FALL-THROUGH path (e.g. a vendor
+    who re-saved the workbook and stripped the token). It must still extract cleanly rather
+    than dumping the quote on someone to re-type.
+    """
+    result = estimate_parse.parse_xlsx_estimate(_filled_rfq_quote_form())
+    assert result is not None
+    assert result.tier == "tier1_xlsx"
+    assert [li.part_number for li in result.line_items] == ["PVW10BLK", "CQD230"]
+    assert [li.unit for li in result.line_items] == ["M", "EA"]
+    assert result.math_ok is True
+
+
+def test_real_rfq_quote_form_m_divisor_math_exact():
+    """2,500 of wire at $1,098.90 per THOUSAND ("M") extends to $2,747.25 EXACTLY.
+
+    `check_math` seeds `DEFAULT_UOM_DIVISORS = {"M": 1000}`, so per-thousand distributor
+    pricing reconciles without the caller passing divisors — drop that default and this
+    line math-flags.
+    """
+    result = estimate_parse.parse_xlsx_estimate(_filled_rfq_quote_form())
+    wire = result.line_items[0]
+    assert wire.qty == 2500.0
+    assert wire.unit == "M"
+    assert wire.unit_cost_cents == 109890
+    assert wire.extended_cents == 274725
+    assert wire.math_ok is True
+
+
+def test_tier0_still_claims_a_verified_quote_form():
+    """Regression fence: the xlsx tier must not change Tier-0 behaviour for a form whose
+    token verifies — Tier 0 is checked first and stays authoritative."""
+    from po_materials import quote_form
+
+    secret = b"test-quote-form-secret"
+    parsed = quote_form.parse_quote_form(_filled_rfq_quote_form(secret), secret=secret)
+    assert parsed is not None
+    assert parsed.verified is True
+    assert len(parsed.lines) == 2

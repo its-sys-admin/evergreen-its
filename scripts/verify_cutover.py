@@ -385,6 +385,10 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     ConfigRow("field_ops.fieldops_sync.equipment_enabled", "field_ops", "non_empty"),
     ConfigRow("field_ops.fieldops_sync.materials_enabled", "field_ops", "non_empty"),
     ConfigRow("field_ops.fieldops_sync.incidents_enabled", "field_ops", "non_empty"),
+    # Track 6 archive pass. `non_empty`, never forced true — the dark-ship reflex: the row must
+    # EXIST so activation is a visible cell-flip rather than a switch the operator cannot find,
+    # but demanding "true" would force archiving on at cutover, which is an operator decision.
+    ConfigRow("field_ops.fieldops_sync.archive_enabled", "field_ops", "non_empty"),
     # The §50 config actuator and the form-publish daemon: both LOADED, both gate-ON,
     # and neither runtime gate was enrolled — the privileged code-actuation rail could
     # arrive at a new host with no switch present. `non_empty` (dark-ship reflex).
