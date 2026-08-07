@@ -439,7 +439,7 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 - `tests/test_keychain.py` — canonical pattern for mocking an external CLI.
 - `tests/test_error_log.py` — covers the CRITICAL surfacing path.
 - `tests/test_capability_gating.py` — enforces Invariant 1 at the import level.
-- `scripts/watchdog.py` — the daily watchdog skeleton.
+- `scripts/watchdog.py` — the watchdog skeleton (HOURLY since 2026-08-07; `DAILY_ONLY_CHECKS` keeps the expensive/mutating checks on a ~24h tier).
 - `scripts/launchd/template.plist` + `install.sh` — launchd trigger pattern.
 - `docs/session_logs/` — durable narrative log. Write one at end of any session that lands ≥1 commit and involves a non-obvious decision. Convention in `docs/session_logs/README.md`.
 - `docs/operations/pr_merge_discipline.md` — canonical **four-part** PR-landing verify. The original three assertions (`state=MERGED` / `mergedAt` non-null / `mergeCommit.oid` present) catch GitHub-side ghost merges but miss a post-merge `push: main` workflow failure. Step 4 (main-branch CI on the merge commit) is the fourth gate; a PR passing steps 1-3 but failing step 4 is **functionally not landed**.

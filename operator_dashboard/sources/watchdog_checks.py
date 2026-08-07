@@ -134,8 +134,13 @@ class WatchdogSweepSource(DataSource):
     panel_id = "watchdog_sweep"
     title = "Watchdog sweep (per-check results)"
 
-    # A daily sweep older than this is itself a warning (24h cadence + slack).
-    STALE_AFTER = timedelta(hours=26)
+    # A sweep older than this is itself a warning. Was 26h for the old daily 07:00 cadence;
+    # tightened to 3h when the watchdog went HOURLY (2026-08-07, StartInterval 3600). The
+    # whole point of the cadence change was to shrink the "nobody looked" window, and leaving
+    # this at 26h would have kept the DASHBOARD blind for a day even while sweeps ran fine.
+    # 3h = one hourly cadence + 2h slack, so a host that naps through a single sweep does not
+    # flap the panel.
+    STALE_AFTER = timedelta(hours=3)
 
     # Check-result severity (shared.error_log Severity names) -> panel severity.
     # INFO is a PASSING check (the watchdog logs INFO on healthy), so it renders ok.

@@ -211,7 +211,7 @@ to the one-shot rule is the **dashboard**, a long-lived server with
 | `picklist-sync` | interval | 3600s (hourly) | sync cross-sheet picklist options |
 | `weekly-generate` | calendar | Fri 14:00 | deterministic safety weekly compile |
 | `progress-generate` | calendar | Fri 14:30 | deterministic progress weekly compile |
-| `watchdog` | calendar | daily 07:00 | health checks + missed-run detection |
+| `watchdog` | interval | 3600s hourly (+ ~24h daily tier) | health checks + missed-run detection |
 | `picklist-audit` | calendar | Sun 15:00 | picklist drift audit |
 | `dashboard` | server | always up (KeepAlive) | operator observability + ACT surface |
 

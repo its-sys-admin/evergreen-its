@@ -69,7 +69,7 @@ exception so it is grep-distinguishable from a rate-limit or auth failure.
       never sends externally                           verifies HMAC, files via intake
 
    scripts/watchdog.py ──GET──▶ external heartbeat monitor (Healthchecks.io / audit F16)
-         daily 07:00, one ping — skipped while system.heartbeat_url is the seeded placeholder
+         hourly, one ping per sweep — skipped while system.heartbeat_url is the seeded placeholder
       Tailscale-only network posture — nothing ITS-owned is exposed to the public net
 ```
 

@@ -1071,6 +1071,22 @@ This is intentional: operators on the daily-rhythm cadence don't need real-time 
 
 **Urgency:** none. Re-evaluate if operator triage workflow shows ≥24h-delayed summaries causing problems.
 
+> **Update 2026-08-07 — Lever 1 landed at the LAUNCHD layer, but this entry stays OPEN, because the
+> summary delay it describes is unchanged.** The watchdog moved to `StartInterval 3600` (hourly) after the
+> 2026-08-06 outage. This entry's prediction held exactly: no change was needed to the dedupe core. **But
+> Check G — the summary sweep itself — was deliberately placed on the new `DAILY_ONLY_CHECKS` tier**, so the
+> worst-case ~24h summary delay described above still stands.
+>
+> The reason is narrow and temporary: Check G's phase-1 send currently fails on the Resend 403 (unverified
+> domain — see the `resend_client.DEFAULT_FROM` entry) **without marking the entry summarized**, so it retries
+> on every sweep. At hourly that turns one WARN row/day per stuck key into 24. Check G is otherwise perfectly
+> safe hourly — its two-phase state machine emits exactly one summary per entry regardless of cadence.
+>
+> **To finish Lever 1:** fix the Resend leg, then move `_check_alert_dedupe_summaries` out of
+> `DAILY_ONLY_CHECKS` in `scripts/watchdog.py` (a one-line change; the tier comment block names G as the
+> promote-first candidate). That drops the summary delay from ~24h to ~1h. **Trigger:** the Resend
+> domain-verification session.
+
 Surfaced: PR β (watchdog summary sweep) brief, 2026-05-20.
 
 ## Summary email content depth (filter-criteria vs inline correlation IDs) [OPEN 2026-05-20]
