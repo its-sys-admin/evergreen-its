@@ -82,7 +82,7 @@ const TODAY = pacificToday();
 const PLACED_VIEWER: api.ViewerTaskPlacement = { job_id: "JOB-A", project_name: "Alpha", personnel_id: 1, name: "Mo Manager" };
 const JOB_DETAIL: jobtracker.JobDetailResponse = {
   job: {
-    job_id: "JOB-A", project_name: "Alpha", status: "active", lifecycle: "active", progress: 0, client: null,
+    job_id: "JOB-A", project_name: "Alpha", status: "active", lifecycle: "active", archive: null, progress: 0, client: null,
     crew: [], tasks: [], time_entries: [], equipment_on_site: [], inspections: [],
     job_no: "",
     routing: {

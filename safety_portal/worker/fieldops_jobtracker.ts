@@ -2,9 +2,12 @@ import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import { encodeCursor, decodeCursor } from "./cursor";
 import { coerceLifecycle } from "./constants";
 import type {
+  ArchiveDirection,
+  ArchiveState,
   CrewMember,
   DetailCrewMember,
   EquipmentOnSite,
+  JobArchiveContainer,
   JobDetailResponse,
   JobInspection,
   JobListResponse,
@@ -30,6 +33,30 @@ function parseJsonArray(v: unknown): string[] {
   try {
     const a = JSON.parse(v);
     return Array.isArray(a) ? a.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The daemon's per-container archive report (JSON text) → typed rows.
+ *
+ *  Degrades to [] on anything malformed. A bad cell must render as "no report yet", never take the
+ *  whole job-detail page down — the operator most needs this view precisely when something went
+ *  wrong, which is also when the cell is most likely to be odd. */
+function parseContainers(v: unknown): JobArchiveContainer[] {
+  if (typeof v !== "string" || !v) return [];
+  try {
+    const a = JSON.parse(v);
+    if (!Array.isArray(a)) return [];
+    return a
+      .filter((x) => x && typeof x === "object" && !Array.isArray(x))
+      .map((x) => ({
+        key: typeof x.key === "string" ? x.key : "",
+        label: typeof x.label === "string" ? x.label : "",
+        moved: x.moved === true,
+        note: typeof x.note === "string" ? x.note : "",
+      }))
+      .filter((x) => x.key && x.label);
   } catch {
     return [];
   }
@@ -188,6 +215,8 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
                j.stakeholder_name, j.stakeholder_email, j.stakeholder_phone,
                j.safety_contact_name, j.safety_contact_email, j.safety_cc,
                j.progress_contact_name, j.progress_contact_email, j.progress_cc,
+               j.archive_state, j.archive_direction, j.archive_requested_at,
+               j.archive_completed_at, j.archive_attempts, j.archive_detail,
                c.name AS client_name, c.contact AS client_contact,
                c.phone AS client_phone, c.email AS client_email
         FROM jobs j
@@ -199,6 +228,12 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         project_name: string;
         status: string;
         lifecycle: string;
+        archive_state: string;
+        archive_direction: string;
+        archive_requested_at: number | null;
+        archive_completed_at: number | null;
+        archive_attempts: number;
+        archive_detail: string;
         progress: number;
         job_no: string;
         address: string;
@@ -340,6 +375,9 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
       // serving it unconditionally was a least-privilege regression; pre-0057 this data was
       // reachable in-browser only at cap.po.manage / the internal token tier).
       const canSeeRouting = caps.has("cap.jobtracker.manage");
+      // Archive state rides the detail for cap.job.archive holders only — same least-privilege
+      // shape as `routing`. A read-tier viewer sees the job, not its relocation machinery.
+      const canArchive = caps.has("cap.job.archive");
       const [tasksRes, crewRes, timeRes, equipRes, inspRes, viewerRes] = await c.env.DB.batch([
         c.env.DB.prepare(sqlTasks).bind(...taskParams),
         c.env.DB.prepare(sqlCrew).bind(jobId, LEG_CAP),
@@ -389,6 +427,16 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
           // 0057 + routing SoR: display + edit-form seeding. CC arrays are stored as
           // JSON text; parse defensively (a malformed cell yields [] — never a throw).
           job_no: header.job_no ?? "",
+          archive: !canArchive ? null : {
+            state: (header.archive_state || "none") as ArchiveState,
+            direction: (header.archive_direction || "") as ArchiveDirection,
+            requested_at: header.archive_requested_at ?? null,
+            completed_at: header.archive_completed_at ?? null,
+            attempts: header.archive_attempts ?? 0,
+            // The daemon writes this as JSON; a malformed cell must degrade to "no report yet",
+            // never throw and take the whole detail page down with it.
+            containers: parseContainers(header.archive_detail),
+          },
           routing: !canSeeRouting ? null : {
             address: header.address ?? "",
             address_city: header.address_city ?? "",
