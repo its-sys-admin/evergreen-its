@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from field_ops import job_archive
 from progress_reports import (
     equipment_status,
     hours_log,
@@ -144,6 +145,19 @@ DEFAULT_MATERIALS_ENABLED = False
 # table). APPEND-ONLY: no watermark, no mark-mirrored, and NO retire (a filed incident is immutable).
 CFG_INCIDENTS_ENABLED = "field_ops.fieldops_sync.incidents_enabled"
 DEFAULT_INCIDENTS_ENABLED = False
+
+# Track 6 job archive — the pass that drains `/archive-pending` and relocates a closed job's six
+# containers across Smartsheet and Box. Its own gate, shipped OFF, and the reason it needs one is
+# not caution about the code: turning this on is what makes an operator-visible Archive button in
+# the portal actually DO something. Until then a press records intent and nothing acts on it, which
+# is the deliberate state (`docs/ROADMAP.md` Track 6).
+#
+# The gate ROW is seeded (at false) by `scripts/migrations/seed_daemon_gate_config.py` in the same
+# change that adds this code, because a boolean gate read with `default=False` treats a MISSING row
+# identically to `false` — so a capability that "ships dark" with no row at all leaves the operator
+# hunting for a switch that does not exist (HOUSE_REFLEXES §5).
+CFG_ARCHIVE_ENABLED = "field_ops.fieldops_sync.archive_enabled"
+DEFAULT_ARCHIVE_ENABLED = False
 _PACIFIC = ZoneInfo("America/Los_Angeles")  # tracker cells are the operator's wall-clock
 
 # #336 — every ITS_Config key this daemon resolves at RUNTIME, declared once for the
@@ -159,6 +173,7 @@ REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(CFG_EQUIPMENT_ENABLED, WORKSTREAM, DEFAULT_EQUIPMENT_ENABLED, "bool"),
     ConfigKey(CFG_MATERIALS_ENABLED, WORKSTREAM, DEFAULT_MATERIALS_ENABLED, "bool"),
     ConfigKey(CFG_INCIDENTS_ENABLED, WORKSTREAM, DEFAULT_INCIDENTS_ENABLED, "bool"),
+    ConfigKey(CFG_ARCHIVE_ENABLED, WORKSTREAM, DEFAULT_ARCHIVE_ENABLED, "bool"),
     ConfigKey(
         CFG_WORKER_BASE_URL, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
         description="Shared Worker base URL; owned by safety_reports, read here too.",
@@ -304,6 +319,10 @@ def _materials_enabled() -> bool:
 
 def _incidents_enabled() -> bool:
     return _read_bool_setting(CFG_INCIDENTS_ENABLED, DEFAULT_INCIDENTS_ENABLED)
+
+
+def _archive_enabled() -> bool:
+    return _read_bool_setting(CFG_ARCHIVE_ENABLED, DEFAULT_ARCHIVE_ENABLED)
 
 
 # ---- Lock + heartbeat seams (mirror portal_poll) -------------------------------
@@ -611,10 +630,19 @@ def _sync_inside_lock() -> SyncStats:
     if _incidents_enabled():
         incidents = _mirror_material_incidents_pass(base_url, bearer)
 
+    # Track 6 archive pass — its OWN queue (/archive-pending), not the job-dirty list, so a failed
+    # relocation genuinely retries instead of being silenced by an unrelated mirror success. Gated
+    # OFF by default. Runs LAST, after every mirror: relocating a closed job's folders is the least
+    # time-critical thing this daemon does, and putting it last means its per-job fences cannot
+    # delay the mirrors that feed live reports.
+    archive = {"complete": 0, "partial": 0, "failed": 0, "capped": 0, "errors": 0}
+    if _archive_enabled():
+        archive = _archive_pass(base_url, bearer)
+
     _write_heartbeat()
     total_errors = (
         counters["errors"] + hours["errors"] + equip["errors"] + materials["errors"]
-        + incidents["errors"]
+        + incidents["errors"] + archive["errors"]
     )
     total_reviewed = (
         counters["reviewed"] + hours["reviewed"] + equip["reviewed"] + materials["reviewed"]
@@ -635,6 +663,7 @@ def _sync_inside_lock() -> SyncStats:
             items_processed=(
                 counters["mirrored"] + hours["mirrored"] + equip["upserted"]
                 + materials["upserted"] + incidents["upserted"]
+                + archive["complete"] + archive["partial"]
             ),
             error_summary=(
                 None
@@ -661,7 +690,9 @@ def _sync_inside_lock() -> SyncStats:
             f"materials upserted={materials['upserted']} retired={materials['retired']} "
             f"reviewed={materials['reviewed']} errors={materials['errors']}; "
             f"incidents upserted={incidents['upserted']} reviewed={incidents['reviewed']} "
-            f"errors={incidents['errors']}"
+            f"errors={incidents['errors']}; "
+            f"archive complete={archive['complete']} partial={archive['partial']} "
+            f"failed={archive['failed']} capped={archive['capped']} errors={archive['errors']}"
         ),
         error_code="sync_cycle_summary",
     )
@@ -1790,6 +1821,130 @@ def _mirror_material_incidents_pass(base_url: str, bearer: str) -> dict[str, int
     for job_id, (project_name, rows) in _group_incidents_by_job(incidents).items():
         correlation_id = uuid.uuid4().hex[:12]
         _reconcile_job_incidents(job_id, project_name, rows, correlation_id, out)
+    return out
+
+
+def _archive_pass(base_url: str, bearer: str) -> dict[str, int]:
+    """Drain the archive queue: relocate each queued job's containers and report the outcome back.
+
+    Returns {complete, partial, failed, capped, errors}. Never raises — it runs after every mirror
+    pass, so an archive failure must never abort the cycle or the heartbeat below.
+
+    THE QUEUE IS THE RETRY. This pass deliberately does NOT ride the job-dirty list: that list is
+    cleared the moment an unrelated mirror succeeds, which is exactly why the pre-Track-6 archive
+    move "did not auto-retry" and why a failed relocation was permanent. `/archive-pending` keeps
+    serving a job until its archive reaches a terminal state, so a failure here is genuinely
+    resumable and needs no bookkeeping of its own.
+
+    The ADMIN pre-flight runs ONCE per cycle rather than per job — it is five workspace reads and
+    the answer cannot differ between jobs in the same cycle. It runs only when the queue is
+    non-empty, so an idle daemon costs nothing.
+    """
+    out = {"complete": 0, "partial": 0, "failed": 0, "capped": 0, "errors": 0}
+    try:
+        jobs = portal_client.get_fieldops_pending_archives(base_url, bearer)
+    except portal_client.PortalAuthError as exc:
+        out["errors"] += 1
+        error_log.log(
+            Severity.CRITICAL, SCRIPT_NAME,
+            f"archive-queue fetch UNAUTHORIZED (401) — field-ops bearer rejected; no job was "
+            f"relocated this cycle: {exc!r}",
+            error_code="fieldops_archive_fetch_auth_failed",
+        )
+        return out
+    except portal_client.PortalTransportError as exc:
+        out["errors"] += 1
+        error_log.log(
+            Severity.ERROR, SCRIPT_NAME,
+            f"archive-queue fetch failed (the queue re-serves next cycle): {exc!r}",
+            error_code="fieldops_archive_fetch_failed",
+        )
+        return out
+
+    if not jobs:
+        return out
+
+    if not job_archive.verify_archive_capability():
+        # The probe already WARNed naming the deficient workspace. Skipping the whole pass is right
+        # HERE (unlike the per-container fences inside it): every job would 403 on the same
+        # shortfall, so attempting them would produce N identical failures and burn N attempts
+        # against the retry cap for a condition no retry can fix.
+        out["errors"] += 1
+        return out
+
+    updates: list[dict[str, Any]] = []
+    for job in jobs:
+        job_id = str(job.get("job_id") or "")
+        direction = str(job.get("archive_direction") or "")
+        try:
+            attempts = int(job.get("archive_attempts") or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+
+        if attempts >= job_archive.MAX_ARCHIVE_ATTEMPTS:
+            # A PERMANENT condition (a deleted destination, a share never fixed) would otherwise
+            # re-fire the whole six-container sequence every cycle forever. The operator's "Try
+            # again" resets the counter in D1. Deliberately NOT logged per cycle: the failures that
+            # got it here already have their own ITS_Errors rows, and a WARN every few minutes for
+            # a row nobody is watching is how a log stops being read.
+            out["capped"] += 1
+            continue
+
+        correlation_id = uuid.uuid4().hex[:12]
+        try:
+            results = job_archive.run_archive_pass(job, correlation_id)
+        except Exception as exc:  # noqa: BLE001 — per-JOB fence; one job never blocks the rest
+            out["errors"] += 1
+            error_log.log(
+                Severity.ERROR, SCRIPT_NAME,
+                f"archive pass raised for job_id={job_id!r} ({direction or 'no direction'}); the "
+                f"job stays queued and retries next cycle: {type(exc).__name__}: {exc!r}",
+                error_code="fieldops_archive_job_failed",
+                correlation_id=correlation_id,
+            )
+            continue
+
+        state = job_archive.state_from_results(results)
+        out[state] = out.get(state, 0) + 1
+        updates.append({
+            "job_id": job_id,
+            "direction": direction,
+            "state": state,
+            "containers": [r.as_dict() for r in results],
+        })
+
+    if not updates:
+        # The Worker REFUSES an empty updates array (400). Every job was capped, or every one
+        # raised — either way there is nothing to report.
+        return out
+
+    try:
+        ack = portal_client.post_fieldops_archive_progress(base_url, bearer, updates)
+    except (portal_client.PortalAuthError, portal_client.PortalTransportError) as exc:
+        # The relocations ALREADY HAPPENED; only the report failed. Nothing is lost: the queue
+        # re-serves each job next cycle and every container operation is idempotent (an already
+        # relocated container resolves to "nothing to move"), so the re-run reports the same
+        # terminal state. WARN, not CRITICAL, for exactly that reason.
+        out["errors"] += 1
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"archive progress post FAILED for {len(updates)} job(s) — the folders moved but the "
+            f"portal was not told. The queue re-serves them next cycle and the relocation is "
+            f"idempotent, so this self-heals: {type(exc).__name__}: {exc!r}",
+            error_code="fieldops_archive_progress_failed",
+        )
+        return out
+
+    skipped = ack.get("skipped") or []
+    if skipped:
+        # NOT an error: the Worker's UPDATE is forward-only, so a row that no longer matches means
+        # the operator changed direction (or it already completed) while the pass was working.
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"archive progress: {len(skipped)} job(s) no longer matched their queued direction and "
+            f"were skipped by the Worker (the request changed mid-pass): {skipped!r}",
+            error_code="fieldops_archive_progress_skipped",
+        )
     return out
 
 
