@@ -563,3 +563,137 @@ def test_parse_native_is_a_registered_sandbox_fn():
 def test_preview_module_untouched_contract():
     """estimate_ocr leans on estimate_preview's laundered PNGs — pin the seam."""
     assert callable(estimate_preview.render_page_pngs)
+
+
+# ---- Tier-1 xlsx (vendor spreadsheets) -----------------------------------------------
+#
+# These drive the REAL sandbox child (a subprocess), like the parse_native live round-trip
+# above — a mocked child would prove nothing about the openpyxl behaviour, which IS the tier.
+
+
+def _vendor_book(
+    *, subtotal=3945.00, tax=None, grand=3945.00, merged_header=False, sheets=1
+) -> bytes:
+    """A VENDOR quote workbook — deliberately not ITS's own form (no _ITS_META sheet),
+    so Tier 0 declines it and it reaches the xlsx tier."""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Quote"
+    ws.append(["ACME Electric Supply"])
+    ws.append(["Quote #: Q-88213"])
+    ws.append([None])
+    ws.append(["Part", "Description", "Qty", "UOM", "Unit Price", "Ext Price"])
+    ws.append(["THHN-10", "10 AWG THHN Copper", 5000, "FT", 0.42, 2100.00])
+    ws.append(["PVC-2", '2" PVC Conduit', 300, "EA", 6.15, 1845.00])
+    if merged_header:
+        # A VERTICAL merge over the two data rows — the common "one category cell spanning
+        # its member rows" layout. iter_rows leaves the second row's cell None.
+        ws.merge_cells(start_row=5, start_column=1, end_row=6, end_column=1)
+    if subtotal is not None:
+        ws.append([None, None, None, None, "Subtotal", subtotal])
+    if tax is not None:
+        ws.append([None, None, None, None, "Tax", tax])
+    if grand is not None:
+        ws.append([None, None, None, None, "Grand Total", grand])
+    for extra in range(sheets - 1):
+        wb.create_sheet(f"Terms{extra}").append(["Boilerplate terms and conditions"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_parse_xlsx_estimate_extracts_lines_and_cell_totals():
+    result = estimate_parse.parse_xlsx_estimate(_vendor_book())
+    assert result is not None
+    assert result.tier == "tier1_xlsx"
+    assert result.vendor_name == "ACME Electric Supply"
+    assert result.quote_number == "Q-88213"
+    assert [li.part_number for li in result.line_items] == ["THHN-10", "PVC-2"]
+    # Integer cents, exact: 5000 FT @ $0.42 = $2,100.00
+    assert result.line_items[0].unit_cost_cents == 42
+    assert result.line_items[0].extended_cents == 210000
+    assert result.subtotal_cents == 394500  # read from the CELL, not regexed
+    assert result.math_ok is True
+    assert result.math_flags == []
+
+
+def test_round_totals_are_read_from_cells_not_regexed_from_text():
+    """THE control this tier exists for.
+
+    openpyxl returns the STORED value, so a ROUND money amount stringifies with ONE
+    decimal (`str(4000.00) == "4000.0"`) while `_GENERIC_TOTALS` demands two. Regexing the
+    flattened grid therefore drops round totals — and `check_math` SKIPS comparisons with
+    absent operands, so the cross-check silently evaporates.
+    """
+    data = _vendor_book(subtotal=3945.00, grand=3945.00)
+    parsed, raw = estimate_parse.parse_xlsx(data)
+
+    # The text-regex path cannot see the round subtotal at all...
+    assert estimate_parse.parse_generic_table(parsed).subtotal_cents is None
+    # ...the cell-grid reader can.
+    assert estimate_parse._xlsx_totals_from_grid(raw)["subtotal_cents"] == 394500
+
+
+def test_a_wrong_round_subtotal_is_caught_not_silently_passed():
+    """The failure the control prevents: lines sum to $3,945.00, the book claims $3,900.00.
+
+    Asserts the CATCH, so the control cannot rot into a no-op without RED-lighting here.
+    """
+    data = _vendor_book(subtotal=3900.00, grand=3900.00)
+
+    parsed, _raw = estimate_parse.parse_xlsx(data)
+    missed = estimate_parse.check_math(estimate_parse.parse_generic_table(parsed))
+    assert missed.math_ok is True  # regex path: silently unverified, error invisible
+
+    caught = estimate_parse.parse_xlsx_estimate(data)
+    assert caught.math_ok is False
+    assert any("subtotal" in f for f in caught.math_flags)
+
+
+def test_vertically_merged_cell_fills_down_and_never_across():
+    """A merge spanning rows fills DOWN (the value genuinely applies to each row); a merge
+    must never fill ACROSS, which would copy one column's value into a sibling column that
+    has none. Filling across was measured to overwrite the "Qty" header with "Description",
+    after which `_infer_columns` claimed nothing and the sheet yielded ZERO lines."""
+    result = estimate_parse.parse_xlsx_estimate(_vendor_book(merged_header=True))
+    assert result is not None
+    assert len(result.line_items) == 2
+    # The merged part-number cell propagated down to the second row...
+    assert result.line_items[1].part_number == "THHN-10"
+    # ...while every OTHER column of that row kept its own distinct value.
+    assert result.line_items[1].qty == 300
+    assert result.line_items[1].extended_cents == 184500
+
+
+def test_extra_sheets_do_not_break_the_parse():
+    """Vendor books carry cover / T&C sheets; the line sheet must still parse."""
+    result = estimate_parse.parse_xlsx_estimate(_vendor_book(sheets=3))
+    assert result is not None
+    assert len(result.line_items) == 2
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"", b"not a zip at all", b"PK\x03\x04" + b"\x00" * 64],
+    ids=["empty", "not-a-zip", "zip-magic-garbage"],
+)
+def test_hostile_bytes_degrade_to_none_and_never_raise(payload):
+    """A workbook openpyxl cannot open must DEGRADE, never raise — the ladder contract is
+    that a tier failure falls through to needs_review."""
+    assert estimate_parse.parse_xlsx(payload) is None
+    assert estimate_parse.parse_xlsx_estimate(payload) is None
+
+
+def test_parse_xlsx_never_reports_scanned():
+    """A workbook has no text layer to be missing; the OCR concept does not apply."""
+    parsed, _raw = estimate_parse.parse_xlsx(_vendor_book())
+    assert parsed.is_scanned is False
+
+
+def test_xlsx_child_fn_is_sandbox_allowlisted():
+    """The hostile parse runs in the killable child, not in the daemon. (Contrast Tier 0,
+    which parses in-process — defensible only for ITS's own HMAC-verified form.)"""
+    assert "parse_xlsx_grid" in estimate_sandbox._ALLOWED_FNS
+    assert estimate_sandbox.XLSX_TIMEOUT_S > 0

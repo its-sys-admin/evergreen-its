@@ -98,7 +98,7 @@ docs:
     title: "ITS_Config Data Dictionary"
     version: v1
     source: docs/references/its_config_dictionary.md
-    sha256: 7e0454e3247360f15b7d5657ff392425fefcbf1b9e5e1402b45b2fc373140de7
+    sha256: 937e082648b77717400ec324a985d7ecacf35c395110b8867b61a7d7c7f14b50
 
   # ── Delivery-critical guides added 2026-07-13: the operator dashboard (WS2 D1-x)
   #    and the subcontracts generator (ADR-0003). Both blockers cleared — the dashboard

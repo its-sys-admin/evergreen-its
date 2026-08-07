@@ -49,7 +49,7 @@ CLEAN = po_attach_screen.ScreenResult("clean", "L2", "ok")
 REAL_SCREEN = po_attach_screen.screen_attachment
 
 DARK_TIERS = estimate_poll._TierConfig(
-    tier1_enabled=False, tier2_enabled=False, ocr_enabled=False,
+    tier1_enabled=False, tier1_xlsx_enabled=False, tier2_enabled=False, ocr_enabled=False,
     model="qwen3.5:9b", ollama_base_url="http://127.0.0.1:11434",
     confidence_threshold=0.75, timeout_seconds=600,
 )

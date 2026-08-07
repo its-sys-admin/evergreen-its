@@ -217,7 +217,7 @@
       "setting": "system.operator_email",
       "workstream": "global",
       "kind": "str",
-      "default": "seths@evergreenmirror.com",
+      "default": "seth@solutionsmith.org",
       "purpose": "Where out-of-band operator alerts (Resend) are sent when ITS_Config cannot be read — the last-resort page recipient during a Smartsheet outage.",
       "read_by": [
         "shared.resend_client"
@@ -296,6 +296,17 @@
       "kind": "bool",
       "default": false,
       "purpose": "Gate for the Tier-1 deterministic native-text extraction (estimate_parse template→generic ladder). Ships FALSE (dark).",
+      "read_by": [
+        "po_materials.estimate_poll"
+      ],
+      "origin": "daemon"
+    },
+    {
+      "setting": "po_materials.estimate_extract.tier1_xlsx_enabled",
+      "workstream": "po_materials",
+      "kind": "bool",
+      "default": false,
+      "purpose": "Gate for the Tier-1 deterministic VENDOR-SPREADSHEET extraction (estimate_parse.parse_xlsx_estimate: sandboxed openpyxl grid -> the same generic-table line logic as the PDF tier, with doc-level totals read from the CELL grid). NO AI. Separate from tier1_enabled because it is a distinct parse path with its own failure modes. Turning it ON lets a vendor .xlsx quote be extracted instead of hand-keyed; turning it OFF returns those documents to needs_review — no other lane is affected. Independent of Tier 0, which claims ITS's own HMAC-verified quote form first.",
       "read_by": [
         "po_materials.estimate_poll"
       ],

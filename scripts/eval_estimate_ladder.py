@@ -180,6 +180,21 @@ def _run_ladder(
                 "grand_total_cents": parsed.subtotal_cents,
                 "lines": parsed.lines,
             }
+        # Not ITS's own form (or unparsable as one) — fall through to the VENDOR
+        # spreadsheet tier, mirroring the daemon's `_tier1_xlsx` branch. Without this the
+        # eval scores every vendor .xlsx as unextractable, and the corpus gate could never
+        # qualify the very tier it exists to qualify.
+        try:
+            from po_materials import estimate_parse  # noqa: PLC0415 — lazy sibling-adjacent import
+            xl = estimate_parse.parse_xlsx_estimate(data)
+        except ImportError:
+            record["note"] = "estimate_parse not importable (sibling PR)"
+            return None
+        except Exception as exc:  # noqa: BLE001 — hostile bytes; degrade like the daemon
+            record["note"] = f"tier1 xlsx crash: {type(exc).__name__}"
+            return None
+        if xl is not None and xl.line_items:
+            return _metric_payload(xl, tier=1)
         return None
     if mime != "application/pdf":
         return None

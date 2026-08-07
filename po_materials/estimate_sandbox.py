@@ -28,6 +28,16 @@ Child fn contracts (stdout JSON):
                                      per-page word positions bounded by
                                      PARSE_MAX_WORDS_PER_PAGE, tables by
                                      PARSE_MAX_TABLES_PER_PAGE × PARSE_MAX_TABLE_ROWS)
+  parse_xlsx_grid    [max_sheets] → {"sheets": ["Sheet1", ...],
+                                     "tables": [[["cell", ...], ...], ...],  (STRING cells)
+                                     "text":   ["tab/newline-joined grid", ...],
+                                     "raw":    [[[native, ...], ...], ...]}  (str|int|float|None)
+                                    Tier-1 xlsx payload. `raw` preserves NUMERIC TYPES so the
+                                    parent reads doc-level totals off the CELL GRID — regexing
+                                    the flattened text misses them (openpyxl yields 4685.0,
+                                    one decimal; _GENERIC_TOTALS demands two), and an absent
+                                    total makes check_math SKIP the cross-check entirely.
+                                    Bounded by XLSX_MAX_SHEETS / _ROWS_PER_SHEET / _COLS_PER_ROW.
   (plus four harmless _test_* fns — spin / bounded-alloc / crash / echo — dispatched
   only by tests/test_estimate_sandbox.py to prove the reap contract on REAL children)
 
@@ -93,13 +103,34 @@ PARSE_MAX_WORDS_PER_PAGE = 3000
 PARSE_MAX_TABLES_PER_PAGE = 20
 PARSE_MAX_TABLE_ROWS = 500
 
+# Tier-1 xlsx-grid parse. A VENDOR workbook is arbitrary bytes from outside the tenant, so
+# it gets the same killable-child treatment as a PDF: openpyxl is a zip + XML parser and is
+# no safer than pdfplumber. (Contrast Tier 0, `quote_form.parse_quote_form`, which parses
+# openpyxl IN-PROCESS — defensible only because that file is ITS's OWN fixed-geometry form,
+# HMAC-verified before parsing. A vendor book earns no such assumption.) ADR-0004 decision 5
+# names openpyxl as a stage that belongs in the subprocess.
+#
+# Own bounds, mirroring the PARSE_MAX_* posture: a hostile book DECLARING 10,000 sheets ×
+# 1M rows is truncated in the CHILD, so stdout stays bounded regardless of what the file
+# claims about itself.
+XLSX_TIMEOUT_S = 90
+XLSX_MAX_SHEETS = 12
+XLSX_MAX_ROWS_PER_SHEET = 2000
+XLSX_MAX_COLS_PER_ROW = 64
+
 # TEST-SUPPORT child fns (tests/test_estimate_sandbox.py — the REAL-child-process
 # suite proving the reap/rlimit contract without a hostile document). Deliberately
 # ungated: each is harmless — local CPU/memory inside a child the parent reaps
 # (spin / bounded alloc / crash / echo); nothing in the daemon dispatches them,
 # and invoking one by hand just burns a few seconds of local CPU.
 _TEST_FNS = ("_test_spin", "_test_alloc", "_test_crash", "_test_echo")
-_ALLOWED_FNS = ("extract_pages_text", "render_page_pngs", "parse_native", *_TEST_FNS)
+_ALLOWED_FNS = (
+    "extract_pages_text",
+    "render_page_pngs",
+    "parse_native",
+    "parse_xlsx_grid",
+    *_TEST_FNS,
+)
 
 
 def run_sandboxed(
@@ -337,6 +368,90 @@ def _child_test_alloc() -> NoReturn:  # pragma: no cover — runs in the child, 
         pass
 
 
+def _child_parse_xlsx_grid(data: bytes, max_sheets: int) -> dict[str, Any]:
+    """Tier-1 xlsx payload (child-side): every worksheet as a cell grid.
+
+    Emits THREE parallel per-sheet views, because the consumer needs two different things
+    and conflating them is the bug this design exists to avoid:
+
+      tables — rows of STRING cells. Feeds `estimate_parse.parse_generic_table` unchanged,
+               which is shape-compatible with a worksheet by construction.
+      text   — the same grid tab/newline-joined, for vendor-name / quote-number regexes.
+      raw    — rows of NATIVE values (str | float | int | None). **This is the load-bearing
+               one for doc-level totals.** openpyxl returns the STORED value, and a ROUND
+               money amount stringifies with ONE decimal (`str(4000.00) == "4000.0"`) while
+               `estimate_parse._GENERIC_TOTALS` requires exactly `\\.\\d{2}`. Regexing the
+               flattened text therefore drops round totals — subtotals especially — and
+               `check_math` SKIPS comparisons with absent operands, so a book with a WRONG
+               subtotal posts as `extracted`, math_ok=True, cross-check never performed.
+               The parent reads totals off `raw` and hands the native value straight to
+               `to_cents`, which takes floats exactly. See
+               `estimate_parse._xlsx_totals_from_grid` for the measured before/after.
+
+    Merged cells are filled FORWARD across their range: `iter_rows` puts the value in the
+    top-left and `None` everywhere else, so a merged header band would otherwise blank the
+    columns and `_infer_columns` would fail to claim the header row. This needs
+    `ws.merged_cells`, which openpyxl does NOT expose under `read_only=True` — hence a
+    normal (non-read-only) load, whose memory is bounded by the sandbox RLIMIT + the caps
+    above rather than by streaming.
+
+    A workbook openpyxl cannot open raises (→ nonzero exit → parent None, the degrade
+    signal). Per-sheet failures degrade that sheet to empty rather than killing the parse.
+    """
+    import openpyxl  # noqa: PLC0415 — lazy child-only import by design
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, keep_vba=False)
+    sheets: list[str] = []
+    tables: list[list[list[str]]] = []
+    texts: list[str] = []
+    raws: list[list[list[Any]]] = []
+
+    for ws in wb.worksheets[:max_sheets]:
+        sheets.append(str(ws.title))
+        try:
+            grid: list[list[Any]] = [
+                list(row[:XLSX_MAX_COLS_PER_ROW])
+                for row in ws.iter_rows(values_only=True, max_row=XLSX_MAX_ROWS_PER_SHEET)
+            ]
+            # Merged ranges: fill DOWN the anchor column only — never ACROSS.
+            #
+            # `iter_rows` puts the value in the top-left and None everywhere else. Filling a
+            # merge DOWN is semantically sound (a category/section cell merged over its member
+            # rows genuinely applies to each of them). Filling ACROSS is NOT: it copies one
+            # column's value into a neighbouring column that has no such value, fabricating
+            # data. Measured — merging the "Description" and "Qty" headers and filling across
+            # overwrote the Qty header, so `_infer_columns` could not claim the column and the
+            # sheet yielded ZERO lines. A merge must never be able to destroy a sibling column.
+            merged = getattr(ws, "merged_cells", None)
+            for rng in (merged.ranges if merged is not None else []):
+                r0, c0, r1 = rng.min_row, rng.min_col, rng.max_row
+                col = c0 - 1
+                if r0 - 1 >= len(grid) or col >= XLSX_MAX_COLS_PER_ROW:
+                    continue
+                anchor = grid[r0 - 1][col] if col < len(grid[r0 - 1]) else None
+                if anchor is None or r1 <= r0:
+                    continue
+                for r in range(r0, min(r1, len(grid))):  # rows BELOW the anchor
+                    if col < len(grid[r]) and grid[r][col] is None:
+                        grid[r][col] = anchor
+        except Exception:  # noqa: BLE001 — one bad sheet degrades to empty, never fatal
+            grid = []
+
+        # JSON-safe natives only: openpyxl can hand back datetime/Decimal/etc.
+        raw_rows: list[list[Any]] = [
+            [c if isinstance(c, (str, int, float)) or c is None else str(c) for c in row]
+            for row in grid
+        ]
+        str_rows: list[list[str]] = [
+            ["" if c is None else str(c) for c in row] for row in raw_rows
+        ]
+        raws.append(raw_rows)
+        tables.append(str_rows)
+        texts.append("\n".join("\t".join(r) for r in str_rows))
+
+    return {"sheets": sheets, "tables": tables, "text": texts, "raw": raws}
+
+
 def _child_test_echo(data: bytes) -> dict[str, Any]:
     """Happy-path round-trip probe: prove stdin bytes reached the child intact
     and the JSON-on-stdout contract works end-to-end."""
@@ -358,6 +473,8 @@ def _child_main(argv: list[str]) -> int:
         result = _child_extract_pages_text(data, max_pages)
     elif fn_name == "parse_native":
         result = _child_parse_native(data, max_pages)
+    elif fn_name == "parse_xlsx_grid":
+        result = _child_parse_xlsx_grid(data, max_pages)
     elif fn_name == "render_page_pngs":
         result = _child_render_page_pngs(data, max_pages)
     elif fn_name == "_test_echo":

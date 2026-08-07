@@ -324,6 +324,173 @@ def parse_native(data: bytes, *, max_pages: int = DEFAULT_MAX_PAGES) -> ParsedPd
     )
 
 
+# ---- Tier-1 xlsx (vendor spreadsheets) ----------------------------------------------
+#
+# A worksheet IS already the shape `parse_generic_table` consumes — per page, a list of
+# tables, each a list of rows of string cells — so the extraction half of this tier is an
+# ADAPTER, not a second parser. The line-item logic, column inference, section-band
+# handling, `check_math` and `to_worker_payload` are reused verbatim.
+#
+# The ONE thing that does not carry over is doc-level totals; see `_xlsx_totals_from_grid`.
+
+# Label vocabulary for the cell-grid totals scan. Matched against a NORMALIZED label cell
+# (lowercased, punctuation/whitespace squeezed) — deliberately not regexes over free text,
+# which is exactly the trap this function exists to avoid.
+_XLSX_TOTAL_LABELS: dict[str, tuple[str, ...]] = {
+    "subtotal_cents": ("subtotal", "sub total"),
+    "tax_cents": ("tax", "sales tax"),
+    "freight_cents": ("freight", "shipping", "delivery"),
+    "grand_total_cents": ("grand total", "total due", "order total", "total"),
+}
+# How far right of a label cell to look for its number. Vendors pad with blank/merged
+# spacer columns; beyond a handful it stops being "the adjacent value".
+_XLSX_TOTAL_SCAN_COLS = 6
+
+
+def _normalize_label(cell: Any) -> str:
+    if not isinstance(cell, str):
+        return ""
+    return re.sub(r"[\s:\-_.]+", " ", cell).strip().lower()
+
+
+def _xlsx_totals_from_grid(raw_sheets: list[list[list[Any]]]) -> dict[str, int]:
+    """Read doc-level totals off the CELL GRID, never by regexing flattened text.
+
+    THIS IS THE LOAD-BEARING DIFFERENCE between the xlsx tier and the PDF tier, and it is a
+    correctness control, not an optimization.
+
+    `_GENERIC_TOTALS` (used by `parse_generic_table` on PDF text) requires exactly two
+    decimals: ``([\\d,]+\\.\\d{2})``. A PDF text layer always carries FORMATTED currency
+    ("$4,685.00"), so that holds. openpyxl hands back the STORED value instead, and a
+    ROUND money amount stringifies with ONE decimal — ``str(4000.00) == "4000.0"`` — so the
+    pattern misses it. (A non-round amount like ``386.51`` happens to survive, which makes
+    the failure intermittent and therefore worse: it depends on the vendor's numbers.)
+
+    A subtotal is very often round, and `check_math` deliberately SKIPS comparisons with
+    absent operands, so the whole cross-check evaporates while `math_ok` stays True. Measured
+    on a book whose subtotal was WRONG (3999.00 against lines summing to 4000.00):
+
+        regex-over-text : math_ok=True,  flags=[]                      <- MISSES it
+        this function   : math_ok=False, flags=['Σextended 400000 != subtotal 399900',
+                                                'subtotal+tax+freight+misc 399900 != grand_total 400000']
+
+    A document posting as `extracted` with every LINE correct and no doc-level check
+    performed is silently unverified rather than visibly failed — the worst shape a money
+    bug can take, and the reason this reads cells instead of text.
+
+    So: find a label cell, take the nearest numeric cell to its right, and hand the NATIVE
+    value to `to_cents` (which handles floats/Decimals exactly). Longest label wins, so
+    "grand total" is not shadowed by the bare "total" alias.
+    """
+    found: dict[str, int] = {}
+    for rows in raw_sheets:
+        for row in rows:
+            for col, cell in enumerate(row):
+                label = _normalize_label(cell)
+                if not label:
+                    continue
+                # Longest alias first so "grand total" beats "total".
+                best: tuple[int, str] | None = None
+                for key, aliases in _XLSX_TOTAL_LABELS.items():
+                    for alias in aliases:
+                        if label == alias or label.startswith(alias + " ") or label.endswith(" " + alias):
+                            if best is None or len(alias) > best[0]:
+                                best = (len(alias), key)
+                if best is None:
+                    continue
+                key = best[1]
+                if key in found:  # first occurrence wins (headers precede footers)
+                    continue
+                for probe in row[col + 1 : col + 1 + _XLSX_TOTAL_SCAN_COLS]:
+                    if isinstance(probe, bool) or probe is None or probe == "":
+                        continue
+                    cents = to_cents(probe)
+                    if cents is not None:
+                        found[key] = cents
+                        break
+    return found
+
+
+def parse_xlsx(data: bytes, *, max_sheets: int = 12) -> tuple[ParsedPdf, list[list[list[Any]]]] | None:
+    """Parse a (potentially hostile) vendor workbook via the sandboxed child.
+
+    Returns `(ParsedPdf, raw_sheets)` — the ParsedPdf feeds `parse_generic_table` unchanged,
+    and `raw_sheets` (native-typed cells) feeds `_xlsx_totals_from_grid`. None on a child
+    timeout / crash / malformed output — the caller's degrade signal. Never raises on
+    hostile input.
+
+    `is_scanned` is always False: a workbook has no text layer to be missing, and the
+    scanned/OCR concept simply does not apply.
+    """
+    out = estimate_sandbox.run_sandboxed(
+        "parse_xlsx_grid",
+        data,
+        timeout_s=estimate_sandbox.XLSX_TIMEOUT_S,
+        args=(str(max_sheets),),
+    )
+    if out is None:
+        return None
+    try:
+        parsed = json.loads(out)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    tables_raw = parsed.get("tables")
+    text_raw = parsed.get("text")
+    raw_raw = parsed.get("raw")
+    if not isinstance(tables_raw, list) or not isinstance(text_raw, list):
+        return None
+
+    # One worksheet == one "page": tables[i] is that page's single table.
+    tables: list[list[list[list[str]]]] = []
+    for sheet in tables_raw[:max_sheets]:
+        if isinstance(sheet, list):
+            tables.append([[[str(c) for c in row] for row in sheet if isinstance(row, list)]])
+        else:
+            tables.append([])
+    pages = [t for t in text_raw if isinstance(t, str)][:max_sheets]
+    raw_sheets: list[list[list[Any]]] = []
+    if isinstance(raw_raw, list):
+        for sheet in raw_raw[:max_sheets]:
+            raw_sheets.append(
+                [row for row in sheet if isinstance(row, list)] if isinstance(sheet, list) else []
+            )
+
+    return (
+        ParsedPdf(
+            pages_text=pages,
+            words=[[] for _ in pages],
+            tables=tables,
+            chars_per_page=[len(p) for p in pages],
+            is_scanned=False,
+        ),
+        raw_sheets,
+    )
+
+
+def parse_xlsx_estimate(data: bytes, *, max_sheets: int = 12) -> ExtractionResult | None:
+    """Full Tier-1 xlsx extraction: adapter -> generic table -> CELL totals -> check_math.
+
+    The one composed entry point the ladder calls. Returns None when the workbook cannot be
+    parsed or yields no line items (the ladder then falls through to needs_review).
+    """
+    adapted = parse_xlsx(data, max_sheets=max_sheets)
+    if adapted is None:
+        return None
+    parsed, raw_sheets = adapted
+    result = parse_generic_table(parsed)
+    if result is None:
+        return None
+
+    # Override the (structurally unreliable) text-regex totals with cell-grid values.
+    for key, cents in _xlsx_totals_from_grid(raw_sheets).items():
+        setattr(result, key, cents)
+
+    result.tier = "tier1_xlsx"
+    return check_math(result)
+
+
 # ---- Vendor templates ---------------------------------------------------------------
 
 

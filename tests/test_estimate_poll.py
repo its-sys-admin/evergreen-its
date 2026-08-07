@@ -153,7 +153,8 @@ def _patch(mocker):
         "tiers": mocker.patch(
             "po_materials.estimate_poll._resolve_tier_config",
             return_value=estimate_poll._TierConfig(
-                tier1_enabled=False, tier2_enabled=False, ocr_enabled=False,
+                tier1_enabled=False, tier1_xlsx_enabled=False, tier2_enabled=False,
+                ocr_enabled=False,
                 model="qwen3.5:9b", ollama_base_url="http://127.0.0.1:11434",
                 confidence_threshold=0.75, timeout_seconds=600,
             ),
