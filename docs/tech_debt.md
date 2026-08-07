@@ -10,7 +10,18 @@ When to add an entry: a session deliberately chooses preservation-over-refactor 
 
 ## 2026-07-14 Debt-Zero Triage — session disposition
 
-Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent verification workflow + operator session). **Counts:** 123 unique entries — 12 verified **resolved/stale → moved** to [`tech_debt_closed.md`](tech_debt_closed.md); 110 **re-parked** (still valid, deferred, owner-tagged below); 1 folded into the send-path re-park (scheduled_send_local). This index is the dated disposition record; each entry keeps its full rationale in place.
+Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent verification workflow + operator session). **Counts:** 123 unique entries — 12 verified **resolved/stale → moved** to [`tech_debt_closed.md`](tech_debt_closed.md); 91 **re-parked** (still valid, deferred, owner-tagged below; originally 110 — reconciled 2026-08-07, see note); 1 folded into the send-path re-park (scheduled_send_local). This index is the dated disposition record; each entry keeps its full rationale in place.
+
+> **Index reconciled 2026-08-07 (delivery-day tech-debt cleanup).** This 2026-07-14 index was never
+> updated when entries were archived, so it had drifted into pointing at entries that no longer exist —
+> 19 of its 110 "re-parked (still valid)" bullets named entries already moved to
+> [`tech_debt_closed.md`](tech_debt_closed.md), over-counting open debt by ~17%. Two of the stale bullets
+> were `[CUTOVER-BLOCKING]`-tagged, which overstated cutover risk. Those bullets are removed and the five
+> group counts re-derived from the surviving bullets. The three `### This session's code outcomes` bullets
+> below are a historical session record, not entry pointers, and are left untouched. Verification method:
+> each bullet title was matched against the surviving `## ` headers and cross-checked against the archive;
+> one apparent stale bullet (`Publish daemon: privileged subprocess chain…`) was a FALSE POSITIVE — its
+> entry is still live, the header just reads "chain **is** operator-validated-live" — and was kept.
 
 ### This session's code outcomes (2026-07-14)
 
@@ -20,32 +31,26 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 
 ### Re-parked, by owner (still valid — trigger in each entry)
 
-**Seth** (9):
+**Seth** (7):
 
-- [CUTOVER-BLOCKING] Aug-7 cutover readiness — deferred code follow-ups — CO-1 is a fail-safe tightening on a SEND_SCRIPTS daemon (FIXED high-class external-send-gate); CO-2 is a Phase-C operator EICAR smoke; CO-3 already RESOLVED. Trigger: any PO send-path session / Phase-C hardening gate.
 - DKIM in-process re-validation — Security/threat-model enhancement (in-MTA-trust assumption); half-day. Trigger: security review or threat-model session flags it.
 - Field-ops P2.3 write-layer follow-ups (deferred sub-features + governance) — Four remain: inspection quick-log (operator domain-input blocked), cap.admin.equipment orphan cleanup + 0013 label tidy (touch cap vocabulary → confirm Seth), §50 doctrine bump. Trigger: cap-management UI scheduled / equipment-inspection forms defined.
 - Field-ops Smartsheet/Box source-of-truth integration (P2.4+ downstream) — BLOCKED on Seth gaining canonical-Evergreen Smartsheet SoR visibility + the §50 doctrine bump; building against unseen schema is worse than absent. Trigger: SoR access AND/OR §50 doctrine reaches Seth.
-- Optimization-plan doctrine-adjacent decisions awaiting operator green-light — Item 2 (B3) + the D5 registry split RESOLVED; item 1 is a doctrine-adjacent dead-weight-vs-preservation call only Seth greenlights. Trigger: Seth reviews the optimization-plan Needs-operator section.
 - Optional fail_closed_until kill-switch hardening (deferred) — Kill-switch fail-open contract + defense-in-depth is doctrine/security territory; revisit when a time-bounded hard halt is actually needed.
 - Progress (and safety) no-recipient HELD surfaces a record, not an operator page — Adding a CRITICAL push leg on a no-recipient HELD is a Send-Gate severity-posture decision (§3.1, Seth-owned). Trigger: operator decides a blocked customer-facing send warrants an active page.
 - Safety Portal M2 — capability gate static-AST-import-only — Dynamic-import/transitive-closure/scripts-scope gaps remain (now documented as residual in-code); security capability-gate is high-class. Trigger: next capability-gating hardening / before Customer-1.
 - Single-token blast radius for Smartsheet — Secrets/blast-radius split is high-class (auth); revisit when a rotation incident causes a system-wide outage or multi-customer secrets land.
 
-**operator** (25):
+**operator** (21):
 
-- "New Job" Smartsheet form on ITS_Active_Jobs — operator-UI creation pending — Smartsheet forms are UI-only (not API-creatable), ~15min operator step at deploy session.
 - /pending-jobs transport flakiness — deeper cause untraced, only blast-radius mitigated — Root-cause diagnosis needs a captured live failure + Cloudflare WAF/bot-fight dashboard cross-check; symptom already mitigated by #469. Trigger: next observed transient /pending-jobs failure.
-- 5-duplicate ITS_Errors sheets in System/02-Logs — Four dead duplicate sheets need Smartsheet-UI delete (no MCP delete-sheet primitive); non-blocking. Trigger: next operator Smartsheet UI session.
 - Confirm canonical_job_path() format with owner — Still no real consumer (only test_box_client.py:524 references it); owner never validated the write-path format. Trigger: first workstream that consumes canonical_job_path.
 - Cross-leg dedupe activation — Sentry/Smartsheet stay record-only, so no push-leg dedupe needed; correlation_id already wired. Trigger: operator configures Sentry/Smartsheet alert rules.
 - Doc-conventions lint strict-mode flip after retrofit window closes — Scheduled: bulk frontmatter retrofit sweep + one-line --strict CI flip; trigger 2026-07-24 (not yet reached) or operator opens a retrofit session / accepts permanent grandfather.
 - ITS_Active_Jobs Address cells blank — office PM fill required — Live Smartsheet data-fill by office PM (no code); revisit at portal production go-live before enabling Work-Location autofill.
-- ITS_Active_Jobs AUTO_NUMBER Job ID column — manual operator UI step pending — SUPERSEDED by P2.5 Slice 6: the portal assigns JOB-###### (Worker job_counter, migration 0022) and the column is plain TEXT; no manual UI step exists (entry closed 2026-07-23).
 - ITS_Active_Jobs column order cosmetically scrambled — Cosmetic UI drag-reorder; not load-bearing (active_jobs looks up by title), convenience-only.
 - ITS_Daemon_Health sheet observability drift — Partially eased (publish daemon now self-provisions its row) but stale live rows (retired intake_poll etc.) need operator UI deletion + Last-Error-clear. Trigger: next daemon-health pass; before cutover.
 - Operator-UI Shortcuts for trusted-contacts workflows — Half-day tooling nicety, no functional gap. Trigger: tooling-track session bandwidth.
-- Orphan per-job Smartsheet folder from the JOB-000013 50-char-cap incident — Empty stray folder needs a manual Smartsheet-UI delete (live-Smartsheet, not code); revisit at next ITS — Safety Portal workspace tidy.
 - Orphaned Reports sheet — column styling not applied — Cosmetic column widths on a live Smartsheet sheet (forbidden live-Smartsheet-write for a DO). Trigger: operator finds default widths inconvenient / a portal styling pass.
 - Phase 5 manual week-sheet additions — By-design operator workflow for occasional manual corrections; no automation intended — retained as documented behavior.
 - PowerShell Get-ApplicationAccessPolicy -Identity <friendly-name> directory lookup fails — Documented bare-cmdlet workaround for an EXO PowerShell gotcha; reference. Trigger: next EXO ApplicationAccessPolicy work.
@@ -60,29 +65,22 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Watchdog sweep cadence vs dedupe window length — Intentional 24h-max summary delay for daily-rhythm ops. Trigger: operator reports ≥24h-delayed summaries causing triage problems.
 - WPR_Pending_Review final removal (decommission-by-doc → delete) — Blocked on operator deleting the live WPR sheet; SHEET_WPR_PENDING_REVIEW + smoke_test_watchdog_catchup WPR seeding still present (grep confirms). Trigger: after operator deletes the WPR Smartsheet.
 
-**deploy-dependent** (11):
+**deploy-dependent** (7):
 
 - .dash-section CSS class duplicates .card — .dash-section still in global.css alongside .card; cosmetic dedup, entry says not worth a standalone PR, needs deploy. Trigger: next design-system consolidation pass.
-- Field-ops portal UI polish follow-ups (post write-UI restyle) — PageShell wrap + .banner + --danger variant are frontend polish needing a Worker deploy. Trigger: personnel-creation form-page PR (batch all three there).
 - Form editor: S1 per-item scale/comment authoring from scratch — editorModel.ts still lacks scale/comment item-creation fields; frontend change needs Worker deploy. Trigger: a new HSSE-type form authored via the editor.
-- PR-5 Worker + migration 0012 NOT yet deployed to live mirror — CUTOVER-BLOCKING; requires operator wrangler d1 migrate + npm run deploy (CC classifier-blocked on live D1). Trigger: next operator deploy session (pre-Customer-1).
 - Publish daemon: rollback UI picker missing — Backend rollback op live; SPA picker still deferred and needs a Worker deploy to land. Trigger: a rollback is operationally needed / Phase-3 form-editor polish.
 - Remove the progress-% estimate system-wide — Remaining cleanup touches the worker CREATE-route INSERT (portal-worker-security-reviewer DoD) + a destructive ALTER TABLE DROP COLUMN migration (0014, deploy-coupled). Trigger: a supervised worker-reviewed PR.
-- Safety Portal browser-tab <title> + favicon still say ITS Portal — index.html still <title>ITS Portal</title>; trivial one-line edit but inert without a Worker deploy, cosmetic-low. Trigger: next frontend cosmetic pass.
-- Safety Portal M1 — submitter can overwrite a peer's PENDING submission — submission.ts still INSERT-OR-REPLACE on client-controlled UUID; defense-in-depth Worker fix needs adversarial review + deploy. Trigger: next Worker security pass / before real PM users on live tenant.
 - Safety Portal — bcryptjs cost-10 may exceed Workers Free 10ms CPU cap — auth.ts still imports bcryptjs at cost 10 (unresolved); Paid-plan-vs-PBKDF2 choice is a production-cutover deploy decision.
 - Subcontracts — PO/SC Configuration + builder follow-ups — SC-CFG-2 (index.ts still hardcodes literal 512 vs shared MAX_ADDRESS, verified) is in HELD PR #548 needing Worker deploy; PR-B2 is a large operator-directed exhibit-A+payment-terms build needing deploy + a Layer-A legal-attestation seed; SC-CFG-1 is informational-only.
 - Worker publish-reject paths return bare error codes — no reason field — Low-severity optional server-side parity; client fallback is explicit+non-silent; Worker change needs deploy. Trigger: an unmapped code surfaces in prod / publish-flow UI polish.
 
-**phase-1.5** (15):
+**phase-1.5** (12):
 
-- [CUTOVER-BLOCKING] its#460 — create progress@evergreenmirror.com mailbox + Entra Application Access Policy — Operator M365/Entra auth action (create mailbox + Mail.Send access policy); sends HELD at approval until then. Trigger: Phase 1.5 tenant cutover.
 - Attachment screening pipeline Layers 1-3 — Email-attachment §34 arbitrary-file path still unbuilt (photo/PO screeners are separate); required before Phase 1.5 cutover. Trigger: Phase 1.4 hardening session.
 - Config editor (§50) — deferred follow-ups — CE-1/CE-2/CE-3/CE-6 verified RESOLVED (sweep to archive); open CE-5 (MEDIUM — who may attest legal clearance) is a pre-activation §44 decision gating config_actuator.polling_enabled, CE-4/CE-7 low residuals folding into PR-B2 / next po.test.ts touch.
 - Fallback path removal after ITS_Config cutover — ~30min cleanup but gated on operator confirming one clean Friday cycle post-cutover; _check_legacy_allowlist still live at intake.py:626. Trigger: cutover confirmation.
-- Future PDF/JHA field extraction needs found-flag pattern — Multi-session Phase 1.5 PDF-extraction workstream not yet built; found-flag + corpus + customer template solved together when that brief is drafted.
 - hours_log.find_entry_row does a full client-side scan of the sheet on every upsert/supersede call — O(sheet-size) scan still present but benign at low volume; revisit at the 20-job cutover or when a live Hours Log cycle is observed slowing.
-- ITS scaling hardening — 20-job/20-user Tier-A roadmap — Most Tier-A shipped; live marching order moved to docs/ROADMAP.md Track 3, section kept for provenance only. Trigger: the 20-job ramp is scheduled.
 - Native multi-PICKLIST graduation for Trusted Contacts scope columns — ~1hr; trusted_contacts allowlist currently dormant. Trigger: Picklist Hardening #1 deliverable lands + allowlist goes live.
 - Phase 1.5 — provision dedicated ITS Box user account, re-auth — Cutover task: re-auth as dedicated ITS Box user + ownership/collab transfer; no code change. Trigger: Phase 1.5 production-tenant cutover.
 - Pre-mirror-tree portal Box filings are sandbox orphans — 3 sandbox pre-activation orphans, no repair required in sandbox; revisit at a live customer Box-root cutover to decide leave-or-hand-move.
@@ -92,7 +90,7 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Watchdog/launchd hang-killer: hard-kill a daemon exceeding N× expected cycle duration — Recovery complement to Check-C detection; larger design decision (kill location, per-daemon N sizing) — Phase 1.4/1.5 reliability target.
 - weekly_send upload-session — live-Graph integration smoke — Only mocked coverage of the 4-step Graph upload-session; §30 mocks-pass-live-fails surface. Trigger: pre-Customer-1 live-tenant validation / first real photo-bearing packet.
 
-**post-delivery** (50):
+**post-delivery** (44):
 
 - Alert-dedupe state is per-machine — Single-host through Phase 3; per-host dedupe is correct today. Trigger: ITS gains multi-host execution (Phase 4+).
 - Alert-dedupe state-file growth in pathological flap-with-new-error-code scenarios — Bound holds today (fixed error_code); monitor-only. Trigger: state file exceeds ~100 persistent entries between sweeps.
@@ -106,12 +104,9 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - D1-primary tables have no ITS-side backup — Time Travel is the restore path — Accepted decision (R3-F7): §14 explicitly rejected a backup job, restore path documented. Trigger: a third D1-primary table lands / Cloudflare changes Time Travel retention.
 - Draft cache stores one draft per account — Accepted single-slot design (deliberate); only revisit if concurrent multi-form editing is requested. Trigger: operator requests multi-form edit / a WIP draft-loss incident.
 - Eventually migrate from legacy boxsdk to box_sdk_gen (Gen API) — ~half-day dependency migration; pin <4.0.0 holds. Trigger: Box announces 3.x deprecation, capability gap, or annual hygiene sweep.
-- Exec session log gap — 2026-06-17 to 2026-06-18 arc still missing — Retroactive narrative reconstruction from PRs #292/#294/#295; operator invokes session-log-writer, doc-only but >quick. Trigger: operator bandwidth for the retro log.
 - Hardcoded BOX_SUBPATH_BY_CATEGORY in safety_reports/intake.py — A2 (shared/project_routing.py) has landed so the trigger is technically met, but this lives in the dormant email-intake branch; it is a ~2hr config-migration, not a quick fix.
-- Hardcoded default fallbacks for ITS_Config-sourced timing constants — Layer-1 observable-config (resolve_and_log + REQUIRED_CONFIG, #336) is already in weekly_send_poll.py; Layer-2 WARN-loud validation folds into the C1 startup-validation cluster.
 - HTML email rendering for weekly_send — weekly_send still sends WSR Email Body as text; HTML render awaits Teala's feedback on inline-text format after first 30 days of real cycles.
 - Inline doctrine-pin normalization across shared/* + safety_reports/* — The one real fix (weekly_send.py:72 §23.3→§19) lives in a SEND-path file (excluded); fold in opportunistically next time those files are touched.
-- Intake stream extension for Weather + Labor + Mobilization metadata — Email intake stages now dormant (portal-fed); weather/labor extension revisits at WPR template calibration after 30 days of real Friday cycles.
 - ITS_Active_Jobs CC recipients are operator-entered, not allowlist-validated — Accepted-risk under trusted-operator-input model (Send Gate still requires explicit approval); revisit only if allowlist validation is later wanted.
 - Nightly auto-index regen wiring — CI --check gate is the load-bearing enforcement; wire the launchd/watchdog job only when local drift is observed or a 3rd daemon touches watchdog wiring.
 - P2.5 job-tracker up-sync — fast-follows — Items 1 (needs picklist_sync.py capability-gating enrolled FIRST to avoid meta-test break) and 4 (find-after-create race, idempotent nuisance) remain; 4 others closed. Trigger: item1 when picklist_sync enrollment addressed; item4 on an observed duplicate.
@@ -124,7 +119,6 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - R-series spec Deferred #5–#10 — named follow-ups — Explicit locked-decision scope cuts (not regressions); listed to avoid rediscovery as bugs. Trigger: next field-ops UX pass — check before re-scoping.
 - R2 upgrade path for portal photo transport (deferred) — ADR-0001 deferred design (second storage plane); revisit when field crews need >4 full-res photos/field or the Worker body bound blocks a budget raise.
 - Safety email-intake retire — operator-manual + future-PR follow-ups — Tombstone deletion done (intake_poll.py + weekly_summary.py DELETED 2026-07-03); residual = WPR sheet deletion (still referenced, own entry) + optional Job Slug column delete.
-- Safety Portal M6 — publish daemon zero watchdog/health coverage — Partially done — daemon now self-provisions an ITS_Daemon_Health row (R4-F1 HeartbeatReporter), but still absent from watchdog TRACKED_JOBS and writes no last_run marker. Trigger: next watchdog/publish-daemon hardening; before cutover.
 - Safety Portal M7 — publish daemon runs destructive git on live ~/its tree — Still runs git clean/checkout on the live tree without worktree isolation; daemon-hardening code change. Trigger: next publish-daemon hardening; before cutover.
 - Safety Portal — Worker-side capability-gate for TS not covered by Python AST gate — Still no TS capability-gate (grep: no eslint no-restricted / no .ts coverage in test_capability_gating.py); duplicate of the later ts-sendgate entry — revisit when Worker gains outbound code path.
 - safety_reports week-folder create-find race condition — Rare at single-machine cadence; WARN+operator-visibility preferred over auto-clean. Trigger: race observed in practice (multi-machine ops).
@@ -133,7 +127,6 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Smartsheet API constraint: AUTO_NUMBER columns rejected at sheet creation — Permanent platform constraint with row-ID workaround ("likely never"); reference note. Trigger: a workstream needs user-visible auto-IDs.
 - Smartsheet API constraint: column FORMAT must be set via model attribute, not dict constructor — Documented SDK-vs-live reference gotcha; apply_column_styles already uses the attribute path — revisit only when new column-format code is written.
 - Smartsheet API constraint: DATETIME columns require system column type — Permanent Smartsheet platform constraint (ABSTRACT_DATETIME workaround confirmed 2026-06-09); reference note. Trigger: Smartsheet surfaces user-editable DATETIME.
-- Smartsheet transient 404 on first-project sheet/folder create — Retry mitigation shipped; durable SDK→REST swap deferred — trigger = retries_attempted>=3 in a 4-week window OR a real GENERATION_FAILED placeholder appears.
 - smartsheet-python-sdk upper-bound pin (CI-break stopgap) — Pin <3.10.0 still live and load-bearing (import at smartsheet_client.py:46); proper ~1hr fix requires verifying the newer SDK exception surface — dependency-maintenance pass.
 - Smoke harness pattern divergence between dedupe smoke and Resend/Sentry smokes — Forward-protection note, no active failure; documents that new full-triple-fire smokes must use @its_error_log. Trigger: next triple-fire smoke authored.
 - Structural fix: lazy keychain loading + DI-injected kill_switch — Non-trivial cross-call-site refactor deferred by design; fold in when a session next touches smartsheet_client or kill_switch for another reason.
@@ -142,7 +135,6 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - weekly_send upload-session chunk-retry hardening (deferred) — Cross-cycle session-resume/cancel deferred, restart-from-zero cheap today; revisit on recurring mid-upload failures or packets nearing the 150 MB ceiling.
 - weekly_send upload-session threshold = 2.5 MB (heuristic, not measured) — Send-path threshold tuning against the live tenant; revisit when the first live photo packet crosses ~2.5 MB or a graph_error cluster appears near 3 MB.
 - Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate) — Confirmed no TS send-gate CI rule exists; Worker stays send-free by design — add fetch-allowlist grep/ESLint when it gains an outbound path or at deploy hardening.
-- WS2 operator dashboard — completion parked items — WS2-1 verified RESOLVED (static assets present); residual WS2-2/WS2-3 are doc-sync (CLAUDE.md 'No launchd plist yet' line + enablement delta still stale, verified) folded into next doc-reconciliation/A8 pass, WS2-4 is a by-design Seth send-lane decision.
 - §6a enablement-doc DoD owed per Progress-Reporting slice — PARTIALLY_MITIGATED — manifest pipeline now exists; residual = retire in-doc TODOs, add material_catalog guide, D2-2/D2-3 content. Trigger: each Progress-Reporting slice brief.
 
 ---
@@ -221,30 +213,6 @@ followed by re-recording the doc's sha256 in the enablement manifest.
 **Trigger:** any `generate_config_dictionary.py` work, or the next send-gate documentation pass.
 
 ---
-
-## WS2 operator dashboard — completion parked items [OPEN 2026-07-13]
-
-From the dashboard-completion session (Blocks 1-5 landed #567/#570/#574/#576). None blocks the ship; each
-is a deliberate scope line:
-
-- **WS2-1 — RESOLVED 2026-07-14.** No Canva export was needed — the Safety Portal brand already had the
-  vector + font. Pulled `evergreen-logo.svg` + `great-vibes.woff2` (+ OFL license) from `safety_portal/public/`
-  into `operator_dashboard/static/` and wired the real lockup into the dashboard header: the Evergreen mark on
-  a gold-bordered white plate + the "Integrated Technical System" gold-gradient Great Vibes script (the
-  portal's exact treatment incl. the WebKit background-clip cap-loop padding fix).
-- **WS2-2 (PARTIALLY RESOLVED 2026-07-14, PR #597).** CLAUDE.md's dashboard "stubbed vs real" row was stale
-  ("No launchd plist yet (D1-3b)"); #597 fixed it in the same PR as the `mark_errors_resolved` verb — the row
-  now reads "launchd-managed (`org.solutionsmith.its.dashboard`)" and lists the mark-resolved+clear verbs.
-  (Re-verified 2026-07-17: `grep operator_dashboard CLAUDE.md` no longer contains "No launchd plist yet.")
-  **Residual RESOLVED 2026-07-22 (#658):** the `verify_cutover.py` docstring now reads
-  "launchd-managed, `org.solutionsmith.its.dashboard`" — the second surface is fixed.
-- **WS2-3 — DELTA LANDED 2026-07-22 (session-close PR):** `docs/enablement/operator_dashboard.md` now
-  covers the sweep panel, the system-map operator briefs/doc links/Smartsheet out-links, and the reorganized
-  config editor. (The guide had already grown the verb/panel coverage in the interim; this delta brought it
-  current with the 2026-07-22 dashboard trilogy #655/#657/#658.)
-- **WS2-4 (Seth decision, by design) — no mutating send-lane verb.** The send-queue panel is read-only;
-  bulk-approve / resend-FAILED / clear-HELD are deliberately NOT built (D13). Trigger: an explicit operator
-  decision to expose a send-lane action (would need its own adversarial review).
 
 ## WS2 dashboard clear-error-log verb (#587/#591/#594) + live error-chase findings [OPEN 2026-07-14]
 
@@ -481,6 +449,27 @@ were retracted/resolved from this diagnosis. Four open design gaps surfaced, non
   the 07-15 storm, and only coincidentally (`progress_send_poll` CRITICAL `ReadTimeout` at onset) — a cleaner
   full-outage window could page zero times. Trigger: same pass as above; needs a severity-posture decision
   (Seth-owned, Op Stds §3.1 territory).
+
+  **2026-08-06 — BOTH gaps above RECURRED, and the "pages zero times" hypothetical actually happened.**
+  A **12.7-hour** Smartsheet outage (10:23Z→23:04Z; HTTP 500 code 4000 + read timeouts; breaker OPEN
+  **729 min**, 361 short-circuit observations across the fleet) froze every Smartsheet-backed daemon —
+  the escalation text's own words: *"approved sends are FROZEN and nothing is being filed."* Outcome
+  versus the two predictions:
+  - **Durability gap (2nd occurrence):** the outage left **zero `ITS_Errors` CRITICAL rows** — the
+    record leg could not write because Smartsheet *was* the outage. `~/its/logs/2026-08-06.log` is again
+    the only forensic record. 07-15 lost 1,264 of 1,368 writes; 08-06 lost the incident entirely.
+  - **Paging gap (worse than predicted):** 07-15 got one coincidental page. 08-06 got **zero**. The
+    third leg was independently dead — Resend 403s on an unverified domain (see the
+    `resend_client.DEFAULT_FROM` entry at the end of this file, severity raised there). Sentry was the
+    lone surviving leg. **A 12.7-hour full-fleet freeze was invisible until a human went looking.**
+
+  This is the two-outage pattern the 07-15 entry anticipated: the three legs are not independent under
+  a Smartsheet outage (one leg *is* Smartsheet) and the remaining two can both be down without anyone
+  noticing. Note the watchdog behaved correctly throughout — Check J WARNed at 450s (< its 600s
+  threshold) on the 11:00Z sweep, and the daily cadence is exactly the "not real-time" limitation named
+  above. **Trigger raised: this is now a twice-realized outage-blindness class, not a hypothetical.**
+  Recovery required no intervention (breaker self-closed, all daemons resumed clean) — the defect is
+  purely in *observability*, not recovery.
 - **(operator/dev, recurring) — pytest runs during a live dev session pollute the LIVE dated error log,
   Keychain-adjacent state, and `~/its/state/*.lock` files.** `tests/conftest.py:138-141`'s stub creds
   (`test-{service}`) still make REAL network calls that 401/error, and `shared.error_log` appends those to
@@ -617,10 +606,14 @@ all three verdicts CLEAN/WARN, no BLOCK). Deferred deliberately — none blocks 
   files both `.docx`+`.xlsx` but only tracks the `.docx` id as `box_file_id`; the `.xlsx` lives in Box under
   its deterministic `sc_xlsx_filename` with no ledger/D1 handle. Correct for S3c (the reviewer gets both via
   the inline attach); SC-S4's send — which will attach BOTH — must re-derive `sc_xlsx_filename` to locate it.
-- **SC3c-4 (LOW, shared) — the daemon-scaffold subprocess-AST guard doesn't cover `subcontracts/`** (nor
-  `po_materials/`; `tests/test_daemon_scaffold.py` `DAEMON_ROOT = safety_reports` only). Zero current
-  exposure (`subcontract_poll` spawns no subprocess). Widen `DAEMON_ROOT` to a root LIST covering the
-  daemon-bearing packages if/when that guard is generalized — a shared change, matches the existing PO gap.
+> **Cleanup 2026-08-07:** the **SC3c-4** bullet was deleted from this entry — its premise is dead at HEAD.
+> It asserted `tests/test_daemon_scaffold.py` scoped the subprocess-AST guard to `safety_reports` only via a
+> singular `DAEMON_ROOT`; `grep -rn "DAEMON_ROOT[^S]" --include="*.py"` now returns ZERO hits, and
+> `tests/test_daemon_scaffold.py:39` defines `DAEMON_ROOTS` over all five daemon packages
+> (`safety_reports`, `po_materials`, `subcontracts`, `progress_reports`, `field_ops`) with a comment naming
+> the bullet's own ID. Left in place it read as a live capability-gate coverage hole on the PO/subcontract
+> daemon surface — the worst class of stale entry, because it invites someone to "fix" a guard that already
+> bites. SC3c-1/-2/-3 below remain valid.
 
 ## Subcontracts — PO/SC Configuration + builder follow-ups [OPEN 2026-07-12]
 
@@ -643,15 +636,14 @@ bug.
   immutable-pin-per-version pattern elsewhere in the manifest, but silently so for this one file. **Trigger:**
   only relevant the day a `standard_subcontract_v2` is minted — worth an ADR-0003 note or a cross-check at
   that point, not before. **Tag:** `subcontracts`, `terms`, `legal-gate`, `informational`.
-- **SC-CFG-2 (COSMETIC) — `worker/index.ts`'s `/api/internal/sync` address bound hardcodes the literal
-  `512` instead of importing the shared `MAX_ADDRESS` constant.** PR #548 (HELD for operator deploy +
-  live-smoke — touches the Worker) added `address` to the `ITS_Active_Jobs` down-sync payload and bounds it
-  at `address.length > 512` inline in `index.ts`. The same `512` value is already defined as `MAX_ADDRESS`
-  independently in three other Worker files (`po.ts`, `subcontract.ts`, `fieldops_job_write.ts`) —
-  duplicated, not shared, across all four sites. Zero behavioral drift today (all four agree at 512), but a
-  future bump to any one site without the others is a latent inconsistency. **Fix:** hoist `MAX_ADDRESS` into
-  a shared Worker constants module and import it at all four call sites (a small, contained refactor — no
-  functional change). **Tag:** `subcontracts`, `worker`, `cosmetic`, `low-severity`.
+> **Cleanup 2026-08-07:** the **SC-CFG-2** bullet was deleted from this entry — its prescribed fix has been
+> executed verbatim. It asked to "hoist `MAX_ADDRESS` into a shared Worker constants module and import it at
+> all four call sites"; at HEAD `safety_portal/worker/constants.ts:10` reads
+> `export const MAX_ADDRESS = 512;` and it is imported by `index.ts`, `po.ts`, `subcontract.ts`,
+> `fieldops_job_write.ts` **and** `rfq.ts` (five sites, one more than the bullet anticipated). The only
+> surviving `512` literals in the Worker are the constant's own definition and the comment recording the
+> old duplicated state. This entry's 2026-07-24 audit note already recorded it resolved by PR #590, so the
+> same item was reading as open in two places within one file.
 - **PR-B2 (the remaining Exhibit-A + payment-terms build, operator-directed, NOT started) — Exhibit-A
   versioned+gated editing + subcontract payment-terms editing + a `config.ts` comment fix.** Mapped this
   session (Explore agent) as one LARGE, atomic Python+worker+SPA change, deliberately left for the operator's
@@ -686,49 +678,17 @@ bug.
 
 From the slice-2 (`config_actuator`) build + adversarial review (PR #509):
 
-- **CE-1 (LOW, defense-in-depth) — §54 redact parity on the daemon `_fail` stamp legs. RESOLVED 2026-07-13.**
-  `safety_reports/publish_daemon._fail` now applies the byte-identical `redact(reason[:1800])` that
-  `config_actuator._fail` already had, so the `stamp_publish(..., failure_reason=reason)` leg — which lands on
-  the portal Status Monitor, a sink that BYPASSES error_log's redact choke — no longer egresses an accidental
-  token/PII from an `_exc_reason` subprocess-stderr tail. Proven by `tests/test_publish_daemon.py::
-  test_fail_redacts_a_secret_bearing_reason_before_egress` (RED on the pre-fix unredacted line). The stale
-  "tracked follow-up" comment in `config_actuator._fail` was updated to note parity. (The broader "redact at
-  the `portal_client.stamp_*` call sites so every future daemon inherits it" idea is left as a future
-  refactor, not this fix.) Sweep to `tech_debt_closed.md` in the follow-up doc-hygiene pass.
-- **CE-2 (legal-gate depth) — render-side `legal_review` refusal (Layer A). RESOLVED 2026-07-10 (slice T2).**
-  `terms._version_entry` now REFUSES a library version whose `legal_review != "cleared"` — the single choke
-  point shared by `load_terms_text` + `required_tokens`, firing on an explicit pin OR the `current_version`
-  default. A mis-bumped `current_version` can no longer render an un-reviewed version; it raises + fences the PO
-  (`po_poll` → Review Queue). Shipped with the two required predecessors, in lockstep: (1) the two shipped
-  versions (`standard_17_v1`, `chint_vendor_v1`) were backfilled to `legal_review:"cleared"` in the same change
-  (operator-confirmed clearance), so no live PO fences; (2) the `set_current` make-current op + a confirmable
-  portal control ("I've reviewed this — make it live") is the activation path (clears legal_review + advances
-  `current_version` through the config actuator). The **legal judgment** it encodes stays a §44 high-class call
-  (Seth / legal), training-enforced per the §43 runbook — the control is the mechanism, not a re-delegation.
-- **CE-3 (was HIGH, blocked the editor entirely) — self-defeating CI test class recurs: CI hard-pins the
-  live editable config content, so a legitimate purchaser/tax edit cannot merge. RESOLVED 2026-07-10
-  (session 2) — PR #514 (`ca9c776`).** Discovered 2026-07-10 during the first live activation smoke: the
-  operator edited the purchaser's `invoice_routing.to`, the actuator queued → committed → opened
-  **PR #511** (`chore(po-config): purchaser: Evergreen Renewables LLC -> config_version 2 (req 1)`) — and CI
-  red-lit at the `tested` stage, so the daemon's `_wait_for_ci` never advanced it past `validated`/`tested`
-  and the edit was permanently stuck. Root cause: `safety_portal/test/po.test.ts:222-223` asserted the exact
-  live-bundled purchaser entity + `invoice_routing.to` value, and `tests/test_config_apply.py` asserted an
-  absolute `config_version == 2` plus a pinned preserved field — both coupled to the CURRENT content of the
-  file being edited rather than its shape. This was the **identical class** already named in
-  `claude-code-info-gap.md` §5 "Self-defeating CI test class" (2026-06-09, PR #222/#228, form-publish
-  catalog counts) recurring on a second §50-actuator instantiation. **Fix landed (PR #514):** rewrote
-  `tests/test_config_apply.py` (fixture seeded at a non-1 sentinel `SEED_CONFIG_VERSION=5` + relative
-  `new == seed+1` asserts), `tests/test_po_terms.py` (shape asserts — non-empty, email-shaped, integer-bp in
-  range, key parity — a second blocker the initial brief missed), and `safety_portal/test/po.test.ts`
-  (imports the same bundled config the worker uses; derives `EXPECTED` tax math from `taxConfig.rates_bp.IL`;
-  asserts served-config == imported source; terms wiring derives from the manifest) — all now assert
-  shape/round-trip instead of pinning live content. A guard against a THIRD instantiation hitting this blind
-  is now in `docs/HOUSE_REFLEXES.md` §5 ("never pin editable-config content; assert shape/round-trip/
-  served-equals-source"). **PR #511 itself did NOT merge — it is `state: CLOSED`, not `MERGED`** (verified
-  via `gh pr view 511`); the next purchaser/tax edit retests clean against the fixed suites, but #511's
-  specific `invoice_routing.to` edit needed resubmission through the SPA, it did not auto-resume. **Tag:**
-  `po_materials`, `config-editor`, `ci`, `self-defeating-test`, `resolved`. See CE-4 below for a residual the
-  same PR flagged, not fixed.
+> **Cleanup 2026-08-07:** the **CE-1 / CE-2 / CE-3 / CE-6** bullets were deleted from this entry — all
+> four were already recorded RESOLVED in their own text, and CE-1's closing line literally asked for this
+> sweep ("Sweep to `tech_debt_closed.md` in the follow-up doc-hygiene pass"), which never happened. Re-verified
+> at HEAD before removal: CE-1 `safety_reports/publish_daemon.py:583` `reason = redact(reason[:1800])`;
+> CE-2 `po_materials/terms.py:104` refuses a version whose `legal_review != "cleared"`; CE-3
+> `tests/test_config_apply.py:30` `SEED_CONFIG_VERSION = 5` with version asserts made RELATIVE to the seed;
+> CE-6 a grep of `docs/enablement/purchase_orders.md` for the old "read-only"/"not a portal edit" phrasing
+> returns empty. ~75 lines of closed narrative were burying the three genuinely-open bullets below — of which
+> **CE-5 matters**: it is a MEDIUM pre-activation §44 decision (who may attest legal clearance) gating
+> `po_materials.config_actuator.polling_enabled`, and it deserves to be readable without scrolling past four
+> finished items.
 - **CE-4 (LOW, out of scope of CE-3's fix) — `po.test.ts`'s `draftBody` hard-codes `ship_to_state:"IL"`.**
   Flagged by PR #514 as a known residual: CE-3's fix makes the test track a tax-RATE edit to IL (or an
   additional state) correctly, but a tax edit that **removes or renames the IL entry entirely** would still
@@ -749,20 +709,6 @@ From the slice-2 (`config_actuator`) build + adversarial review (PR #509):
   `po_materials.config_actuator.polling_enabled` live for terms editing (the editor as a whole is already
   gated on this flag; this is a use-of-capability question, not a code gap). **Tag:** `po_materials`,
   `config-editor`, `terms`, `authorization`, `pre-activation`.
-- **CE-6 (LOW, doc-currency) — `docs/enablement/purchase_orders.md:148-149` still says PO config is
-  "read-only … not a portal edit," which has been false since the config editor's 3-slice vertical (#508–
-  #510/#512) shipped and terms editing (T1/T2, #518/#520) completed it. RESOLVED 2026-07-13 (#506/#566):**
-  the "Configuration" section was rewritten to describe the actual editable surfaces; a grep for the old
-  "read-only"/"not a portal edit" phrasing returns empty and the manifest sha is current (CI green on HEAD).
-  Original context — deferred at write
-  time: editing an enablement doc trips the `docs/enablement/manifest.yaml` sha256 recompute (see auto-memory
-  `reference_enablement-doc-sha-manifest-coupling.md`) and the doc-currency CI gate (`test_docs_pdf --check`)
-  goes RED until the new hash is hand-recorded — not a blocker to skip, just a two-step edit rather than a
-  one-liner. **Trigger:** next time `docs/enablement/purchase_orders.md` is touched for any reason, or as a
-  dedicated small PR; update the "Configuration" section to describe the actual editable surfaces (purchaser/
-  tax/terms via the portal, fully-automatic actuation) and re-run `scripts/generate_config_dictionary.py` /
-  re-record the sha in the manifest per the existing coupling pattern. **Tag:** `po_materials`,
-  `config-editor`, `docs`, `enablement`, `low-severity`.
 - **CE-7 (LOW, blocks a SPA feature not a live edit) — subcontract payment-terms editing deferred to
   PR-B2: the actuator needs day-fields the served config doesn't expose yet.** PR #546 ("PO/SC
   Configuration — subcontract Contractor + terms editors (v1)") built the Contractor identity editor + the
@@ -777,62 +723,6 @@ From the slice-2 (`config_actuator`) build + adversarial review (PR #509):
   pattern as purchaser/tax/terms), then build the SPA editor. Folds into **PR-B2** alongside Exhibit-A
   versioned+gated editing (see the Subcontracts — PO/SC Configuration section below for the full PR-B2
   scope). **Tag:** `subcontracts`, `config-editor`, `deferred`, `low-severity`.
-
-## Aug-7 cutover readiness — deferred code follow-ups [OPEN 2026-07-10 — CO-1/CO-3/CO-4 RESOLVED; CO-2 code landed, operator-run pending]
-
-Surfaced during the cutover-readiness drive (PR #525); each is a real code follow-up not blocking
-the merged work, tracked so it isn't lost. The operator-gated cutover items live in
-`docs/operations/cutover_operator_punchlist.md`, not here.
-
-- **CO-1 — RESOLVED 2026-07-14 (PR #585, `45fe4df`):** `DEFAULT_POLLING_ENABLED = False` landed with the CO-1 comment in place (verified at HEAD 2026-07-22); this entry was stale. Original text: **(LOW, belt-and-suspenders) — `po_send_poll.py:77 DEFAULT_POLLING_ENABLED = True` diverges from
-  HOUSE_REFLEXES §5 (dark-ship default-False).** PO send ships dark via a seeded
-  `po_materials.po_send.polling_enabled=false` row, so the seeded row is load-bearing (a MISSING row would
-  default the SEND poller ENABLED). Flip the code default to `False` so a lost/absent row fails safe (a
-  send-gate should never fail-open to sending). **Deliberately NOT landed autonomously** — it touches a
-  `SEND_SCRIPTS`-enrolled send daemon, and the External Send Gate is a FIXED high-capability class; even a
-  fail-safe tightening on that surface is Seth's call. **Trigger:** any PO send-path session, or a §5 sweep.
-  **Tag:** `po_materials`, `po_send`, `external-send-gate`, `low-severity`.
-- **CO-2 — code half LANDED 2026-07-22 (this PR):** `tests/test_photo_screen.py::test_live_clamd_flags_eicar` + `test_live_clamd_end_to_end_clean_photo` — skip-if-no-clamd, runtime EICAR through the REAL daemon; the operator runs them at the Phase-C hardening gate (`pytest -k live_clamd`) once ClamAV installs on the production Mac. Original: **(MEDIUM, prove-the-control-bites) — no live-clamd EICAR end-to-end smoke for portal-upload
-  ClamAV.** `safety_reports/photo_screen._clamav_scan` is wired into every portal upload path and ships
-  default-OFF (`safety_reports.photo_screen.clamav_enabled`); the EICAR test (`test_photo_screen.py`) PATCHES
-  `_clamav_scan`, so no live clamd ever runs. Per HOUSE_REFLEXES §2, add a live EICAR-through-clamd smoke
-  (construct the EICAR string at runtime — do NOT commit a malicious file — feed it through
-  `screen_photo(..., clamav_enabled=True)`, assert disposition=malicious; skip-if-no-clamd). CI cannot run
-  clamd, so it's an operator-run Phase-C smoke (clamd installs in host-migration Phase A2). **Trigger:**
-  Phase-C hardening gate, when the operator enables `clamav_enabled`. **Tag:** `security`, `safety_reports`,
-  `clamav`, `prove-the-control-bites`.
-- **CO-3 (LOW, mechanical coverage) — VC-03 does not sandbox-scan every mirror-bearing config row. RESOLVED
-  2026-07-13 (as-designed):** the actionable sub-item is done — `system.operator_email` is enrolled in VC-03
-  with `sandbox_scan=True` (`scripts/verify_cutover.py:264`, comment "CO-3"). The 2 Box
-  `portal_root_folder_id` rows stay intentionally unenrolled (numeric IDs with no `evergreenmirror` marker to
-  scan; CL-14 grep + CL-12 sweep are their backstop). Original context — PR #525
-  enrolled the 2 extra `worker_base_url` copies + `po_send.from_mailbox`, but `system.operator_email` (global,
-  mirror-domain fallback) and the 2 Box `portal_root_folder_id` rows remain outside VC-03 — the manual CL-14
-  grep + the CL-12 sweep are their backstop. Enrolling `operator_email` (sandbox-scanned) would close another
-  gap. Deferred because it changes gate behaviour and the Box roots are numeric IDs (no `evergreenmirror`
-  marker to scan). **SUPERSEDED IN PART 2026-07-21 (gap-builder PR):** the 2 Box `portal_root_folder_id`
-  rows ARE now enrolled in VC-03 as `non_empty` (no `sandbox_scan`). CO-3 conflated two separate
-  assertions: **sandbox_scan**, which stays correctly N/A (a numeric Box folder id carries no
-  `evergreenmirror` marker — CO-3's reasoning holds), and **presence**, which was never the reason to
-  abstain and is now worth asserting because that PR adds `scripts/migrations/build_box_roots.py` — a
-  create-only builder that writes no config row, so its two printed ids reach ITS_Config only via a manual
-  operator paste at cutover. VC-03 now catches a skipped/fat-fingered paste. **Trigger:** the next
-  verify_cutover hardening pass. **Tag:** `cutover`, `verify_cutover`,
-  `low-severity`.
-- **CO-4 — RESOLVED 2026-07-22 (this PR):** both builders repointed to `WORKSPACE_SAFETY_PORTAL` with the live folder names (`00_Safety Portal` / `00_Form Catalog` — two different folders) and the aliased `FOLDER_OPERATIONS_SAFETY_PORTAL` bootstrap line replaced with the real constants; `safety_portal_config_sheets.md` runbook location fixed in the same pass. Landed BEFORE the Phase-1 production builder run this depended on. Original: **(HIGH, stale target) — `build_its_active_jobs_sheet.py` + `build_its_forms_catalog_sheet.py` still
-  target the pre-2026-06-05 Safety-Portal location.** Both hardcode `WORKSPACE = sheet_ids.WORKSPACE_OPERATIONS`
-  with `FOLDER_NAME = "Safety Portal"` (`build_its_active_jobs_sheet.py:50-51`,
-  `build_its_forms_catalog_sheet.py:52-53`), which is stale against the 2026-06-05 move to
-  `WORKSPACE_SAFETY_PORTAL` (whose live folders are `00_Safety Portal` + `00_Form Catalog`). **Failure
-  scenario at a fresh production tenant:** each script find-or-creates a THIRD, wrongly-named `Safety Portal`
-  folder under ITS — Operations, builds ITS_Active_Jobs + ITS_Forms_Catalog into it — orphaned from every
-  runtime constant, so no daemon can see either sheet — and its `[bootstrap]` line prints that folder's id
-  for `FOLDER_OPERATIONS_SAFETY_PORTAL`, an ALIAS of `FOLDER_SAFETY_PORTAL`, so pasting it overwrites the
-  real Safety-Portal folder id with the wrong one. Deliberately NOT fixed in the gap-builder PR (explicitly
-  out of its scope); recorded here rather than left silent. **Fix:** repoint both to `WORKSPACE_SAFETY_PORTAL`
-  + the live folder names (`00_Safety Portal` and `00_Form Catalog` respectively — they are two DIFFERENT
-  folders), and stop emitting the aliased bootstrap constant. **Trigger:** Phase-1 cutover, before running
-  the Safety-Portal sheet builders. **Tag:** `cutover`, `migrations`, `safety_reports`, `high-severity`.
 
 ## Smartsheet-wiring audit findings — daemon-health + capacity hygiene [OPEN 2026-07-04]
 
@@ -1827,24 +1717,6 @@ Surfaced: 2026-06-09 Form Editor UX + draft-caching session (PR #249; client fix
 
 The following entries were surfaced by a read-only 12-dimension forensic audit of the Safety Portal this session. H2, M3, M8, and the SENDING-picklist regression were fixed in PRs #247/#252/#253 respectively. The findings below are explicitly deferred.
 
-## [OPEN 2026-06-09] Safety Portal M1 — authenticated submitter can overwrite a peer's PENDING submission
-
-`worker/index.ts` `/api/submit` accepts a client-controlled `submission_uuid` and executes `INSERT OR REPLACE` — this resets `box_verified=0` on an existing row. `/api/recent` leaks any job's latest UUID+payload (not scoped to the authenticated user). The intake dedup only guards already-filed UUIDs; a plain overwrite writes no `audit_log` row. An authenticated submitter can therefore silently replace a peer's un-filed submission with attacker-controlled content, leaving no audit trail.
-
-Not currently exploitable remotely (requires an authenticated session), but a defense-in-depth gap before multi-user production rollout.
-
-**Fix:** server-generate `submission_uuid` (remove client control) OR reject a UUID collision from a different actor. Stop `/api/recent` from leaking arbitrary-job UUIDs not owned by the caller. Add an `audit_log` row for every overwrite attempt.
-
-**Collision risk:** active SPA work shares `worker/index.ts`. Coordinate with any in-flight Worker edits before touching `/api/submit`.
-
-**Tag:** `safety-portal`, `security`, `adversarial-input`, `medium`.
-
-**Revisit when:** next Worker security hardening pass, or before real PM users are provisioned on a live tenant.
-
-Surfaced: 2026-06-09 12-dimension forensic audit (M1).
-
-> **Audit 2026-07-24 (tech-debt janitorial pass):** M1 primary fix RESOLVED (PR #268 — 409 uuid_conflict on cross-actor overwrite + atomic submission_replace audit). STILL OPEN (narrowed): GET /api/recent is requireSession-only — any authenticated user can pull any active job's latest submission_uuid+payload for Amend prefill (no per-job ownership scope). Fix the stale top-of-file index line too.
-
 ## [OPEN 2026-06-09] Safety Portal M2 — capability gate is static-AST-import-only; transitive and dynamic paths are unchecked
 
 `tests/test_capability_gating.py::_imports_in` is static AST-import-only — blind to `importlib.__import__` dynamic imports, has no transitive closure over `shared/` + `safety_reports/`, and `WALKED_ROOTS` excludes `scripts/`. The docstring ("fails at CI before it can ship") overstates the gate's reach.
@@ -2053,34 +1925,6 @@ The edge case: if an **admin authors a template through the UI** with a title th
   date) but the in-code honest-regression comment frames unmount as the only loss path — this is a
   second. Fix = the same functional-overlay pattern if it bites in practice. (Photo-disappear fix
   review NIT, 2026-07-03.)
-
-## ITS scaling hardening — 20-job/20-user Tier-A roadmap [OPEN 2026-06-28]
-
-> **Status (recovered from PR #324 on 2026-07-04; kept for provenance):** most Tier-A items have
-> since **shipped** — A1 `verify_sheet_cap` (#326), A2 single-host resilience (#327), A3 Box/Keychain
-> lock + watchdog Check P (#345), A4 backlog alerts + Checks Q/R (#349), A6 `weekly_generate`
-> hardening (#346), A7 photo-413 (CS2 #437), plus the broader forensic-hardening cluster (#342–#351).
-> The live marching order is **`docs/ROADMAP.md` Track 3**; the remaining open items live there. This
-> section is preserved verbatim below for the original analysis; the full report is
-> `docs/reports/2026-06-28_forensic-scaling-eval-20x20.md`.
-
-2026-06-28 forensic scaling evaluation (read-only; `improve`-skill + multi-agent Workflows; full report at `docs/reports/2026-06-28_forensic-scaling-eval-20x20.md`). Audited the system for a planned ramp to 20+ active jobs / 20+ daily **photo-heavy** portal users this quarter. 98 findings (7 CRITICAL / 33 HIGH; **39 silent-failure**). No code changed — diagnosis + logged executable specs only.
-
-**Tier-A (must-fix-before-cutover) — full self-contained specs in the report's Part II; all 7 code specs are first-draft `needs-revision`:**
-- **A1 (gating, do first):** verify the real Smartsheet per-workspace sheet-count cap + design a week-sheet archival/rollup strategy. ~1,040 new sheets/yr (20×52) is the #1 dollar cost (plan-tier upgrade $600 Pro / $2,400 Business) and a possible hard cap. `smartsheet_client` has no list/count-sheets method yet. Gates the cost + cutover timing.
-- **A2:** single-host resilience — daemon auto-start after reboot (LaunchAgent-at-login gap), SDK network timeouts (boxsdk has none → indefinite daemon hang), Keychain-locked-after-reboot handling.
-- **A3:** Box OAuth refresh-token cross-process lock + `keychain.set_secret` lock + 50-day idle warning (silent 60-day auth-death risk).
-- **A4:** unfiled-submission backlog/age alert + portal_poll outage escalation (`box_verified=0` rows never pruned → silent loss if the host dies).
-- **A5:** ITS_Review_Queue + ITS_Errors 5,000-row cap rotation (silent drop at cap).
-- **A6:** weekly_generate hardening — per-job timeout + streamed merge + partial-write resumability. **CORRECTION:** the original "launchd kills it at >1h" CRITICAL is FALSE — the plist sets no `ExitTimeOut`; real risk is wall-clock + memory.
-- **A7:** photo/payload 413 reconciliation (raise PAYLOAD_MAX envelope, keep the four-way §34 photo mirror synced — `worker/index.ts` + `photo_screen.py` + `PhotoField.tsx` + `publishValidation.ts`) + amend-prefill empty-payload guard. Doctrine flag RESOLVED — see report Part III.
-- **A8 (P1, parallel):** Operator & User Enablement Documentation program — a PDF guide / user manual / comprehensive troubleshooting tree for every ITS function (Portal, ~17 Smartsheet surfaces incl. an `ITS_Config` data-dictionary PDF, daemons/CLIs, future workstreams). Enabling precondition for the distributed-Evergreen-operator model; needs a doc-currency discipline.
-
-Cost at 20×20 ≈ **$610–$2,410/mo hard ≈ the Smartsheet tier decision** + ~$8 Cloudflare; Anthropic ~$0 (portal deterministic); labor distributed across existing Evergreen staff (not a bottleneck).
-
-**Revisit when:** the 20-job ramp is scheduled (start with A1's read-only cap verification), or any Tier-A item is picked up for implementation.
-
-> **Audit 2026-07-24 (tech-debt janitorial pass):** A1-A7 shipped/verified (merged). STILL OPEN: the A8 remainder + two unverified quotas (the real Smartsheet plan sheet-cap pending a support ticket, and pooled-attachment-storage) — these residuals now live in ROADMAP.md Track 3/4, not re-duplicated here. This entry is effectively superseded-by-ROADMAP; kept as the pointer.
 
 ## Converge `fieldops_sync`/`portal_poll` onto the shared `shared/sustained_failure.py` counter [OPEN 2026-07-20]
 
@@ -2363,5 +2207,69 @@ One-line constant change once CL-10 is green; operator alerts only, NOT a custom
 
 **Revisit when:** CL-10 shows the solutionsmith domain `Verified` in Resend — swap `DEFAULT_FROM`
 in the same session and live-fire one test alert to confirm delivery. **Tag:** `alerting`,
-`resend`, `cutover`, `CL-10`, `low-severity`.
+`resend`, `cutover`, `CL-10`, ~~`low-severity`~~ **`CONFIRMED-LIVE`**.
+
+**2026-08-06 — CONFIRMED LIVE, severity raised from `low` to `HIGH`. This entry's own prediction
+came true; the CRITICAL email leg is dead in production right now.** Two watchdog sweeps this
+session (23:08Z, 23:10Z) both surfaced, from `_check_alert_dedupe_summaries`:
+
+```
+ResendAuthError('HTTP 403: You can only send testing emails to your own email address
+(seths@evergreenmirror.com). To send emails to other recipients, please verify a domain at
+resend.com/domains, and change the `from` address to an email using this domain.')
+```
+
+This is **broader than the `DEFAULT_FROM` swap this entry scopes**. With no verified domain the
+Resend account is in test mode, which constrains the **recipient** as well as the sender: the only
+deliverable address is the account owner's own (`seths@evergreenmirror.com`), while
+`system.operator_email` is `its@evergreenrenewables.com`. So **every** operator alert email is
+rejected, not merely mis-branded — `resend_client.send_alert` defaults `to` to that config row
+(`shared/resend_client.py:180`).
+
+**Why this matters more than the severity suggested:** it converged with the two 2026-07-15
+error-flood gaps (see that entry, ~line 466) during a **12.7-hour Smartsheet outage on 2026-08-06
+(10:23Z→23:04Z, HTTP 500 code 4000 + read timeouts, breaker OPEN 729 min)**. All three legs of the
+triple-fire degraded at once:
+
+| Leg | State during the outage |
+|-----|-------------------------|
+| `ITS_Errors` record | **lost** — Smartsheet was the thing that was down (the 2026-07-15 durability gap, 2nd occurrence) |
+| Resend email push | **403 rejected** — this entry |
+| Sentry push | fired — the *only* surviving leg |
+
+The outage produced **no `ITS_Errors` CRITICAL row at all**; the sole forensic record is
+`~/its/logs/2026-08-06.log`. A 12.7-hour full-fleet freeze of every Smartsheet-backed daemon —
+"approved sends FROZEN and nothing is being filed" — went unnoticed until an operator-initiated
+diagnosis. Operator decision this session: **leave it, log it** (domain verification is Seth's to
+do); recorded here rather than repointing `system.operator_email`, which was offered and declined.
+
+**Two fixes, either one restores the leg:** (a) verify a domain at `resend.com/domains` and swap
+`DEFAULT_FROM` — the original scope, and the correct fix; or (b) interim, repoint
+`system.operator_email` to `seths@evergreenmirror.com`, the one address Resend will currently
+deliver to. **Trigger: raised to next session — do not wait for the CL-10 cutover slot.**
+
+## `GET /api/recent` is session-scoped but not ownership-scoped — any authenticated portal user can read any job's latest submission payload [OPEN 2026-08-07]
+
+**Re-filed from the archived "Safety Portal M1" entry on 2026-08-07.** M1's headline defect (a submitter
+silently overwriting a peer's PENDING submission with no audit trail) no longer exists at HEAD — cross-actor
+overwrite is refused with a 409 `uuid_conflict` (`safety_portal/worker/index.ts:857`) and every replace writes
+an atomic audit row (`:924`). That entry was archived because a security-sounding headline which is false at
+HEAD distorts every read of the portal's security posture. **This narrower residual survives and is filed here
+under its own honest title so it is not lost with the archive.**
+
+`app.get("/api/recent", requireSession, …)` (`safety_portal/worker/index.ts:623`) gates on a valid session but
+applies **no per-job ownership predicate** — the SELECT is scoped only by job / form / date. Any authenticated
+user can therefore pull any active job's latest `submission_uuid` + payload (the Amend-prefill path). This is
+an authorization gap, not an authentication one: the caller must be logged in, so it is not remotely
+exploitable, but the portal's user population now includes **subcontractors**, which widens who "any
+authenticated user" means relative to when M1 was first written (2026-06-09).
+
+**Fix:** scope the `/api/recent` query by the caller's job access (the same predicate the rest of the
+field-ops read routes use), or reject a request for a job the session has no claim on. **Adversarial review is
+definition-of-done here** — this is a D1 read-route fed by client-supplied identifiers, exactly the surface
+`portal-worker-security-reviewer` exists for; unit tests structurally cannot find an authorization gap.
+Coordinate with in-flight Worker edits before touching `index.ts`.
+
+**Revisit when:** the next Worker security-hardening pass, or before the subcontractor user population grows
+beyond the current pilot set. **Tag:** `safety-portal`, `security`, `authorization`, `worker`, `medium`.
 
