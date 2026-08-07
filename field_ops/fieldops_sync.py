@@ -72,7 +72,13 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from progress_reports import equipment_status, hours_log, material_incidents, material_list
+from progress_reports import (
+    equipment_status,
+    hours_log,
+    material_incidents,
+    material_list,
+    material_receipts,
+)
 from shared import (
     active_jobs_writer,
     circuit_breaker,
@@ -866,6 +872,7 @@ def _archive_closed_job_trackers(
         equipment_status.equipment_sheet_name(project_name),
         material_list.material_list_sheet_name(project_name),
         material_incidents.material_incidents_sheet_name(project_name),
+        material_receipts.material_receipts_sheet_name(project_name),
     )
     for sheet_name in trackers:
         try:

@@ -2416,6 +2416,55 @@ app.get("/api/internal/fieldops/material-incidents", requireFieldopsToken, async
 });
 
 /**
+ * Material Receipts up-sync (PR4) — the field-ops delivery-ledger route
+ * (GET /api/internal/fieldops/material-receipts). Same field-ops token privilege separation as the
+ * job/hours/equipment/material-list/material-incidents mirror queues (requireFieldopsToken — NOT
+ * portal_poll's internal token nor the admin token).
+ *
+ * An APPEND-ONLY EVENT LEDGER, NOT a re-projected snapshot — the `material_incidents` posture, not
+ * `material_list`'s. Each row is one `material_receipt_events` mark (migration 0059): somebody
+ * asserted on a date that a delivery arrived, partly arrived, or did not. That is an immutable
+ * historical fact, so there is deliberately NO reconcile roster and the daemon NEVER retires a row,
+ * making the count-drops-to-zero / #468 zero-drop class structurally impossible here — there is no
+ * retire path to wrongly zero. The active-job JOIN bounds the working set (receipts on non-active
+ * jobs drop out and their sheet is archive-moved on closure); within that bound the set grows
+ * monotonically, covered downstream by the Smartsheet §51 row-cap watchdog.
+ *
+ * Unlike the incidents route this reads a real TABLE rather than json_extract over submissions —
+ * receipts are structured D1 rows, not form payloads. Two DERIVED columns ride along because the
+ * mirror shows them and they legitimately change after the event is written: `line_status` (the
+ * line's coarse status, which goes 'incident' if a problem is later flagged) and
+ * `line_qty_received` (the ledger ROLLUP across all events for that line, recomputed here rather
+ * than stored, so it can never drift from the events it summarizes).
+ *
+ * `bol_number` is LEFT-JOINed from the optional shipment the event names — a mark made against a
+ * specific truckload carries its BOL, one made against the line as a whole does not.
+ * DISPLAY-NAME-ONLY received_by (personnel.name; the raw actor username is never returned — House
+ * Reflex §5). All values flow only to a Smartsheet cell (no AI, no send).
+ */
+app.get("/api/internal/fieldops/material-receipts", requireFieldopsToken, async (c) => {
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT e.event_uuid, e.job_id, j.project_name, e.kind, e.qty, e.note, e.event_date,
+              jem.line_uuid, jem.description AS material_description, jem.unit,
+              jem.part_number, jem.qty AS line_qty_expected, jem.status AS line_status,
+              (SELECT SUM(e2.qty) FROM material_receipt_events e2 WHERE e2.line_id = e.line_id)
+                AS line_qty_received,
+              sh.bol_number,
+              (SELECT p.name FROM personnel p WHERE p.username = e.actor ORDER BY p.id ASC LIMIT 1)
+                AS received_by_display
+         FROM material_receipt_events e
+         JOIN jobs j ON j.job_id = e.job_id AND j.status = ?1
+         LEFT JOIN job_expected_materials jem ON jem.id = e.line_id
+         LEFT JOIN material_shipments sh ON sh.id = e.shipment_id
+        ORDER BY j.project_name ASC, e.id ASC`,
+    )
+    .bind("active")
+    .all();
+  return c.json({ receipts: results ?? [] });
+});
+
+/**
  * Operator user provisioning — /api/internal/admin/* (requireAdminToken, the
  * operator-only secret). The operator passes PLAINTEXT over this bearer-gated
  * channel; the BACKEND bcrypt-hashes (cost 10) before write — plaintext is never
