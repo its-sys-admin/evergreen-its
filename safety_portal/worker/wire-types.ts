@@ -498,3 +498,157 @@ export interface DailyPoolPhotoRow {
 export interface DailyPhotosListResponse {
   photos: DailyPoolPhotoRow[];
 }
+
+// ─── Materials-manifest import (PR3b) ────────────────────────────────────────────────────────
+//
+// The office uploads a BOM / shipping log; the Mac daemon parses it into a REVIEWABLE GRID plus a
+// PROPOSED column map, and the validate screen disposes. These are the read shapes that surface
+// carries. Request/body shapes live in src/lib/fieldops_manifests.ts per the scope rule.
+
+/** `job_manifests.status` (migration 0060 CHECK). `parsed` is the only state the validate screen
+ *  can act on; `committing` means a paged commit is mid-flight and `committed` is terminal. */
+export type ManifestStatus =
+  | "pending"
+  | "claimed"
+  | "refused"
+  | "parsed"
+  | "committing"
+  | "committed"
+  | "discarded";
+
+/** `manifest_parse.ParsedRow.kind` — the classification the parser gave one source row.
+ *  `meta` rows are document preamble (a DELTA BOM's CLIENT / PROJECT block), never importable. */
+export type ManifestRowKind = "header" | "data" | "continuation" | "section" | "meta";
+
+/** One manifest in the per-job list. Never carries the hmac and never the document bytes. */
+export interface ManifestListRow {
+  id: number;
+  manifest_uuid: string;
+  job_id: string;
+  filename: string;
+  declared_mime: string;
+  size_bytes: number;
+  status: ManifestStatus;
+  /** Machine reason on a refusal (e.g. `screen:malicious:L3:…`, `extract_failed`). Never bytes. */
+  detail: string | null;
+  /** `manifest_parse` document profile — customer_bom / delta_bom / shipping_log / … */
+  profile: string | null;
+  row_count: number | null;
+  mode: "merge" | "add_new" | null;
+  committed_through_row: number;
+  uploaded_by: string;
+  box_file_id: string | null;
+  created_at: number;
+  parsed_at: number | null;
+  committed_at: number | null;
+}
+
+/** GET /api/fieldops/manifests?job_id= */
+export interface ManifestListResponse {
+  manifests: ManifestListRow[];
+}
+
+/** The PROPOSED concept→column mapping. `mapping` is concept → column index; `labels` names the
+ *  columns a header alone cannot distinguish (a DELTA BOM's seven identical QUANTITY headers get
+ *  their product codes here); `qty_candidates` is every column that could plausibly BE the
+ *  quantity, in the order the picker should offer them; `qty_default` is the evidence-backed
+ *  pre-selection (the highest REV column on a revision BOM). JSON object keys are strings. */
+export interface ManifestColumnMap {
+  mapping: Record<string, number>;
+  labels: Record<string, string>;
+  qty_candidates: number[];
+  qty_default: number | null;
+}
+
+/** GET /api/fieldops/manifests/:id — the header the validate screen renders its evidence from. */
+export interface ManifestDetailResponse {
+  manifest: ManifestListRow & {
+    column_map_json: string | null;
+    header_meta_json: string | null;
+    /** The parser's notes, newline-joined — including the DELTA arithmetic cross-check
+     *  ("revision cross-check: … equals the chosen revision on 47/47 rows"), which is the
+     *  evidence the screen SHOWS for its pre-selected quantity column. */
+    parse_notes: string | null;
+    merge_options_json: string | null;
+  };
+  preview_pages: number[];
+}
+
+/** One row of the parsed grid, stored VERBATIM. `cells_json` is a JSON array of the source cells;
+ *  nothing is pre-collapsed, so duplicate part numbers survive to get a per-row human decision. */
+export interface ManifestGridRow {
+  row_index: number;
+  source_page: string | null;
+  kind: ManifestRowKind;
+  cells_json: string;
+  /** Comma-joined `ParsedRow.flags` — `qty_unparseable`, `orphan_continuation`. '' when clean. */
+  flags: string | null;
+}
+
+/** GET /api/fieldops/manifests/:id/rows?after=&limit= — cursor is `row_index`. */
+export interface ManifestRowsResponse {
+  rows: ManifestGridRow[];
+}
+
+/** GET /api/fieldops/manifests/:id/preview/:page — a rendered source page, base64 PNG. The ONLY
+ *  view a browser gets of the source document; the original bytes never leave the Mac-ward tier. */
+export interface ManifestPreviewResponse {
+  page: number;
+  png_b64: string;
+}
+
+/** An incoming line whose part number matches EXACTLY ONE existing active line. */
+export interface ManifestPlanMatch {
+  source_row_index: number;
+  part_number: string;
+  line_id: number;
+}
+
+/** An incoming line whose part number matches MORE THAN ONE existing line. Not a rounding error:
+ *  duplicate part numbers are universal in the real BOMs (7000153 appears twice in three of the
+ *  four sample Customer BOMs, under different groupings), so there is no single correct target
+ *  and the screen MUST ask per row rather than silently pick a winner. */
+export interface ManifestPlanAmbiguous {
+  source_row_index: number;
+  part_number: string;
+  line_ids: number[];
+}
+
+/** A line the job already expects that this document does NOT mention. Reported, never
+ *  auto-retired — a partial BOM is not a deletion order. */
+export interface ManifestPlanAbsent {
+  line_id: number;
+  part_number: string | null;
+}
+
+/** POST /api/fieldops/manifests/:id/plan — a DRY RUN against the job's live lines. Writes nothing. */
+export interface ManifestPlanResponse {
+  ok: true;
+  job_id: string;
+  committed_through_row: number;
+  counts: {
+    incoming: number;
+    matched: number;
+    ambiguous: number;
+    new: number;
+    absent: number;
+    existing: number;
+  };
+  matched: ManifestPlanMatch[];
+  ambiguous: ManifestPlanAmbiguous[];
+  absent: ManifestPlanAbsent[];
+  projected_total: number;
+  /** The materials read route caps a job at 500 lines; past that the page and the daily form
+   *  SILENTLY truncate, so the screen warns BEFORE anyone commits. */
+  would_exceed_line_cap: boolean;
+}
+
+/** POST /api/fieldops/manifests/:id/commit — ONE page of the import. `done` false means re-post
+ *  the remainder; every line at or below `committed_through_row` is dropped before any write, so
+ *  a replayed page is a genuine no-op rather than a duplicate import. */
+export interface ManifestCommitResponse {
+  ok: true;
+  done: boolean;
+  inserted: number;
+  committed_through_row: number;
+}
