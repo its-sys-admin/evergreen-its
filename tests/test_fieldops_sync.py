@@ -674,15 +674,19 @@ def test_job_mirror_never_archives(_patch, lifecycle):
 
 # The helper itself is PRESERVED (§14) until the replacement path is live-proven. It has no
 # caller, so these exercise it DIRECTLY — keeping the preserved code covered, and keeping the
-# move semantics (four trackers, pure relocation, fenced failure) pinned for the port.
+# move semantics (all five trackers, pure relocation, fenced failure) pinned for the port.
 
 
-def test_preserved_helper_moves_all_four_trackers(_patch):
+def test_preserved_helper_moves_every_tracker(_patch):
     fieldops_sync._archive_closed_job_trackers("JOB-1", "Bradley 1", "corr-1")
 
     _patch["arc_folder"].assert_called_once()  # source folder resolved ONCE, find-no-create
-    assert _patch["arc_sheet"].call_count == 4  # Hours Log + Equipment + Material List + Incidents
-    assert _patch["arc_move"].call_count == 4
+    # Counted, not sampled: this assertion is the ONLY thing that notices a new per-job
+    # tracker being added without enrolling it in the archive tuple — which would leave that
+    # sheet behind in the live folder when the job closes, where every find-or-create path
+    # would then re-grow around it.
+    assert _patch["arc_sheet"].call_count == 5  # Hours + Equipment + Material List + Incidents + Receipts
+    assert _patch["arc_move"].call_count == 5
     for call in _patch["arc_move"].call_args_list:
         assert call.args[0] == 888
         assert call.args[1] == sheet_ids.FOLDER_ARCHIVE_CLOSED_PROJECTS
