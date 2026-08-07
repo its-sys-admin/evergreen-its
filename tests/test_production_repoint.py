@@ -113,7 +113,7 @@ def _std_row(**overrides: Any) -> dict[str, Any]:
 
 def test_map_loads_rows_unique() -> None:
     specs = pr.load_map()
-    assert len(specs) == 12
+    assert len(specs) == 13
     keys = [s.key for s in specs]
     assert len(set(keys)) == len(keys)
 
@@ -414,8 +414,8 @@ def test_profile_skip_trio_never_written_under_commit(
     monkeypatch.setattr(
         pr, "_write_value", lambda row_id, col_id, value: written.append(value))
     assert pr.run_commit(specs, frozenset(skip), allow_loaded_daemons=False) == 0
-    # 12 map rows - the 3 skipped worker_base_url rows = 9 writes.
-    assert len(written) == 9
+    # 13 map rows - the 3 skipped worker_base_url rows = 10 writes.
+    assert len(written) == 10
     trio_value = next(s.to_production for s in specs if s.category == "A")
     assert trio_value is not None and trio_value not in written
     assert capsys.readouterr().out.count(pr.CLASS_SKIP) >= 3
@@ -438,8 +438,8 @@ def test_commit_happy_path_writes_all_and_gates_verify(
     monkeypatch.setattr(
         pr, "_write_value", lambda row_id, col_id, value: written.append(value))
     assert pr.run_commit(specs, frozenset(), allow_loaded_daemons=False) == 0
-    assert len(written) == 12  # every map row repointed
-    assert written.count("424242") == 2  # both section-D rows carry the RESOLVED id
+    assert len(written) == 13  # every map row repointed
+    assert written.count("424242") == 3  # every section-D row carries the RESOLVED id
     assert heartbeat in written
     out = capsys.readouterr().out
     # Post-run instruction printed, never executed (the operator gates).

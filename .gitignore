@@ -67,3 +67,13 @@ state/
 # show as an untracked dir and could be staged or scanned by repo-relative tooling.
 # No legitimate top-level dir is named its-*, so this is zero-false-positive.
 /its-*/
+
+# Session scratch — throwaway one-shot scripts a CC session writes while working
+# (audit appliers, brief generators, tenant probes). Deliberately NOT part of the
+# repo: each is written against a moment's state and is wrong the next day.
+#
+# Load-bearing, not cosmetic: the dir was untracked but NOT ignored, so `git add -A`
+# would stage it — and its contents fail BOTH blocking legs of the CI `test` job
+# (ruff E401/I001/F401/E741; mypy import-not-found on modules since renamed). One
+# accidental `-A` REDs main. Ignoring it makes that impossible rather than unlikely.
+/scratchpad/

@@ -395,4 +395,45 @@ describe("GET /api/fieldops/jobs/:job_id — R7 attribution contract", () => {
     const retired = (await (await call("/api/fieldops/jobs/JOB-A", { cookie: cAdmin })).json()) as any;
     expect(retired.viewer_personnel).toBeNull();
   });
+  // ── Track 6 PR-0 — `lifecycle` on the wire ────────────────────────────────────────────────
+  //
+  // The list and detail payloads carried only the LEGACY `status`, which maps active→'active'
+  // but BOTH inactive and archived→'closed'. With no `lifecycle` field the SPA re-derived state
+  // from `status`, so every ARCHIVED job re-displayed as "Inactive" after a reload — the runbook
+  // had to tell operators to "validate by effects, not the dropdown". These pin the wire contract
+  // that makes the display truthful.
+  it("serves lifecycle on BOTH the list row and the detail, distinguishing archived from inactive", async () => {
+    await seedJob("JOB-ACT", "Active One", "active");
+    await seedJob("JOB-INA", "Inactive One", "closed");
+    await seedJob("JOB-ARC", "Archived One", "closed");
+    // seedJob writes the legacy status; set the canonical field the two closed jobs differ on.
+    await env.DB.prepare("UPDATE jobs SET lifecycle='inactive' WHERE job_id='JOB-INA'").run();
+    await env.DB.prepare("UPDATE jobs SET lifecycle='archived' WHERE job_id='JOB-ARC'").run();
+
+    const c = await login("admin.one", "password123");
+    const list = (await (await call("/api/fieldops/jobs?status=all", { cookie: c })).json()) as any;
+    const byId = Object.fromEntries(list.jobs.map((r: any) => [r.job_id, r]));
+
+    expect(byId["JOB-ACT"].lifecycle).toBe("active");
+    expect(byId["JOB-INA"].lifecycle).toBe("inactive");
+    expect(byId["JOB-ARC"].lifecycle).toBe("archived");
+    // The legacy column genuinely cannot tell the last two apart — which is the whole point.
+    expect(byId["JOB-INA"].status).toBe(byId["JOB-ARC"].status);
+
+    const detail = (await (await call("/api/fieldops/jobs/JOB-ARC", { cookie: c })).json()) as any;
+    expect(detail.job.lifecycle).toBe("archived");
+  });
+
+  it("coerces an UNKNOWN stored lifecycle to 'active' (fail-SAFE, never 'archived')", async () => {
+    await seedJob("JOB-ODD", "Odd One", "active");
+    // The column is NOT NULL (0021), so NULL is unreachable — but nothing constrains the VALUE,
+    // so a future migration or a hand-edit can leave a token this build doesn't know.
+    await env.DB.prepare("UPDATE jobs SET lifecycle='mothballed' WHERE job_id='JOB-ODD'").run();
+
+    const c = await login("admin.one", "password123");
+    const detail = (await (await call("/api/fieldops/jobs/JOB-ODD", { cookie: c })).json()) as any;
+    // Defaulting the other way would let an unknown value hide a live job and — once the archive
+    // path exists — mark it relocatable.
+    expect(detail.job.lifecycle).toBe("active");
+  });
 });

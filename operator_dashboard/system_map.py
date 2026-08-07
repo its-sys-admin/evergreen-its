@@ -326,6 +326,20 @@ NODES: tuple[MapNode, ...] = (
         runbook="docs/runbooks/estimate_import_path.md", send_half="generation", marker="estimate_poll",
     ),
     MapNode(
+        id="manifest_poll", label="manifest_poll", kind="daemon", lane="generation", band="fieldops",
+        blurb="The 120s materials-manifest importer daemon (PR3b / ADR-0005): pulls "
+              "office-uploaded BOMs and shipping logs, re-verifies the manifest:v1 HMAC + "
+              "digest, §34-screens, extracts the cell grid in a KILLABLE sandbox child, and "
+              "posts a REVIEWABLE GRID plus a proposed column map for the office to validate. "
+              "No AI, and it never picks a quantity column for you — the human disposes.",
+        error_scripts=("field_ops.manifest_poll",),
+        launchd_label="org.solutionsmith.its.manifest-poll", heartbeat_stem="manifest_poll",
+        config_gate="field_ops.manifest_poll.polling_enabled",
+        watchdog_checks=("C",), script_path="field_ops/manifest_poll.py",
+        runbook="docs/runbooks/material_manifest_import.md", send_half="generation",
+        marker="manifest_poll",
+    ),
+    MapNode(
         id="rfq_poll", label="rfq_poll", kind="daemon", lane="generation", band="po",
         blurb="The 120s outbound-RFQ generation daemon (ADR-0004 Lane 2): pulls composed "
               "requests-for-quote from the Worker, re-verifies the rfq:v1 HMAC, and per vendor "

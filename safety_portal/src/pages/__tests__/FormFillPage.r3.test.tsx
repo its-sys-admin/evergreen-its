@@ -166,6 +166,14 @@ describe("FormFillPage — R3 dirty guard", () => {
     );
     await waitFor(() => expect(getByText("Submit")).toBeTruthy());
 
+    // Visible on the light page ground. This shipped as the white-on-green HEADER variant,
+    // rendering white-on-#f7f6f2 at ~1.04:1 — the operator reported it as invisible.
+    // --secondary is the canonical in-page back control, and it matches the post-submit twin
+    // above, which was already green. (The complementary "and NOT the header variant" half is
+    // asserted repo-wide by tests/test_portal_button_variants.py; spelling it out here would
+    // put that very class name in a source file the scanner reads, tripping its own gate.)
+    expect(getByText("← Back to My Tasks").className).toContain("btn--secondary");
+
     // Clean → no confirm, straight back.
     fireEvent.click(getByText("← Back to My Tasks"));
     expect(confirmSpy).not.toHaveBeenCalled();

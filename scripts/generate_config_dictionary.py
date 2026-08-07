@@ -216,6 +216,10 @@ PURPOSE_OVERRIDES: dict[str, str] = {
     "progress_reports.intake_enabled": "Gate for progress-report intake. NOTE: read under the safety_reports "
                                        "workstream (intake's own workstream), not progress_reports — a documented footgun.",
     "progress_reports.box.portal_root_folder_id": "Box root folder ID under which progress-report packets are filed.",
+    "field_ops.box.archive_root_folder_id": "Box root folder ID the Track 6 job archive relocates a closed job's "
+                                            "Safety and Progress containers beneath (ITS Archive/<Job>/<Workstream>). "
+                                            "Unset = the archive's Box leg fails those two containers rather than "
+                                            "silently reporting them moved.",
     "field_ops.fieldops_sync.sync_enabled": "Master gate for the portal→Smartsheet job mirror (fieldops_sync). "
                                             "Ships OFF; the operator flips it on at cutover after the mirror slices land.",
     "field_ops.fieldops_sync.hours_enabled": "Per-stream gate: mirror crew hours from the portal into Smartsheet.",

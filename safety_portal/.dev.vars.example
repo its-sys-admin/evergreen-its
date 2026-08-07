@@ -15,6 +15,21 @@ SESSION_SIGNING_SECRET="replace-with-output-of-openssl-rand-base64-48"
 HMAC_PAYLOAD_SECRET="replace-with-output-of-openssl-rand-base64-48"
 PORTAL_INTERNAL_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
 
+# Operator-CLI tier. Gates POST /api/internal/admin/* — account provisioning and
+# purge-job (safety_reports/portal_admin.py). Mirrored into the macOS Keychain as
+# ITS_PORTAL_ADMIN_TOKEN. In a DEPLOYED Worker: `wrangler secret put …`.
+#
+# NOT optional for local dev: requireAdminToken is fail-closed on an absent secret,
+# so without this every /api/internal/admin/* call 401s and a fresh clone cannot
+# provision its first user at all.
+PORTAL_ADMIN_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
+
+# Field-ops mirror tier. Gates GET/POST /api/internal/fieldops/* — the job, hours,
+# equipment, material-list and incident queues the Mac-side fieldops_sync daemon
+# drains. Mirrored into the macOS Keychain as ITS_PORTAL_FIELDOPS_TOKEN.
+# Also fail-closed when absent.
+PORTAL_FIELDOPS_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
+
 # PO workstream (WS1 S2). The Mac-side po_poll daemon mirrors this into the macOS
 # Keychain as ITS_PORTAL_PO_TOKEN. In a DEPLOYED Worker: `wrangler secret put …`.
 PORTAL_PO_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
@@ -28,6 +43,12 @@ PORTAL_ESTIMATE_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
 # into the macOS Keychain as ITS_PORTAL_RFQ_TOKEN. Its OWN tier — separate from BOTH the PO
 # and estimate tokens (red-team #1). In a DEPLOYED Worker: `wrangler secret put …`.
 PORTAL_RFQ_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
+
+# Materials-manifest import pool (PR3b). The Mac-side manifest_poll daemon mirrors this into
+# the macOS Keychain as ITS_PORTAL_MANIFEST_TOKEN. Its OWN tier — that daemon decodes hostile
+# PDF/xlsx bytes, so a compromise of it must reach nothing but the manifest pool. In a
+# DEPLOYED Worker: `wrangler secret put …`.
+PORTAL_MANIFEST_API_TOKEN="replace-with-output-of-openssl-rand-base64-48"
 
 # Config-editor queue (§50). The Mac-side config daemon (built LATER) mirrors this into
 # the macOS Keychain as ITS_PORTAL_CONFIG_TOKEN. In a DEPLOYED Worker: `wrangler secret put …`.

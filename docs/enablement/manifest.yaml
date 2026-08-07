@@ -98,7 +98,7 @@ docs:
     title: "ITS_Config Data Dictionary"
     version: v1
     source: docs/references/its_config_dictionary.md
-    sha256: 937e082648b77717400ec324a985d7ecacf35c395110b8867b61a7d7c7f14b50
+    sha256: 05eb6ffb34800abc50f1196ed8ca4d7648af661ae66662b72667038125ec9e92
 
   # ── Delivery-critical guides added 2026-07-13: the operator dashboard (WS2 D1-x)
   #    and the subcontracts generator (ADR-0003). Both blockers cleared — the dashboard
@@ -132,14 +132,14 @@ docs:
     title: "ITS Daemon Reference"
     version: v1
     source: docs/references/daemon_reference.md
-    sha256: 00f7fab19169750b16c2fe14b5fa897d0fbabee2b6b81bb5c24d6a186c149874
+    sha256: 8ebecd72881b3bc7c39039c800bc7f62cf528acbf6a3163a920d1e1da7b5c63c
     audience: operator
 
   - key: data_model_reference
     title: "ITS Data Model Reference"
     version: v1
     source: docs/references/data_model_reference.md
-    sha256: 26e3c0a8eeded049a8e9ef4c5073519d8a2724f08e7e433bc8c49d9cf0c43115
+    sha256: c266186ae867af8cdd6a6b86323bee162883ea72fd4d518636e739f3e501e6cd
     audience: operator
 
   - key: integration_reference
@@ -185,5 +185,5 @@ docs:
     title: "ITS Troubleshooting Guide"
     version: v1
     source: docs/troubleshooting/troubleshooting_guide.md
-    sha256: f07013a8638dd627282091a457be355e4ebd7fdc42935b73ad4bce12a3d93c01
+    sha256: 992d3336fa371147583a2c291cdc10496c6fbf6469fa5db2cf52e4a633ed05af
     audience: operator

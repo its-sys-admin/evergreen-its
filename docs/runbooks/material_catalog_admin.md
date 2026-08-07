@@ -48,9 +48,17 @@ deactivate; history is kept). Managers and field PMs (`cap.materials.receive`) s
 
 The manager's action surface is the **Daily tab** (My Tasks → Daily): the daily report form
 (daily-report-v5) carries an **Expected materials** section in the D.13 deliveries region that
-renders the placed job's pending rows live. Two actions per pending row, both send-free D1
-status flips through the M1 routes (per-job ownership-scoped; a repeat is a clean 409 —
-first action wins):
+renders the placed job's pending rows live. Both actions are send-free D1 writes through the
+routes below (per-job ownership-scoped).
+
+> **Changed 2026-08-07 (materials tracking, migration 0059).** "Confirm receipt" is no longer a
+> one-shot flip. It appends to an **append-only delivery ledger** (`material_receipt_events`), so
+> **a repeat is a legal second event returning 200 — not a 409.** That guard was exactly what made
+> a *partial* delivery impossible to finish: one part number routinely arrives across several
+> truckloads. The line's displayed state is now a ROLLUP over the ledger and `qty_received` is the
+> running SUM. The fuller three-way mark (Delivered / Partially delivered / Not delivered, each
+> with a note) lives on the new per-job **Materials tracking** page — see
+> `docs/runbooks/job_materials.md`.
 
 - **Confirm receipt** — flips the row *Expected → Received* (stamps who/when) **and appends a
   row to the form's "Deliveries Received" table** (`item_material` = the material,
@@ -82,12 +90,13 @@ page refresh dropped the in-memory reference). This ships **dark** on the existi
 |---|---|---|
 | "Expected materials" section missing from a job's detail | The account holds neither `cap.materials.manage` nor `cap.materials.receive` | Confirm the account's role in Accounts (all three roles hold `receive`; only admin holds `manage`) |
 | A manager sees "Failed to load expected materials" on a job (403 `forbidden_job` in the network tab) | Non-admins only read the job they are **placed on** (`personnel.current_job`) | Check the person's placement on the Personnel page / job crew — place them on the job (this is the designed scope, not a fault) |
-| "already_actioned" (409) when confirming a receipt | The row was already received / flagged by someone else | No repair — the first action won; the row shows who and when |
+| "already_actioned" (409) when **flagging an incident** | The row was already flagged by someone else | No repair — the first flag won; the row shows who and when. Since 0059 this no longer applies to **confirming a receipt**: repeats are legal and append a second ledger event |
+| A manager confirms a receipt twice and BOTH are recorded | **Expected since 0059** — receipts are an append-only ledger so a partial delivery can be completed later | Not a fault. Open the job's **Materials tracking** page to see every event with its qty, note, date and who recorded it. An event cannot be deleted (append-only by design); record a correcting event, and escalate if the running total must be corrected at source |
 | A row can't be edited ("not_editable", 409) | Received/incident rows are receipt **records** — content edits are locked | Expected behavior. If the record itself is wrong, escalate |
 | The catalog picker fails but free-text add works | The catalog read failed (transient) | Retry; if persistent check the Materials Catalog page loads |
 | The daily form shows "Couldn't load this job's expected materials" | A transient read failure — the form stays fillable (never silent) | Tap **Retry** next to the warning; if persistent, check the job's Expected materials section loads on the Job Tracker detail |
 | No "Expected materials" section in the manager's daily form | The job has no expected rows → the section shows the explicit empty copy; if even THAT is absent, the read failed (see the Retry warn) or the account isn't a placed manager | Confirm placement + that the office added expected rows on the job's detail |
-| "Confirm receipt" errors with "already received" | Someone else received/flagged the row first (the 409 above, surfaced in the form) | No repair — refresh to see who and when |
+| "Confirm receipt" errors with "already received" | **Pre-0059 behaviour — should no longer occur** | If it is still seen, the deployed Worker predates migration 0059. Check the deploy; escalate if the deployed code is current |
 | The manager cancelled the incident prompt / form but the row already shows *Incident* | The flag lands **before** the incident form files (deliberate — the D1 record carries the note either way) | File the Material Incident Report from Submit-a-Form (it prefills nothing then, but job/date/details can be re-entered); the row's note already says what's wrong |
 | A valid Material Incident Report is refused **`422 unknown_material_line`** | The incident is trying to reference a specific expected-materials line, but that line is not an **active** line of the same job (it was removed/soft-deactivated, or the wrong job is selected) | Confirm the line still shows on the job's **Expected materials** list (active) and the incident's job matches. If the operator wants an **unlinked** incident, file the Material Incident Report from **Submit-a-Form** (no line reference is carried) — it files cleanly. If a genuinely active line is still refused, **escalate** |
 

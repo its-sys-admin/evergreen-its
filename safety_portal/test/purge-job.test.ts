@@ -28,6 +28,10 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM inspections"),
     env.DB.prepare("DELETE FROM checklist_instances"),
     env.DB.prepare("DELETE FROM equipment_location"),
+    env.DB.prepare("DELETE FROM job_manifest_chunks"),
+    env.DB.prepare("DELETE FROM job_manifest_rows"),
+    env.DB.prepare("DELETE FROM job_manifest_previews"),
+    env.DB.prepare("DELETE FROM job_manifests"),
     env.DB.prepare("DELETE FROM jobs"),
     env.DB.prepare("DELETE FROM audit_log"),
   ]);
@@ -63,6 +67,24 @@ async function seedJobWithData(job: string, uuid: string): Promise<void> {
     env.DB
       .prepare("INSERT INTO job_expected_materials (job_id, description, seq) VALUES (?, 'Panels pallet', 10)")
       .bind(job),
+    // PR2 (0059): the materials children. Counts are DISTINCT from every sibling (2 shipments,
+    // 3 events) so a mis-shifted positional index in purge-job's results[] cannot pass by
+    // accidentally reading a neighbour's count — the exact failure mode that route warns about.
+    env.DB
+      .prepare("INSERT INTO material_shipments (shipment_uuid, line_id, job_id, bol_number) VALUES (?,1,?,'LD0867264')")
+      .bind(`ship-a-${job}`, job),
+    env.DB
+      .prepare("INSERT INTO material_shipments (shipment_uuid, line_id, job_id, bol_number) VALUES (?,1,?,'LD0867268')")
+      .bind(`ship-b-${job}`, job),
+    env.DB
+      .prepare("INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, actor) VALUES (?,1,?,'partial','pm')")
+      .bind(`ev-a-${job}`, job),
+    env.DB
+      .prepare("INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, actor) VALUES (?,1,?,'partial','pm')")
+      .bind(`ev-b-${job}`, job),
+    env.DB
+      .prepare("INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, actor) VALUES (?,1,?,'delivered','pm')")
+      .bind(`ev-c-${job}`, job),
     // The five job-context tables prune.ts guards a job on. purge-job's own comment
     // claimed it was "the explicit operator cleanup path (cascades both)" — it did
     // not touch any of them, so an operator purge returned ok:true while orphaning
@@ -83,6 +105,38 @@ async function seedJobWithData(job: string, uuid: string): Promise<void> {
       .bind(job),
     env.DB.prepare("INSERT INTO equipment_location (equipment_id, job_id) VALUES (1, ?)").bind(job),
   ]);
+  // PR3b (0060): the manifest-import pool. Its three children key on manifest_id, not
+  // job_id, so they must be seeded AFTER the parent exists. Counts are 1 / 4 / 6 / 5 —
+  // every value distinct from each other and from every sibling in the batch, so a
+  // one-position shift in purge-job's results[] reads cannot pass by reading a
+  // neighbour's count. That positional hazard is what the route's own ⚠ comment warns
+  // about, and inserting four DELETEs is exactly the change that triggers it.
+  const mid = (
+    await env.DB
+      .prepare(
+        "INSERT INTO job_manifests (manifest_uuid, job_id, filename, declared_mime, size_bytes, sha256, hmac, uploaded_by) " +
+          "VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+      )
+      .bind(`man-${job}`, job, "Customer BOM.pdf", "application/pdf", 4096, `sha-${job}`, `mac-${job}`, "pm")
+      .first<{ id: number }>()
+  )!.id;
+  await env.DB.batch([
+    ...[0, 1, 2, 3].map((i) =>
+      env.DB
+        .prepare("INSERT INTO job_manifest_chunks (manifest_id, chunk_index, chunk_total, chunk_b64) VALUES (?,?,4,'QUJD')")
+        .bind(mid, i),
+    ),
+    ...[1, 2, 3, 4, 5, 6].map((i) =>
+      env.DB
+        .prepare("INSERT INTO job_manifest_rows (manifest_id, row_index, kind, cells_json) VALUES (?,?, 'data', '[\"7006955\"]')")
+        .bind(mid, i),
+    ),
+    ...[1, 2, 3, 4, 5].map((p) =>
+      env.DB
+        .prepare("INSERT INTO job_manifest_previews (manifest_id, page, png_b64) VALUES (?,?, 'QUJD')")
+        .bind(mid, p),
+    ),
+  ]);
 }
 
 async function counts(job: string, uuid: string) {
@@ -95,11 +149,20 @@ async function counts(job: string, uuid: string) {
     reqs: await q("SELECT COUNT(*) n FROM pdf_requests WHERE submission_uuid=?", uuid),
     dailyReqs: await q("SELECT COUNT(*) n FROM job_daily_requirements WHERE job_id=?", job),
     materials: await q("SELECT COUNT(*) n FROM job_expected_materials WHERE job_id=?", job),
+    shipments: await q("SELECT COUNT(*) n FROM material_shipments WHERE job_id=?", job),
+    receiptEvents: await q("SELECT COUNT(*) n FROM material_receipt_events WHERE job_id=?", job),
     timeEntries: await q("SELECT COUNT(*) n FROM time_entries WHERE job_id=?", job),
     tasks: await q("SELECT COUNT(*) n FROM task_assignments WHERE job_id=?", job),
     inspections: await q("SELECT COUNT(*) n FROM inspections WHERE job_id=?", job),
     checklists: await q("SELECT COUNT(*) n FROM checklist_instances WHERE job_id=?", job),
     equipLoc: await q("SELECT COUNT(*) n FROM equipment_location WHERE job_id=?", job),
+    manifests: await q("SELECT COUNT(*) n FROM job_manifests WHERE job_id=?", job),
+    manifestChunks: await q(
+      "SELECT COUNT(*) n FROM job_manifest_chunks WHERE manifest_id IN (SELECT id FROM job_manifests WHERE job_id=?)", job),
+    manifestRows: await q(
+      "SELECT COUNT(*) n FROM job_manifest_rows WHERE manifest_id IN (SELECT id FROM job_manifests WHERE job_id=?)", job),
+    manifestPreviews: await q(
+      "SELECT COUNT(*) n FROM job_manifest_previews WHERE manifest_id IN (SELECT id FROM job_manifests WHERE job_id=?)", job),
   };
 }
 
@@ -117,16 +180,26 @@ describe("POST /api/internal/admin/purge-job", () => {
     expect(await res.json()).toMatchObject({
       ok: true, found: true, job_id: "JOB-PURGE", job_deleted: 1, submissions: 1, pdfChunks: 1, pdfRequests: 1,
       requirements: 2, expectedMaterials: 1, // Slice 1 (R3-F4): per-job content cascades too
+      // PR2 — asserted BY NAME with distinct values: this is what catches a positional-index
+      // shift in the route's results[] reads (2 ≠ 3 ≠ 1, so a swap cannot look correct).
+      shipments: 2, receiptEvents: 3,
+      // PR3b — same technique for the manifest pool. manifestChunks is the one that
+      // matters most: it counts the ORIGINAL untrusted document bytes leaving with the job.
+      manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
     });
 
     expect(await counts("JOB-PURGE", "u-purge")).toEqual({
       jobs: 0, subs: 0, pdfs: 0, reqs: 0, dailyReqs: 0, materials: 0,
+      shipments: 0, receiptEvents: 0,
       timeEntries: 0, tasks: 0, inspections: 0, checklists: 0, equipLoc: 0,
+      manifests: 0, manifestChunks: 0, manifestRows: 0, manifestPreviews: 0,
     });
     // The OTHER job keeps every one of them — the cascade is job-scoped, not a sweep.
     expect(await counts("JOB-KEEP", "u-keep")).toEqual({
       jobs: 1, subs: 1, pdfs: 1, reqs: 1, dailyReqs: 2, materials: 1,
+      shipments: 2, receiptEvents: 3,
       timeEntries: 1, tasks: 1, inspections: 1, checklists: 1, equipLoc: 1,
+      manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
     });
     const audit = await env.DB
       .prepare("SELECT action, target_username FROM audit_log WHERE action='purge-job'")

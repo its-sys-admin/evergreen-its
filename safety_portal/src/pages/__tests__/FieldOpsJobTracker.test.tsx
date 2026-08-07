@@ -75,7 +75,7 @@ beforeEach(() => {
   // Slice T: a subcontractor's log-time picker fetches its own loggable crew; default empty.
   vi.mocked(fetchMyCrew).mockResolvedValue([]);
   // M1 expected materials: safe empty defaults for the self-contained detail section.
-  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [] });
+  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [] });
   vi.mocked(fetchMaterials).mockResolvedValue({ materials: [], next_cursor: null });
   // Delivery-contact suggestions for the create-form Safety CC datalist — default empty so tests
   // that don't exercise the datalist never issue a real fetch; the datalist test overrides this.
@@ -104,6 +104,7 @@ const JOBS: api.JobRow[] = [
     job_id: "JOB-A",
     project_name: "Alpha",
     status: "active",
+    lifecycle: "active",
     progress: 40,
     client_name: "Acme Co",
     crew: [{ id: 1, name: "Alice Chen", trade: "operator" }],
@@ -113,6 +114,7 @@ const JOBS: api.JobRow[] = [
     job_id: "JOB-B",
     project_name: "Bravo",
     status: "on_hold",
+    lifecycle: "inactive",
     progress: 0,
     client_name: null,
     crew: [],
@@ -124,6 +126,7 @@ const DETAIL: api.JobDetail = {
   job_id: "JOB-A",
   project_name: "Alpha",
   status: "active",
+  lifecycle: "active",
   progress: 60,
   job_no: "2026.123",
   routing: {
@@ -498,12 +501,47 @@ describe("FieldOpsJobTracker — write UI", () => {
   });
 
   it("the lifecycle selector calls setLifecycle with the chosen value", async () => {
-    vi.mocked(api.setLifecycle).mockResolvedValue({ lifecycle: "archived" });
+    vi.mocked(api.setLifecycle).mockResolvedValue({ lifecycle: "inactive" });
     const { getByLabelText } = await openManagedDetail(["cap.jobtracker.manage"]);
     const select = getByLabelText("Job lifecycle") as HTMLSelectElement;
-    expect(select.value).toBe("active"); // seeded from the active job's status
-    fireEvent.change(select, { target: { value: "archived" } });
-    await waitFor(() => expect(api.setLifecycle).toHaveBeenCalledWith("JOB-A", "archived"));
+    expect(select.value).toBe("active"); // seeded from the job's OWN lifecycle field
+    fireEvent.change(select, { target: { value: "inactive" } });
+    await waitFor(() => expect(api.setLifecycle).toHaveBeenCalledWith("JOB-A", "inactive"));
+  });
+
+  // ── Track 6 PR-0 — the selector tells the truth, and cannot archive ──────────────────────
+  //
+  // Before this change the selector was seeded `job.status === "active" ? "active" : "inactive"`
+  // because the detail payload carried no lifecycle. `status` collapses inactive AND archived into
+  // 'closed', so an ARCHIVED job re-displayed as "Inactive" on every reload and the runbook told
+  // operators to "validate by effects, not the dropdown".
+  it("an ARCHIVED job reads 'Archived' and its selector is locked", async () => {
+    const archived: api.JobDetail = { ...DETAIL, lifecycle: "archived", status: "closed" };
+    const { getByLabelText, container } = await openManagedDetail(["cap.jobtracker.manage"], archived);
+
+    const select = getByLabelText("Job lifecycle") as HTMLSelectElement;
+    expect(select.value).toBe("archived");   // NOT "inactive" — the regression this pins
+    expect(select.disabled).toBe(true);      // un-archive first; you cannot re-open it here
+
+    // The detail pill renders the lifecycle, not statusLabel(status) (which said "Closed").
+    expect(container.querySelector(".dash-detail__head")!.textContent).toContain("Archived");
+  });
+
+  it("an INACTIVE job still reads 'Inactive' with an enabled selector", async () => {
+    const inactive: api.JobDetail = { ...DETAIL, lifecycle: "inactive", status: "closed" };
+    const { getByLabelText } = await openManagedDetail(["cap.jobtracker.manage"], inactive);
+    const select = getByLabelText("Job lifecycle") as HTMLSelectElement;
+    expect(select.value).toBe("inactive");
+    expect(select.disabled).toBe(false);
+  });
+
+  it("the selector offers NO selectable 'archived' option on a live job", async () => {
+    const { getByLabelText } = await openManagedDetail(["cap.jobtracker.manage"]);
+    const select = getByLabelText("Job lifecycle") as HTMLSelectElement;
+    const selectable = Array.from(select.options).filter((o) => !o.disabled).map((o) => o.value);
+    // Archiving relocates folders across two systems — it needs its own confirmed action, not a
+    // silent dropdown change. The worker refuses it too (409), so a stale bundle can't fire it.
+    expect(selectable).toEqual(["active", "inactive"]);
   });
 
   it("the edit-job form seeds + sends the project name (rename via the edit page)", async () => {

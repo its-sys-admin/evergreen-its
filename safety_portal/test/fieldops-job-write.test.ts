@@ -177,14 +177,48 @@ describe("P2.5 — SoR create + lifecycle + contacts (version vector)", () => {
     const id = await createOk(admin, FULL); // mirror_version=1, sync_state pending
     // Simulate the daemon having mirrored it clean, then change lifecycle.
     await env.DB.prepare("UPDATE jobs SET sync_state='synced', safety_mirrored_version=1, progress_mirrored_version=1 WHERE job_id=?").bind(id).run();
-    const res = await j(admin, `/api/fieldops/job/${id}/lifecycle`, { lifecycle: "archived" });
+    // Was 'archived' before Track 6 PR-0; that value is now refused here (see the next test).
+    const res = await j(admin, `/api/fieldops/job/${id}/lifecycle`, { lifecycle: "inactive" });
     expect(res.status, await res.clone().text()).toBe(200);
     const row = await jobRow(id);
-    expect(row.lifecycle).toBe("archived");
+    expect(row.lifecycle).toBe("inactive");
     expect(row.active).toBe(0); // only 'active' lifecycle keeps active=1
     expect(row.mirror_version).toBe(2); // bumped
     expect(row.sync_state).toBe("pending"); // re-dirtied for the daemon
     expect((await audits("job_lifecycle")).length).toBe(1);
+  });
+
+  // Track 6 PR-0 — the disarm fence.
+  //
+  // Setting lifecycle='archived' here used to be accepted, and acceptance was a live hazard: the
+  // write re-dirtied the row and the Mac-side mirror then relocated FOUR tracker sheets out of the
+  // job's progress folder, unconfirmed and un-retryable, while the UI re-displayed the job as
+  // "Inactive". Archiving is a heavyweight cross-system relocation and needs its own confirmed
+  // route. 409 (not 400) because the intent is valid and the route is wrong.
+  it("/lifecycle REFUSES 'archived' with 409 use_archive_route and writes NOTHING", async () => {
+    const id = await createOk(admin, FULL);
+    await env.DB.prepare("UPDATE jobs SET sync_state='synced' WHERE job_id=?").bind(id).run();
+    const before = await jobRow(id);
+
+    const res = await j(admin, `/api/fieldops/job/${id}/lifecycle`, { lifecycle: "archived" });
+    expect(res.status).toBe(409);
+    expect((await res.json() as { error: string }).error).toBe("use_archive_route");
+
+    // The refusal must be total — no lifecycle change, no version bump, no re-dirty, no audit row.
+    const after = await jobRow(id);
+    expect(after.lifecycle).toBe(before.lifecycle);
+    expect(after.active).toBe(before.active);
+    expect(after.status).toBe(before.status);
+    expect(after.mirror_version).toBe(before.mirror_version);
+    expect(after.sync_state).toBe("synced");
+    expect((await audits("job_lifecycle")).length).toBe(0);
+  });
+
+  it("/lifecycle still accepts the two settable values (no lockout from the archived fence)", async () => {
+    const id = await createOk(admin, FULL);
+    expect((await j(admin, `/api/fieldops/job/${id}/lifecycle`, { lifecycle: "inactive" })).status).toBe(200);
+    expect((await j(admin, `/api/fieldops/job/${id}/lifecycle`, { lifecycle: "active" })).status).toBe(200);
+    expect((await jobRow(id)).lifecycle).toBe("active");
   });
 
   it("/lifecycle rejects an invalid value; { lifecycle: 'inactive' } is the close path (status='closed', idempotent, unknown → 404)", async () => {
@@ -222,7 +256,12 @@ describe("P2.5 — SoR create + lifecycle + contacts (version vector)", () => {
 
   it("W5: edit routes REFUSE a smartsheet-origin job (no cross-origin corruption)", async () => {
     await seedJob("SS-9", "active"); // origin='smartsheet'
-    expect((await j(admin, "/api/fieldops/job/SS-9/lifecycle", { lifecycle: "archived" })).status).toBe(404);
+    // Payload is 'inactive', not 'archived': this test asserts the origin='portal' FENCE, and
+    // 'archived' is now refused at the route (409 use_archive_route) BEFORE any row lookup, which
+    // would mask the very thing under test. That ordering is deliberate — route-shape checks run
+    // before DB work, like every other validation here — and it leaks nothing, because the 409 is
+    // identical for any job id, existent or not.
+    expect((await j(admin, "/api/fieldops/job/SS-9/lifecycle", { lifecycle: "inactive" })).status).toBe(404);
     expect((await j(admin, "/api/fieldops/job/SS-9/contacts", FULL)).status).toBe(404);
     const row = await jobRow("SS-9");
     expect(row.lifecycle).toBe("active"); // untouched (the origin='portal' scope refused every edit)

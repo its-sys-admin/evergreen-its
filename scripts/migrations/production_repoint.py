@@ -127,6 +127,7 @@ ALLOWED_SETTING_SUFFIXES: tuple[str, ...] = (
     ".worker_base_url",          # section A
     ".from_mailbox",             # section B
     ".portal_root_folder_id",    # section D (resolve_box_root rows)
+    ".archive_root_folder_id",   # section D — the Track 6 Box archive root
 )
 ALLOWED_SETTINGS_EXACT: frozenset[str] = frozenset({
     "system.operator_email",     # section C

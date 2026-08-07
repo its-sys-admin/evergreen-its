@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Materials-manifest import daemon (PR3b / ADR-0005). Drains the send-free D1 manifest
+  pool (GET /api/fieldops/manifests/internal/pending, bearer = the daemon's OWN
+  PORTAL_MANIFEST_API_TOKEN tier), verifies manifest:v1 + the byte digest, §34-screens the
+  document, extracts its cell grid inside the KILLABLE sandbox child, parses it with
+  field_ops/manifest_parse.py, files the ORIGINAL bytes to Box <job>/Materials/Manifests/,
+  and posts the reviewable grid back for the validate screen. AI-free + customer-send-free
+  (External Send Gate, FM Invariant 1; enrolled in tests/test_capability_gating.py
+  GATED_SCRIPTS) — the Box WRITE is the intended filing capability, and the HTTP egress to
+  OUR Worker goes through the F02-allowlisted shared.portal_client. Fail-closed on missing
+  creds. Gated OFF by field_ops.manifest_poll.polling_enabled until go-live.
+
+  Install:
+    scripts/launchd/install.sh load org.solutionsmith.its.manifest-poll
+
+  StartInterval is PARAMETERIZED (install.sh __POLL_INTERVAL_SECONDS__): resolution is
+  [interval] arg > ITS_Config field_ops.manifest_poll.poll_interval_seconds > default 120s.
+  120s matches estimate-poll — this daemon does the same shape of work (pull, screen,
+  sandboxed parse, file) and a tighter cadence buys nothing on an office-paced upload
+  queue. The resolved value is BAKED into the installed plist, so a later change needs a
+  re-load. If you widen it past ~2 minutes, widen watchdog's manifest_poll marker window
+  too (scripts/watchdog.py, currently 10 min == ~5 cycles).
+
+  See docs/runbooks/material_manifest_import.md for the operator runbook.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.solutionsmith.its.manifest-poll</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__ITS_HOME__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>field_ops.manifest_poll</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__ITS_HOME__</string>
+
+    <key>StandardOutPath</key>
+    <string>__ITS_HOME__/logs/launchd/manifest_poll.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__ITS_HOME__/logs/launchd/manifest_poll.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>__POLL_INTERVAL_SECONDS__</integer>
+
+    <!-- A2 (single-host resilience): RunAtLoad=true so this interval daemon RESUMES
+         immediately when launchd loads the agent after a reboot/OS-update, then
+         StartInterval re-fires on cadence. KeepAlive is intentionally absent: ITS daemons
+         are one-shot-per-fire, so KeepAlive=true would restart on exit and destroy the
+         interval cadence. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

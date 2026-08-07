@@ -1,9 +1,16 @@
 import type { Context } from "hono";
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
-import { auditStmt, auditStmtIfChanged } from "./audit";
+import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { requireDailyReportRole, requireJob, requireJobScope } from "./fieldops_scope";
-import type { ExpectedMaterialRow, ExpectedMaterialsResponse } from "./wire-types";
+import { pacificDateString } from "./fieldops_recurrence";
+import type {
+  ExpectedMaterialRow,
+  ExpectedMaterialsResponse,
+  MaterialReceiptEventRow,
+  MaterialReceiptKind,
+  MaterialShipmentRow,
+} from "./wire-types";
 
 // Material receipts (M1) — per-job EXPECTED-materials list (`job_expected_materials`, migration
 // 0031). The office records what a job is expecting; managers confirm receipt against that list.
@@ -41,6 +48,28 @@ const MAX_NOTE = 500;
 const MAX_SEQ = 1_000_000;
 const MAX_QTY = 1_000_000_000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Materials tracking (PR2, 0059). Sized against the real manifests: the sample BOM part numbers
+// run to ~14 chars and BOL/load numbers ("LD0867264") to ~10, so these are generous ceilings that
+// still bound an untrusted write.
+const MAX_PART_NUMBER = 64;
+const MAX_CATEGORY = 64;
+const MAX_BOL = 64;
+const MAX_CARRIER = 64;
+const RECEIPT_KINDS: readonly MaterialReceiptKind[] = ["delivered", "partial", "not_delivered"];
+
+/** The derived receipt rollup, as a SQL fragment over an aliased `jem` row.
+ *
+ *  ONE definition on purpose: the SPA read route below AND the §51 material-list snapshot in
+ *  index.ts both project it, and a drift between them would put a different delivery state on the
+ *  portal than on the operator's Smartsheet.
+ *
+ *  `ORDER BY e.id DESC` — APPEND order, not event_date. A back-dated correction is DISPLAYED on
+ *  its own date but must never rewrite "what the field most recently told us". `id` is a unique
+ *  autoincrement, so no tie-break is needed. SUM over zero rows yields NULL — the honest
+ *  "nothing recorded", deliberately distinct from a recorded 0. Literal SQL, no interpolation. */
+export const RECEIPT_ROLLUP_SQL = `
+  (SELECT e.kind FROM material_receipt_events e WHERE e.line_id = jem.id ORDER BY e.id DESC LIMIT 1) AS receipt_status,
+  (SELECT SUM(e.qty) FROM material_receipt_events e WHERE e.line_id = jem.id) AS qty_received_total`;
 
 // The two caps that bypass the per-job ownership scope (admins hold both; a manager/submitter
 // holds neither) — the same admin set the /daily-form/status scope recognizes, plus
@@ -59,14 +88,39 @@ function badId(c: Ctx): number | null {
 // Shared expectation-field validation for create + update (content fields; seq is create-only —
 // reorder has its own route). Returns the cleaned tuple or an error string. material_id is only
 // SHAPE-checked here; its live-catalog check is async and runs at the call site.
-type ExpectationFields = {
+// EXPORTED for the PR3b manifest-import commit route: a bulk-imported line must run the
+// IDENTICAL validation a hand-authored one does, so the importer reuses this validator and
+// this type rather than re-deriving the bounds (which is how two paths drift apart).
+export type ExpectationFields = {
   material_id: number | null;
   description: string | null;
   qty: number | null;
   unit: string | null;
   expected_date: string | null;
+  part_number: string | null;
+  category: string | null;
+  expected_ship_date: string | null;
 };
-function readExpectationFields(body: Record<string, unknown>): ExpectationFields | string {
+
+/** Trim + bound an optional free-text field. Empty (or all-whitespace) collapses to null so a
+ *  cleared input stores NULL rather than "". */
+function optText(value: unknown, max: number): string | null | "invalid" {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length > max) return "invalid";
+  const t = value.trim();
+  return t.length ? t : null;
+}
+
+/** Validate an optional YYYY-MM-DD date field. */
+function optDate(value: unknown): string | null | "invalid" {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !DATE_RE.test(value)) return "invalid";
+  return value;
+}
+/** EXPORTED for the PR3b manifest-import commit route (see the ExpectationFields note).
+ *  Returns the cleaned fields, or a plain error-CODE string the caller renders as
+ *  `{ error: <code> }` 400 — importers additionally report the offending row index. */
+export function readExpectationFields(body: Record<string, unknown>): ExpectationFields | string {
   let material_id: number | null = null;
   if (body.material_id !== undefined && body.material_id !== null) {
     if (typeof body.material_id !== "number" || !Number.isInteger(body.material_id) || body.material_id < 1) {
@@ -96,19 +150,23 @@ function readExpectationFields(body: Record<string, unknown>): ExpectationFields
     const t = body.unit.trim();
     unit = t.length ? t : null;
   }
-  let expected_date: string | null = null;
-  if (body.expected_date !== undefined && body.expected_date !== null && body.expected_date !== "") {
-    if (typeof body.expected_date !== "string" || !DATE_RE.test(body.expected_date)) {
-      return "invalid_expected_date";
-    }
-    expected_date = body.expected_date;
-  }
-  return { material_id, description, qty, unit, expected_date };
+  // expected_date KEEPS its 0031 meaning — the expected DELIVERY date (see migration 0059).
+  const expected_date = optDate(body.expected_date);
+  if (expected_date === "invalid") return "invalid_expected_date";
+  const expected_ship_date = optDate(body.expected_ship_date);
+  if (expected_ship_date === "invalid") return "invalid_expected_ship_date";
+  const part_number = optText(body.part_number, MAX_PART_NUMBER);
+  if (part_number === "invalid") return "invalid_part_number";
+  const category = optText(body.category, MAX_CATEGORY);
+  if (category === "invalid") return "invalid_category";
+  return { material_id, description, qty, unit, expected_date, part_number, category, expected_ship_date };
 }
 
 // material_id, when given, must name an ACTIVE catalog type (a retired type must not gain new
 // expectations; existing rows referencing a later-retired type are untouched — soft-ref posture).
-async function catalogIdValid(c: Ctx, materialId: number | null): Promise<boolean> {
+// EXPORTED for the PR3b manifest-import commit route. NOTE it is ONE D1 round-trip per call, so a
+// bulk importer must pre-resolve the DISTINCT non-null material_ids rather than calling per row.
+export async function catalogIdValid(c: Ctx, materialId: number | null): Promise<boolean> {
   if (materialId === null) return true;
   const row = await c.env.DB.prepare("SELECT id FROM material_catalog WHERE id = ?1 AND active = 1")
     .bind(materialId)
@@ -187,22 +245,56 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       const scopeErr = await requireJobScope(c, jobId, SCOPE_BYPASS_CAPS); // 403 forbidden_job outside own placement
       if (scopeErr) return scopeErr;
 
-      const res = await c.env.DB.prepare(
-        `SELECT jem.id, jem.material_id,
-                (SELECT mc.model_id FROM material_catalog mc WHERE mc.id = jem.material_id) AS material_name,
-                jem.description, jem.qty, jem.unit, jem.expected_date, jem.status,
-                jem.received_at,
-                (SELECT p.name FROM personnel p WHERE p.username = jem.received_by ORDER BY p.id ASC LIMIT 1)
-                  AS received_by_name,
-                jem.qty_received, jem.note, jem.seq, jem.line_uuid
-         FROM job_expected_materials jem
-         WHERE jem.job_id = ?1 AND jem.active = 1
-         ORDER BY jem.seq ASC, jem.id ASC
-         LIMIT 500`,
-      )
-        .bind(jobId)
-        .all<ExpectedMaterialRow>();
-      const payload: ExpectedMaterialsResponse = { expected_materials: res.results ?? [] };
+      // PR2 — one read, three projections, ONE batch. A separate "materials page" read would be
+      // free to drift from the daily form's read; keeping one wire shape is what stops the two
+      // surfaces disagreeing about a delivery.
+      const [lines, shipments, events] = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            `SELECT jem.id, jem.material_id,
+                    (SELECT mc.model_id FROM material_catalog mc WHERE mc.id = jem.material_id) AS material_name,
+                    jem.description, jem.qty, jem.unit, jem.expected_date, jem.status,
+                    jem.received_at,
+                    (SELECT p.name FROM personnel p WHERE p.username = jem.received_by ORDER BY p.id ASC LIMIT 1)
+                      AS received_by_name,
+                    jem.qty_received, jem.note, jem.seq, jem.line_uuid,
+                    jem.part_number, jem.category, jem.expected_ship_date,
+                    ${RECEIPT_ROLLUP_SQL}
+             FROM job_expected_materials jem
+             WHERE jem.job_id = ?1 AND jem.active = 1
+             ORDER BY jem.seq ASC, jem.id ASC
+             LIMIT 500`,
+          )
+          .bind(jobId),
+        c.env.DB
+          .prepare(
+            `SELECT s.id, s.line_id, s.part_number, s.bol_number, s.carrier, s.qty, s.unit,
+                    s.ship_date, s.delivery_date, s.seq, s.source
+             FROM material_shipments s
+             WHERE s.job_id = ?1 AND s.active = 1
+             ORDER BY s.line_id ASC, s.seq ASC, s.id ASC
+             LIMIT 1000`,
+          )
+          .bind(jobId),
+        // Newest first per line. actor resolves to the personnel DISPLAY NAME only (W9) — the
+        // stored account username never leaves the Worker.
+        c.env.DB
+          .prepare(
+            `SELECT e.id, e.line_id, e.shipment_id, e.kind, e.qty, e.note, e.event_date, e.created_at,
+                    (SELECT p.name FROM personnel p WHERE p.username = e.actor ORDER BY p.id ASC LIMIT 1)
+                      AS actor_name
+             FROM material_receipt_events e
+             WHERE e.job_id = ?1
+             ORDER BY e.line_id ASC, e.id DESC
+             LIMIT 2000`,
+          )
+          .bind(jobId),
+      ]);
+      const payload: ExpectedMaterialsResponse = {
+        expected_materials: (lines.results ?? []) as ExpectedMaterialRow[],
+        shipments: (shipments.results ?? []) as MaterialShipmentRow[],
+        receipt_events: (events.results ?? []) as MaterialReceiptEventRow[],
+      };
       return c.json(payload, 200);
     },
   );
@@ -241,10 +333,15 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       const res = await c.env.DB.batch([
         c.env.DB
           .prepare(
-            `INSERT INTO job_expected_materials (job_id, material_id, description, qty, unit, expected_date, seq, line_uuid)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`,
+            `INSERT INTO job_expected_materials
+               (job_id, material_id, description, qty, unit, expected_date, seq, line_uuid,
+                part_number, category, expected_ship_date)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) RETURNING id`,
           )
-          .bind(jobId, f.material_id, f.description, f.qty, f.unit, f.expected_date, seq, lineUuid),
+          .bind(
+            jobId, f.material_id, f.description, f.qty, f.unit, f.expected_date, seq, lineUuid,
+            f.part_number, f.category, f.expected_ship_date,
+          ),
         auditStmt(c, actor, "expected_material_create", jobId, {
           job_id: jobId,
           material_id: f.material_id,
@@ -279,10 +376,14 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
         c.env.DB
           .prepare(
             `UPDATE job_expected_materials
-             SET material_id = ?2, description = ?3, qty = ?4, unit = ?5, expected_date = ?6
+             SET material_id = ?2, description = ?3, qty = ?4, unit = ?5, expected_date = ?6,
+                 part_number = ?7, category = ?8, expected_ship_date = ?9
              WHERE id = ?1 AND active = 1 AND status = 'expected'`,
           )
-          .bind(id, f.material_id, f.description, f.qty, f.unit, f.expected_date),
+          .bind(
+            id, f.material_id, f.description, f.qty, f.unit, f.expected_date,
+            f.part_number, f.category, f.expected_ship_date,
+          ),
         auditStmtIfChanged(c, actor, "expected_material_update", String(id), { expectation_id: id, material_id: f.material_id, description: f.description }),
       ]);
       if ((res[0].meta.changes ?? 0) === 0) {
@@ -346,10 +447,188 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
     },
   );
 
-  // Shared receive / flag-incident implementation. Both are cap.materials.receive + the per-job
-  // ownership scope; both flip status FROM 'expected' with the guard IN the WHERE clause and the
-  // audit conditional on changes()=1 in the SAME batch (W4) — a repeat is a 409 with exactly one
-  // stamp and exactly one audit row ever written. M2 wires both into the daily form.
+  // ── PR2 receipt EVENTS ───────────────────────────────────────────────────────────────────────
+  // The three-way delivery mark. Unlike the M1 one-shot flip below, this APPENDS to the
+  // material_receipt_events ledger, so a line can be marked partial today and delivered next week
+  // — the whole point of 0059. The line's legacy status/received_*/qty_received columns are
+  // refreshed in the same batch as a coarse projection (see the migration header).
+
+  type ReceiptFields = {
+    kind: MaterialReceiptKind;
+    qty: number | null;
+    note: string | null;
+    event_date: string;
+    shipment_id: number | null;
+  };
+
+  function readReceiptFields(body: Record<string, unknown>): ReceiptFields | string {
+    const kind = body.kind;
+    // `invalid_receipt_kind`, not `invalid_kind`: that code already means "pick a valid
+    // daily-requirement kind" in src/lib/errorCopy.ts, and one code cannot carry two meanings.
+    if (typeof kind !== "string" || !RECEIPT_KINDS.includes(kind as MaterialReceiptKind)) {
+      return "invalid_receipt_kind";
+    }
+    let qty: number | null = null;
+    if (body.qty !== undefined && body.qty !== null && body.qty !== "") {
+      if (typeof body.qty !== "number" || !Number.isFinite(body.qty) || body.qty <= 0 || body.qty > MAX_QTY) {
+        return "invalid_qty";
+      }
+      qty = body.qty;
+    }
+    // A "nothing arrived" mark carrying a received quantity is incoherent — refuse it rather than
+    // silently drop the number and let the ledger sum disagree with what was typed.
+    if (kind === "not_delivered" && qty !== null) return "invalid_qty";
+    const note = optText(body.note, MAX_NOTE);
+    if (note === "invalid") return "invalid_note";
+    // A negative report must say why — the same posture flag-incident already takes.
+    if (kind === "not_delivered" && note === null) return "note_required";
+    const event_date = optDate(body.event_date);
+    if (event_date === "invalid") return "invalid_event_date";
+    return {
+      kind: kind as MaterialReceiptKind,
+      qty,
+      note,
+      // Pacific wall-clock — the crews' day, matching every other date the daily surfaces stamp.
+      event_date: event_date ?? pacificDateString(Date.now()),
+      shipment_id: null, // resolved + validated against the line at the call site
+    };
+  }
+
+  /** Shared implementation for /receipt and the re-pointed /receive. */
+  async function appendReceiptEvent(c: Ctx, forcedKind?: MaterialReceiptKind): Promise<Response> {
+    // Role-checked FIRST — an ineligible role must learn nothing about row existence.
+    const roleErr = requireDailyReportRole(c);
+    if (roleErr) return roleErr;
+    const id = badId(c);
+    if (id === null) return c.json({ error: "invalid_id" }, 400);
+    const body = await readOptionalJsonBody(c);
+    if (body === null) return c.json({ error: "bad_request" }, 400);
+    // /receive is the legacy alias: it carries no `kind` and speaks `qty_received`, not `qty`.
+    const merged = forcedKind
+      ? { ...body, kind: forcedKind, qty: body.qty ?? body.qty_received }
+      : body;
+    const f = readReceiptFields(merged);
+    if (typeof f === "string") return c.json({ error: f }, 400);
+
+    // Resolve the row first — its job_id anchors the ownership-scope check.
+    const row = await c.env.DB.prepare(
+      "SELECT id, job_id FROM job_expected_materials WHERE id = ?1 AND active = 1",
+    )
+      .bind(id)
+      .first<{ id: number; job_id: string }>();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const scopeErr = await requireJobScope(c, row.job_id, SCOPE_BYPASS_CAPS);
+    if (scopeErr) return scopeErr;
+
+    // An event MAY name the load it closed — but only a load belonging to THIS line.
+    let shipmentId: number | null = null;
+    if (merged.shipment_id !== undefined && merged.shipment_id !== null) {
+      if (typeof merged.shipment_id !== "number" || !Number.isInteger(merged.shipment_id)) {
+        return c.json({ error: "invalid_shipment_id" }, 400);
+      }
+      const ship = await c.env.DB.prepare(
+        "SELECT id FROM material_shipments WHERE id = ?1 AND line_id = ?2 AND active = 1",
+      )
+        .bind(merged.shipment_id, id)
+        .first();
+      if (!ship) return c.json({ error: "invalid_shipment_id" }, 400);
+      shipmentId = merged.shipment_id;
+    }
+
+    const actor = c.get("session").username;
+    const eventUuid = crypto.randomUUID();
+    let res;
+    try {
+      res = await c.env.DB.batch([
+        // 1. GUARDED append. The guard is the INSERT…SELECT's own WHERE: the line must still exist
+        //    and be active, so a row deactivated between the resolve above and here writes nothing.
+        c.env.DB
+          .prepare(
+            `INSERT INTO material_receipt_events
+               (event_uuid, line_id, job_id, shipment_id, kind, qty, note, event_date, actor)
+             SELECT ?2, jem.id, jem.job_id, ?3, ?4, ?5, ?6, ?7, ?8
+               FROM job_expected_materials jem
+              WHERE jem.id = ?1 AND jem.active = 1
+                -- The shipment check is re-asserted HERE, not left to the SELECT above: a
+                -- concurrent /material-shipment/:id/delete between that read and this batch would
+                -- otherwise land an event pointing at a just-deactivated load. Matches this
+                -- module's in-WHERE guard discipline (the line's own active=1 already is atomic).
+                AND (?3 IS NULL OR EXISTS (
+                      SELECT 1 FROM material_shipments s
+                       WHERE s.id = ?3 AND s.line_id = jem.id AND s.active = 1))`,
+          )
+          .bind(id, eventUuid, shipmentId, f.kind, f.qty, f.note, f.event_date, actor),
+        // 2. Audit IMMEDIATELY after the mutation it describes — changes() reads the LAST
+        //    data-modifying statement, so anything between them would break the W4 contract.
+        auditStmtIfChanged(c, actor, "expected_material_receipt", row.job_id, {
+          expectation_id: id,
+          job_id: row.job_id,
+          kind: f.kind,
+          qty: f.qty,
+          shipment_id: shipmentId,
+        }),
+        // 3. Legacy projection refresh. qty_received is RECOMPUTED from the ledger, never
+        //    incremented, so it cannot drift from it. `status <> 'incident'` makes an incident
+        //    flag STICKY: a delivery mark records the delivery without clearing the problem.
+        c.env.DB
+          .prepare(
+            `UPDATE job_expected_materials
+                SET status       = CASE WHEN ?2 = 'delivered' THEN 'received' ELSE 'expected' END,
+                    received_at  = unixepoch(),
+                    received_by  = ?3,
+                    note         = ?4,
+                    qty_received = (SELECT SUM(e.qty) FROM material_receipt_events e WHERE e.line_id = ?1)
+              WHERE id = ?1 AND active = 1 AND status <> 'incident'`,
+          )
+          .bind(id, f.kind, actor, f.note),
+      ]);
+    } catch (e) {
+      // event_uuid collision — a genuinely lost race, not a client error worth 500ing over.
+      if (isUniqueViolation(e)) return c.json({ error: "duplicate_event" }, 409);
+      throw e;
+    }
+    if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_found" }, 404);
+    // Report the ACTUAL persisted status, never a literal. Statement 3 is guarded
+    // `status <> 'incident'`, so on a flagged line it deliberately no-ops and the row STAYS
+    // 'incident' — the sticky-incident rule. Returning an assumed "received" there would tell the
+    // field crew a flagged delivery was resolved while the §51 Material List mirror (which reads
+    // this same column) still showed the problem: the two surfaces would disagree, silently.
+    const after = await c.env.DB.prepare(
+      "SELECT status FROM job_expected_materials WHERE id = ?1",
+    )
+      .bind(id)
+      .first<{ status: string }>();
+    return c.json(
+      {
+        ok: true,
+        id,
+        event_id: res[0].meta.last_row_id ?? null,
+        kind: f.kind,
+        status: after?.status ?? null,
+      },
+      200,
+    );
+  }
+
+  // ── POST /api/fieldops/expected-material/:id/receipt — the three-way mark (manager/admin). ───────
+  // Delivered / Partially delivered / Not delivered, each with an optional note + qty and an
+  // optional shipment reference. Repeatable BY DESIGN: partial → partial → delivered is the
+  // normal path for a part number arriving across several loads.
+  app.post(
+    "/api/fieldops/expected-material/:id/receipt",
+    gates.requireSession,
+    gates.requireCapability("cap.materials.receive"),
+    (c) => appendReceiptEvent(c),
+  );
+
+  // Shared flag-incident implementation (M1). Flips status FROM 'expected' with the guard IN the
+  // WHERE clause and the audit conditional on changes()=1 in the SAME batch (W4) — a repeat is a
+  // 409 with exactly one stamp and exactly one audit row ever written.
+  //
+  // NOTE: /receive no longer routes through here. Under 0059 it appends a 'delivered' EVENT (see
+  // appendReceiptEvent above), because the one-shot 409-on-repeat contract is exactly what the
+  // partial-delivery model had to lift. flag-incident KEEPS the one-shot posture: an incident is a
+  // distinct axis with its own ledger (M3), and re-flagging is not a workflow anyone asked for.
   async function actionExpectation(
     c: Ctx,
     nextStatus: "received" | "incident",
@@ -398,11 +677,32 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
   }
 
   // ── POST /api/fieldops/expected-material/:id/receive — confirm receipt (manager/field). ──────────
+  // KEPT for the daily form's existing "Confirm receipt" button: same path, same cap, same gate
+  // stack, same `{qty_received?, note?}` body, same `{ok, id, status:"received"}`-shaped success.
+  // Internally it is now a 'delivered' EVENT (0059), so the ledger has ONE writer.
+  //
+  // INTENTIONAL BEHAVIOUR CHANGE: a repeat call is now 200 + a second delivered event, where M1
+  // returned 409 already_actioned. That one-shot guard is precisely what made a partial delivery
+  // impossible to complete; the client's per-row busy flag still stops double-taps. Documented in
+  // docs/runbooks/job_materials.md and in material_catalog_admin.md's changed-behaviour note.
   app.post(
     "/api/fieldops/expected-material/:id/receive",
     gates.requireSession,
     gates.requireCapability("cap.materials.receive"),
-    (c) => actionExpectation(c, "received", "expected_material_receive", false),
+    async (c) => {
+      const res = await appendReceiptEvent(c, "delivered");
+      if (res.status !== 200) return res;
+      const body = (await res.json()) as {
+        id: number;
+        event_id: number | null;
+        status: string | null;
+      };
+      // Legacy success shape — the daily form reads `status` off this response. Pass through the
+      // PERSISTED status rather than asserting "received": on an incident-flagged line the sticky
+      // guard leaves it 'incident', and claiming otherwise would show the crew a resolved delivery
+      // that the office's Material List still flags as a problem.
+      return c.json({ ok: true, id: body.id, status: body.status, event_id: body.event_id }, 200);
+    },
   );
 
   // ── POST /api/fieldops/expected-material/:id/flag-incident — flag a delivery problem. ────────────
@@ -412,5 +712,154 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
     gates.requireSession,
     gates.requireCapability("cap.materials.receive"),
     (c) => actionExpectation(c, "incident", "expected_material_incident", true),
+  );
+
+  // ── PR2 SHIPMENT CRUD (office; cap.materials.manage) ────────────────────────────────────────
+  // A shipping-log row is a LOAD, not an expectation: one part number arrives across several
+  // trucks, each with its own ship date, delivery date and BOL. These routes are also PR3's
+  // insert target once the manifest importer lands.
+
+  type ShipmentFields = {
+    part_number: string | null;
+    bol_number: string | null;
+    carrier: string | null;
+    qty: number | null;
+    unit: string | null;
+    ship_date: string | null;
+    delivery_date: string | null;
+    seq: number;
+  };
+
+  function readShipmentFields(body: Record<string, unknown>): ShipmentFields | string {
+    const part_number = optText(body.part_number, MAX_PART_NUMBER);
+    if (part_number === "invalid") return "invalid_part_number";
+    const bol_number = optText(body.bol_number, MAX_BOL);
+    if (bol_number === "invalid") return "invalid_bol_number";
+    const carrier = optText(body.carrier, MAX_CARRIER);
+    if (carrier === "invalid") return "invalid_carrier";
+    const unit = optText(body.unit, MAX_UNIT);
+    if (unit === "invalid") return "invalid_unit";
+    const ship_date = optDate(body.ship_date);
+    if (ship_date === "invalid") return "invalid_ship_date";
+    const delivery_date = optDate(body.delivery_date);
+    if (delivery_date === "invalid") return "invalid_delivery_date";
+    let qty: number | null = null;
+    if (body.qty !== undefined && body.qty !== null && body.qty !== "") {
+      if (typeof body.qty !== "number" || !Number.isFinite(body.qty) || body.qty <= 0 || body.qty > MAX_QTY) {
+        return "invalid_qty";
+      }
+      qty = body.qty;
+    }
+    let seq = 0;
+    if (body.seq !== undefined) {
+      if (typeof body.seq !== "number" || !Number.isInteger(body.seq) || body.seq < 0 || body.seq > MAX_SEQ) {
+        return "invalid_seq";
+      }
+      seq = body.seq;
+    }
+    return { part_number, bol_number, carrier, qty, unit, ship_date, delivery_date, seq };
+  }
+
+  // ── POST /api/fieldops/material-shipment — attach a load to a line. ──────────────────────────
+  app.post(
+    "/api/fieldops/material-shipment",
+    gates.requireSession,
+    gates.requireCapability("cap.materials.manage"),
+    async (c) => {
+      const body = await readJsonBody(c);
+      if (body === null) return c.json({ error: "bad_request" }, 400);
+      if (typeof body.line_id !== "number" || !Number.isInteger(body.line_id) || body.line_id < 1) {
+        return c.json({ error: "invalid_line_id" }, 400);
+      }
+      const f = readShipmentFields(body);
+      if (typeof f === "string") return c.json({ error: f }, 400);
+      // Resolve the line to inherit its job_id — the denormalized copy the read scope, the prune
+      // guard and the purge cascade all key on.
+      const line = await c.env.DB.prepare(
+        "SELECT id, job_id FROM job_expected_materials WHERE id = ?1 AND active = 1",
+      )
+        .bind(body.line_id)
+        .first<{ id: number; job_id: string }>();
+      if (!line) return c.json({ error: "not_found" }, 404);
+
+      const actor = c.get("session").username;
+      const shipmentUuid = crypto.randomUUID();
+      const res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            `INSERT INTO material_shipments
+               (shipment_uuid, line_id, job_id, part_number, bol_number, carrier, qty, unit,
+                ship_date, delivery_date, seq, source, created_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'manual', ?12) RETURNING id`,
+          )
+          .bind(
+            shipmentUuid, line.id, line.job_id, f.part_number, f.bol_number, f.carrier, f.qty,
+            f.unit, f.ship_date, f.delivery_date, f.seq, actor,
+          ),
+        auditStmt(c, actor, "material_shipment_create", line.job_id, {
+          line_id: line.id, job_id: line.job_id, bol_number: f.bol_number, qty: f.qty,
+        }),
+      ]);
+      const newId = (res[0].results?.[0] as { id: number } | undefined)?.id ?? null;
+      return c.json({ ok: true, id: newId }, 201);
+    },
+  );
+
+  // ── POST /api/fieldops/material-shipment/:id/update — full-replace the content fields. ───────
+  // line_id is deliberately NOT re-assignable: moving a load to another line would have to keep
+  // the denormalized job_id in step. Delete and re-add instead.
+  app.post(
+    "/api/fieldops/material-shipment/:id/update",
+    gates.requireSession,
+    gates.requireCapability("cap.materials.manage"),
+    async (c) => {
+      const id = badId(c);
+      if (id === null) return c.json({ error: "invalid_id" }, 400);
+      const body = await readJsonBody(c);
+      if (body === null) return c.json({ error: "bad_request" }, 400);
+      const f = readShipmentFields(body);
+      if (typeof f === "string") return c.json({ error: f }, 400);
+
+      const actor = c.get("session").username;
+      const res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            `UPDATE material_shipments
+                SET part_number = ?2, bol_number = ?3, carrier = ?4, qty = ?5, unit = ?6,
+                    ship_date = ?7, delivery_date = ?8, seq = ?9
+              WHERE id = ?1 AND active = 1`,
+          )
+          .bind(
+            id, f.part_number, f.bol_number, f.carrier, f.qty, f.unit, f.ship_date,
+            f.delivery_date, f.seq,
+          ),
+        auditStmtIfChanged(c, actor, "material_shipment_update", String(id), {
+          shipment_id: id, bol_number: f.bol_number, qty: f.qty,
+        }),
+      ]);
+      if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_found" }, 404);
+      return c.json({ ok: true, id }, 200);
+    },
+  );
+
+  // ── POST /api/fieldops/material-shipment/:id/delete — deactivate (soft, idempotent). ─────────
+  app.post(
+    "/api/fieldops/material-shipment/:id/delete",
+    gates.requireSession,
+    gates.requireCapability("cap.materials.manage"),
+    async (c) => {
+      const id = badId(c);
+      if (id === null) return c.json({ error: "invalid_id" }, 400);
+      const actor = c.get("session").username;
+      const res = await c.env.DB.batch([
+        c.env.DB.prepare("UPDATE material_shipments SET active = 0 WHERE id = ?1 AND active = 1").bind(id),
+        auditStmtIfChanged(c, actor, "material_shipment_deactivate", String(id), { shipment_id: id }),
+      ]);
+      if ((res[0].meta.changes ?? 0) === 0) {
+        const row = await c.env.DB.prepare("SELECT id FROM material_shipments WHERE id = ?1").bind(id).first();
+        return row ? c.json({ ok: true, id, already_inactive: true }, 200) : c.json({ error: "not_found" }, 404);
+      }
+      return c.json({ ok: true, id }, 200);
+    },
   );
 }

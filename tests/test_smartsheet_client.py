@@ -1679,6 +1679,12 @@ _TRANSLATE_IDEMPOTENCY = {
     "create_sheet_in_folder": {False},
     "delete_sheet": {False},
     "move_sheet_to_folder": {False},
+    # Track 6 folder relocation — all three are WRITES. A folder move is not idempotent in
+    # the retry sense: re-issuing after an ambiguous 5xx could act on a folder that has
+    # already re-parented, so `is_transient_error()` must never call these self-healing.
+    "move_folder_to_folder": {False},
+    "move_folder_to_workspace": {False},
+    "rename_folder": {False},
     "attach_pdf_to_row": {False},
     # reads the live column list (True), then UPDATEs each column (False) — the one helper
     # that legitimately does both, which is why the table holds a SET per function.
@@ -1896,6 +1902,94 @@ def test_move_sheet_to_folder_translates_error(mocker):
     client.Sheets.move_sheet.side_effect = _api_error(404, message="gone")
     with pytest.raises(SmartsheetNotFoundError):
         smartsheet_client.move_sheet_to_folder(1, 2)
+
+
+# ---- Track 6 folder relocation (move / rename / probes) ----------------------
+
+
+def test_move_folder_to_folder_calls_sdk_with_folder_destination(mocker):
+    client = _install_client(mocker)
+    smartsheet_client.move_folder_to_folder(111, 222)
+    client.Folders.move_folder.assert_called_once()
+    args, _ = client.Folders.move_folder.call_args
+    assert args[0] == 111
+    dest = args[1]
+    assert isinstance(dest, smartsheet.models.ContainerDestination)
+    assert dest.destination_type == "folder"
+    assert dest.destination_id == 222
+    # A MOVE relocates. It must never route through a delete, and must not rename
+    # (the API ignores new_name on /move — see the live footgun test).
+    assert dest.new_name is None
+    client.Folders.delete_folder.assert_not_called()
+
+
+def test_move_folder_to_workspace_uses_the_workspace_destination_type(mocker):
+    # The restore leg: a per-job Safety/Progress folder's source parent is a WORKSPACE,
+    # not a folder, so un-archiving needs this variant.
+    client = _install_client(mocker)
+    smartsheet_client.move_folder_to_workspace(111, 333)
+    args, _ = client.Folders.move_folder.call_args
+    assert args[1].destination_type == "workspace"
+    assert args[1].destination_id == 333
+
+
+def test_rename_folder_sends_only_the_name(mocker):
+    client = _install_client(mocker)
+    smartsheet_client.rename_folder(111, "Safety")
+    client.Folders.update_folder.assert_called_once()
+    args, _ = client.Folders.update_folder.call_args
+    assert args[0] == 111
+    assert isinstance(args[1], smartsheet.models.Folder)
+    assert args[1].name == "Safety"
+
+
+@pytest.mark.parametrize(
+    "fn, call",
+    [
+        ("move_folder_to_folder", lambda: smartsheet_client.move_folder_to_folder(1, 2)),
+        ("move_folder_to_workspace", lambda: smartsheet_client.move_folder_to_workspace(1, 2)),
+        ("rename_folder", lambda: smartsheet_client.rename_folder(1, "x")),
+    ],
+)
+def test_folder_writes_translate_errors(mocker, fn, call):
+    client = _install_client(mocker)
+    client.Folders.move_folder.side_effect = _api_error(404, message="gone")
+    client.Folders.update_folder.side_effect = _api_error(404, message="gone")
+    with pytest.raises(SmartsheetNotFoundError):
+        call()
+
+
+def test_folder_writes_are_not_retry_enrolled():
+    # A failed folder WRITE must never be re-issued in-process: the archive's correct retry
+    # is durable and cross-cycle (re-drained from its queue with the ledger intact).
+    for name in ("move_folder_to_folder", "move_folder_to_workspace", "rename_folder"):
+        assert name not in smartsheet_client._TRANSIENT_RETRY_ENROLLED
+
+
+def test_get_folder_name_reads_the_name_field(mocker):
+    mocker.patch.object(smartsheet_client.keychain, "get_secret", return_value="tok")
+    resp = mocker.Mock(status_code=200)
+    resp.json.return_value = {"id": 111, "name": "Bradley 1"}
+    mocker.patch.object(smartsheet_client.requests, "get", return_value=resp)
+    assert smartsheet_client.get_folder_name(111) == "Bradley 1"
+
+
+def test_get_workspace_access_level_reads_accesslevel(mocker):
+    mocker.patch.object(smartsheet_client.keychain, "get_secret", return_value="tok")
+    resp = mocker.Mock(status_code=200)
+    resp.json.return_value = {"id": 9, "accessLevel": "ADMIN"}
+    mocker.patch.object(smartsheet_client.requests, "get", return_value=resp)
+    assert smartsheet_client.get_workspace_access_level(9) == "ADMIN"
+
+
+def test_get_workspace_access_level_missing_field_fails_closed(mocker):
+    # '' is not ADMIN, so a caller comparing against the allowed set refuses the move.
+    # Guessing a level here would be the fail-OPEN mistake.
+    mocker.patch.object(smartsheet_client.keychain, "get_secret", return_value="tok")
+    resp = mocker.Mock(status_code=200)
+    resp.json.return_value = {"id": 9}
+    mocker.patch.object(smartsheet_client.requests, "get", return_value=resp)
+    assert smartsheet_client.get_workspace_access_level(9) == ""
 
 
 # ---- delete_sheet_settling (probe create→delete eventual-consistency retry) ---

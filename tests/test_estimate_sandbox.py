@@ -82,3 +82,126 @@ def test_happy_path_round_trip_through_real_child():
         "echo_len": len(payload),
         "echo_sha256": hashlib.sha256(payload).hexdigest(),
     }
+
+
+# ---- extract_xlsx_rows (PR3b materials-manifest grid extraction) --------------------
+#
+# Same NO-MOCKS rule: every case below spawns a REAL child over a REAL workbook built
+# in-process by openpyxl — the whole point of relocating openpyxl into the sandbox is
+# that the parse happens in another process, and only a live child proves that.
+
+
+def _xlsx_bytes(rows_by_sheet: dict[str, list[list[object]]]) -> bytes:
+    """A real .xlsx in memory. openpyxl is imported HERE (test-side) deliberately —
+    the module under test must only ever load it inside the child."""
+    import io  # noqa: PLC0415 — test-local by design
+
+    import openpyxl  # noqa: PLC0415 — test-local by design
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for title, rows in rows_by_sheet.items():
+        ws = wb.create_sheet(title=title)
+        for row in rows:
+            ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _extract(data: bytes, sheets: str = "20") -> bytes | None:
+    return estimate_sandbox.run_sandboxed(
+        "extract_xlsx_rows", data, timeout_s=estimate_sandbox.XLSX_TIMEOUT_S, args=[sheets]
+    )
+
+
+def test_extract_xlsx_rows_round_trips_a_real_workbook_through_a_real_child():
+    """(f) The new fn is DISPATCHED, not swallowed by the trailing `else:` — which
+    falls through to the allocation bomb, so a missing branch would look like a
+    plain timeout rather than an error."""
+    out = _extract(_xlsx_bytes({"Export": [["Part Number", "Qty"], ["7006955", 4]]}))
+    assert out is not None, "extract_xlsx_rows returned None — is its dispatch branch missing?"
+    doc = json.loads(out)
+    assert [s["name"] for s in doc["sheets"]] == ["Export"]
+    assert doc["sheets"][0]["rows"][0] == ["Part Number", "Qty"]
+
+
+def test_extract_xlsx_rows_preserves_numeric_type_so_part_numbers_survive():
+    """THE fidelity control. A part number stored as a NUMBER must reach the parser as
+    a number: manifest_parse.normalize_cell renders a float 7006955.0 as "7006955" but
+    a str "7006955.0" as "7006955.0", which matches no part on earth. A child that
+    str()'d every cell would pass the round-trip test above and still corrupt every
+    numeric part number in the corpus."""
+    from field_ops.manifest_parse import normalize_cell  # noqa: PLC0415 — test-local
+
+    out = _extract(_xlsx_bytes({"Sheet1": [["Part Number", "Qty"], [7006955, 4]]}))
+    assert out is not None
+    cell = json.loads(out)["sheets"][0]["rows"][1][0]
+    assert not isinstance(cell, str), f"part number arrived as str — numeric type lost: {cell!r}"
+    assert normalize_cell(cell) == "7006955"
+
+
+def test_extract_xlsx_rows_stringifies_datetimes_into_the_parsers_iso_form():
+    """json.dumps cannot encode a datetime, so the child must stringify it — into the
+    exact "YYYY-MM-DD 00:00:00" shape normalize_cell's regex collapses to a date. An
+    un-stringified datetime would raise in the child and lose the whole workbook."""
+    import datetime  # noqa: PLC0415 — test-local by design
+
+    from field_ops.manifest_parse import normalize_cell  # noqa: PLC0415 — test-local
+
+    out = _extract(_xlsx_bytes({"Sheet1": [["Ship Date"], [datetime.datetime(2026, 6, 26)]]}))
+    assert out is not None
+    cell = json.loads(out)["sheets"][0]["rows"][1][0]
+    assert cell == "2026-06-26 00:00:00"
+    assert normalize_cell(cell) == "2026-06-26"
+
+
+def test_extract_xlsx_rows_bounds_rows_and_columns_in_the_child():
+    """The caps are enforced AS THE GRID IS BUILT. MAX_CHILD_STDOUT_BYTES is a
+    parent-side check that only fires once the child has already materialized the
+    payload, so an over-declared workbook must be truncated child-side or it exhausts
+    the child before the parent can refuse it."""
+    wide = [[f"c{i}" for i in range(estimate_sandbox.MANIFEST_XLSX_MAX_COLS_PER_ROW + 25)]]
+    tall = [[i] for i in range(estimate_sandbox.MANIFEST_XLSX_MAX_ROWS_PER_SHEET + 40)]
+    out = _extract(_xlsx_bytes({"Wide": wide, "Tall": tall}))
+    assert out is not None
+    sheets = {s["name"]: s["rows"] for s in json.loads(out)["sheets"]}
+    assert len(sheets["Wide"][0]) == estimate_sandbox.MANIFEST_XLSX_MAX_COLS_PER_ROW
+    assert len(sheets["Tall"]) == estimate_sandbox.MANIFEST_XLSX_MAX_ROWS_PER_SHEET
+
+
+def test_extract_xlsx_rows_bounds_a_single_hostile_cell():
+    """One cell holding megabytes of text must not ride into D1 and then into the
+    validate screen's grid."""
+    out = _extract(_xlsx_bytes({"S": [["x" * (estimate_sandbox.MANIFEST_XLSX_MAX_CELL_CHARS + 500)]]}))
+    assert out is not None
+    assert len(json.loads(out)["sheets"][0]["rows"][0][0]) == estimate_sandbox.MANIFEST_XLSX_MAX_CELL_CHARS
+
+
+def test_extract_xlsx_rows_max_sheets_arg_is_honoured():
+    """The single int argv slot means max SHEETS for this fn (it means max PAGES for
+    the PDF fns) — the dispatch reuses one parameter across differently-shaped fns."""
+    out = _extract(_xlsx_bytes({"A": [[1]], "B": [[2]], "C": [[3]]}), sheets="2")
+    assert out is not None
+    assert [s["name"] for s in json.loads(out)["sheets"]] == ["A", "B"]
+
+
+def test_extract_xlsx_rows_on_non_workbook_bytes_degrades_to_none():
+    """A hostile / corrupt container raises in the child → nonzero exit → None. The
+    caller refuses the manifest; the daemon never sees an exception."""
+    assert _extract(b"not a workbook at all \x00\xff") is None
+
+
+def test_openpyxl_is_never_imported_at_sandbox_module_level():
+    """The whole point of the relocation: importing estimate_sandbox must NOT pull
+    openpyxl into the daemon process. The import lives inside the child fn body, where
+    only the child ever evaluates it."""
+    import ast  # noqa: PLC0415 — test-local by design
+    import pathlib  # noqa: PLC0415 — test-local by design
+
+    tree = ast.parse(pathlib.Path(estimate_sandbox.__file__).read_text(encoding="utf-8"))
+    for node in tree.body:  # module level ONLY — nested child-fn imports are the design
+        if isinstance(node, ast.Import):
+            assert all("openpyxl" not in a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert "openpyxl" not in (node.module or "")

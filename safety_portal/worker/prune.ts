@@ -328,16 +328,37 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
   // and a single NULL inside a NOT-IN subquery poisons the whole predicate to NULL
   // (nothing would EVER be deleted — a silent full-stage disable). Their subqueries
   // therefore filter `WHERE job_id IS NOT NULL`.
+  //
+  // ARCHIVE GUARD (`archive_state = 'none'`, migration 0058). An ARCHIVED job has active = 0, and
+  // a job whose only remaining artifacts are Smartsheet folders and Box files holds NONE of the
+  // eight guarded D1 record types — so without this predicate the very next 09:00 cron deletes the
+  // jobs row, taking archive_state, archive_detail, archive_folder_key and the recorded source
+  // locations with it. That record is the ONLY place the un-archive path can learn where each
+  // container came from, so losing it makes the archive irreversible. And this stage has NO age
+  // cutoff at all (inactiveCutoff belongs to the submissions stage), so the window is not
+  // "eventually" — it is the next nightly run.
+  //
+  // Semantically exact rather than merely defensive: a job that has ever entered the archive
+  // workflow is a deliberate, audited record, not dead weight. A COMPLETED un-archive resets
+  // archive_state to 'none', at which point the job becomes prunable again — and by then it is
+  // lifecycle='inactive' with active = 0, which is precisely the pre-existing behaviour.
   const jobs = await runStage("jobs", failedStages, async () => {
     const r = await db
       .prepare(
         "DELETE FROM jobs WHERE active = 0 " +
+          "AND archive_state = 'none' " +
           "AND job_id NOT IN (SELECT job_id FROM submissions) " +
           "AND job_id NOT IN (SELECT job_id FROM time_entries) " +
           "AND job_id NOT IN (SELECT job_id FROM task_assignments) " +
           "AND job_id NOT IN (SELECT job_id FROM inspections) " +
           "AND job_id NOT IN (SELECT job_id FROM job_daily_requirements) " +
           "AND job_id NOT IN (SELECT job_id FROM job_expected_materials) " +
+          // PR3b (0060): a job holding an imported manifest is not dead weight — the pooled
+          // document is the provenance of its material list. This guard and purge-job's
+          // cascade must stay EXACTLY in step: anything guarded here and missing there is a
+          // row no path can ever remove, and anything cascaded there and missing here is a
+          // job prune can delete out from under its own manifest rows.
+          "AND job_id NOT IN (SELECT job_id FROM job_manifests) " +
           "AND job_id NOT IN (SELECT job_id FROM checklist_instances WHERE job_id IS NOT NULL) " +
           "AND job_id NOT IN (SELECT job_id FROM equipment_location WHERE job_id IS NOT NULL)",
       )

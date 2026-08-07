@@ -224,6 +224,16 @@ _ENTRIES: list[ConfigEntry] = [
         first_activation_gated=True,
         note="vendor-estimate importer (ADR-0004 Lane 1) — pause anytime; turning ON escalates (go-live preconditions in Description)",
     ),
+    # manifest_poll is the same generation-half shape: it files to Box and posts a grid
+    # back to our own Worker. Pause = plain Class A; the first activation escalates.
+    _e(
+        "field_ops.manifest_poll.polling_enabled",
+        "field_ops",
+        _SEND_GATES,
+        v_bool,
+        first_activation_gated=True,
+        note="materials-manifest importer (PR3b / ADR-0005) — pause anytime; turning ON escalates",
+    ),
     _e(
         "po_materials.rfq_poll.polling_enabled",
         "po_materials",
@@ -330,6 +340,10 @@ _ENTRIES: list[ConfigEntry] = [
     # --- data / paths ---
     _e("safety_reports.box.portal_root_folder_id", "safety_reports", _DATA, v_id),
     _e("progress_reports.box.portal_root_folder_id", "progress_reports", _DATA, v_id),
+    _e("field_ops.box.archive_root_folder_id", "field_ops", _DATA, v_id,
+       note="Box root the Track 6 job archive relocates a closed job's Safety + Progress "
+            "containers beneath; built by build_box_roots.py. Blank = the archive's Box leg "
+            "cannot resolve a destination and reports those containers as failed"),
     _e("system.operator_email", "global", _DATA, v_email),
     _e("system.heartbeat_url", "global", _DATA, v_url),
     _e("daemons.heartbeat_sheet_id", "global", _DATA, v_id),

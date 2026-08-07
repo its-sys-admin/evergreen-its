@@ -49,17 +49,17 @@ const ROWS: api.ExpectedMaterialRow[] = [
   {
     id: 1, material_id: 7, material_name: "Q.PEAK_DUO", description: null, qty: 40, unit: "panels",
     expected_date: "2026-07-10", status: "expected", received_at: null, received_by_name: null,
-    qty_received: null, note: null, seq: 10, line_uuid: "lu-1",
+    qty_received: null, note: null, seq: 10, line_uuid: "lu-1", part_number: null, category: null, expected_ship_date: null, receipt_status: null, qty_received_total: null,
   },
   {
     id: 2, material_id: null, material_name: null, description: "Rebar bundles", qty: 12, unit: "pallets",
     expected_date: null, status: "received", received_at: 1_700_000_000, received_by_name: "Mo Manager",
-    qty_received: 12, note: null, seq: 20, line_uuid: "lu-2",
+    qty_received: 12, note: null, seq: 20, line_uuid: "lu-2", part_number: null, category: null, expected_ship_date: null, receipt_status: null, qty_received_total: null,
   },
   {
     id: 3, material_id: null, material_name: null, description: "Crushed crate", qty: null, unit: null,
     expected_date: null, status: "incident", received_at: 1_700_000_100, received_by_name: null,
-    qty_received: null, note: "damaged", seq: 30, line_uuid: "lu-3",
+    qty_received: null, note: "damaged", seq: 30, line_uuid: "lu-3", part_number: null, category: null, expected_ship_date: null, receipt_status: null, qty_received_total: null,
   },
 ];
 
@@ -67,7 +67,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(useAuth).mockReturnValue(authWith([]));
-  vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: ROWS });
+  vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: ROWS, shipments: [], receipt_events: [] });
   vi.mocked(fetchMaterials).mockResolvedValue({ materials: CATALOG, next_cursor: null });
 });
 
@@ -105,7 +105,7 @@ describe("ExpectedMaterialsSection — gating", () => {
   });
 
   it("empty list → the explicit empty state (never a silent blank)", async () => {
-    vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: [] });
+    vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [] });
     const { container } = await renderSection(["cap.materials.receive"]);
     await waitFor(() => expect(container.textContent ?? "").toContain("No expected materials for this job."));
   });
@@ -113,7 +113,7 @@ describe("ExpectedMaterialsSection — gating", () => {
   it("load failure → error banner with a WORKING Retry", async () => {
     vi.mocked(api.fetchExpectedMaterials)
       .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({ expected_materials: ROWS });
+      .mockResolvedValueOnce({ expected_materials: ROWS, shipments: [], receipt_events: [] });
     const { container, getByText } = await renderSection(["cap.materials.receive"]);
     await waitFor(() => expect(container.textContent ?? "").toContain("Failed to load expected materials."));
     fireEvent.click(getByText("Retry"));

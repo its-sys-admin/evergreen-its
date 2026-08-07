@@ -331,9 +331,15 @@ export function FormFillPage({
         {returnTo ? (
           // R3 — pre-submit back/cancel returns to the deep-link origin (not Home); confirms first
           // when fields were touched.
-          <button type="button" className="btn btn--ghost" onClick={onReturnGuarded}>
-            ← {returnTo.label}
-          </button>
+          // --secondary, NOT --ghost: this sits on the light page ground (--c-surface), where the
+          // header ghost's white text + 60%-white border is invisible (~1.04:1). --secondary is the
+          // canonical in-page back control (FieldOpsJobTracker, EquipmentManageView, ...), and it
+          // matches the Submitted-screen twin below that already renders green.
+          <div className="dash-back-btn">
+            <button type="button" className="btn btn--secondary" onClick={onReturnGuarded}>
+              ← {returnTo.label}
+            </button>
+          </div>
         ) : null}
         {/* R3 — a deep-linked fill names the form it opened into instead of the generic heading. */}
         <h1 className="page__heading">{prefillFormName ?? "New safety form"}</h1>

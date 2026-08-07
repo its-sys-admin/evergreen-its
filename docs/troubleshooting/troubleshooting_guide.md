@@ -458,6 +458,25 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/safety_portal_job_management.md`
 
+#### A manager cannot mark a delivery on a job's Materials page, or a line shows the wrong received total, or a line still shows a problem after the goods arrived.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** no Delivered / Partially delivered buttons, forbidden_job, running total looks wrong, still shows Problem reported
+
+**Checks (in order):**
+- Marking needs cap.materials.receive AND a manager/admin role — a submitter holds the capability but not the role (the same gate the daily report uses).
+- Non-admins only reach the job they are PLACED on (personnel.current_job); a 403 forbidden_job is the designed scope, not a fault.
+- The received total is the SUM over an append-only ledger — open the line's history, which shows every event with its quantity, note, date and who recorded it.
+- The incident flag is STICKY by design; a delivery mark records the delivery without clearing the flag.
+
+**Resolutions (in order):**
+- Fix the role in Accounts or the placement on the job's crew, per the runbook.
+- A duplicate or mistaken ledger event is corrected by recording a FURTHER event — the ledger is append-only and has no delete path.
+- Correcting a total at source, or clearing a stuck incident flag, is Seth's — escalate.
+
+**See also:** runbook `docs/runbooks/job_materials.md`
+
 ### fieldops-sync mirrors dirty jobs UP into both Active-Jobs sheets
 
 | What happens | |
@@ -535,6 +554,48 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 - Apply the amendment via the documented time-amend procedure.
 
 **See also:** runbook `docs/runbooks/fieldops_time_amend.md`
+
+### manifest-poll screens, parses, and files an uploaded BOM / shipping log
+
+| What happens | |
+|---|---|
+| Daemon | `manifest-poll` |
+| Worker route | `GET /api/fieldops/manifests/internal/pending` |
+| Sheets | `ITS_Review_Queue` |
+| Config gates | `field_ops.manifest_poll.polling_enabled`, `po_materials.po_attach_screen.clamav_enabled` |
+
+**Healthy signals:**
+- With the gate on, an office-uploaded manifest is HMAC- and digest-verified, §34-screened, read in a killable sandbox child, filed to Box (job → Materials → Manifests), and lands `parsed` with a reviewable grid + proposed column map for the validate screen. It never commits a line by itself.
+
+#### Uploaded manifests are not being pulled or parsed.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** manifest-poll gate off, designed-dark, no marker written, manifest_creds_missing
+
+**Checks (in order):**
+- Is manifest-poll loaded AND field_ops.manifest_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design.
+- If both are on, look for manifest_creds_missing (CRITICAL) — the daemon is fail-closed and will not poll half-configured.
+
+**Resolutions (in order):**
+- Load the plist and flip the gate together; a first activation is a §44 capability action — confirm with Seth. Missing credentials always escalate.
+
+**See also:** runbook `docs/runbooks/material_manifest_import.md`
+
+#### An uploaded manifest was refused (unreadable, SUSPICIOUS/MALICIOUS) or failed integrity.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** manifest_unreadable, manifest_suspicious, manifest_malicious, manifest_integrity_failed
+
+**Checks (in order):**
+- Read the ITS_Review_Queue row. An unreadable document (a scan, an empty export, no header row) is ORDINARY — ask the office for a text-based PDF or the source spreadsheet.
+- A security_flag row is not a readability problem; an integrity failure means the bytes disagree with what was signed.
+
+**Resolutions (in order):**
+- For a readability refusal only, clear that manifest's id from state/manifest_poll_flagged.json to retry. NEVER clear a flag for a MALICIOUS verdict or an integrity failure — both escalate, and the bytes are retained for investigation.
+
+**See also:** runbook `docs/runbooks/material_manifest_import.md`
 
 ## Purchase order — build, config, pull/render/file, send
 

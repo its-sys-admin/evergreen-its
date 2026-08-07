@@ -32,6 +32,9 @@ describe("router — round-trip law", () => {
     { view: "fieldops-inspections" },
     { view: "fieldops-equipment" },
     { view: "fieldops-personnel" },
+    { view: "fieldops-job-materials", jobId: "JOB-000018" },
+    // A job id needing percent-encoding — the /jobs/:id/materials matcher must decode it back.
+    { view: "fieldops-job-materials", jobId: "JOB 42/A" },
     { view: "fieldops-tasks" },
     { view: "fieldops-tasks", tab: "assigned" },
     { view: "fieldops-tasks", tab: "daily" },
@@ -144,6 +147,7 @@ describe("router — VIEW_CAPS gate map", () => {
       subcontractors: "cap.subcontracts.manage",
       "subcontract-builder": "cap.subcontracts.manage",
       "fieldops-jobs": "cap.jobtracker.read",
+      "fieldops-job-materials": "cap.materials.receive",
       "fieldops-tasks": "cap.tasks.own",
       "fieldops-inspections": "cap.checklist.manage",
       "fieldops-equipment": "cap.equipment.field",

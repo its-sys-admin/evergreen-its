@@ -6,6 +6,9 @@ import { HomePage, type HomeNav } from "./pages/HomePage";
 import { FormFillPage, type FormPrefill } from "./pages/FormFillPage";
 import { FormRequestPage } from "./pages/FormRequestPage";
 import { FieldOpsJobTracker } from "./pages/FieldOpsJobTracker";
+// EAGER on purpose: a manager marking a delivery is a field path, and the lazy split is reserved
+// for office-desk admin surfaces (a chunk-load failure mid-shift must not take the daily path down).
+import { JobMaterialsPage } from "./pages/JobMaterialsPage";
 import { FieldOpsMyTasks } from "./pages/FieldOpsMyTasks";
 import { FieldOpsInspections } from "./pages/FieldOpsInspections";
 import { FieldOpsEquipment } from "./pages/FieldOpsEquipment";
@@ -304,6 +307,13 @@ export function App() {
     setEditing(false);
     navigate({ view: "fieldops-jobs", jobId });
   };
+  // PR2: the per-job Materials page. Reached from the Job Tracker's expected-materials section
+  // and from the daily field report's material-receipt region — both deep links, no home card
+  // (the page is job-scoped, so there is no job-less entry point to put on the home grid).
+  const openJobMaterials = (jobId: string) => {
+    setEditing(false);
+    navigate({ view: "fieldops-job-materials", jobId });
+  };
 
   // The effective FormFillPage prefill: the route's shareable fields + the in-memory S5 draft.
   let fillPrefill: FormPrefill | undefined;
@@ -342,6 +352,16 @@ export function App() {
         onJobViewChange={(id) =>
           syncRouteUp({ view: "fieldops-jobs", jobId: id ?? undefined }, id === null)
         }
+        onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
+      />
+    );
+  } else if (route.view === "fieldops-job-materials" && allowed) {
+    page = (
+      <JobMaterialsPage
+        key={`${popEpoch}:${route.jobId}`}
+        jobId={route.jobId}
+        onHome={home}
+        onOpenJob={openJobTracker}
       />
     );
   } else if (route.view === "fieldops-tasks" && allowed) {
@@ -351,6 +371,7 @@ export function App() {
         onBack={home}
         onOpenForm={openForm}
         onOpenJob={has("cap.jobtracker.read") ? openJobTracker : undefined}
+        onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
         initialTab={route.tab}
         onTabChange={(t) => syncRouteUp({ view: "fieldops-tasks", tab: t }, true)}
       />

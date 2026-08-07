@@ -9,7 +9,14 @@ import type { ExpectedMaterialsResponse } from "../../worker/wire-types";
 // Wire shapes — SINGLE-SOURCED in worker/wire-types.ts (the Worker types its c.json payload with
 // the same definitions, so a shape drift fails the typecheck on both sides); re-exported here so
 // existing importers keep their path.
-export type { ExpectedMaterialRow, ExpectedMaterialStatus } from "../../worker/wire-types";
+export type {
+  ExpectedMaterialRow,
+  ExpectedMaterialStatus,
+  MaterialReceiptEventRow,
+  MaterialReceiptKind,
+  MaterialShipmentRow,
+} from "../../worker/wire-types";
+import type { MaterialReceiptKind } from "../../worker/wire-types";
 
 export async function fetchExpectedMaterials(jobId: string): Promise<ExpectedMaterialsResponse> {
   const res = await fetch(`/api/fieldops/expected-materials?job_id=${encodeURIComponent(jobId)}`, {
@@ -40,7 +47,24 @@ export interface ExpectedMaterialFields {
   description?: string;
   qty?: number;
   unit?: string;
+  /** The expected DELIVERY date (the column's 0031 meaning; the UI labels it so). */
   expected_date?: string;
+  // ── Materials tracking (PR2, 0059) ──────────────────────────────────────────────────────────
+  part_number?: string;
+  category?: string;
+  expected_ship_date?: string;
+}
+
+/** Fields for a scheduled load attached to a line. */
+export interface MaterialShipmentFields {
+  part_number?: string;
+  bol_number?: string;
+  carrier?: string;
+  qty?: number;
+  unit?: string;
+  ship_date?: string;
+  delivery_date?: string;
+  seq?: number;
 }
 
 export async function createExpectedMaterial(
@@ -66,12 +90,50 @@ export async function deactivateExpectedMaterial(id: number): Promise<void> {
   await postJson(`/api/fieldops/expected-material/${id}/delete`, {});
 }
 
-/** Confirm receipt (expected → received). Repeat → the Worker 409s already_actioned. */
+/** Confirm receipt — a 'delivered' mark. Kept for the daily form's existing button; under 0059 it
+ *  appends to the receipt ledger, so a REPEAT is now a legal second event, not a 409. */
 export async function receiveExpectedMaterial(
   id: number,
   opts: { qty_received?: number; note?: string } = {},
 ): Promise<void> {
   await postJson(`/api/fieldops/expected-material/${id}/receive`, opts);
+}
+
+/** The three-way delivery mark (PR2). Appends a receipt event; repeatable by design, because a
+ *  part number routinely arrives across several loads. `qty` is forbidden on not_delivered and
+ *  `note` is required there (the Worker 400s otherwise). */
+export async function markReceipt(
+  id: number,
+  body: {
+    kind: MaterialReceiptKind;
+    qty?: number;
+    note?: string;
+    event_date?: string;
+    shipment_id?: number;
+  },
+): Promise<{ event_id: number | null }> {
+  return postJson<{ ok: boolean; id: number; event_id: number | null; kind: MaterialReceiptKind }>(
+    `/api/fieldops/expected-material/${id}/receipt`,
+    body,
+  );
+}
+
+export async function createMaterialShipment(
+  lineId: number,
+  fields: MaterialShipmentFields,
+): Promise<{ id: number }> {
+  return postJson<{ ok: boolean; id: number }>("/api/fieldops/material-shipment", {
+    line_id: lineId,
+    ...fields,
+  });
+}
+
+export async function updateMaterialShipment(id: number, fields: MaterialShipmentFields): Promise<void> {
+  await postJson(`/api/fieldops/material-shipment/${id}/update`, fields);
+}
+
+export async function deactivateMaterialShipment(id: number): Promise<void> {
+  await postJson(`/api/fieldops/material-shipment/${id}/delete`, {});
 }
 
 /** Flag a delivery problem (expected → incident). note is REQUIRED (the Worker 400s without it). */

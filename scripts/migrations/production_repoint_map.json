@@ -107,6 +107,15 @@
       "resolve_box_root": "ITS Progress Reports",
       "category": "D",
       "notes": "Production Box root folder id — resolved LIVE at commit, exact-name match, refuse ambiguity/absence. Folder name copied from standup.BOX_ROOT_CONFIG_ROWS."
+    },
+    {
+      "setting": "field_ops.box.archive_root_folder_id",
+      "workstream": "field_ops",
+      "from_mirror": null,
+      "to_production": null,
+      "resolve_box_root": "ITS Archive",
+      "category": "D",
+      "notes": "Production Box root id for the Track 6 job archive — resolved LIVE at commit, exact-name match, refuse ambiguity/absence. Folder name copied from standup.BOX_ROOT_CONFIG_ROWS. Enrolling this row required adding the '.archive_root_folder_id' suffix to ALLOWED_SETTING_SUFFIXES: without it the guard silently SKIPS the row and the production tenant keeps a sandbox folder id, archiving closed jobs into the mirror with no error."
     }
   ]
 }

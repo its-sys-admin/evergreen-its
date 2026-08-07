@@ -645,6 +645,11 @@ _TRANSIENT_RETRY_ENROLLED: frozenset[str] = frozenset({
     "find_folder_by_name_in_workspace",
     "list_workspace_share_emails",
     "get_workspace_name",
+    # Track 6 archive primitives — pure GETs. The three folder WRITES that accompany them
+    # (move_folder_to_folder / move_folder_to_workspace / rename_folder) are deliberately
+    # absent: an archive's correct retry is durable and cross-cycle, not in-process.
+    "get_folder_name",
+    "get_workspace_access_level",
 })
 
 
@@ -1809,6 +1814,157 @@ def move_sheet_to_folder(sheet_id: int, folder_id: int) -> None:
         get_client().Sheets.move_sheet(sheet_id, dest)
     except sdk_exc.SmartsheetException as e:
         raise _translate(e, idempotent=False) from e
+
+
+# ── Folder-level relocation (ROADMAP Track 6) ───────────────────────────────────────────
+#
+# A job owns a FOLDER per workstream, not a loose set of sheets, so archiving a job means
+# moving folders. One `move_folder` relocates everything inside — sub-folders, sheets,
+# reports, dashboards — in a single call, which is the whole reason these exist rather than
+# a loop over `move_sheet_to_folder`.
+#
+# THE MOVE ENDPOINT CANNOT RENAME. `POST /folders/{id}/move` accepts only `destinationType`
+# + `destinationId`; `newName` belongs to `POST /folders/{id}/copy`. The SDK's
+# `ContainerDestination` model is SHARED between copy and move and therefore exposes a
+# `new_name` field — set it on a move and it serializes, is ignored, and you get a silently
+# un-renamed folder. Rename with `rename_folder` as a second call.
+#
+# PERMISSIONS. The move endpoint requires the `ADMIN_WORKSPACES` scope. ITS authenticates
+# with a PAT, which carries the acting user's own permissions, so the token identity must
+# hold ADMIN on BOTH the source and destination workspaces. Probe with
+# `get_workspace_access_level` rather than discovering it as a runtime 403.
+#
+# SHARING. Moving a folder ACROSS workspaces changes who can READ its contents — Smartsheet
+# sharing is inherited from the workspace. That is a real, silent consequence (Op Stds §46:
+# workspace membership carries approval semantics), not a footnote.
+
+
+@_breaker_guard
+def move_folder_to_folder(folder_id: int, dest_folder_id: int) -> None:
+    """MOVE (never delete) a folder — and everything inside it — into `dest_folder_id`.
+
+    Pure relocation: the folder keeps its ID, and the sheets it contains keep their IDs,
+    permalinks, and cell history (contrast `copy_folder`, which mints new objects and
+    explicitly does NOT carry cell history).
+
+    Does NOT rename — see the section note above. Idempotency is the CALLER's concern:
+    this always issues the move, so a caller must decide "already moved?" itself — and must
+    NOT decide it by name, because the find-or-create paths in `week_sheet` / `hours_log` /
+    `job_sheet` can re-create that name in the source at any time. Key the decision off the
+    recorded folder ID via `get_folder_name`.
+
+    Raises the typed hierarchy: `SmartsheetNotFoundError` on a dead source or destination,
+    `SmartsheetPermissionError` (403) when the token lacks ADMIN on either end.
+    """
+    dest = smartsheet.models.ContainerDestination({
+        "destination_type": "folder",
+        "destination_id": dest_folder_id,
+    })
+    try:
+        get_client().Folders.move_folder(folder_id, dest)
+    except sdk_exc.SmartsheetException as e:
+        raise _translate(e, idempotent=False) from e
+
+
+@_breaker_guard
+def move_folder_to_workspace(folder_id: int, workspace_id: int) -> None:
+    """MOVE a folder to a WORKSPACE root (the `destination_type='workspace'` variant).
+
+    Not speculative: the per-job Safety and Progress folders sit directly under their
+    workspace, not inside a parent folder, so restoring one out of the archive needs this
+    variant. Two named wrappers rather than one parameterized function, matching the
+    existing `..._in_folder` / `..._in_workspace` idiom in this module.
+
+    Same contract as `move_folder_to_folder` — see it and the section note above.
+    """
+    dest = smartsheet.models.ContainerDestination({
+        "destination_type": "workspace",
+        "destination_id": workspace_id,
+    })
+    try:
+        get_client().Folders.move_folder(folder_id, dest)
+    except sdk_exc.SmartsheetException as e:
+        raise _translate(e, idempotent=False) from e
+
+
+@_breaker_guard
+def rename_folder(folder_id: int, new_name: str) -> None:
+    """Rename a folder in place (`PUT /folders/{id}` via `Folders.update_folder`).
+
+    Exists because the move endpoint cannot rename (section note above), so reaching
+    `Archive / <Job> / Safety` is a two-call sequence: move, then rename. That sequence is
+    NOT atomic — a crash between them leaves a folder that moved but kept its old name.
+    This call is naturally idempotent (PUT the same name twice ⇒ same state), which is what
+    makes that intermediate state safely resumable rather than a wedge.
+
+    Ordering matters and belongs to the caller: move-then-rename on the way IN (renaming
+    first would hide the folder from the live find-or-create paths, which would then create
+    a duplicate beside it), rename-then-move on the way back OUT (so the folder already
+    carries its live name the moment it lands where those paths look).
+    """
+    try:
+        get_client().Folders.update_folder(
+            folder_id, smartsheet.models.Folder({"name": new_name})
+        )
+    except sdk_exc.SmartsheetException as e:
+        raise _translate(e, idempotent=False) from e
+
+
+@_breaker_guard
+@_transient_retry
+def get_folder_name(folder_id: int) -> str:
+    """Live folder name for ``folder_id`` (`GET /folders/{id}`).
+
+    The archive resume probe. After a crash mid-sequence a container may have moved but not
+    been renamed, so "did this already finish?" cannot be answered by looking for a name in
+    the SOURCE (the live creators re-make that name on the next filing) — it is answered by
+    reading the RECORDED folder id's current name and comparing it to the expected label.
+    Also disambiguates the pathological case of a job literally named "Safety".
+
+    Direct REST for the same reasons as `get_workspace_name` (no SDK DeprecationWarning, no
+    within-session stale reads). Idempotent GET, so retry-enrolled.
+    """
+    token = keychain.get_secret("ITS_SMARTSHEET_TOKEN")
+    url = f"https://api.smartsheet.com/2.0/folders/{folder_id}"
+    context = f"fetching folder {folder_id} name"
+    try:
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=30
+        )
+    except requests.RequestException as e:
+        raise SmartsheetTransientError(f"{context}: {e!r}") from e
+    _translate_smartsheet_error(response, context=context, idempotent=True)
+    return str(response.json().get("name", ""))
+
+
+@_breaker_guard
+@_transient_retry
+def get_workspace_access_level(workspace_id: int) -> str:
+    """The TOKEN IDENTITY's access level on ``workspace_id`` (e.g. ``ADMIN`` / ``OWNER``).
+
+    The pre-flight for folder moves, which need `ADMIN_WORKSPACES`. Without it a move fails
+    403 only AFTER an operator has pressed Archive, and only for whichever containers got
+    that far — a half-archived job caused purely by a permissions gap. Probing up front
+    turns that into one loud, actionable refusal before anything moves.
+
+    Precedent: `verify_write_capability` probes rather than assumes. The difference is that
+    one tests transport CAPABILITY while this tests authorization POSTURE, so the policy
+    decision (what to do when it is insufficient) belongs to the caller, not here.
+
+    Returns '' when the API omits the field rather than guessing a level — '' is not ADMIN,
+    so a caller comparing against an allowed set fails CLOSED.
+    """
+    token = keychain.get_secret("ITS_SMARTSHEET_TOKEN")
+    url = f"https://api.smartsheet.com/2.0/workspaces/{workspace_id}"
+    context = f"fetching workspace {workspace_id} access level"
+    try:
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {token}"}, timeout=30
+        )
+    except requests.RequestException as e:
+        raise SmartsheetTransientError(f"{context}: {e!r}") from e
+    _translate_smartsheet_error(response, context=context, idempotent=True)
+    return str(response.json().get("accessLevel", ""))
 
 
 def delete_sheet_settling(

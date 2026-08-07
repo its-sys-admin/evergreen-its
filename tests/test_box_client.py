@@ -607,6 +607,83 @@ def test_get_or_create_folder_conflict_refinds_existing(mocker):
     assert fid == "88"  # adopted the racer's folder, did not raise
 
 
+# ---- move_folder (Track 6 archive) -------------------------------------------
+
+
+def test_move_folder_moves_and_renames_in_one_call(mocker):
+    """The Box/Smartsheet asymmetry, pinned.
+
+    boxsdk emits a single PUT carrying both parent and name, so there is no
+    moved-but-not-renamed crash window here — unlike the Smartsheet path, which needs a
+    two-call move-then-rename. If this ever becomes two calls, the resume logic on the Box
+    side has to grow an intermediate state it currently does not need.
+    """
+    _oauth, _client_cls, instance = _install_mocked_sdk(mocker)
+    instance.folder.return_value.move.return_value = SimpleNamespace(
+        id="500", name="Safety", parent=SimpleNamespace(id="900")
+    )
+
+    out = box_client.move_folder("500", "900", new_name="Safety")
+
+    assert out == {"id": "500", "name": "Safety", "parent_id": "900"}
+    instance.folder.return_value.move.assert_called_once()
+    args, _ = instance.folder.return_value.move.call_args
+    assert args[1] == "Safety"  # the rename rides the SAME call
+
+
+def test_move_folder_without_a_rename_passes_none(mocker):
+    _oauth, _client_cls, instance = _install_mocked_sdk(mocker)
+    instance.folder.return_value.move.return_value = SimpleNamespace(
+        id="500", name="Coker", parent=SimpleNamespace(id="900")
+    )
+
+    box_client.move_folder("500", "900")
+
+    args, _ = instance.folder.return_value.move.call_args
+    assert args[1] is None
+
+
+def test_move_folder_409_adopts_when_the_existing_child_is_this_folder(mocker):
+    """Replay, not collision: a prior run already moved+renamed it, so the retry no-ops.
+
+    This is what lets the resume path re-issue the move without checking first.
+    """
+    _oauth, _client_cls, instance = _install_mocked_sdk(mocker)
+    instance.folder.return_value.move.side_effect = _box_api_error(409, message="item_name_in_use")
+    instance.folder.return_value.get_items.return_value = [_folder_item("500", "Safety")]
+
+    out = box_client.move_folder("500", "900", new_name="Safety")
+
+    assert out == {"id": "500", "name": "Safety", "parent_id": "900"}
+
+
+def test_move_folder_409_raises_when_a_different_folder_holds_the_name(mocker):
+    """A genuine collision must be loud.
+
+    There is no merge primitive on either system, so silently adopting someone else's
+    folder would fuse two job trees irreversibly.
+    """
+    _oauth, _client_cls, instance = _install_mocked_sdk(mocker)
+    instance.folder.return_value.move.side_effect = _box_api_error(409, message="item_name_in_use")
+    instance.folder.return_value.get_items.return_value = [_folder_item("777", "Safety")]
+
+    with pytest.raises(BoxConflictError):
+        box_client.move_folder("500", "900", new_name="Safety")
+
+
+def test_box_client_exposes_no_folder_delete_primitive():
+    """MOVE-ONLY by construction (prove-it-bites for the design constraint).
+
+    A "move failed → delete and re-upload" recovery would be catastrophic and irreversible,
+    so the primitive that would enable it must simply not exist in this module.
+    """
+    for banned in ("delete_folder", "rename_folder", "delete_file"):
+        assert not hasattr(box_client, banned), (
+            f"box_client.{banned} appeared — the archive path is MOVE-ONLY on purpose; "
+            f"adding a delete primitive re-opens a destructive recovery route"
+        )
+
+
 def test_upload_bytes_oauth_exception_raises_box_auth(mocker):
     _oauth, _client_cls, instance = _install_mocked_sdk(mocker)
     instance.folder.return_value.upload_stream.side_effect = BoxOAuthException(

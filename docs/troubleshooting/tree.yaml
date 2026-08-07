@@ -337,6 +337,22 @@ workflows:
               - Correct the personnel record / mapping per the job-management runbook.
             class: daniel_solo
             runbook: docs/runbooks/safety_portal_job_management.md
+          - id: materials_marking
+            symptom: >-
+              A manager cannot mark a delivery on a job's Materials page, or a line shows the wrong
+              received total, or a line still shows a problem after the goods arrived.
+            signals: ["no Delivered / Partially delivered buttons", "forbidden_job", "running total looks wrong", "still shows Problem reported"]
+            checks:
+              - Marking needs cap.materials.receive AND a manager/admin role — a submitter holds the capability but not the role (the same gate the daily report uses).
+              - Non-admins only reach the job they are PLACED on (personnel.current_job); a 403 forbidden_job is the designed scope, not a fault.
+              - The received total is the SUM over an append-only ledger — open the line's history, which shows every event with its quantity, note, date and who recorded it.
+              - The incident flag is STICKY by design; a delivery mark records the delivery without clearing the flag.
+            resolutions:
+              - Fix the role in Accounts or the placement on the job's crew, per the runbook.
+              - A duplicate or mistaken ledger event is corrected by recording a FURTHER event — the ledger is append-only and has no delete path.
+              - Correcting a total at source, or clearing a stuck incident flag, is Seth's — escalate.
+            class: seth_coresolve
+            runbook: docs/runbooks/job_materials.md
       - id: job_mirror
         title: fieldops-sync mirrors dirty jobs UP into both Active-Jobs sheets
         what_happens:
@@ -391,6 +407,36 @@ workflows:
               - Apply the amendment via the documented time-amend procedure.
             class: daniel_solo
             runbook: docs/runbooks/fieldops_time_amend.md
+      - id: manifest_import
+        title: manifest-poll screens, parses, and files an uploaded BOM / shipping log
+        what_happens:
+          daemon: manifest-poll
+          worker_route: GET /api/fieldops/manifests/internal/pending
+          sheets: [ITS_Review_Queue]
+          config_gates: [field_ops.manifest_poll.polling_enabled, po_materials.po_attach_screen.clamav_enabled]
+        healthy_signals:
+          - With the gate on, an office-uploaded manifest is HMAC- and digest-verified, §34-screened, read in a killable sandbox child, filed to Box (job → Materials → Manifests), and lands `parsed` with a reviewable grid + proposed column map for the validate screen. It never commits a line by itself.
+        failure_modes:
+          - id: manifest_poll_dark
+            symptom: Uploaded manifests are not being pulled or parsed.
+            signals: ["manifest-poll gate off", "designed-dark", "no marker written", "manifest_creds_missing"]
+            checks:
+              - Is manifest-poll loaded AND field_ops.manifest_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design.
+              - If both are on, look for manifest_creds_missing (CRITICAL) — the daemon is fail-closed and will not poll half-configured.
+            resolutions:
+              - Load the plist and flip the gate together; a first activation is a §44 capability action — confirm with Seth. Missing credentials always escalate.
+            class: seth_coresolve
+            runbook: docs/runbooks/material_manifest_import.md
+          - id: manifest_refused
+            symptom: An uploaded manifest was refused (unreadable, SUSPICIOUS/MALICIOUS) or failed integrity.
+            signals: ["manifest_unreadable", "manifest_suspicious", "manifest_malicious", "manifest_integrity_failed"]
+            checks:
+              - Read the ITS_Review_Queue row. An unreadable document (a scan, an empty export, no header row) is ORDINARY — ask the office for a text-based PDF or the source spreadsheet.
+              - A security_flag row is not a readability problem; an integrity failure means the bytes disagree with what was signed.
+            resolutions:
+              - For a readability refusal only, clear that manifest's id from state/manifest_poll_flagged.json to retry. NEVER clear a flag for a MALICIOUS verdict or an integrity failure — both escalate, and the bytes are retained for investigation.
+            class: seth_coresolve
+            runbook: docs/runbooks/material_manifest_import.md
 
   # ── 4. Purchase order ────────────────────────────────────────────────────────────────────
   - id: purchase_order

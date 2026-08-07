@@ -63,7 +63,9 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_photo_ref: "The photo reference isn't valid.",
   invalid_value_num: "Enter a non-negative number.",
   below_target: "The value you recorded is below the target — the item stays open.",
-  note_required: "Add a note explaining the shortfall to complete this item below target.",
+  // Shared by the checklist below-target acknowledgement, flag-incident, and the PR2
+  // not-delivered mark — worded to serve all three (each is "record a shortfall, say why").
+  note_required: "Add a note explaining the shortfall.",
   auto_close_only: "This item completes automatically when the linked form is filed — it can't be checked by hand.",
   no_instance: "There's no daily checklist for you today.",
   not_complete: "Finish the remaining checklist items first.",
@@ -121,6 +123,17 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_project_name: "Enter a project name.",
   invalid_progress: "Progress must be a whole number from 0 to 100.",
   invalid_lifecycle: "That isn't a valid job state.",
+  // 409, not 400 — the intent is valid and the route is wrong (the use_amend_route shape).
+  // Reachable only from a stale bundle or a direct call: the current UI cannot select "Archived".
+  use_archive_route:
+    "Archiving a job is a separate action — it moves the job's folders, so it needs its own confirmation.",
+  // ── job archive / un-archive (cap.job.archive) ──────────────────────────────
+  confirm_required: "Type the project name to confirm.",
+  confirm_mismatch: "That doesn't match the project name — check the spelling and try again.",
+  already_archived: "This job is already archived. Use Un-archive to bring its folders back.",
+  not_archived: "This job isn't archived, so there's nothing to bring back.",
+  archive_in_flight:
+    "An archive or un-archive is already running for this job — wait for it to finish.",
   invalid_address: "The address isn't valid.",
   invalid_email: "Enter a valid email address.",
   invalid_phone: "The phone number isn't valid.",
@@ -188,6 +201,22 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_material_id: "Pick a material from the catalog.",
   already_actioned: "That material was already actioned — refresh to see the current status.",
   not_editable: "That material can no longer be edited — it's already been received or flagged.",
+
+  // ── materials tracking: the delivery ledger + scheduled loads (PR2, migration 0059) ────────────
+  // A DISTINCT code from the pre-existing `invalid_kind` (the daily-requirement vocabulary):
+  // one shared code cannot carry two different "pick from this list" meanings.
+  invalid_receipt_kind: "Pick Delivered, Partially delivered, or Not delivered.",
+  invalid_event_date: "That isn't a valid delivery date.",
+  invalid_shipment_id: "That load isn't on this material line — pick one of its own loads.",
+  invalid_line_id: "That material line no longer exists — refresh and try again.",
+  duplicate_event:
+    "That delivery was already recorded — refresh to see it.",
+  invalid_category: "The category is too long (64 characters max).",
+  invalid_expected_ship_date: "That isn't a valid expected ship date.",
+  invalid_bol_number: "The BOL / load number is too long (64 characters max).",
+  invalid_carrier: "The carrier name is too long (64 characters max).",
+  invalid_ship_date: "That isn't a valid ship date.",
+  invalid_delivery_date: "That isn't a valid delivery date.",
 
   // ── job daily requirements ─────────────────────────────────────────────────────────────────────
   daily_tab_form_code:
@@ -309,6 +338,38 @@ export const ERROR_COPY: Record<string, string> = {
   no_sov_lines: "Add at least one schedule-of-values line before generating.",
   sov_mismatch: "The schedule of values doesn't add up to the contract price — review the refreshed numbers and generate again.",
   sc_number_conflict: "A subcontract number collision occurred — generate again to get the next revision.",
+
+  // ── materials-manifest import (PR3b — worker/fieldops_manifests.ts) ────────────────────────────
+  // Upload-path codes reach the office directly. The internal-tier codes below them are posted by
+  // the Mac daemon and should never surface in a browser, but they get copy anyway: a code with no
+  // entry renders as "Something went wrong (…). Please try again.", and for a rejected upload that
+  // advice is actively false.
+  mime_not_allowed: "Only PDF and Excel (.xlsx) manifests can be imported — export the document and upload it again.",
+  extension_mime_mismatch: "The file's extension doesn't match its type — re-export it and upload again.",
+  magic_mime_mismatch: "That file isn't the type its name claims — re-export it as a PDF or .xlsx and upload again.",
+  manifest_too_large: "That manifest is too large to import — split it or export a smaller range.",
+  duplicate_manifest: "This job already has that exact manifest — open the existing one, or discard it first to re-import.",
+  not_discardable: "That manifest can't be discarded now — its lines have already been committed.",
+  preview_too_large: "A source-page preview was too large to store — the grid is still usable without it.",
+  invalid_data: "The upload didn't come through intact — choose the file again.",
+  invalid_page: "That preview page number isn't valid.",
+  invalid_rows: "The parsed rows didn't come through correctly — the manifest needs re-importing.",
+  invalid_row_count: "The parsed row count isn't valid — the manifest needs re-importing.",
+  invalid_profile: "The detected document type isn't valid — the manifest needs re-importing.",
+  invalid_column_map: "The proposed column map didn't come through correctly — the manifest needs re-importing.",
+  invalid_header_meta: "The document's header details didn't come through correctly — the manifest needs re-importing.",
+  invalid_parse_notes: "The parser's notes didn't come through correctly — the manifest needs re-importing.",
+  invalid_box_file_id: "The filed-document reference isn't valid — the manifest needs re-importing.",
+  box_file_id_on_refusal: "A refused manifest can't carry a filed-document reference — this is a bug; tell Seth.",
+
+  // Import validate + commit (the routes that actually author a job's material list).
+  invalid_lines: "The lines to import didn't come through correctly — reload the validate screen and try again.",
+  invalid_line: "One of the lines is malformed — reload the validate screen and try again.",
+  invalid_source_row_index: "A line lost track of which document row it came from — reload the validate screen.",
+  invalid_mode: "Choose whether to merge these lines into the existing list or add them as new.",
+  not_committable: "This manifest can't be committed — it was refused or discarded, so re-import the document.",
+  line_cap_exceeded: "This job can hold 500 material lines and the import would exceed that — split it across jobs, or trim the list before committing.",
+  duplicate_line: "A line collided with one that already exists — reload the validate screen to see the current list.",
 };
 
 /** Humanize an unknown wire code: 'some_new_code' → 'some new code'. */

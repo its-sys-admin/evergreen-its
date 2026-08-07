@@ -1,5 +1,6 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import { encodeCursor, decodeCursor } from "./cursor";
+import { coerceLifecycle } from "./constants";
 import type {
   CrewMember,
   DetailCrewMember,
@@ -55,8 +56,13 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
       // Jobs page (keyset on project_name ASC, job_id ASC; status filter via idx_jobs_status_name).
       // `all` ⇒ the ?1='all' OR branch makes the status predicate a no-op. client_name comes from a
       // LEFT JOIN to clients (jobs has client_id, not a denormalized name).
+      // `lifecycle` rides the row because it is the CANONICAL job-state field (migration 0021).
+      // `status` is the LEGACY flag and collapses inactive+archived into 'closed', so a consumer
+      // reading only `status` structurally cannot tell an archived job from an inactive one — which
+      // is exactly why the SPA displayed both as "Inactive". The list status FILTER still keys off
+      // `status` (unchanged, and it is what idx_jobs_status_name covers); this is display data.
       const sqlJobs = `
-        SELECT j.job_id, j.project_name, j.status, j.progress, c.name AS client_name
+        SELECT j.job_id, j.project_name, j.status, j.lifecycle, j.progress, c.name AS client_name
         FROM jobs j
         LEFT JOIN clients c ON c.id = j.client_id
         WHERE (?1 = 'all' OR j.status = ?1)
@@ -72,6 +78,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         job_id: string;
         project_name: string;
         status: string;
+        lifecycle: string;
         progress: number;
         client_name: string | null;
       }>();
@@ -144,6 +151,9 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         job_id: j.job_id,
         project_name: j.project_name,
         status: j.status,
+        // Coerced through coerceLifecycle so a pre-0021 row with a NULL/unknown value renders as
+        // 'active' rather than leaking an arbitrary string into the SPA's typed union.
+        lifecycle: coerceLifecycle(j.lifecycle),
         progress: j.progress,
         client_name: j.client_name,
         crew: crewByJob.get(j.job_id) ?? [],
@@ -173,7 +183,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
       // Evergreen number / structured address and SEED the routing editor with current
       // values (pre-0057 the editor opened blank and a save re-sent only what was typed).
       const sqlHeader = `
-        SELECT j.job_id, j.project_name, j.status, j.progress,
+        SELECT j.job_id, j.project_name, j.status, j.lifecycle, j.progress,
                j.job_no, j.address, j.address_city, j.address_state, j.address_zip,
                j.stakeholder_name, j.stakeholder_email, j.stakeholder_phone,
                j.safety_contact_name, j.safety_contact_email, j.safety_cc,
@@ -188,6 +198,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         job_id: string;
         project_name: string;
         status: string;
+        lifecycle: string;
         progress: number;
         job_no: string;
         address: string;
@@ -373,6 +384,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
           job_id: header.job_id,
           project_name: header.project_name,
           status: header.status,
+          lifecycle: coerceLifecycle(header.lifecycle),
           progress: header.progress,
           // 0057 + routing SoR: display + edit-form seeding. CC arrays are stored as
           // JSON text; parse defensively (a malformed cell yields [] — never a throw).

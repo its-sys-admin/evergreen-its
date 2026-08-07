@@ -641,94 +641,82 @@ def test_hours_malformed_entry_is_skipped_never_silent(_patch):
     )
 
 
-# ---- §51 archive-on-closure ----------------------------------------------
+# ---- §51 archive-on-closure — DISARMED on the mirror path (Track 6 PR-0) -----------
 
 
-def test_archived_job_moves_all_trackers_to_closed_projects(_patch):
-    # An ARCHIVED (closed) job whose standing trackers exist → the Hours Log, Equipment, Material
-    # List, AND Material Incidents sheets are MOVED into the Archive workspace's Closed-Projects
-    # folder, and the job still counts as mirrored. (Folder resolved ONCE; each tracker resolved + moved.)
-    _patch["pending"].return_value = [_job(lifecycle="archived")]
+@pytest.mark.parametrize("lifecycle", ["active", "inactive", "archived"])
+def test_job_mirror_never_archives(_patch, lifecycle):
+    """THE STANDING FENCE: mirroring a job must never relocate anything, for ANY lifecycle.
+
+    Until Track 6 PR-0 this file asserted the opposite — that mirroring a `lifecycle='archived'`
+    job moved four tracker sheets into the flat Closed-Projects folder. That coupling was the
+    defect, not the feature: the move fired from inside the job-dirty mirror fence, the job was
+    mark-synced immediately after, so a failure was permanent with no retry — and the only
+    trigger was an unconfirmed portal dropdown.
+
+    This test is deliberately parametrized over ALL THREE lifecycles rather than just 'archived',
+    so re-introducing the trigger under any guard (or none) red-lights here.
+    """
+    _patch["pending"].return_value = [_job(lifecycle=lifecycle)]
     _patch["upsert"].side_effect = _upsert_ok
 
     stats = fieldops_sync._sync_inside_lock()
 
     assert stats.mirrored == 1 and stats.errors == 0 and stats.reviewed == 0
-    _patch["arc_folder"].assert_called_once()  # source per-job folder resolved ONCE (no create)
-    assert _patch["arc_sheet"].call_count == 4  # Hours Log + Equipment + Material List + Incidents
-    assert _patch["arc_move"].call_count == 4   # each tracker moved
-    for call in _patch["arc_move"].call_args_list:
-        assert call.args[0] == 888  # the resolved tracker sheet id
-        assert call.args[1] == sheet_ids.FOLDER_ARCHIVE_CLOSED_PROJECTS
-
-
-def test_active_job_does_not_archive(_patch):
-    # Proves the guard bites: a NON-archived (active) job must never touch the archive path.
-    # (If the `lifecycle == "archived"` guard were removed, arc_move would fire here.)
-    _patch["pending"].return_value = [_job(lifecycle="active")]
-    _patch["upsert"].side_effect = _upsert_ok
-
-    stats = fieldops_sync._sync_inside_lock()
-
-    assert stats.mirrored == 1
     _patch["arc_folder"].assert_not_called()
     _patch["arc_sheet"].assert_not_called()
     _patch["arc_move"].assert_not_called()
+    assert not any(
+        c.kwargs.get("error_code") == "fieldops_archive_on_closure_failed"
+        for c in _patch["log"].call_args_list
+    )
 
 
-def test_archived_job_no_folder_is_noop_no_error(_patch):
-    # No per-job folder found → nothing was ever created → no move, no error.
-    _patch["pending"].return_value = [_job(lifecycle="archived")]
-    _patch["upsert"].side_effect = _upsert_ok
+# The helper itself is PRESERVED (§14) until the replacement path is live-proven. It has no
+# caller, so these exercise it DIRECTLY — keeping the preserved code covered, and keeping the
+# move semantics (four trackers, pure relocation, fenced failure) pinned for the port.
+
+
+def test_preserved_helper_moves_all_four_trackers(_patch):
+    fieldops_sync._archive_closed_job_trackers("JOB-1", "Bradley 1", "corr-1")
+
+    _patch["arc_folder"].assert_called_once()  # source folder resolved ONCE, find-no-create
+    assert _patch["arc_sheet"].call_count == 4  # Hours Log + Equipment + Material List + Incidents
+    assert _patch["arc_move"].call_count == 4
+    for call in _patch["arc_move"].call_args_list:
+        assert call.args[0] == 888
+        assert call.args[1] == sheet_ids.FOLDER_ARCHIVE_CLOSED_PROJECTS
+
+
+def test_preserved_helper_no_folder_is_noop(_patch):
     _patch["arc_folder"].return_value = None
 
-    stats = fieldops_sync._sync_inside_lock()
+    fieldops_sync._archive_closed_job_trackers("JOB-1", "Bradley 1", "corr-1")
 
-    assert stats.mirrored == 1 and stats.errors == 0
     _patch["arc_sheet"].assert_not_called()
     _patch["arc_move"].assert_not_called()
-    assert not any(
-        c.kwargs.get("error_code") == "fieldops_archive_on_closure_failed"
-        for c in _patch["log"].call_args_list
-    )
 
 
-def test_archived_job_no_trackers_is_noop_no_error(_patch):
-    # Folder exists but no tracker sheets in it → already moved (or never existed) → no move.
-    # This is the natural idempotency: once moved out of the source folder they aren't found again.
-    _patch["pending"].return_value = [_job(lifecycle="archived")]
-    _patch["upsert"].side_effect = _upsert_ok
+def test_preserved_helper_no_trackers_is_noop(_patch):
+    # The old "natural idempotency": once moved out of the source folder they aren't found again.
     _patch["arc_sheet"].return_value = None
 
-    stats = fieldops_sync._sync_inside_lock()
+    fieldops_sync._archive_closed_job_trackers("JOB-1", "Bradley 1", "corr-1")
 
-    assert stats.mirrored == 1 and stats.errors == 0
     _patch["arc_move"].assert_not_called()
-    assert not any(
-        c.kwargs.get("error_code") == "fieldops_archive_on_closure_failed"
-        for c in _patch["log"].call_args_list
-    )
 
 
-def test_archive_move_failure_warns_but_never_fails_the_mirror(_patch):
-    # A move failure must NEVER fail the mirror (the job is already mirrored + mark-synced):
-    # WARN is logged, no exception propagates, and the job still counts as mirrored.
-    _patch["pending"].return_value = [_job(lifecycle="archived")]
-    _patch["upsert"].side_effect = _upsert_ok
+def test_preserved_helper_move_failure_warns_and_never_raises(_patch):
     _patch["arc_move"].side_effect = smartsheet_client.SmartsheetError("move boom")
 
-    stats = fieldops_sync._sync_inside_lock()
+    fieldops_sync._archive_closed_job_trackers("JOB-1", "Bradley 1", "corr-1")  # must not raise
 
-    assert stats.mirrored == 1  # the mirror still counts despite the failed archive move
-    assert stats.errors == 0 and stats.reviewed == 0
     warn = [
         c for c in _patch["log"].call_args_list
         if c.kwargs.get("error_code") == "fieldops_archive_on_closure_failed"
     ]
     assert warn, "expected a WARN with error_code=fieldops_archive_on_closure_failed"
     assert warn[0].args[0] == fieldops_sync.Severity.WARN
-    # heartbeat is still OK — the archive move is best-effort, not part of the mirror result
-    assert _patch["hb_row"].call_args.kwargs["status"] == "OK"
 
 
 # ---- P7 equipment pass (Track 2, Slice 2) --------------------------------

@@ -39,11 +39,28 @@ export function rowTitle(r: api.ExpectedMaterialRow): string {
   return r.material_name ?? r.description ?? "—";
 }
 
-type FormState = { source: "catalog" | "custom"; materialId: string; description: string; qty: string; unit: string; expectedDate: string };
-const EMPTY_FORM: FormState = { source: "catalog", materialId: "", description: "", qty: "", unit: "", expectedDate: "" };
+// Exported (with ExpectationForm / toFields / formFromRow below) so the per-job Materials page
+// mounts the SAME editor rather than a parallel copy. That is not tidiness: /update FULL-REPLACES
+// the content fields, so a second form that forgot part_number / category / expected_ship_date
+// would silently NULL them on every edit.
+export type FormState = {
+  source: "catalog" | "custom";
+  materialId: string;
+  description: string;
+  qty: string;
+  unit: string;
+  expectedDate: string;
+  partNumber: string;
+  category: string;
+  expectedShipDate: string;
+};
+export const EMPTY_FORM: FormState = {
+  source: "catalog", materialId: "", description: "", qty: "", unit: "", expectedDate: "",
+  partNumber: "", category: "", expectedShipDate: "",
+};
 
 // Form state → wire fields, or an error string the banner shows (client half of the Worker's 400s).
-function toFields(f: FormState): api.ExpectedMaterialFields | string {
+export function toFields(f: FormState): api.ExpectedMaterialFields | string {
   const out: api.ExpectedMaterialFields = {};
   if (f.source === "catalog") {
     const id = Number(f.materialId);
@@ -61,10 +78,13 @@ function toFields(f: FormState): api.ExpectedMaterialFields | string {
   }
   if (f.unit.trim()) out.unit = f.unit.trim();
   if (f.expectedDate.trim()) out.expected_date = f.expectedDate.trim();
+  if (f.partNumber.trim()) out.part_number = f.partNumber.trim();
+  if (f.category.trim()) out.category = f.category.trim();
+  if (f.expectedShipDate.trim()) out.expected_ship_date = f.expectedShipDate.trim();
   return out;
 }
 
-function formFromRow(r: api.ExpectedMaterialRow): FormState {
+export function formFromRow(r: api.ExpectedMaterialRow): FormState {
   return {
     source: r.material_id !== null ? "catalog" : "custom",
     materialId: r.material_id !== null ? String(r.material_id) : "",
@@ -72,12 +92,25 @@ function formFromRow(r: api.ExpectedMaterialRow): FormState {
     qty: r.qty == null ? "" : String(r.qty),
     unit: r.unit ?? "",
     expectedDate: r.expected_date ?? "",
+    partNumber: r.part_number ?? "",
+    category: r.category ?? "",
+    expectedShipDate: r.expected_ship_date ?? "",
   };
+}
+
+/** The three-way delivery rollup → pill. Distinct from statusPill(), which renders the coarse
+ *  legacy `status` (and its orthogonal `incident` flag). Both surfaces import this so the job
+ *  page, the Materials page and the daily form can never drift on what a mark looks like. */
+export function rollupPill(r: api.ExpectedMaterialRow): { className: string; label: string } {
+  if (r.receipt_status === "delivered") return { className: "dash-pill dash-pill--ok", label: "Delivered" };
+  if (r.receipt_status === "partial") return { className: "dash-pill dash-pill--warn", label: "Partially delivered" };
+  if (r.receipt_status === "not_delivered") return { className: "dash-pill dash-pill--danger", label: "Not delivered" };
+  return { className: "dash-pill", label: "Not marked" };
 }
 
 // The shared add/edit expectation form (catalog-pick OR free-text). `label` prefixes aria-labels —
 // keep it unique per mounted instance (the ChecklistItemForm convention).
-function ExpectationForm({
+export function ExpectationForm({
   label,
   draft,
   onChange,
@@ -151,11 +184,41 @@ function ExpectationForm({
         size={8}
       />{" "}
       <input
-        aria-label={`${label} expected date`}
-        type="date"
-        value={draft.expectedDate}
-        onChange={(e) => set({ expectedDate: e.target.value })}
+        aria-label={`${label} part number`}
+        value={draft.partNumber}
+        onChange={(e) => set({ partNumber: e.target.value })}
+        placeholder="Part #"
+        maxLength={64}
+        size={10}
       />{" "}
+      <input
+        aria-label={`${label} category`}
+        value={draft.category}
+        onChange={(e) => set({ category: e.target.value })}
+        placeholder="Category"
+        maxLength={64}
+        size={10}
+      />{" "}
+      {/* Ship vs delivery. `expectedDate` keeps its stored 0031 name but IS the delivery date —
+          the label says so, because that is what the office and the field both mean by it. */}
+      <label className="field__inline">
+        <span className="field__label">Expected ship</span>
+        <input
+          aria-label={`${label} expected ship date`}
+          type="date"
+          value={draft.expectedShipDate}
+          onChange={(e) => set({ expectedShipDate: e.target.value })}
+        />
+      </label>{" "}
+      <label className="field__inline">
+        <span className="field__label">Expected delivery</span>
+        <input
+          aria-label={`${label} expected date`}
+          type="date"
+          value={draft.expectedDate}
+          onChange={(e) => set({ expectedDate: e.target.value })}
+        />
+      </label>{" "}
       <button type="submit" disabled={busy} className="btn btn--primary">{submitLabel}</button>
       {onCancel && (
         <>
@@ -169,7 +232,15 @@ function ExpectationForm({
   );
 }
 
-export function ExpectedMaterialsSection({ jobId }: { jobId: string }) {
+export function ExpectedMaterialsSection({
+  jobId,
+  onOpenMaterials,
+}: {
+  jobId: string;
+  /** Deep link into the per-job Materials page (PR2). Absent → no button, so this section stays
+   *  mountable anywhere that has nowhere to navigate to. */
+  onOpenMaterials?: () => void;
+}) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
   const canManage = caps.includes("cap.materials.manage"); // UI affordance only — the Worker re-gates
@@ -296,6 +367,13 @@ export function ExpectedMaterialsSection({ jobId }: { jobId: string }) {
   return (
     <section className="card dash-section" aria-label="Expected materials">
       <h3 className="dash-detail__h2">Expected materials ({list.length})</h3>
+      {onOpenMaterials && (
+        <div className="dash-row">
+          <button type="button" className="btn btn--secondary" onClick={onOpenMaterials}>
+            Materials tracking →
+          </button>
+        </div>
+      )}
 
       {!canManage && (
         <p className="dash-card__sub muted">

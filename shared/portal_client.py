@@ -74,6 +74,8 @@ CONFIG_STUCK_PATH = "/api/internal/config/stuck"
 FIELDOPS_PENDING_JOBS_PATH = "/api/internal/fieldops/pending-jobs"
 FIELDOPS_JOBS_MARK_MIRRORED_PATH = "/api/internal/fieldops/jobs-mark-mirrored"
 FIELDOPS_HOURS_PENDING_PATH = "/api/internal/fieldops/hours-pending"
+FIELDOPS_ARCHIVE_PENDING_PATH = "/api/internal/fieldops/archive-pending"
+FIELDOPS_ARCHIVE_PROGRESS_PATH = "/api/internal/fieldops/job-archive-progress"
 FIELDOPS_HOURS_MARK_MIRRORED_PATH = "/api/internal/fieldops/hours-mark-mirrored"
 FIELDOPS_EQUIPMENT_SNAPSHOT_PATH = "/api/internal/fieldops/equipment-snapshot"
 FIELDOPS_MATERIAL_LIST_SNAPSHOT_PATH = "/api/internal/fieldops/material-list-snapshot"
@@ -104,6 +106,12 @@ SUB_STATUS_SYNC_PATH = "/api/subcontracts/internal/status-sync"
 SUB_SUBCONTRACTORS_SYNC_PATH = "/api/subcontracts/internal/subcontractors/sync"
 SUB_SUBCONTRACTORS_PENDING_PATH = "/api/subcontracts/internal/subcontractors/pending"
 SUB_SUBCONTRACTORS_MARK_MIRRORED_PATH = "/api/subcontracts/internal/subcontractors/mark-mirrored"
+MANIFEST_PENDING_PATH = "/api/fieldops/manifests/internal/pending"
+MANIFEST_CLAIM_PATH = "/api/fieldops/manifests/internal/{id}/claim"
+MANIFEST_CHUNKS_PATH = "/api/fieldops/manifests/internal/{id}/chunks"
+MANIFEST_ROWS_PATH = "/api/fieldops/manifests/internal/{id}/rows"
+MANIFEST_PREVIEW_PATH = "/api/fieldops/manifests/internal/{id}/preview"
+MANIFEST_RESULT_PATH = "/api/fieldops/manifests/internal/result"
 
 
 # ---- Typed exceptions ----------------------------------------------------
@@ -392,6 +400,62 @@ def mark_fieldops_hours_mirrored(
     return _request(
         "POST", base_url, FIELDOPS_HOURS_MARK_MIRRORED_PATH, token,
         json_body={"uuids": uuids},
+    )
+
+
+def get_fieldops_pending_archives(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Pull jobs awaiting relocation: GET /api/internal/fieldops/archive-pending.
+
+    Returns the `jobs` list verbatim — each a dict with `job_id, project_name, job_no,
+    archive_folder_key, archive_direction, archive_state, archive_attempts,
+    archive_requested_at`.
+
+    Resolve containers against `archive_folder_key`, NEVER against `project_name`. The key is
+    snapshotted when the operator raises the request; `project_name` is editable afterwards
+    (`POST /api/fieldops/job/:id/contacts`), and every per-job folder was created under the key's
+    value. Using the live name would send the pass after a folder that does not exist.
+
+    The Worker caps the page at 25 server-side — far below the other queues' 200, because each row
+    costs six external API sequences across two systems. The pass drains across cycles.
+
+    A control-plane read of OUR OWN Worker (bearer = `PORTAL_FIELDOPS_API_TOKEN`, the same token
+    as the job and hours queues), NOT a customer send. Typed-error contract as elsewhere:
+    `PortalAuthError` (401) / `PortalRateLimitError` / `PortalTransportError`.
+    """
+    data = _request("GET", base_url, FIELDOPS_ARCHIVE_PENDING_PATH, token)
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
+        raise PortalTransportError(
+            f"GET {FIELDOPS_ARCHIVE_PENDING_PATH} missing/invalid 'jobs' array "
+            f"(got {type(jobs).__name__})"
+        )
+    return [row for row in jobs if isinstance(row, dict)]
+
+
+def post_fieldops_archive_progress(
+    base_url: str, token: str, updates: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Archive-pass commit point: POST /api/internal/fieldops/job-archive-progress.
+
+    Each update is `{job_id, direction, state, containers?}` where `state` is one of
+    in_progress | complete | partial | failed. `requested` is REFUSED by the Worker — the pass may
+    ADVANCE a request, only a human may raise one.
+
+    The Worker's UPDATE is forward-only (`archive_state IN ('requested','in_progress') AND
+    archive_direction = ?`), so a late or replayed post cannot resurrect a completed archive nor
+    apply an archive result to a job the operator has since flipped to un-archive. Rows that no
+    longer match come back in `skipped` rather than failing the batch — one stale member must not
+    discard the rest. **Callers should treat a job appearing in `skipped` as "the operator moved
+    this out from under me", not as an error to retry.**
+
+    Empty lists are rejected (400) — never send one. Cap is 25, matching the queue page.
+
+    A control-plane write to OUR OWN Worker (outside the External Send Gate, Invariant 1). Returns
+    the Worker's `{ok, updated, skipped}` dict.
+    """
+    return _request(
+        "POST", base_url, FIELDOPS_ARCHIVE_PROGRESS_PATH, token,
+        json_body={"updates": updates},
     )
 
 
@@ -1646,3 +1710,184 @@ def post_rfq_status_sync(
     if responded_estimate_id is not None:
         body["responded_estimate_id"] = responded_estimate_id
     return _request("POST", base_url, RFQ_STATUS_SYNC_PATH, token, json_body=body)
+
+
+# ---- Materials-manifest internal tier (PR3b — the manifest_poll daemon's I/O) ----
+#
+# Faithful mirror of the vendor-estimate pool client (above) — same typed-error contract,
+# same control-plane read/write semantics — against the manifest pool routes. All six
+# calls ride the SEPARATE manifest bearer tier (`requireManifestToken`, Worker
+# PORTAL_MANIFEST_API_TOKEN / Mac Keychain ITS_PORTAL_MANIFEST_TOKEN — resolved by the
+# caller, `field_ops.manifest_poll`; this module stays stateless). Same ADR-0004
+# decision-4 reasoning as the estimate lane: this process decodes hostile PDF/XLSX bytes,
+# so its bearer scopes ONLY /api/fieldops/manifests/internal/* — none of the sibling
+# bearers is accepted on these routes and this bearer opens no other tier. Every call is
+# a control-plane read/write of OUR OWN Worker, NOT a customer-facing send — outside the
+# External Send Gate (Invariant 1).
+
+
+def get_manifests_pending(
+    base_url: str, token: str, *, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Pull serviceable materials manifests: GET /api/fieldops/manifests/internal/pending.
+
+    Each row is one `job_manifests` D1 row (migration 0060) at status pending|claimed,
+    oldest-first — `{id, manifest_uuid, job_id, filename, declared_mime, size_bytes,
+    sha256, hmac, uploaded_by, status, created_at}`. Rows are UNTRUSTED until the
+    caller recomputes the manifest:v1 canonical HMAC
+    (`shared.portal_hmac.verify_manifest`) AND separately re-derives length + sha256
+    over the reassembled chunk bytes — the HMAC covers only the CLAIMS about the bytes.
+
+    Raises `PortalAuthError` (401) / `PortalRateLimitError` (429/503 exhausted) /
+    `PortalTransportError` (any other failure, incl. a non-object / missing-array body).
+    """
+    data = _request("GET", base_url, MANIFEST_PENDING_PATH, token, params={"limit": limit})
+    manifests = data.get("manifests")
+    if not isinstance(manifests, list):
+        raise PortalTransportError(
+            f"GET {MANIFEST_PENDING_PATH} missing/invalid 'manifests' array "
+            f"(got {type(manifests).__name__})"
+        )
+    # Defensive: keep only dict rows; a non-dict element is malformed transport.
+    return [row for row in manifests if isinstance(row, dict)]
+
+
+def claim_manifest(base_url: str, token: str, *, manifest_id: int) -> bool:
+    """Mark one manifest claimed BEFORE pulling its bytes: POST
+    /api/fieldops/manifests/internal/:id/claim.
+
+    Claim-FIRST is the crash-visibility contract: a daemon that dies mid-parse leaves
+    an observably `claimed` row rather than a `pending` one that silently re-services
+    a hostile document every cycle. `found=False` means the row was already claimed or
+    disposed by a previous cycle — BENIGN, and the caller proceeds (its own pending read
+    saw the row serviceable). A control-plane write to OUR OWN Worker (outside the
+    External Send Gate, Invariant 1).
+    """
+    data = _request(
+        "POST", base_url, MANIFEST_CLAIM_PATH.format(id=manifest_id), token, json_body={}
+    )
+    return bool(data.get("found"))
+
+
+def get_manifest_chunks(
+    base_url: str, token: str, *, manifest_id: int
+) -> list[dict[str, Any]]:
+    """Pull one manifest's bytes: GET /api/fieldops/manifests/internal/:id/chunks.
+
+    Returns the `chunks` list verbatim — `{chunk_index, chunk_total, chunk_b64}` rows,
+    index-ordered (the po_attachments / po_estimates chunk shape). The ONLY route that
+    ever serves manifest bytes, and only Mac-ward over this bearer. NEVER interpolate
+    `chunk_b64` into a log or error. The caller MUST verify the manifest:v1 HMAC + the
+    length/sha256 recompute over the reassembled bytes before screening or extracting.
+
+    Raises `PortalAuthError` (401) / `PortalRateLimitError` (429/503 exhausted) /
+    `PortalTransportError` (any other failure, incl. a 404 for a disposed row).
+    """
+    data = _request("GET", base_url, MANIFEST_CHUNKS_PATH.format(id=manifest_id), token)
+    chunks = data.get("chunks")
+    if not isinstance(chunks, list):
+        raise PortalTransportError(
+            f"GET {MANIFEST_CHUNKS_PATH} missing/invalid 'chunks' array "
+            f"(got {type(chunks).__name__})"
+        )
+    # Defensive: keep only dict rows; a non-dict element is malformed transport.
+    return [row for row in chunks if isinstance(row, dict)]
+
+
+def post_manifest_rows(
+    base_url: str, token: str, *, manifest_id: int, rows: list[dict[str, Any]]
+) -> int:
+    """Post ONE PAGE of the parsed grid: POST /api/fieldops/manifests/internal/:id/rows.
+
+    `rows` are `manifest_parse.ParsedRow` projections —
+    `{row_index, source_page, kind, cells, flags}` — where `cells` is the row's cell
+    list VERBATIM (the validate screen edits against these, so nothing is pre-collapsed
+    and duplicate part numbers survive to get a per-row human decision). The Worker
+    upserts on `(manifest_id, row_index)`, so a re-posted page is a no-op and a crashed
+    daemon simply re-posts from the start next cycle.
+
+    Paged by the caller (a 900-row master BOM cannot ride one request). Returns the
+    Worker's accepted-row count. A control-plane write to OUR OWN Worker (outside the
+    External Send Gate, Invariant 1); raises the typed `PortalTransportError` hierarchy
+    on failure.
+    """
+    data = _request(
+        "POST",
+        base_url,
+        MANIFEST_ROWS_PATH.format(id=manifest_id),
+        token,
+        json_body={"rows": rows},
+    )
+    written = data.get("written")
+    return written if isinstance(written, int) and not isinstance(written, bool) else 0
+
+
+def post_manifest_preview(
+    base_url: str, token: str, *, manifest_id: int, page: int, png_b64: str
+) -> bool:
+    """Upsert one source-page preview: POST /api/fieldops/manifests/internal/:id/preview.
+
+    `page` is 1-based; `png_b64` is the base64 of one rendered PNG the Worker decodes
+    into `job_manifest_previews` (decoded cap 1_000_000 bytes — the caller keeps each
+    preview under it; an oversize preview is a Worker 400). The previews are what let
+    the validate screen show the SOURCE beside the editable grid without ever serving
+    the original untrusted bytes to a browser — the same fidelity control the estimate
+    lane's disposition screen uses.
+    """
+    data = _request(
+        "POST",
+        base_url,
+        MANIFEST_PREVIEW_PATH.format(id=manifest_id),
+        token,
+        json_body={"page": page, "png_b64": png_b64},
+    )
+    return bool(data.get("found"))
+
+
+def post_manifest_result(
+    base_url: str,
+    token: str,
+    *,
+    manifest_id: int,
+    status: str,
+    detail: str | None = None,
+    box_file_id: str | None = None,
+    profile: str | None = None,
+    row_count: int | None = None,
+    column_map: dict[str, Any] | None = None,
+    header_meta: dict[str, str] | None = None,
+    parse_notes: str | None = None,
+) -> bool:
+    """Post one servicing disposition: POST /api/fieldops/manifests/internal/result.
+
+    `status` is `'refused'` (§34 screen rejection, an unreadable container, or an
+    unusable parse; `detail` carries the machine reason — NEVER file bytes) or
+    `'parsed'` (filed to Box and awaiting the validate screen — carries `box_file_id`,
+    the `profile`, the posted `row_count`, the proposed `column_map`, the header `meta`
+    block and the parser's `notes`). The Worker applies the disposition in ONE atomic
+    batch (W4): status flip + chunk DELETE (the bytes are no longer needed once the
+    grid exists) + audit row.
+
+    Posted LAST, after the rows and previews are in: a crash before this leaves the row
+    `claimed` and every prior step is idempotent, so the next cycle simply redoes them.
+    Idempotent: `found=False` means the row was already disposed (a re-post after a lost
+    ack) — benign. A control-plane write to OUR OWN Worker (outside the External Send
+    Gate, Invariant 1); raises the typed `PortalTransportError` hierarchy on failure.
+    """
+    body: dict[str, Any] = {"manifest_id": manifest_id, "status": status}
+    if detail is not None:
+        body["detail"] = detail
+    if box_file_id is not None:
+        body["box_file_id"] = box_file_id
+    if profile is not None:
+        body["profile"] = profile
+    if row_count is not None:
+        body["row_count"] = row_count
+    if column_map is not None:
+        body["column_map"] = column_map
+    if header_meta is not None:
+        body["header_meta"] = header_meta
+    if parse_notes is not None:
+        body["parse_notes"] = parse_notes
+    data = _request("POST", base_url, MANIFEST_RESULT_PATH, token, json_body=body)
+    return bool(data.get("found"))

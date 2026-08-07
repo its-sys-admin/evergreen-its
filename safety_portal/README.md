@@ -55,6 +55,12 @@ its migration fail-closes `resolveCapabilities` → the universal-lockout class 
 | `0050_subcontracts` | Subcontracts S1: `subcontracts` + `sov_lines` (D1-authoritative drafts) | (SC-S1, #529) | ☐ pending |
 | `0051_subcontracts_capability` | Subcontracts S1: `cap.subcontracts.manage` → admin | (SC-S1, #529) | ☐ pending |
 | `0052_subcontractors_state` | Subcontractors grouped by STATE not region: `subcontractors` region→state rebuild | (SC group-by-state, #533) | ☐ pending |
+| `0059_material_tracking` | Materials tracking (PR2): line `part_number`/`category`/`expected_ship_date` + `material_receipt_events` (append-only delivery ledger) + `material_shipments` (scheduled loads) | (PR2) | ☐ pending |
+
+> ⚠️ **This table is behind the migrations directory: `0053`–`0058` shipped but were never listed
+> here.** Pre-existing drift, not introduced by `0059`. It is a DOCUMENTATION gap, not an apply
+> hazard — the command below is `migrations apply`, which applies everything pending in order
+> regardless of what this table says. Worth a reconciling pass.
 
 Canonical apply-and-deploy sequence (applies **all** pending migrations, in order — never a
 subset):
