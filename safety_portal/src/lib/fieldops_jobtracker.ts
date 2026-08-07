@@ -11,11 +11,16 @@ import type { JobDetailResponse, JobListResponse } from "../../worker/wire-types
 // fixture now type-checks against what the Worker actually sends); re-exported here so existing
 // importers keep their path.
 export type {
+  ArchiveDirection,
+  ArchiveState,
   CrewMember,
   DetailCrewMember,
   EquipmentOnSite,
   JobClient,
   JobDetail,
+  JobArchiveContainer,
+  JobArchiveResponse,
+  JobArchiveStatus,
   JobDetailResponse,
   JobInspection,
   JobListResponse,
@@ -105,7 +110,7 @@ export interface NewJobClient {
 // copies that could drift (the SPA reads it off JobRow/JobDetail, which the worker already types).
 // Imported AND re-exported: a bare `export type { … } from` would satisfy downstream importers but
 // would not bind the name in this module, where setLifecycle's own signature uses it.
-import type { JobLifecycle } from "../../worker/wire-types";
+import type { JobArchiveResponse, JobLifecycle } from "../../worker/wire-types";
 export type { JobLifecycle };
 
 export interface JobRouting {
@@ -155,6 +160,31 @@ export async function setLifecycle(jobId: string, lifecycle: JobLifecycle): Prom
     { lifecycle },
   );
 }
+// ── Archive / un-archive (ROADMAP Track 6) ──────────────────────────────────────────────────
+//
+// These do NOT move anything. They record intent; the Mac-side pass performs the relocation and
+// reports back, which is why the UI polls `job.archive.state` rather than treating the 200 as
+// "done". `confirm` must be the job's project_name EXACTLY (trim-only, case-sensitive) — the
+// worker re-checks it server-side, so the modal is a usability affordance, not the control.
+//
+// Error codes worth branching on: confirm_mismatch (409), already_archived (409), not_archived
+// (409), archive_in_flight (409). Copy for all of them lives in errorCopy.ts.
+export async function archiveJob(jobId: string, confirm: string): Promise<JobArchiveResponse> {
+  return postJson<JobArchiveResponse>(
+    `/api/fieldops/job/${encodeURIComponent(jobId)}/archive`,
+    { confirm },
+  );
+}
+
+/** Bring an archived job's folders back. The job returns INACTIVE, never active — retrieving
+ *  folders is not re-opening a job. */
+export async function unarchiveJob(jobId: string, confirm: string): Promise<JobArchiveResponse> {
+  return postJson<JobArchiveResponse>(
+    `/api/fieldops/job/${encodeURIComponent(jobId)}/unarchive`,
+    { confirm },
+  );
+}
+
 // Edit the routing SoR block (address + stakeholder + safety/progress contacts + CC arrays). The
 // worker FULL-OVERWRITES the routing fields (an omitted field → ''), so send the complete intended
 // routing for the job. job_id/lifecycle/status are untouched.
