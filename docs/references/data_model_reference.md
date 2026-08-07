@@ -331,11 +331,13 @@ never mutated) plus an `audit_log` row, and version-pinning of checklist content
 
 ### Materials + checklist engine
 
-<!-- src: 0019_material_catalog.sql; 0031_job_expected_materials.sql; 0030_job_daily_requirements.sql; 0039_material_list_mirror.sql | verified 2026-07-14 -->
+<!-- src: 0019_material_catalog.sql; 0031_job_expected_materials.sql; 0030_job_daily_requirements.sql; 0039_material_list_mirror.sql; 0059_material_tracking.sql | verified 2026-08-07 -->
 | Table | Key columns | Purpose |
 |-------|-------------|---------|
 | `material_catalog` | id, model_id, manufacturer, category, key_specs, source_files (JSON provenance), unit_cost (optional), active | Datasheet-backed material TYPE vocabulary (seeded 36 approved types); soft-delete only |
-| `job_expected_materials` | id, job_id, material_id (nullable → catalog), description, qty, unit, expected_date, status (expected / received / incident), received_*, seq, active, **line_uuid**, unplanned | Per-job expected-materials list; `line_uuid` is the one-way-up Material List mirror key |
+| `job_expected_materials` | id, job_id, material_id (nullable → catalog), description, qty, unit, expected_date (= expected DELIVERY), status (expected / received / incident), received_*, seq, active, **line_uuid**, unplanned, **part_number**, **category**, **expected_ship_date** | Per-job expected-materials list; `line_uuid` is the one-way-up Material List mirror key. `status` is the COARSE legacy projection — the three-way delivery state is derived from `material_receipt_events` (0059), and `incident` is an orthogonal, sticky flag |
+| `material_receipt_events` | id, **event_uuid**, line_id, job_id, shipment_id (optional), kind (delivered / partial / not_delivered), qty, note, event_date, actor | **Append-only delivery ledger** — the delivery system of record. One row per mark, so a part number arriving across several loads keeps its full history. No retire path by construction, so the zero-drop class (#468) is structurally impossible |
+| `material_shipments` | id, **shipment_uuid**, line_id, job_id, part_number, bol_number, carrier, qty, unit, ship_date, delivery_date, seq, source (manual / import), active | Scheduled LOADS under an expected-material line. A shipping-log row is a load, not a line — keeping loads here is also what stops the §51 Material List mirror re-projecting thousands of rows per job |
 | `job_daily_requirements` | id, job_id, seq, kind (note / confirm / text / form_link), label, form_code, active | Admin-authored additive daily-form overlay, snapshotted into each submission's values |
 
 <!-- src: 0026_checklist_engine.sql; 0036_item_photos.sql; 0040_checklist_recurrences.sql | verified 2026-07-14 -->

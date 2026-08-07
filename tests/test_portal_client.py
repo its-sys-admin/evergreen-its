@@ -1053,3 +1053,54 @@ def test_estimates_pending_wire_key_parity():
         f"wire-key drift: worker serves {worker_key!r} but "
         f"get_estimates_pending does not read it"
     )
+
+
+def test_manifests_pending_wire_key_parity():
+    """CROSS-RUNTIME PIN for the materials-manifest lane: the Worker route and this
+    client must agree on the response key. Reads BOTH sources so neither side can drift
+    alone — the failure class here (each side's mocks matching its own assumption) is
+    exactly what unit tests structurally cannot catch without this pin, and it is not
+    hypothetical: `get_estimates_pending` once shipped reading "pending" while the
+    deployed Worker served `{ estimates: … }`, and 629 cycles failed invisibly."""
+    import inspect
+    import re
+    from pathlib import Path
+
+    worker_src = (
+        Path(__file__).resolve().parent.parent
+        / "safety_portal" / "worker" / "fieldops_manifests.ts"
+    ).read_text(encoding="utf-8")
+    # The pending route's success body in the Worker source.
+    route_block = worker_src.split("/api/fieldops/manifests/internal/pending", 1)[1][:1200]
+    m = re.search(r"c\.json\(\{\s*(\w+):", route_block)
+    assert m is not None, "pending route success body not found in fieldops_manifests.ts"
+    worker_key = m.group(1)
+
+    client_src = inspect.getsource(portal_client.get_manifests_pending)
+    assert f'data.get("{worker_key}")' in client_src, (
+        f"wire-key drift: worker serves {worker_key!r} but "
+        f"get_manifests_pending does not read it"
+    )
+
+
+def test_manifest_internal_paths_match_the_worker_routes():
+    """Every manifest path constant must name a route the Worker actually registers.
+    A path typo is the same silent class as a wire-key drift: the daemon 404s forever
+    and both sides' mocks agree with themselves."""
+    from pathlib import Path
+
+    worker_src = (
+        Path(__file__).resolve().parent.parent
+        / "safety_portal" / "worker" / "fieldops_manifests.ts"
+    ).read_text(encoding="utf-8")
+    for const in (
+        portal_client.MANIFEST_PENDING_PATH,
+        portal_client.MANIFEST_CLAIM_PATH,
+        portal_client.MANIFEST_CHUNKS_PATH,
+        portal_client.MANIFEST_ROWS_PATH,
+        portal_client.MANIFEST_PREVIEW_PATH,
+        portal_client.MANIFEST_RESULT_PATH,
+    ):
+        # The client writes `{id}` where Hono writes `:id`.
+        route = const.replace("{id}", ":id")
+        assert f'"{route}"' in worker_src, f"no Worker route registered for {route}"

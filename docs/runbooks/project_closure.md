@@ -48,11 +48,12 @@ Projects`. Nothing else moves, anywhere.
   sheet-side value of `Archived` behaves identically to `Inactive` — it can **never** trigger the
   tracker archive move (that automation only sees portal-origin jobs).
 
-> **Display quirk (do not mistake for a failed write).** After a page reload, the portal's
-> lifecycle selector for an **Archived** job displays **"Inactive"** — the detail view re-derives
-> the selector from a coarser status field. The archive state is still stored and still drives the
-> tracker move. Confirm an archive via its *effects* (the `Active` cell in `ITS_Active_Jobs`, or
-> the tracker sheets appearing under Closed Projects), not the selector.
+> **The lifecycle selector now tells the truth.** It used to display **"Inactive"** for an
+> **Archived** job after any page reload, because the detail view re-derived it from a coarser
+> status field that cannot tell inactive and archived apart — which is why earlier versions of this
+> runbook told you to "validate by effects, not the dropdown". That is fixed: an archived job reads
+> **"Archived"**, and its selector is locked (the job must be un-archived before its state can
+> change again).
 
 ## Procedure
 
@@ -85,40 +86,28 @@ What actually happens:
 What does **not** happen: no sheet is moved or archived, no Box folder changes, no flat-log or
 review rows change. See "What closure leaves in place" below.
 
-### Task B — Permanent close: set the job **Archived**
+### Task B — Archiving a job is temporarily UNAVAILABLE
 
-Use for a job that is done for good. Archived does **everything Inactive does**, plus the one
-automated archival in the system:
+**There is no way to archive a job right now, and that is deliberate.** If you need one archived,
+note it and raise it with Seth — do not try to force it from the sheet side.
 
-- On the job's next mirror cycle (the daemon runs continuously; allow a few minutes), the four
-  standing progress tracker sheets that exist for the job —
-  **`<Job> — Hours Log`**, **`<Job> — Equipment`**, **`<Job> — Material List`**, and
-  **`<Job> — Material Incidents`** — are **moved** (pure relocation, never deleted) from the job's
-  per-job folder in `ITS — Progress Reporting` into **`ITS — Archive / Closed Projects`**.
-  Trackers that were never created for the job are simply skipped.
+What changed and why:
 
-Caveats you must know:
+- The portal's lifecycle selector no longer offers **Archived**, and the server refuses the value
+  even if an old browser tab still shows it.
+- Until 2026-08-03, choosing Archived silently relocated four tracker sheets on the next daemon
+  cycle — with **no confirmation prompt**, **no retry if a move failed**, and a screen that then
+  displayed the job as "Inactive". A single dropdown change moved live records with essentially no
+  feedback. It had never actually run against real data; it was one click away from doing so.
+- Archiving is being rebuilt as its own deliberate action, with a confirmation step that names
+  exactly what moves, automatic retry when a step fails, and a way to reverse it.
 
-- **Portal-origin jobs only.** Typing `Archived` into `ITS_Active_Jobs` for a sheet-created job
-  gives you exactly the Inactive drop-out and nothing more — the tracker-move automation
-  structurally never sees it.
-- **Best-effort, no auto-retry.** If a move fails (e.g. a transient Smartsheet error), the system
-  WARNs (`fieldops_archive_on_closure_failed` in `ITS_Errors`) and does **not** retry on its own —
-  the job is already marked synced. The guaranteed repair is a one-off manual drag of the sheet
-  into `ITS — Archive / Closed Projects` — see [hours_log_sync.md](hours_log_sync.md) **Fault F**.
-- **Everything else stays.** Week sheets, the per-job folder itself, review rows, procurement
-  sheets, Box — all unmoved (next section).
-- **Field data after archival re-creates trackers.** If hours/equipment/material data somehow
-  arrives for an archived job, the mirror passes find-or-create a **fresh** tracker back in the
-  active progress folder. It re-archives only when the job row itself is next edited — not
-  automatically. Archived jobs are not expected to receive new field data; treat a re-appearing
-  tracker as a signal someone is still filing against a closed job.
+**Use Task A (Inactive) for a job that is finished.** Inactive is what makes a job stop appearing
+in dropdowns, compiles, and intake — the day-to-day effect you actually want. Nothing is lost by
+waiting: no job's records have ever been archived, so nothing is sitting in a half-done state.
 
-> **Observation (2026-07-23):** the archive move has never yet fired against live data — the
-> `Closed Projects` folder has never received a sheet, and the underlying move helper's live
-> API smoke is still on the operator queue. If you perform the first live archival, check
-> `ITS_Errors` afterward for `fieldops_archive_on_closure_failed` and verify the trackers landed
-> (Validation below).
+Sheet-created (legacy) jobs are unaffected: typing `Archived` into `ITS_Active_Jobs` for one of
+those never triggered any automation and still doesn't.
 
 ### Task C — What closure leaves in place (deliberate + known gaps)
 

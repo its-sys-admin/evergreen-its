@@ -24,7 +24,8 @@ exact split). Use the roster to jump to the daemon you care about, then read its
 (The 17th — `subcontract-send`, the SC-S4 approval poller — the 18th — `estimate-poll`, the
 ADR-0004 vendor-estimate importer — the 19th — `rfq-poll`, the ADR-0004 outbound-RFQ
 generation daemon — and the 20th — `rfq-send`, the ADR-0004 R3 outbound-RFQ approval poller
-— were added after this doc's first cut; see their rows + sections below.)
+— were added after this doc's first cut; see their rows + sections below. The 21st — `manifest-poll`, the PR3b
+materials-manifest importer — was added later still.)
 
 If you only need one thing: **to restart a daemon**, the dashboard verb is
 **kickstart** (Class-B ACT, PIN-gated); the shell fallback is
@@ -136,6 +137,7 @@ runtime.
 | `rfq-send` | `po_materials.rfq_send_poll` | interval, **900s** default | Purchase Orders (RFQ) | yes | `rfq_send_poll` |
 | `subcontract-poll` | `subcontracts.subcontract_poll` | interval, **120s** default | Subcontracts | yes | `subcontract_poll` |
 | `subcontract-send` | `subcontracts.subcontract_send_poll` | interval, **900s** default | Subcontracts | yes | `subcontract_send_poll` |
+| `manifest-poll` | `field_ops.manifest_poll` | interval, **120s** default | Field-Ops (materials) | yes | `manifest_poll` |
 | `fieldops-sync` | `field_ops.fieldops_sync` | interval, **90s** default | Field Ops | yes | `fieldops_sync` |
 | `publish-daemon` | `safety_reports.publish_daemon` | interval, **120s** fixed | §50 actuator | yes | (not tracked) |
 | `config-actuator` | `po_materials.config_actuator` | interval, **120s** fixed | §50 actuator | yes | (not tracked) |
@@ -304,6 +306,21 @@ the running plist holds the interval.
 | **Log** | `~/its/logs/launchd/estimate_poll.out.log` / `.err.log` |
 | **Known failure modes** | **Fail-CLOSED** on missing Worker base URL / estimate bearer / HMAC secret (CRITICAL + ERROR heartbeat, nothing polled). The bearer is the **dedicated** Keychain `ITS_PORTAL_ESTIMATE_TOKEN` (privilege-separated — scopes ONLY `/api/po/estimates/internal/*`; ADR-0004 red-team #1); a **401 anywhere stops the whole cycle** (`estimate_bearer_rejected` CRITICAL — a bad/rotated token never self-heals). Integrity failures (bad HMAC / digest / chunk set) and screen/doc-type refusals are one-shot-flagged (`~/its/state/estimate_poll_flagged.json` — delete an entry to retry after fixing the cause); transient Smartsheet/Box/transport errors leave the row claimed and retried next cycle. A hostile document can never kill the daemon — every hostile parse runs in the killable `estimate_sandbox` child and a wedged parse degrades the doc, not the cycle. §43 tree: `docs/runbooks/estimate_import_path.md`. |
 | **Restart** | Dashboard **kickstart**; shell `install.sh load org.solutionsmith.its.estimate-poll` |
+
+### manifest-poll — `field_ops.manifest_poll`
+
+<!-- src: field_ops/manifest_poll.py:1-72 (docstring), :117-141 (gates/defaults); scripts/launchd/install.sh (120s default); scripts/watchdog.py (manifest_poll slug, 10-min window) | verified 2026-08-07 -->
+
+| Field | Value |
+|---|---|
+| **Purpose** | Materials-manifest import daemon (PR3b / ADR-0005) — the Mac half of the manifest pool. One pass behind one gate: claim FIRST (crash recovery) → chunk pull + STRICT reassembly → `manifest:v1` HMAC verify **and** a separate length/sha256 recompute vs the SIGNED values → §34 doc screen (the SAME `po_attach_screen` as PO attachments and estimates) → cell-grid extract inside the killable rlimited `estimate_sandbox` child (`extract_xlsx_rows` for workbooks, `parse_native` for PDFs) → `manifest_parse` → file the ORIGINAL bytes to Box (ROOT→job→"Materials"→"Manifests") → post the grid in ≤200-row pages → source-page previews (best-effort) → result post LAST (`parsed` + `box_file_id` + the PROPOSED column map). It never picks a quantity column and never commits a material line — the validate screen disposes. AI-FREE (capability-gated in `GATED_SCRIPTS`). |
+| **Interval** | `StartInterval`, default **120s** (`field_ops.manifest_poll.poll_interval_seconds`) |
+| **Source of work** | `GET /api/fieldops/manifests/internal/pending` on the Cloudflare Worker (via `shared.portal_client`) |
+| **Config gates** | `field_ops.manifest_poll.polling_enabled` (the ONE gate; the seeded ITS_Config row from `scripts/migrations/seed_manifest_config.py` is the operator's switch — read ITS_Config for its live value); `po_materials.po_attach_screen.clamav_enabled` (SHARED with the PO/estimate pools, default **OFF**) |
+| **Heartbeat row** | `field_ops.manifest_poll` — marker slug `manifest_poll` (window 10 min). WARNs until loaded AND the gate flipped (a loaded-but-dark daemon writes no marker by design). |
+| **Log** | `~/its/logs/launchd/manifest_poll.out.log` / `.err.log` |
+| **Known failure modes** | **Fail-CLOSED** on missing Worker base URL / manifest bearer / HMAC secret (CRITICAL + ERROR heartbeat, nothing polled); a transient base-URL blip is a distinct WARN, not a credentials CRITICAL. The bearer is the **dedicated** Keychain `ITS_PORTAL_MANIFEST_TOKEN` (privilege-separated — scopes ONLY `/api/fieldops/manifests/internal/*`, the ADR-0004 decision-4 posture, because this process decodes hostile PDF/xlsx bytes); a **401 anywhere stops the whole cycle**. Three refusal classes are deliberately distinct: an **integrity** failure (bad HMAC / digest / chunk set) fires CRITICAL, posts NO result and leaves the bytes in D1 for forensics; a **§34** refusal fires CRITICAL naming the account on MALICIOUS, WARN on SUSPICIOUS; an **unreadable** document (a scan, an empty export, no header row) is an ORDINARY review item asking the office for a better copy, and is the ONLY class whose one-shot flag (`~/its/state/manifest_poll_flagged.json`) a Tier-2 operator may clear to retry. An unresolved Box root leaves the row claimed and deliberately UNFLAGGED so it self-heals. A hostile document can never kill the daemon — every parse runs in the killable child. §43 tree: `docs/runbooks/material_manifest_import.md`. |
+| **Restart** | Dashboard **kickstart**; shell `install.sh load org.solutionsmith.its.manifest-poll` |
 
 ### rfq-poll — `po_materials.rfq_poll`
 

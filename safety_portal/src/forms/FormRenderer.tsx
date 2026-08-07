@@ -98,6 +98,12 @@ export interface ExpectedMaterialsAdapter {
   onConfirmReceipt: (row: ExpectedMaterialRow) => void;
   /** "Report a problem →" — the host flags the row + deep-links material-incident prefilled. */
   onReportProblem: (row: ExpectedMaterialRow) => void;
+  /** PR2 — "Materials tracking →", the deep link into the per-job Materials page (the full list
+   *  with ship/delivery dates, scheduled loads and the delivery history). OPTIONAL, so the
+   *  section renders exactly as before for any host with nowhere to navigate to — which is why
+   *  this needs NO form-definition change: the mount's whole body is authored here, and the
+   *  definition contributes only type/key/title. */
+  onOpenMaterials?: () => void;
 }
 
 /** Adapter for `additional_photos` sections (DR-photo-pool Slice 1). The HOST (the Daily tab)
@@ -406,6 +412,13 @@ function SectionView(p: SectionProps) {
       return (
         <section className="fr__section fr__expected-materials">
           <h2 className="fr__section-title">{s.title ?? "Expected materials"}</h2>
+          {em.onOpenMaterials ? (
+            <p>
+              <button type="button" className="btn btn--secondary" onClick={em.onOpenMaterials}>
+                Materials tracking →
+              </button>
+            </p>
+          ) : null}
           {incidentFiled ? (
             <p className="fr__form-link-filed">Material incident report: {incidentFiled}</p>
           ) : null}

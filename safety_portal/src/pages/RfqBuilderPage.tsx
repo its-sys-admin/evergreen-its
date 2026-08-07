@@ -529,7 +529,10 @@ export function RfqBuilderPage() {
                 {vendorByKey.get(k)?.vendor_name ?? k}{" "}
                 <button
                   type="button"
-                  className="btn btn--ghost"
+                  // --danger, NOT --ghost: the chip sits on the light page, where the header
+                  // ghost's white glyph is invisible. --danger is the design language's
+                  // "small white/red utility-delete style kept for inline icon/remove controls".
+                  className="btn btn--danger"
                   aria-label={`Remove ${vendorByKey.get(k)?.vendor_name ?? k}`}
                   onClick={() => setVendorKeys((ks) => ks.filter((x) => x !== k))}
                 >

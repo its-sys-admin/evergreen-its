@@ -84,6 +84,7 @@ export function FieldOpsMyTasks({
   onBack,
   onOpenForm,
   onOpenJob,
+  onOpenMaterials,
   initialTab,
   onTabChange,
 }: {
@@ -100,6 +101,9 @@ export function FieldOpsMyTasks({
    *  (the "Log time" quick action + job-group links). Absent when the actor can't read the
    *  tracker (App gates on cap.jobtracker.read) — the affordances then don't render. */
   onOpenJob?: (jobId?: string) => void;
+  /** PR2 — deep link from the Daily tab's material-receipt region into the per-job Materials
+   *  page. Absent when the actor lacks cap.materials.receive — the button then doesn't render. */
+  onOpenMaterials?: (jobId: string) => void;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -461,6 +465,7 @@ export function FieldOpsMyTasks({
             placementError={error}
             onRetryPlacement={() => void load()}
             onOpenForm={onOpenForm}
+            onOpenMaterials={onOpenMaterials}
             refreshToken={refreshToken}
             onLoaded={setDailyInfo}
           />

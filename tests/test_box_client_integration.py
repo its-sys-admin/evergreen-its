@@ -96,3 +96,57 @@ def test_mirror_tree_nesting_round_trip(_client):
         assert job_children.get("week of 2026-05-30") == week
     finally:
         _client.folder(root).delete(recursive=True)
+
+
+def test_move_folder_relocates_atomically_and_preserves_file_ids(_client):
+    """Live §30: the Box half of the job archive.
+
+    The load-bearing assertion is `download_file(file_id)` AFTER the move. Box item IDs are
+    stable across a re-parent, which is what lets an already-approved-but-unsent weekly
+    packet still send once its job's folder has been archived — `weekly_send` resolves the
+    compiled packet by Box FILE ID, not by path. If IDs did not survive, archiving a job
+    would silently break every pending send for it.
+
+    Also proves move+rename is ONE call (no moved-but-unrenamed window) and that re-issuing
+    the same move is a harmless replay, which is what the resume path relies on.
+    """
+    root = box_client.get_or_create_folder("0", TEST_FOLDER)
+    job = box_client.get_or_create_folder(root, "_int_mv_job")
+    archive = box_client.get_or_create_folder(root, "_int_mv_archive")
+    archive_job = box_client.get_or_create_folder(archive, "_int_mv_job_archived")
+
+    payload = b"%PDF-1.4 archive move test\n"
+    meta = box_client.upload_bytes(job, "packet.pdf", payload)
+    file_id = meta["id"]
+
+    try:
+        # Precondition: the file is reachable and the folder sits under the live root.
+        assert box_client.download_file(file_id) == payload
+
+        out = box_client.move_folder(job, archive_job, new_name="Safety")
+
+        # Folder id stable, re-parented, and renamed in the SAME call.
+        assert out["id"] == str(job)
+        assert out["name"] == "Safety"
+        assert out["parent_id"] == str(archive_job)
+
+        # THE assertion: the contained file's ID still resolves to the same bytes.
+        assert box_client.download_file(file_id) == payload
+
+        # Gone from the old parent, present under the new one.
+        assert box_client.find_child_folder(root, "_int_mv_job") is None
+        assert box_client.find_child_folder(archive_job, "Safety") == str(job)
+
+        # Replay: re-issuing the identical move is a no-op, not a 409 escape.
+        again = box_client.move_folder(job, archive_job, new_name="Safety")
+        assert again["id"] == str(job)
+    finally:
+        # Recursive delete of the sandbox subtree — the ITS-prefixed test root only.
+        try:
+            _client.folder(archive).delete(recursive=True)
+        except Exception:  # noqa: BLE001 — best-effort teardown
+            pass
+        try:
+            _client.folder(job).delete(recursive=True)
+        except Exception:  # noqa: BLE001
+            pass

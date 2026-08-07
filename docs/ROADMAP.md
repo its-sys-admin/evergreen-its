@@ -66,9 +66,19 @@ period-split + archive-on-closure; find-or-create + capacity margin-check; never
   accumulating-log shape (which changes the §51 guards: never-delete = retire-in-place + archive-on-closure;
   row-cap/period-split largely moot for a bounded snapshot).
 - **P7 Slice 3 — Materials Status & Location.**
-- **M2** — per-job **Material List** + bidirectional receive. **OPEN DECISION:** the landed table is
-  `job_expected_materials` (0031); the mission specs a `material_list` (line_uuid/smartsheet_row_id/unplanned) that
-  does NOT exist — recommend **EXTEND** the landed table (§14) with those 3 columns rather than adding a new table.
+- **M2** — per-job **Material List** + bidirectional receive. ~~**OPEN DECISION:**~~ **RESOLVED
+  2026-08-07 (migration `0059`)** — the recommendation was taken: `job_expected_materials` (0031)
+  was **EXTENDED** (`part_number`, `category`, `expected_ship_date`) rather than replaced by a
+  `material_list` table. Two genuinely-new tables landed beside it because they model what one
+  table cannot: **`material_receipt_events`** (an append-only delivery ledger — a part number
+  arrives across many loads, so a mark must be an event, not a flag) and **`material_shipments`**
+  (the scheduled loads, with ship/delivery dates + BOL). The three-way mark
+  (Delivered / Partially delivered / Not delivered) and a per-job **Materials tracking** page ship
+  with it; §43 runbook `docs/runbooks/job_materials.md`. **Still open:** the §51 mirror exposure of
+  the new columns + a receipts-ledger sheet, and manifest (BOM / shipping-log) import.
+  _(Original wording, for the design record: "the mission specs a `material_list`
+  (line_uuid/smartsheet_row_id/unplanned) that does NOT exist — recommend EXTEND the landed table
+  (§14) with those 3 columns rather than adding a new table.")_
 - **M3** — Material Incidents referencing a Material-List line + a fenced `portal_poll` photo deep-screen pass.
 Design source: `progress-reporting/mission.md` §11–§13/§16.
 
@@ -109,7 +119,100 @@ Email-Triage-owned (unchanged).
 WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · `cutover_checklist.md` v2 + `scripts/verify_cutover.py` (§53 gate) · `production_rollback.md` · `aug7_delivery_runbook.md`.
 **WS2 operator dashboard — COMPLETE (2026-07-13).** All six completion blocks landed four-part clean: config-registry reconcile to the post-SC/PO surface (#567), D1-3b KeepAlive-service plist + interval-edit verb (#570), daemon-control + breaker-clear verbs + read-only send-queue panel (#574), Evergreen brand pass + audit-panel/lockout-UX/`/healthz` hardening (#576), and the activation kit + close-out. The six §44 actions are built; ships **DARK** pending the operator's one-time PIN + `tailscale_serve.sh` → plist-install activation (`docs/runbooks/operator_dashboard_config_editor.md` quick-start).
 
-### Track 6 — Post-delivery: outage observability + estimate-lane determinism *(scoped 2026-08-07)*
+### Track 6 — End-to-end job archive workflow *(IN FLIGHT — 7 PRs landed 2026-08-03; see status block)*
+
+> **Status 2026-08-03.** Seven PRs landed four-part clean: **#715** disarm the landmine + truthful
+> lifecycle · **#716** Smartsheet folder primitives · **#718** `box_client.move_folder` · **#719**
+> migration 0058 + `cap.job.archive` · **#720** archive/unarchive routes + the `prune.ts` fence ·
+> **#721** the daemon's queue + commit point · **#722** `field_ops/job_archive.py`.
+>
+> **The Box leg LANDED** — `job_archive` now moves all six containers. `build_box_roots.py` builds a
+> third root (`ITS Archive`), `field_ops.box.archive_root_folder_id` is seeded by `standup.py` and
+> enrolled in VC-03, the dashboard registry, the config dictionary, and — the trap that would have
+> been silent — `production_repoint.ALLOWED_SETTING_SUFFIXES`, which matches Setting names by
+> literal suffix and SKIPS non-matching rows without error. A test asserts that enrolment, so the
+> guard cannot rot back.
+>
+> **The un-archive leg LANDED too** — `run_archive_pass` dispatches on the queue row's
+> `archive_direction` (refusing an unrecognised one rather than defaulting, because running the
+> wrong direction reports success while nothing moves). Smartsheet's two-call order inverts per
+> direction (archive move→rename, restore rename→move) so neither crash window can leave a
+> mis-named folder in the live tree; a restore onto a re-grown live folder refuses rather than
+> merging. Still never exercised LIVE on either system.
+>
+> **REMAINING:** wire the pass into `fieldops_sync`'s cycle behind a dark, seeded-false gate;
+> `production_shares_manifest.json` needs `WORKSPACE_ARCHIVE` with a byte-exact name
+> (Safety Portal uses two EN DASHes, the others one EM dash) — **and an operator decision on WHO is
+> shared on it**, because a cross-workspace move changes who can READ the relocated contents (§46);
+> the SPA button + typed-confirm modal; docs (ADR-0005, the `project_closure.md` rewrite, the
+> troubleshooting-tree node, the system-map node **with its brief** —
+> `tests/test_system_map.py` enforces that); the **§51 doctrine rider**; and the attended sandbox
+> drill (the Smartsheet half is drilled; the Box half is not).
+>
+> **Archiving is UNAVAILABLE end-to-end until those land — deliberately.** Nothing is lost: the §51
+> move had never fired against live data in this system's history.
+>
+> **Operator-blocked:** the sandbox Smartsheet PAT, the Box identity question, and the
+> `evergreen-its` push-access decision — all three now have `docs/tech_debt.md` entries dated
+> 2026-08-03 with their unblock conditions.
+
+An admin archives a job from the portal and **every per-job container in BOTH Smartsheet and Box**
+relocates into an archive tree, consolidated under the job with per-workstream subfolders:
+
+```
+SMARTSHEET   ITS — Archive / <Job Name> / {Safety, Progress, Purchase Orders, Subcontracts}/
+BOX          ITS Archive   / <Job Name> / {Safety, Progress}/          ← new root
+```
+
+**Six containers, not eleven** — `safety_reports.box.portal_root_folder_id` is the *shared* Box root
+for safety + PO + RFQ + subcontracts, so moving `<safety root>/<Job>` carries `Purchase Orders/`,
+`RFQs/`, `Vendor Quotes/` and the subcontract files with it. Retained deliberately: the flat
+`*_Log` / `*_Pending_Review` ledgers, WSR/WPR review rows, the `ITS_Active_Jobs*` rows (flagged
+`Archived`, never deleted), `ITS DATA/<Project>`, `ITS Photos/`, and all D1.
+
+**Doctrine:** this is a **§51 scope expansion** — a FIXED high-capability class. It ratifies rows
+2/3/6/9 of `docs/reports/2026-07-23_project_closure_policy_proposal.md` (RETAIN/DECIDE → MOVE) and
+closes its#682. Seth-owned rider; nothing activates before it exists. Note row 3 inverts the
+proposal's recommendation — the progress mission's "week sheets archived on closure" language turns
+out to be *correct*; the implementation was behind it, not the mission ahead of it.
+
+**Ordered PRs.** PR-0 **de-arm the landmine first** (below) · primitives + §30 live smokes
+(`smartsheet_client.move_folder_to_folder` / `move_folder_to_workspace` / `rename_folder`;
+`box_client.move_folder`) · D1 migration `0058` + `cap.job.archive` · Worker archive/unarchive routes
++ the `prune.ts` fence · `field_ops/job_archive.py` shipped dark · third Box root + repoint/standup/
+shares enrolment · SPA button + typed confirm · **attended sandbox drill** · docs/doctrine ·
+delete the superseded helper.
+
+**Three live defects this work must fix (found 2026-08-02):**
+- **The `Archived` dropdown option is an armed landmine.** `fieldops_sync.py:757-763` fires the
+  four-sheet §51 relocation on any mirror of a `lifecycle=='archived'` job — no confirmation, no
+  retry, and the UI then displays "Inactive". Never fired live; one selection away from doing so.
+- **`prune.ts:331-357` would delete an archived job out from under its own archive record** — the
+  `jobs` DELETE has **no age cutoff** and fires on `active = 0`.
+- **Renaming a job orphans its folders.** `project_name` is editable
+  (`fieldops_job_write.ts:352-377`) while every container is keyed by
+  `safety_naming.job_folder_name(project_name)` with no rename propagation.
+
+**Blocked on (operator):** a sandbox Smartsheet PAT under a distinct Keychain key — this host's
+`ITS_SMARTSHEET_TOKEN` resolves to **production**, so `pytest -m integration` here writes to the
+live tenant; the Box identity question (a `box_client` call rotates the refresh token); and the
+`ITS — Archive` production sharing posture (§46 — a folder move transfers read authority).
+
+**Key API constraints (verified):** Smartsheet Move Folder **cannot rename** (`newName` is a *Copy*
+parameter, silently ignored on move) → move-then-rename, two calls, non-atomic; Box
+`Item.move(parent, name=)` does both atomically. Move Folder needs `ADMIN_WORKSPACES`, so the PAT
+identity must hold Admin on all five workspaces. F22 approval is **not** affected — authority comes
+from a fixed workspace constant, and the review sheets never move.
+
+Prior art: `docs/runbooks/project_closure.md` (the §43 runbook this rewrites) ·
+`docs/reports/2026-07-23_project_closure_policy_proposal.md` · its#682 · `docs/tech_debt.md`
+"Archive-on-closure". Design record lands as `docs/adr/0005-job-archive-workflow.md`.
+
+<!-- NUMBERING NOTE (reconcile 2026-08-07): this Track was scoped as "Track 6" on the
+     deployment repo while Track 6 above was already in flight on the development repo —
+     the two repositories allocated the number independently while they were split. Kept
+     both; renumbered the later-scoped one to 7. -->
+### Track 7 — Post-delivery: outage observability + estimate-lane determinism *(scoped 2026-08-07)*
 Scoped the day of delivery, after a live diagnosis session found a **12.7-hour Smartsheet outage (2026-08-06,
 breaker OPEN 729 min) that paged ZERO times**. Two code PRs + a docs pass; the debt-file half landed with this
 entry. Working notes: `~/.claude/plans/zany-brewing-ritchie.md` (scratch — this Track is the durable record).

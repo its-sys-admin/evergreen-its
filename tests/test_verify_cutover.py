@@ -575,7 +575,8 @@ def test_required_secrets_cover_program_list():
         "ITS_BOX_REFRESH_TOKEN",
     }
     assert "ITS_PORTAL_PO_TOKEN" in vc.REQUIRED_SECRETS
-    assert len(vc.REQUIRED_SECRETS) == 20
+    # 21 with PR3b's ITS_PORTAL_MANIFEST_TOKEN (its own per-lane bearer).
+    assert len(vc.REQUIRED_SECRETS) == 21
 
 
 def test_dark_daemon_bearers_and_operator_pin_enrolled():

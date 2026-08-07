@@ -15,6 +15,25 @@ import { eagerFormDefinitionsPlugin } from "./vite-plugin-eager-forms";
 // effect on the worker build.
 export default defineConfig({
   plugins: [react(), cloudflare(), eagerFormDefinitionsPlugin()],
+  server: {
+    fs: {
+      // The Worker reads PO/subcontract config + terms from OUTSIDE this vite root:
+      // worker/po.ts imports ../../po_materials/{terms/manifest.json,config/*.json} and
+      // globs ../../po_materials/terms/*.md as ?raw (worker/subcontract.ts does the same).
+      // Vite's dev server refuses to serve anything above `root` unless allow-listed, so
+      // without this `vite dev` dies at startup with
+      //   Denied ID …/po_materials/terms/chint_vendor_v1.md?raw
+      //
+      // Why this went unnoticed: fs.allow is a DEV-SERVER-ONLY restriction. `vite build`
+      // resolves the same imports fine (verified: build succeeds while dev did not), and
+      // CI's `portal` job runs tsc + vitest + build — never `vite dev`. Local dev has
+      // therefore been broken since the PO terms/config imports landed, with every gate
+      // green the whole time.
+      //
+      // ".." is the repo root relative to this config file. Scoped to the repo on purpose.
+      allow: [".."],
+    },
+  },
   build: {
     // R4-F7 vendor-chunk split: pin react/react-dom/scheduler into their own chunk so a
     // definition-only publish (the common auto-publish: catalog.json + forms/*.json →

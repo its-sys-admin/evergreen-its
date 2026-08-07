@@ -210,8 +210,11 @@ export function ChecklistItemRow({
           <button
             type="button"
             // A required-but-missing photo makes "Add photo" the obvious next action (primary), so the
-            // person isn't left staring at a disabled "Mark done"; an optional photo stays a quiet ghost.
-            className={needsPhoto ? "btn btn--primary" : "btn btn--ghost"}
+            // person isn't left staring at a disabled "Mark done"; an optional photo stays quiet.
+            // --secondary, NOT --ghost: this row sits on a white card, where the header ghost's white
+            // text + 60%-white border is invisible (global.css: "the trackers' page-context ghosts are
+            // remapped to --secondary in the markup so they are visible on the white page").
+            className={needsPhoto ? "btn btn--primary" : "btn btn--secondary"}
             aria-label={`Add photo for item ${item.id}`}
             disabled={busy || photoBusy}
             onClick={() => photoInputRef.current?.click()}
@@ -265,7 +268,7 @@ export function ChecklistItemRow({
               {" "}
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--secondary"
                 aria-label={`File another ${item.label ?? `form for item ${item.id}`}`}
                 disabled={busy}
                 onClick={() => onOpenForm(item)}
@@ -349,7 +352,7 @@ export function ChecklistItemRow({
               {" "}
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--secondary"
                 aria-label={`Edit note for item ${item.id}`}
                 disabled={busy}
                 onClick={() => {
@@ -476,7 +479,7 @@ export function ChecklistItemRow({
                   </button>{" "}
                   <button
                     type="button"
-                    className="btn btn--ghost"
+                    className="btn btn--secondary"
                     aria-label={`Dismiss shortfall prompt for item ${item.id}`}
                     disabled={busy || countBusy}
                     onClick={() => {

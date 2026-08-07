@@ -72,6 +72,18 @@ export interface Env {
    */
   PORTAL_RFQ_API_TOKEN: string;
   /**
+   * Bearer token the Mac-side manifest daemon (field_ops/manifest_poll.py, PR3b) presents to
+   * /api/fieldops/manifests/internal/* — SEPARATE from every other tier, for exactly the
+   * ADR-0004 decision-4 reason the estimate lane has its own: this daemon decodes hostile
+   * PDF/xlsx bytes (openpyxl + pdfplumber inside a killable child), so it is a
+   * highest-exposure process and its token is scoped ONLY to the manifest pool. It must NOT
+   * reach the PO/RFQ/estimate queues, the submission drain, user provisioning, the mirrors,
+   * or any send-lane control surface — and none of those tokens may read the manifest pool.
+   * Mirrored into the Keychain as ITS_PORTAL_MANIFEST_TOKEN. Workers Secret / .dev.vars —
+   * never committed.
+   */
+  PORTAL_MANIFEST_API_TOKEN: string;
+  /**
    * Bearer token the Mac-side config daemon (config_editor/config_poll.py, §50 — built LATER)
    * presents to /api/internal/config/* — SEPARATE from the portal_poll / admin / fieldops / PO
    * tokens (privilege separation): the config daemon's token must NOT be able to drain the

@@ -138,6 +138,27 @@ GATED_SCRIPTS: list[tuple[str, list[str]]] = [
          "anthropic", "anthropic_client"],
     ),
     (
+        # manifest_poll (PR3b) is the materials-manifest import daemon: it drains the
+        # send-free D1 manifest pool, §34-screens each document, extracts its cell grid in
+        # the KILLABLE sandbox child, parses it, files the ORIGINAL bytes to Box and posts
+        # the reviewable grid back. It is the highest-exposure process in field_ops — it
+        # decodes hostile PDF/xlsx bytes — which is exactly why it holds its OWN bearer and
+        # why this entry matters: no send path, no LLM. Its HTTP egress to OUR Worker rides
+        # the F02-allowlisted shared.portal_client, so it imports no raw network library.
+        "field_ops/manifest_poll.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client"],
+    ),
+    (
+        # Track 6 job archive. Pure relocation of Smartsheet/Box folders — no AI, no send path.
+        # Worth gating explicitly rather than relying on its caller: this module reaches BOTH
+        # external systems directly, so a future "email the operator when an archive fails" would
+        # be a natural-looking addition that must go through the error_log/alerting path instead.
+        "field_ops/job_archive.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client"],
+    ),
+    (
         # po_poll (PO S4) is the Purchase-Order pull daemon — the ONE multi-pass Mac
         # half of the PO pipeline (drafts drain + HMAC verify + totals assert + render
         # + Box/PO_Log/PO_Pending_Review filing + §51 vendor sync + status mirror).

@@ -52,6 +52,8 @@ export type AppRoute =
   | { view: "subcontractors" }
   | { view: "subcontract-builder" }
   | { view: "fieldops-jobs"; jobId?: string }
+  // jobId REQUIRED — this view has no job-less form, so the round-trip law stays total.
+  | { view: "fieldops-job-materials"; jobId: string }
   | { view: "fieldops-tasks"; tab?: MyTasksTab }
   | { view: "fieldops-inspections" }
   | { view: "fieldops-equipment" }
@@ -82,6 +84,9 @@ export const VIEW_CAPS: Record<AppRoute["view"], string | null> = {
   subcontractors: "cap.subcontracts.manage",
   "subcontract-builder": "cap.subcontracts.manage",
   "fieldops-jobs": "cap.jobtracker.read",
+  // Read is cap-only; the Worker per-job-scopes non-admins, so a submitter reaches only their
+  // own job's page, and the write affordances re-gate on materials.manage / the manager role.
+  "fieldops-job-materials": "cap.materials.receive",
   "fieldops-tasks": "cap.tasks.own",
   "fieldops-inspections": "cap.checklist.manage",
   "fieldops-equipment": "cap.equipment.field",
@@ -140,6 +145,20 @@ export function parseRoute(loc: { pathname: string; search: string }): AppRoute 
   if (path === "/tasks/daily") return { view: "fieldops-tasks", tab: "daily" };
 
   if (path === "/jobs") return { view: "fieldops-jobs" };
+  // Materials BEFORE the bare /jobs/:id matcher. That matcher anchors on a slash-free segment so
+  // it could not swallow this today, but ordering makes the intent explicit and survives a future
+  // loosening of the pattern.
+  const matMatch = /^\/jobs\/([^/]+)\/materials$/.exec(path);
+  if (matMatch) {
+    let raw: string;
+    try {
+      raw = decodeURIComponent(matMatch[1]);
+    } catch {
+      return null; // malformed percent-encoding → unrecognized
+    }
+    const jobId = cleanParam(raw);
+    return jobId ? { view: "fieldops-job-materials", jobId } : null;
+  }
   const jobMatch = /^\/jobs\/([^/]+)$/.exec(path);
   if (jobMatch) {
     let raw: string;
@@ -185,6 +204,8 @@ export function formatRoute(route: AppRoute): string {
       return route.tab ? `/tasks/${route.tab}` : "/tasks";
     case "fieldops-jobs":
       return route.jobId ? `/jobs/${encodeURIComponent(route.jobId)}` : "/jobs";
+    case "fieldops-job-materials":
+      return `/jobs/${encodeURIComponent(route.jobId)}/materials`;
     case "fill": {
       const p = route.prefill;
       if (!p) return "/submit";

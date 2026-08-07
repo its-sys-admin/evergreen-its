@@ -101,7 +101,12 @@ export interface NewJobClient {
 // the canonical job-state field (active|inactive|archived); the legacy `active`/`status` flags are
 // derived by the worker. Routing block + CC arrays mirror fieldops_job_write.ts parseRouting:
 // every field optional, each CC array ≤5 email-shaped strings. The worker re-validates + re-gates.
-export type JobLifecycle = "active" | "inactive" | "archived";
+// Sourced from the worker's wire-types so there is ONE definition of the union rather than two
+// copies that could drift (the SPA reads it off JobRow/JobDetail, which the worker already types).
+// Imported AND re-exported: a bare `export type { … } from` would satisfy downstream importers but
+// would not bind the name in this module, where setLifecycle's own signature uses it.
+import type { JobLifecycle } from "../../worker/wire-types";
+export type { JobLifecycle };
 
 export interface JobRouting {
   /** OPTIONAL rename (edit page, 2026-07-20): absent = unchanged; never blankable.

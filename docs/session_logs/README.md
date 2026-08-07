@@ -96,6 +96,7 @@ outside the sentinel block.
 <!-- BEGIN AUTO-INDEX -->
 | Date | Type | Status | Workstream | Title | PRs |
 |------|------|--------|------------|-------|-----|
+| 2026-08-03 | session_log | active | field_ops | [Session log — 2026-08-02 → 08-03 · Repo reconcile, a real local dev environment, and Track 6 (job-archive workflow) PR-0 through PR-5](2026-08-03_track6-job-archive-workflow-pr0-through-pr5.md) | #712, #713, #715, #716, #717, #718, #719, #720, #721, #722 |
 | 2026-07-14 | session_log | active | _–_ | [2026-07-14 — Debt-Zero + Security-Scrub](2026-07-14_debt-zero-and-security-scrub.md) | _–_ |
 | 2026-07-12 | session_log | active | subcontracts | [Subcontract generator COMPLETE — SC-S3c (backend) + SC-S5 (UI) + SC-S3b Exhibit A](2026-07-12_subcontract-generator-complete-s3c-s5-exhibit-a.md) | #536, #537, #538 |
 | 2026-07-11 | session_log | active | subcontracts | [Subcontract generation workstream — SC-S1 foundation (deterministic, PO-mirror)](2026-07-11_subcontracts-s1-foundation.md) | #529 |
@@ -103,7 +104,11 @@ outside the sentinel block.
 | 2026-07-10 | session_log | active | _–_ | [Cutover readiness gap — CL-01…CL-33 disposition + verify_cutover baseline (2026-07-10)](2026-07-10_cutover-gap.md) | _–_ |
 | 2026-07-10 | session_log | active | _–_ | [Overnight (autonomous): §50 config-editor Features 1 & 2 + Aug-7 cutover readiness](2026-07-10_overnight-config-editor-features-and-cutover-readiness.md) | #524, #525, #526 |
 | 2026-06-10 | session_log | active | safety_portal | [Session — Agent Optimization (Brief 2) + Safety Portal Hardening (Brief 1)](2026-06-10_agent-optimization-and-portal-hardening.md) | #260, #261, #263, #264, #265, #266 |
+| 2026-08-07 | session_log | closed | field_ops | [Session log — 2026-08-07 · Manifest import transport (PR3b): the pool, the daemon, and the paged commit](2026-08-07_manifest-import-transport-pr3b.md) | #727, #729, #732, #733, #734 |
+| 2026-08-07 | session_log | closed | field_ops | [Session log — 2026-08-06 → 08-07 · Materials-tracking program: back-button contrast fix, per-job Materials page (migration 0059), and the BOM/shipping-log manifest parser](2026-08-07_materials-tracking-back-button-page-manifest-parser.md) | #724, #725, #727 |
+| 2026-08-02 | session_log | closed | infrastructure | [Session log — 2026-08-02 · Repo reconcile, a real local dev environment, and the archive-workflow plan](2026-08-02_repo-reconcile-and-local-dev-environment.md) | #712, #713 |
 | 2026-07-29 | session_log | closed | _–_ | [2026-07-26 → 2026-07-29 — Documentation consolidation: six themed PRs against a 172-finding audit](2026-07-29_documentation-consolidation.md) | #2, #3, #4, #5, #6, #7 |
+| 2026-07-26 | session_log | closed | infrastructure | [Session log — 2026-07-25 → 2026-07-26 · Production-host migration Phase 1: dev-box teardown + new production-host stand-up](2026-07-26_production-host-migration-phase1.md) | _–_ |
 | 2026-07-26 | session_log | closed | infrastructure | [2026-07-25 → 2026-07-26 — ITS production host stand-up (Florida MacBook), fleet live at 15 daemons](2026-07-26_production-host-standup.md) | _–_ |
 | 2026-07-24 | session_log | closed | operator_dashboard | [2026-07-24 — The three M365 / Graph secrets become dashboard-rotatable (Developer-Operator self-service), detection gap logged](2026-07-24_m365-secrets-dashboard-rotatable.md) | #705, #707 |
 | 2026-07-23 | session_log | closed | _–_ | [2026-07-23 — Brief B: project-archive path (§51 closure) — verification + doc deliverables](2026-07-23_archive-path-closure-docs.md) | #678 |

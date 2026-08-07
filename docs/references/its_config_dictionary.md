@@ -47,11 +47,13 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
+| `field_ops.box.archive_root_folder_id` | str | *(unset)* | Box root the Track 6 job archive relocates a closed job's Safety and Progress containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py. | field_ops.job_archive |
 | `field_ops.fieldops_sync.equipment_enabled` | bool | false | Per-stream gate: mirror equipment status from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.hours_enabled` | bool | false | Per-stream gate: mirror crew hours from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.incidents_enabled` | bool | false | Per-stream gate: mirror material incidents from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.materials_enabled` | bool | false | Per-stream gate: mirror material receipts from the portal into Smartsheet. (Activation is gated on the §51 rider — read the row's Description before flipping.) | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.sync_enabled` | bool | false | Master gate for the portal→Smartsheet job mirror (fieldops_sync). Ships OFF; the operator flips it on at cutover after the mirror slices land. | field_ops.fieldops_sync |
+| `field_ops.manifest_poll.polling_enabled` | bool | false | Runtime on/off gate for the field_ops.manifest_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | field_ops.manifest_poll |
 
 ## Purchase Orders & Materials
 
@@ -68,7 +70,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 | `po_materials.estimate_extract.timeout_seconds` | int | 600 | Wall-clock budget in seconds for one Tier-2 extraction call (keep_alive=0 load-on-demand can make the first call slow). | po_materials.estimate_poll |
 | `po_materials.estimate_poll.max_pages_preview` | int | 12 | Max pages rendered as disposition-screen previews per estimate (Quartz via the estimate_sandbox child). | po_materials.estimate_poll |
 | `po_materials.estimate_poll.polling_enabled` | bool | false | Runtime on/off gate for the po_materials.estimate_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | po_materials.estimate_poll |
-| `po_materials.po_attach_screen.clamav_enabled` | bool | false | Optional ClamAV layer of the §34 doc screener (po_attach_screen L3), SHARED with po_poll's attachment pass. Default OFF. | po_materials.estimate_poll, po_materials.po_poll |
+| `po_materials.po_attach_screen.clamav_enabled` | bool | false | Shared §34 ClamAV posture; owned by po_materials. One scanner setting spans every document pool (PO attachments, estimates, manifests). | field_ops.manifest_poll, po_materials.estimate_poll, po_materials.po_poll |
 | `po_materials.po_poll.polling_enabled` | bool | false | Runtime gate for the PO pull daemon (pulls submitted POs from the Worker). Ships dark. | po_materials.po_poll |
 | `po_materials.po_poll.status_sync_enabled` | bool | false | Sub-gate: sync PO statuses back to the portal. Ships dark. | po_materials.po_poll |
 | `po_materials.po_poll.vendors_sync_enabled` | bool | false | Sub-gate: push the vendor list down to the portal PO dropdown. Ships dark. | po_materials.po_poll |
@@ -85,7 +87,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
-| `progress_reports.box.portal_root_folder_id` | str | *(unset)* | Box root folder ID under which progress-report packets are filed. | progress_reports.progress_weekly_generate |
+| `progress_reports.box.portal_root_folder_id` | str | *(unset)* | Box root folder ID under which progress-report packets are filed. | field_ops.job_archive, progress_reports.progress_weekly_generate |
 | `progress_reports.compile_now_poll.polling_enabled` | bool | true | Runtime on/off gate for the progress_reports.compile_now_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | safety_reports.compile_now_poll |
 | `progress_reports.equipment_status.row_cap_warn_threshold` | int | 15000 | Row-count on the mirror sheet at which progress_reports.equipment_status WARNs that the sheet is approaching the Smartsheet per-sheet row cap. | field_ops.fieldops_sync |
 | `progress_reports.evergreen_contact_name` | str | the Evergreen Renewables office | The name ITS uses for the Evergreen Renewables office/contact in this workstream's report copy. | progress_reports.progress_weekly_generate |
@@ -104,7 +106,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
 | `progress_reports.intake_enabled` | bool | false | FOOTGUN: the progress-intake gate is read under Workstream='safety_reports' (intake's own workstream), NOT 'progress_reports' — seed it there. | safety_reports.intake |
-| `safety_reports.box.portal_root_folder_id` | str | *(unset)* | Shared Box mirror-tree root; owned by safety_reports. Clean estimates file under ROOT→<job>→'Purchase Orders'→'Vendor Quotes'. | po_materials.estimate_poll, po_materials.po_poll, po_materials.rfq_poll, safety_reports.intake, safety_reports.portal_poll, safety_reports.weekly_generate, subcontracts.subcontract_poll |
+| `safety_reports.box.portal_root_folder_id` | str | *(unset)* | Shared Box mirror-tree root; owned by safety_reports. Unset means the filing folder cannot resolve and rows stay claimed until it is configured. | field_ops.job_archive, field_ops.manifest_poll, po_materials.estimate_poll, po_materials.po_poll, po_materials.rfq_poll, safety_reports.intake, safety_reports.portal_poll, safety_reports.weekly_generate, subcontracts.subcontract_poll |
 | `safety_reports.compile_now_poll.polling_enabled` | bool | true | Runtime on/off gate for the safety_reports.compile_now_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | safety_reports.compile_now_poll |
 | `safety_reports.evergreen_contact_name` | str | the Evergreen Renewables office | The name ITS uses for the Evergreen Renewables office/contact in this workstream's report copy. | safety_reports.weekly_generate |
 | `safety_reports.intake.allowed_senders` | str | *(unset)* | Comma-separated sender allowlist for the intake extraction path (the retired email-PDF intake; the live path is the portal PULL). Empty = none set. | safety_reports.intake |
@@ -114,7 +116,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 | `safety_reports.intake.mailbox` | str | safety@evergreenmirror.com | The mailbox the (now-dormant, legacy) safety email-intake path read from. The live path is the portal PULL model; this remains for the retired email caller. | safety_reports.intake |
 | `safety_reports.intake.review_queue_on_low_confidence` | bool | true | Whether a below-threshold extraction is routed to the Review Queue (true) rather than dropped. | safety_reports.intake |
 | `safety_reports.photo_screen.clamav_enabled` | bool | false | Turns on the ClamAV leg of the §34 photo screen (magic + Pillow verify + re-encode always run; this adds the AV scan). Default OFF. | safety_reports.intake, safety_reports.portal_poll |
-| `safety_reports.portal.worker_base_url` | str | *(unset)* | Shared Worker base URL; owned by safety_reports, read here too. | field_ops.fieldops_sync, po_materials.estimate_poll, po_materials.po_poll, po_materials.rfq_poll, safety_reports.portal_poll, safety_reports.publish_daemon, subcontracts.subcontract_poll, watchdog |
+| `safety_reports.portal.worker_base_url` | str | *(unset)* | Shared Worker base URL; owned by safety_reports, read here too. | field_ops.fieldops_sync, field_ops.manifest_poll, po_materials.estimate_poll, po_materials.po_poll, po_materials.rfq_poll, safety_reports.portal_poll, safety_reports.publish_daemon, subcontracts.subcontract_poll, watchdog |
 | `safety_reports.portal_poll.polling_enabled` | bool | true | Runtime on/off gate for the safety_reports.portal_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | safety_reports.portal_poll |
 | `safety_reports.publish_daemon.polling_enabled` | bool | false | Runtime on/off gate for the safety_reports.publish_daemon daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | safety_reports.publish_daemon |
 | `safety_reports.weekly_generate.job_timeout_seconds` | int | 600 | Per-job wall-clock ceiling (seconds) for the safety_reports.weekly_generate weekly compile; a job exceeding it is fenced to the Review Queue, not left to hang. | safety_reports.weekly_generate |

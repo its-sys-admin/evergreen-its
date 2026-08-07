@@ -55,6 +55,11 @@ APPROVED_RETRY_ENROLLMENT = {
     # VC-10 stale-constant guard (2026-07-23 verify pass): a pure GET of the
     # workspace name — idempotent read, retry-safe.
     "get_workspace_name",
+    # Track 6 archive primitives — both are pure GETs. get_folder_name is the resume probe
+    # (is this container already renamed?); get_workspace_access_level is the ADMIN
+    # pre-flight for folder moves. Idempotent reads, retry-safe.
+    "get_folder_name",
+    "get_workspace_access_level",
 }
 
 # Substrings that mean "this body can mutate remote state". An enrolled function whose
@@ -651,6 +656,11 @@ def test_no_write_helper_is_enrolled():
         "create_sheet_in_folder_from_template", "create_folder_in_folder",
         "create_folder_in_workspace", "move_sheet_to_folder", "delete_sheet",
         "verify_write_capability",
+        # Track 6 folder relocation. Deliberately NOT enrolled: the correct retry for an
+        # archive is DURABLE and cross-cycle (the pass re-drains from its queue with the
+        # ledger intact), not a 2-attempt in-process backoff — a move that 403s for lack of
+        # ADMIN fails identically 2s later, and a 5xx needs the next cycle, not this one.
+        "move_folder_to_folder", "move_folder_to_workspace", "rename_folder",
     }
     assert writes & smartsheet_client._TRANSIENT_RETRY_ENROLLED == set()
     for name in writes:

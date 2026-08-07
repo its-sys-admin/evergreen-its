@@ -45,7 +45,10 @@ const MAX_CC = 5; // mirrors each Active-Jobs sheet's CC 1..5 columns
 // Loose email shape: no whitespace, one @, a dotted domain (matches shared/active_jobs _EMAIL_RE).
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-const LIFECYCLE_VALUES = new Set(["active", "inactive", "archived"]);
+// The values /lifecycle will SET. Deliberately EXCLUDES 'archived' — see the route below.
+// 'archived' remains a legal stored value (JOB_LIFECYCLES in constants.ts, migration 0021); it is
+// simply not settable through this route.
+const LIFECYCLE_SETTABLE = new Set(["active", "inactive"]);
 
 function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
@@ -294,10 +297,23 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
     },
   );
 
-  // POST /api/fieldops/job/:job_id/lifecycle — set the job lifecycle (active|inactive|archived).
+  // POST /api/fieldops/job/:job_id/lifecycle — set the job lifecycle (active|inactive ONLY).
   // Derives the legacy `active` flag, bumps the mirror version, re-dirties the row. THE close path:
   // the UI closes a job via { lifecycle: 'inactive' } (the old bare /close alias was deleted —
   // tombstone below).
+  //
+  // 'archived' IS REFUSED HERE (409 use_archive_route). Until this change it was accepted, and
+  // accepting it was a live hazard, not a cosmetic one: a `lifecycle='archived'` write re-dirties
+  // the row, and on the very next mirror cycle the Mac-side daemon relocated FOUR standing tracker
+  // sheets out of the job's progress folder — with no confirmation prompt, no retry on failure, and
+  // a UI that then re-displayed the job as "Inactive" because it re-derived state from the legacy
+  // `status` column. One dropdown selection, a silent multi-sheet move, and no way to tell it had
+  // happened. It had never fired against live data; it was one click from doing so.
+  //
+  // Archiving is a heavyweight, reversible, cross-system relocation and gets its own confirmed
+  // route (ROADMAP Track 6). 409 rather than 400 because the intent is valid and the route is
+  // wrong — same shape as `use_amend_route`; `invalid_lifecycle` ("That isn't a valid job state")
+  // would be a lie, since 'archived' IS a valid stored state.
   app.post(
     "/api/fieldops/job/:job_id/lifecycle",
     gates.requireSession,
@@ -317,7 +333,10 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
         return c.json({ error: "bad_request" }, 400);
       }
       const lifecycle = typeof body.lifecycle === "string" ? body.lifecycle.trim().toLowerCase() : "";
-      if (!LIFECYCLE_VALUES.has(lifecycle)) return c.json({ error: "invalid_lifecycle" }, 400);
+      // Checked BEFORE the settable-set test so a stale SPA bundle (or curl) gets the specific,
+      // actionable code instead of a generic "invalid state".
+      if (lifecycle === "archived") return c.json({ error: "use_archive_route" }, 409);
+      if (!LIFECYCLE_SETTABLE.has(lifecycle)) return c.json({ error: "invalid_lifecycle" }, 400);
       const res = await setLifecycle(c, jobId, lifecycle);
       return res;
     },
@@ -393,6 +412,33 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
     },
   );
 
+  // ── ARCHIVE / UN-ARCHIVE (ROADMAP Track 6) ─────────────────────────────────────────────────
+  //
+  // Their OWN routes rather than lifecycle values, for three concrete reasons: there is nowhere
+  // on /lifecycle to hang a confirmation token; the audit action would be indistinguishable from
+  // an ordinary close in audit_log; and the error vocabulary here (already_archived /
+  // confirm_mismatch / archive_in_flight) is meaningless for active|inactive.
+  //
+  // Gated on cap.job.archive, NOT cap.jobtracker.manage — every admin holds the latter for routine
+  // create / rename / close, and archiving is a heavyweight, reversible, cross-system relocation
+  // that should be separately narrowable later. Not requireRole("admin") either: FieldopsGates
+  // deliberately exposes only the capability helpers, and widening it would break the
+  // no-import-cycle contract with index.ts.
+
+  app.post(
+    "/api/fieldops/job/:job_id/archive",
+    gates.requireSession,
+    gates.requireCapability("cap.job.archive"),
+    async (c) => archiveTransition(c, "archive"),
+  );
+
+  app.post(
+    "/api/fieldops/job/:job_id/unarchive",
+    gates.requireSession,
+    gates.requireCapability("cap.job.archive"),
+    async (c) => archiveTransition(c, "unarchive"),
+  );
+
   // TOMBSTONE (operator-approved deletion, 2026-07-03): POST /api/fieldops/job/:job_id/progress —
   // the manual progress-% write — was DELETED. Nothing displayed the value (the UI slider/bar was
   // removed in #403, the P6 rollup deliberately excludes progress %), and no Python read it. The
@@ -430,4 +476,192 @@ async function setLifecycle(
   ]);
   if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true, job_id: jobId, lifecycle }, 200);
+}
+
+
+// ---- archive / un-archive transition (Track 6) -------------------------------------------------
+
+/** The states a NEW archive/un-archive request may be raised from. `partial`/`failed` are
+ *  retryable by design — the operator's "Try again" re-raises and resets the attempt counter. */
+const ARCHIVE_RESTARTABLE = new Set(["none", "partial", "failed"]);
+/** In-flight: the daemon owns the row until it reports a terminal result. */
+const ARCHIVE_IN_FLIGHT = new Set(["requested", "in_progress"]);
+
+/** The same restartable set as a SQL literal list, for the atomic in-WHERE guard. Kept beside the
+ *  Set so the two cannot drift — `archiveTransition` asserts they agree at call time. */
+const ARCHIVE_RESTARTABLE_SQL = "('none','partial','failed')";
+
+/** Unicode "Other or Separator" — the complement of Python's `str.isprintable()` (which excepts
+ *  the ASCII space, handled at the call site). Cc/Cf/Cs/Co/Cn + Zl/Zp/Zs. */
+const NONPRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u;
+
+/** Sanitize a project name into the per-job folder key.
+ *
+ *  LOCKSTEP with `safety_reports/safety_naming.job_folder_name` — drop non-printables, turn '/'
+ *  into '-', strip surrounding whitespace, and fall back to the raw stripped name if sanitizing
+ *  empties it. Mirrored here (rather than imported) because the Worker cannot import Python; the
+ *  cross-language parity is covered by test/job-archive.test.ts.
+ *
+ *  Snapshotted at REQUEST time so a later /contacts rename cannot strand the daemon against a
+ *  name that no longer resolves. */
+export function jobFolderKey(projectName: string): string {
+  // Python's str.isprintable() is "NOT (Unicode category Other or Separator), except ASCII space"
+  // — i.e. Cc, Cf, Cs, Co, Cn, Zl, Zp, Zs. A narrower C0/C1-only filter is NOT equivalent, and the
+  // difference is reachable in practice: a project name pasted from Word, Excel or a PDF routinely
+  // carries a non-breaking space (U+00A0), a zero-width space/joiner (U+200B/U+200D), a direction
+  // mark (U+200E), or an en/ideographic space (U+2002/U+3000).
+  //
+  // Getting this wrong is silent and expensive. Python creates the real folder with those
+  // characters STRIPPED, so if the Worker snapshotted archive_folder_key with them intact, the
+  // daemon would resolve against a folder name that was never created — a permanent archive
+  // failure surfacing only as an unexplained archive_state='failed'.
+  const printable = Array.from(projectName)
+    .filter((ch) => ch === " " || !NONPRINTABLE.test(ch))
+    .join("");
+  const cleaned = printable.replaceAll("/", "-").trim();
+  return cleaned.length > 0 ? cleaned : projectName.trim();
+}
+
+/** POST /:job_id/archive and /:job_id/unarchive — raise a relocation request for the daemon.
+ *
+ *  This route does NOT move anything. It records intent; the Mac-side pass drains the queue and
+ *  reports back. Keeping those separate is what lets the UI say "Archiving…" honestly instead of
+ *  claiming a job is archived the instant a flag flips.
+ *
+ *  The typed confirmation is checked SERVER-side against the row's own project_name. Client-only
+ *  would not be a control at all (Invariant 2), would be untestable in workerd, and would turn
+ *  "wrong job open in a second tab" from a refusal into an archive. House precedent:
+ *  operator_dashboard/auth.verify_elevated. Trim-only and case-sensitive; deliberately NOT
+ *  constant-time — the name is rendered in the modal and is not a secret, so the bearer-digest
+ *  helpers in index.ts would be cargo-cult here. */
+async function archiveTransition(
+  c: Context<{ Bindings: Env; Variables: Vars }>,
+  direction: "archive" | "unarchive",
+): Promise<Response> {
+  // `?? ""` because this handler takes a generic Context (shared by both routes), so Hono cannot
+  // infer the param from the path the way an inline handler does. The empty case is then refused
+  // explicitly rather than being allowed to query for a blank job_id.
+  const jobId = c.req.param("job_id") ?? "";
+  if (!jobId || jobId.length > MAX_JOB_ID) return c.json({ error: "invalid_job_id" }, 400);
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  // JSON null/arrays parse fine but aren't objects; dereferencing on them throws → bare 500
+  // (the "audit #1" class). Require a plain object first.
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  const confirm = typeof body.confirm === "string" ? body.confirm : "";
+  if (confirm.length < 1 || confirm.length > MAX_NAME) {
+    return c.json({ error: "confirm_required" }, 400);
+  }
+
+  // origin='portal' scoping, same security fence as every other edit route here: the down-sync
+  // only reconciles project_name/active for smartsheet-origin rows, so a stray archive write to
+  // one would corrupt it permanently with no self-heal.
+  const row = await c.env.DB
+    .prepare(
+      "SELECT project_name, lifecycle, archive_state, archive_direction FROM jobs " +
+        "WHERE job_id=?1 AND origin='portal'",
+    )
+    .bind(jobId)
+    .first<{ project_name: string; lifecycle: string; archive_state: string; archive_direction: string }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  // Post-trim floor on BOTH sides. The length check above runs before trimming, so `confirm: " "`
+  // clears it — and would then match a row whose project_name was somehow empty. That cannot
+  // happen today (create and /contacts both require a non-empty name AFTER trimming), but this
+  // makes the control independent of that invariant rather than quietly dependent on it: a future
+  // bulk-import or migration path that skips those validators must not open a bypass here.
+  const expected = (row.project_name ?? "").trim();
+  if (confirm.trim().length < 1 || expected.length < 1) {
+    return c.json({ error: "confirm_required" }, 400);
+  }
+  if (confirm.trim() !== expected) {
+    return c.json({ error: "confirm_mismatch" }, 409); // zero writes — asserted in the tests
+  }
+
+  const state = row.archive_state || "none";
+  const inFlightDir = row.archive_direction || "";
+
+  // Idempotent double-click: the SAME direction already in flight is a 200 no-op, NOT a second
+  // request — re-raising would reset attempts and re-stamp requested_at under the daemon.
+  if (ARCHIVE_IN_FLIGHT.has(state) && inFlightDir === direction) {
+    return c.json({ ok: true, job_id: jobId, archive: { state, direction: inFlightDir } }, 200);
+  }
+  // The OPPOSITE direction in flight: refuse rather than reverse mid-relocation.
+  if (ARCHIVE_IN_FLIGHT.has(state)) return c.json({ error: "archive_in_flight" }, 409);
+
+  if (direction === "archive") {
+    if (state === "complete") return c.json({ error: "already_archived" }, 409);
+    if (!ARCHIVE_RESTARTABLE.has(state)) return c.json({ error: "archive_in_flight" }, 409);
+  } else {
+    // Un-archiving is only meaningful once an archive completed.
+    if (state !== "complete") return c.json({ error: "not_archived" }, 409);
+  }
+
+  // Un-archive returns the job to INACTIVE, never active. Bringing folders back is a retrieval,
+  // not a re-opening — auto-activating would silently re-add the job to every dropdown and both
+  // weekly compiles as a side effect of a folder move.
+  const lifecycle = direction === "archive" ? "archived" : "inactive";
+  const active = lifecycleToActive(lifecycle);
+  const status = "closed"; // neither end of this transition is an 'active' job
+  const folderKey = jobFolderKey(row.project_name ?? "");
+  const actor = c.get("session").username;
+
+  // ATOMIC IN-WHERE GUARD. The state checks above ran against a SEPARATE read, so on their own
+  // they are check-then-act: two concurrent requests can both observe 'none', both pass, and both
+  // write — producing two audit rows and re-stamping archive_requested_at. Worse, once the daemon
+  // exists it writes these same columns from another process, so a request holding a stale read
+  // could stomp an `in_progress` claim back to 'requested' and zero archive_attempts UNDERNEATH an
+  // active relocation.
+  //
+  // Re-asserting the permitted source state in the UPDATE's own WHERE closes that window: the
+  // database, not the handler's snapshot, decides whether the transition is still legal. The JS
+  // checks above are retained ONLY to choose the specific error code — they are the message, this
+  // is the control. (Same posture as the publish claim/stamp state machine elsewhere in the Worker.)
+  const stateGuard =
+    direction === "archive"
+      ? `AND archive_state IN ${ARCHIVE_RESTARTABLE_SQL}`
+      : "AND archive_state = 'complete'";
+
+  // ONE batch: the mutation and its audit row land together or not at all (the "W4" class).
+  const res = await c.env.DB.batch([
+    c.env.DB
+      .prepare(
+        "UPDATE jobs SET lifecycle=?2, active=?3, status=?4, " +
+          "archive_state='requested', archive_direction=?5, archive_requested_at=unixepoch(), " +
+          "archive_completed_at=NULL, archive_attempts=0, archive_detail='', archive_folder_key=?6, " +
+          "mirror_version=mirror_version+1, sync_state='pending' " +
+          `WHERE job_id=?1 AND origin='portal' ${stateGuard}`,
+      )
+      .bind(jobId, lifecycle, active, status, direction, folderKey),
+    auditStmtIfChanged(c, actor, direction === "archive" ? "job_archive" : "job_unarchive", jobId, {
+      job_id: jobId,
+      direction,
+      folder_key: folderKey,
+    }),
+  ]);
+  // 0 changes now means one of two things, and they are worth distinguishing for the operator:
+  // the row vanished / is not portal-origin (404 — the pre-read said otherwise, so it was deleted
+  // between the two statements), or we LOST THE RACE and another writer moved the state after our
+  // read (409 — retrying is meaningful; 404 would tell the user the job doesn't exist, which is a
+  // lie). Re-read to tell them apart rather than folding both into one misleading code.
+  if ((res[0].meta.changes ?? 0) === 0) {
+    const now = await c.env.DB
+      .prepare("SELECT archive_state FROM jobs WHERE job_id=?1 AND origin='portal'")
+      .bind(jobId)
+      .first<{ archive_state: string }>();
+    if (!now) return c.json({ error: "not_found" }, 404);
+    return c.json({ error: "archive_in_flight" }, 409);
+  }
+
+  return c.json(
+    { ok: true, job_id: jobId, archive: { state: "requested", direction } },
+    200,
+  );
 }

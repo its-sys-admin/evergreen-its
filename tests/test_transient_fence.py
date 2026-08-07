@@ -662,6 +662,7 @@ LADDER_CONSUMERS = frozenset({
     "po_materials/po_poll.py",
     "po_materials/rfq_poll.py",
     "po_materials/estimate_poll.py",
+    "field_ops/manifest_poll.py",
     "subcontracts/subcontract_poll.py",
     "field_ops/fieldops_sync.py",
     "safety_reports/portal_poll.py",

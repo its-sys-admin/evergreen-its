@@ -271,6 +271,9 @@ DARK_BEARER_SECRETS: tuple[str, ...] = (
     "ITS_PORTAL_CONFIG_TOKEN",
     "ITS_PORTAL_SUB_TOKEN",
     "ITS_PORTAL_ESTIMATE_TOKEN",
+    # PR3b: the manifest importer's OWN bearer — same privilege-separation reason
+    # as the estimate token (it decodes hostile PDF/xlsx bytes).
+    "ITS_PORTAL_MANIFEST_TOKEN",
     "ITS_PORTAL_RFQ_TOKEN",
 )
 # Operator-dashboard PIN (operator_dashboard/auth.py PIN_KEYCHAIN_KEY). The dashboard
@@ -355,6 +358,13 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     # never a value assertion — the id is tenant-specific and not ours to pin.
     ConfigRow("safety_reports.box.portal_root_folder_id", "safety_reports", "non_empty"),
     ConfigRow("progress_reports.box.portal_root_folder_id", "progress_reports", "non_empty"),
+    # The Box ARCHIVE root (Track 6), same reasoning as the two above and the same
+    # `non_empty`-never-a-value rule. Enrolled even though archiving ships dark: an unset
+    # root is not inert here, it is a per-container FAILURE on every archive attempt
+    # (job_archive._read_box_root refuses to read an unreadable tree as an empty one), so a
+    # missed paste surfaces to the operator as repeated 4-of-6 `partial` archives rather
+    # than as a quiet no-op. build_box_roots.py prints the id; standup.py seeds the row.
+    ConfigRow("field_ops.box.archive_root_folder_id", "field_ops", "non_empty"),
     # Feature B (PO document attachments): the §34 screener's ClamAV gate must be
     # SEEDED PRESENT (non_empty, NOT forced 'true' — dark-ship reflex: it ships false
     # and stays false until clamd + pyclamd exist on the Mac; the deterministic L1/L2
@@ -434,6 +444,10 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     # ITS_Config, not a silent hardcoded fallback.
     ConfigRow("po_materials.estimate_poll.polling_enabled", "po_materials", "non_empty"),
     ConfigRow("po_materials.estimate_poll.poll_interval_seconds", "po_materials", "non_empty"),
+    # PR3b materials-manifest importer. `non_empty`, NEVER forced true — the lane
+    # ships dark and activation is a §44 capability action, not a cutover checkbox.
+    ConfigRow("field_ops.manifest_poll.polling_enabled", "field_ops", "non_empty"),
+    ConfigRow("field_ops.manifest_poll.poll_interval_seconds", "field_ops", "non_empty"),
     ConfigRow("po_materials.estimate_poll.max_pages_preview", "po_materials", "non_empty"),
     # Extraction-ladder tier gates (ADR-0004 E4-E6, PR-B). Asserted SEEDED PRESENT
     # (non_empty, NEVER forced 'true' — the dark-ship reflex: all three seed 'false'

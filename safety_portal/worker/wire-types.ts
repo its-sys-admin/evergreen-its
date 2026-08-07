@@ -43,10 +43,20 @@ export interface OpenTask {
   due_date: string | null;
 }
 
+/** The canonical job-state field (`jobs.lifecycle`, migration 0021).
+ *
+ *  Do NOT infer state from `status`: that legacy column maps active→'active' but BOTH
+ *  inactive and archived→'closed', so it structurally cannot distinguish the last two
+ *  (`active` is a derived int with the same collapse). Anything user-facing reads
+ *  `lifecycle`. Lockstep with `JOB_LIFECYCLES` in worker/constants.ts. */
+export type JobLifecycle = "active" | "inactive" | "archived";
+
 export interface JobRow {
   job_id: string;
   project_name: string;
+  /** LEGACY. Retained because the list's status filter and its index key off it. */
   status: string;
+  lifecycle: JobLifecycle;
   progress: number;
   client_name: string | null;
   crew: CrewMember[];
@@ -148,7 +158,9 @@ export interface JobRoutingBlock {
 export interface JobDetail {
   job_id: string;
   project_name: string;
+  /** LEGACY — see JobRow.status. */
   status: string;
+  lifecycle: JobLifecycle;
   progress: number;
   /** The Evergreen YYYY.NNN tracking number ('' when unassigned) — 0057. */
   job_no: string;
@@ -246,10 +258,61 @@ export interface ExpectedMaterialRow {
   // "Report a problem →" deep-link so a material-incident submission can reference THIS M2 line
   // (validated server-side in /api/submit). Nullable (schema-level); live rows are non-null.
   line_uuid: string | null;
+  // ── Materials tracking (PR2, migration 0059) ──────────────────────────────────────────────
+  part_number: string | null; // BOM part no.; the key PR3's manifest importer matches shipments on
+  category: string | null; // BOM grouping (e.g. 'HARDWARE'); display + page grouping only
+  /** Expected SHIP date (YYYY-MM-DD). Distinct from `expected_date`, which keeps its 0031
+   *  meaning — the expected DELIVERY date. The UI labels the pair ship/delivery. */
+  expected_ship_date: string | null;
+  /** The delivery ROLLUP, DERIVED from material_receipt_events (latest event by id wins);
+   *  null = never marked. THIS — not `status` — is the three-way delivery state. `status` stays
+   *  the coarse legacy projection the daily form, the §51 Material List mirror and the M3
+   *  incident join already read, and it carries the orthogonal `incident` flag. */
+  receipt_status: MaterialReceiptKind | null;
+  /** Running total: SUM of every event qty for this line. null = nothing quantified yet, which
+   *  is deliberately distinct from a recorded 0. */
+  qty_received_total: number | null;
+}
+
+/** One delivery mark. Append-only: material_receipt_events (0059) is the delivery SoR; the
+ *  LINE's `status` is a coarse projection of it. */
+export type MaterialReceiptKind = "delivered" | "partial" | "not_delivered";
+
+export interface MaterialReceiptEventRow {
+  id: number;
+  line_id: number;
+  shipment_id: number | null; // the load this mark was against, when known
+  kind: MaterialReceiptKind;
+  qty: number | null; // received on THIS event; always null for not_delivered
+  note: string | null;
+  event_date: string | null; // YYYY-MM-DD (defaults to Pacific today at write)
+  created_at: number; // epoch seconds
+  actor_name: string | null; // DISPLAY NAME ONLY (W9) — null when the account has no roster link
+}
+
+/** One SCHEDULED shipment attached to an expected-material LINE. A shipping-log row is a LOAD,
+ *  not a line: ship + delivery dates and the BOL/load number live HERE, while the line's own
+ *  expected_ship_date/expected_date are the office's line-level expectation. */
+export interface MaterialShipmentRow {
+  id: number;
+  line_id: number;
+  part_number: string | null; // what the shipping log said — provenance of the match
+  bol_number: string | null;
+  carrier: string | null;
+  qty: number | null;
+  unit: string | null;
+  ship_date: string | null; // YYYY-MM-DD
+  delivery_date: string | null; // YYYY-MM-DD
+  seq: number;
+  source: "manual" | "import";
 }
 
 export interface ExpectedMaterialsResponse {
   expected_materials: ExpectedMaterialRow[];
+  // REQUIRED, not optional, on purpose: tsconfig covers src/, so every SPA mock that omits them
+  // fails `npm run typecheck` — that is the registry teeth keeping the two surfaces in step.
+  shipments: MaterialShipmentRow[];
+  receipt_events: MaterialReceiptEventRow[];
 }
 
 // ── GET /api/fieldops/checklist/assigned ────────────────────────────────────────────────────────

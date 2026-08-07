@@ -443,6 +443,26 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "runbook."
         ),
     ),
+    "manifest_poll": NodeBrief(
+        what=(
+            "The office uploads a bill of materials or a shipping log; this daemon turns it into "
+            "a grid someone can check on screen. It re-verifies the signature and "
+            "the bytes, screens the file, then reads the cells inside a throwaway child process, "
+            "so a booby-trapped spreadsheet crashes that child instead of the daemon. The "
+            "original is filed to the job's Materials folder in Box."
+            "\n\n"
+            "It deliberately decides nothing: on a revision BOM it only PROPOSES which quantity "
+            "column is current, and the office confirms on the validate screen before any line "
+            "is committed. A document it cannot read gets a Review Queue row asking for a better "
+            "copy — ordinary, not a fault. An integrity failure, a malicious verdict, or a first "
+            "switch-on escalate."
+        ),
+        key_label="Key signals",
+        key_line=(
+            "Healthy: a fresh heartbeat each ~120-second cycle and uploads reaching 'parsed'. "
+            "No heartbeat → check the polling gate, then the launchd job, then the runbook."
+        ),
+    ),
     "rfq_poll": NodeBrief(
         what=(
             "An RFQ (request for quote) starts in the portal, where the office names its vendors. "

@@ -44,6 +44,7 @@ from datetime import UTC, datetime
 
 import pytest
 import requests  # type: ignore[import-untyped]
+import smartsheet  # type: ignore[import-untyped]
 
 from shared import keychain, sheet_ids, smartsheet_client
 
@@ -494,6 +495,177 @@ def test_move_sheet_to_folder_relocates_live(_token_available):
         _delete_sheet_rest(sheet_id, _token_available)
         _delete_folder_rest(src_id, _token_available)
         _delete_folder_rest(dst_id, _token_available)
+
+
+# ---- Track 6 folder relocation (move_folder / rename_folder / the resume probe) --------
+#
+# These exist because a mocked test structurally CANNOT answer the questions the archive
+# design rests on: does a folder move preserve the IDs and cell history of the sheets
+# inside it, does a cross-WORKSPACE move behave like an in-workspace one, and does the move
+# endpoint really ignore `new_name`. The existing move_sheet_to_folder docstring asserted
+# "history is preserved" on no evidence at all — its own live smoke had never been run.
+
+
+def test_move_folder_to_folder_relocates_live(_token_available):
+    """Live §30: a folder — WITH a sheet inside — moves between folders, IDs intact.
+
+    Asserts the property the whole archive depends on: this is a RELOCATION, not a
+    copy-and-delete. The folder id and the contained sheet id must both survive, because
+    the durable archive ledger keys off exactly those ids to answer "already moved?".
+    """
+    src_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("mvf_src")
+    )
+    dst_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("mvf_dst")
+    )
+    job_name = _sandbox_name("mvf_job")
+    job_id = smartsheet_client.create_folder_in_folder(src_id, job_name)
+    sheet_name = _sandbox_name("mvf_sheet")
+    sheet_id = smartsheet_client.create_sheet_in_folder(
+        job_id, sheet_name, [{"title": "id_col", "type": "TEXT_NUMBER", "primary": True}]
+    )
+    try:
+        assert smartsheet_client.find_folder_by_name_in_folder(src_id, job_name) == job_id
+        assert smartsheet_client.find_folder_by_name_in_folder(dst_id, job_name) is None
+
+        smartsheet_client.move_folder_to_folder(job_id, dst_id)
+
+        # The folder itself kept its ID and simply re-parented.
+        assert smartsheet_client.find_folder_by_name_in_folder(dst_id, job_name) == job_id
+        assert smartsheet_client.find_folder_by_name_in_folder(src_id, job_name) is None
+        # And the sheet INSIDE it came along, same id — one call moved the whole subtree.
+        assert smartsheet_client.find_sheet_by_name_in_folder(job_id, sheet_name) == sheet_id
+    finally:
+        _delete_sheet_rest(sheet_id, _token_available)
+        _delete_folder_rest(job_id, _token_available)
+        _delete_folder_rest(src_id, _token_available)
+        _delete_folder_rest(dst_id, _token_available)
+
+
+def test_move_folder_across_workspaces_preserves_history_live(_token_available):
+    """Live §30: THE case the archive actually performs — a CROSS-WORKSPACE folder move.
+
+    Every per-job Safety/Progress folder lives directly under its workspace, so archiving
+    crosses a workspace boundary. Proves the sheet's cell HISTORY survives — the claim the
+    pre-existing move_sheet_to_folder docstring made with no test behind it. If history did
+    not survive, "archive" would silently mean "lose the audit trail".
+    """
+    src_folder = smartsheet_client.create_folder_in_workspace(
+        sheet_ids.WORKSPACE_SYSTEM, _sandbox_name("xws_job")
+    )
+    dst_parent = smartsheet_client.create_folder_in_workspace(
+        sheet_ids.WORKSPACE_ARCHIVE, _sandbox_name("xws_dst")
+    )
+    sheet_name = _sandbox_name("xws_sheet")
+    sheet_id = smartsheet_client.create_sheet_in_folder(
+        src_folder, sheet_name, [{"title": "id_col", "type": "TEXT_NUMBER", "primary": True}]
+    )
+    try:
+        # Write a cell so there IS history to preserve, then capture it pre-move.
+        row_id = smartsheet_client.add_rows(sheet_id, [{"id_col": "before-the-move"}])[0]
+        cols = smartsheet_client.list_columns_with_options(sheet_id)
+        col_title = cols[0]["title"]
+        before = smartsheet_client.get_cell_history(sheet_id, row_id, col_title)
+        assert before, "precondition: the write should have produced cell history"
+
+        smartsheet_client.move_folder_to_workspace(src_folder, sheet_ids.WORKSPACE_ARCHIVE)
+
+        # Folder + sheet ids unchanged, and the sheet is reachable at its new home.
+        assert smartsheet_client.find_sheet_by_name_in_folder(src_folder, sheet_name) == sheet_id
+        after = smartsheet_client.get_cell_history(sheet_id, row_id, col_title)
+        assert len(after) == len(before), "cell history must survive a cross-workspace move"
+    finally:
+        _delete_sheet_rest(sheet_id, _token_available)
+        _delete_folder_rest(src_folder, _token_available)
+        _delete_folder_rest(dst_parent, _token_available)
+
+
+def test_move_folder_silently_ignores_new_name_live(_token_available):
+    """Live §30: the footgun, proven rather than asserted in prose.
+
+    `ContainerDestination` carries a `new_name` field because the model is SHARED with Copy
+    Folder. Setting it on a MOVE serializes fine and is ignored by the API. Without this
+    test the warning in smartsheet_client is folklore — and the two-call move-then-rename
+    sequence (and its crash window) would look like unnecessary ceremony.
+    """
+    src_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("nn_src")
+    )
+    dst_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("nn_dst")
+    )
+    original = _sandbox_name("nn_job")
+    job_id = smartsheet_client.create_folder_in_folder(src_id, original)
+    try:
+        dest = smartsheet.models.ContainerDestination({
+            "destination_type": "folder",
+            "destination_id": dst_id,
+            "new_name": "Safety",          # accepted by the model, ignored by /move
+        })
+        smartsheet_client.get_client().Folders.move_folder(job_id, dest)
+
+        assert smartsheet_client.get_folder_name(job_id) == original, (
+            "move must NOT rename — if this ever starts passing as 'Safety', the API gained "
+            "newName support on /move and rename_folder's second call can be dropped"
+        )
+        assert smartsheet_client.find_folder_by_name_in_folder(dst_id, original) == job_id
+    finally:
+        _delete_folder_rest(job_id, _token_available)
+        _delete_folder_rest(src_id, _token_available)
+        _delete_folder_rest(dst_id, _token_available)
+
+
+def test_move_then_rename_sequence_and_idempotent_rename_live(_token_available):
+    """Live §30: the real archive sequence, plus the property that makes it resumable.
+
+    move → rename is NOT atomic, so a crash can leave a folder moved-but-not-renamed.
+    Re-issuing the rename must be a harmless no-op, which is what turns that intermediate
+    state into "run it again" instead of a wedge.
+    """
+    dst_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("seq_dst")
+    )
+    src_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("seq_src")
+    )
+    job_id = smartsheet_client.create_folder_in_folder(src_id, _sandbox_name("seq_job"))
+    label = _sandbox_name("Safety")
+    try:
+        smartsheet_client.move_folder_to_folder(job_id, dst_id)
+        smartsheet_client.rename_folder(job_id, label)
+        assert smartsheet_client.get_folder_name(job_id) == label
+        assert smartsheet_client.find_folder_by_name_in_folder(dst_id, label) == job_id
+
+        # Idempotent: the resume path re-issues this without checking first.
+        smartsheet_client.rename_folder(job_id, label)
+        assert smartsheet_client.get_folder_name(job_id) == label
+    finally:
+        _delete_folder_rest(job_id, _token_available)
+        _delete_folder_rest(src_id, _token_available)
+        _delete_folder_rest(dst_id, _token_available)
+
+
+def test_move_folder_to_a_dead_destination_raises_not_found_live(_token_available):
+    """Live §30 RED-light: a bad destination must raise the typed error, not pass silently."""
+    src_id = smartsheet_client.create_folder_in_folder(
+        sheet_ids.FOLDER_SYSTEM_CONFIG, _sandbox_name("dead_src")
+    )
+    try:
+        with pytest.raises(smartsheet_client.SmartsheetError):
+            smartsheet_client.move_folder_to_folder(src_id, 1)  # id 1 is not a real folder
+    finally:
+        _delete_folder_rest(src_id, _token_available)
+
+
+def test_get_workspace_access_level_live(_token_available):
+    """Live §30: the ADMIN pre-flight returns a real level for a workspace ITS owns."""
+    level = smartsheet_client.get_workspace_access_level(sheet_ids.WORKSPACE_ARCHIVE)
+    # The archive path requires ADMIN or OWNER on both ends; anything else must fail closed.
+    assert level in {"ADMIN", "OWNER"}, (
+        f"the ITS token identity has {level!r} on WORKSPACE_ARCHIVE — folder moves need "
+        f"ADMIN_WORKSPACES, so archiving would 403 at runtime"
+    )
 
 
 # ---- find_row_by_primary + update_row_cells_by_id (PR #59.5) ------------

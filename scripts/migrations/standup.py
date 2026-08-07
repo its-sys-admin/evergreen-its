@@ -157,6 +157,8 @@ BOX_ROOT_CONFIG_ROWS: tuple[tuple[str, str, str], ...] = (
     ("ITS Safety Reports", "safety_reports.box.portal_root_folder_id", "safety_reports"),
     ("ITS Progress Reports", "progress_reports.box.portal_root_folder_id",
      "progress_reports"),
+    # Track 6 job archive destination — a sibling root, not a child of either tree.
+    ("ITS Archive", "field_ops.box.archive_root_folder_id", "field_ops"),
 )
 
 

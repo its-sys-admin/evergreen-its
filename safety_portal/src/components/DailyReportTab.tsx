@@ -105,6 +105,7 @@ export function DailyReportTab({
   placementError = null,
   onRetryPlacement,
   onOpenForm,
+  onOpenMaterials,
   refreshToken = 0,
   onLoaded,
 }: {
@@ -122,6 +123,9 @@ export function DailyReportTab({
   onRetryPlacement?: () => void;
   /** R3 deep-link opener (App.openForm) — absent renders the form_link buttons disabled. */
   onOpenForm?: (p: FormPrefill) => void;
+  /** PR2 — "Materials tracking →" out of the material-receipt region into the per-job Materials
+   *  page. Absent (no cap.materials.receive) → the section renders without the button. */
+  onOpenMaterials?: (jobId: string) => void;
   /** Bump to refetch the filed status + per-job sections (page Refresh / focus — the parent owns
    *  the trigger; the placement itself refreshes with the parent's own /tasks/mine refetch). */
   refreshToken?: number;
@@ -754,6 +758,8 @@ export function DailyReportTab({
           actionError: expectedActionError,
           onConfirmReceipt: (r) => void confirmReceipt(r),
           onReportProblem: (r) => void reportProblem(r),
+          onOpenMaterials:
+            onOpenMaterials && placement ? () => onOpenMaterials(placement.job_id) : undefined,
         }
       : undefined;
 

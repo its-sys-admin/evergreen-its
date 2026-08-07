@@ -202,6 +202,55 @@ describe("pruneOldData (A3 D1 housekeeping)", () => {
     expect(left.results.map((j) => j.job_id)).toEqual(["J-active", "J-withsub"]);
   });
 
+  // ── Track 6 archive fence (migration 0058) ────────────────────────────────────────────────
+  //
+  // THE PAIR. Two jobs identical in every respect the eight NOT-IN guards can see — inactive,
+  // zero submissions, zero field-ops records — differing ONLY in archive_state. Without the
+  // guard, an archived job is deleted on the very next nightly run (this stage has NO age
+  // cutoff), taking archive_state, archive_detail, archive_folder_key and the recorded source
+  // locations with it. Those are the only record of where each container came from, so losing
+  // them makes the archive irreversible.
+  it("KEEPS an archived job that is otherwise indistinguishable from a prunable one", async () => {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-arch','Archived',0,'complete')"),
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-plain','Plain',0,'none')"),
+    ]);
+
+    const res = await pruneOldData(env.DB, NOW);
+
+    expect(res.jobs).toBe(1); // ONLY the un-archived one
+    const left = await env.DB.prepare("SELECT job_id FROM jobs ORDER BY job_id").all<{ job_id: string }>();
+    expect(left.results.map((j) => j.job_id)).toEqual(["J-arch"]);
+  });
+
+  it("keeps a job in ANY non-'none' archive state, including a failed/partial one", async () => {
+    // A half-archived job is exactly the one an operator still needs the record for.
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-req','R',0,'requested')"),
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-prog','P',0,'in_progress')"),
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-part','X',0,'partial')"),
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-fail','F',0,'failed')"),
+    ]);
+
+    const res = await pruneOldData(env.DB, NOW);
+
+    expect(res.jobs).toBe(0);
+    const left = await env.DB.prepare("SELECT count(*) AS n FROM jobs").first<{ n: number }>();
+    expect(left!.n).toBe(4);
+  });
+
+  it("a COMPLETED un-archive resets the row to prunable again (the guard is not a permanent pin)", async () => {
+    // The daemon zeroes archive_state back to 'none' when an un-archive finishes; by then the job
+    // is lifecycle='inactive' with active=0, i.e. exactly the pre-existing prune behaviour.
+    await env.DB
+      .prepare("INSERT INTO jobs (job_id, project_name, active, archive_state) VALUES ('J-back','B',0,'none')")
+      .run();
+
+    const res = await pruneOldData(env.DB, NOW);
+
+    expect(res.jobs).toBe(1);
+  });
+
   it("NEVER deletes an inactive job holding field-ops SoR (time_entries) with no submissions [P2.1 fence]", async () => {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO jobs (job_id, project_name, active) VALUES ('J-fieldops','F',0)"), // inactive, no subs

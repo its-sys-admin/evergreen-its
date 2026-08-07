@@ -26,6 +26,14 @@ async function expRow(id: number): Promise<any> {
 async function audits(action: string): Promise<unknown[]> {
   return (await env.DB.prepare("SELECT * FROM audit_log WHERE action=?").bind(action).all()).results;
 }
+/** The line's receipt-event ledger (PR2, 0059), append order. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function events(lineId: number): Promise<any[]> {
+  return (
+    await env.DB.prepare("SELECT * FROM material_receipt_events WHERE line_id=? ORDER BY id ASC")
+      .bind(lineId).all()
+  ).results;
+}
 /** A seeded (0019) ACTIVE catalog id, for catalog-pick rows. */
 async function seededCatalogId(): Promise<number> {
   const row = await env.DB.prepare("SELECT id FROM material_catalog WHERE model_id=?")
@@ -263,21 +271,83 @@ describe("POST /api/fieldops/expected-material/:id/receive — guard-in-WHERE + 
     expect(row.received_by).toBe("mgr.mo"); // stored ACCOUNT username (reads resolve display-only)
     expect(row.qty_received).toBe(38);
     expect(row.note).toBe("two short, backordered");
-    expect(await audits("expected_material_receive")).toHaveLength(1);
+    expect(await audits("expected_material_receipt")).toHaveLength(1);
+    // PR2 — /receive is now a 'delivered' EVENT; the ledger is the delivery SoR and the columns
+    // above are its coarse projection.
+    const ev = await events(id);
+    expect(ev).toHaveLength(1);
+    expect(ev[0].kind).toBe("delivered");
+    expect(ev[0].qty).toBe(38);
+    expect(ev[0].actor).toBe("mgr.mo"); // stored ACCOUNT username; reads resolve display-only
   });
 
-  it("double-receive → 409 already_actioned with EXACTLY one stamp + one audit (the in-WHERE guard)", async () => {
-    const id = await createExp(admin, "JOB-A", { description: "Once only" });
-    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`)).status).toBe(200);
-    const firstStamp = (await expRow(id)).received_at;
+  // PR2 REPLACES the M1 "double-receive → 409 already_actioned" contract. That one-shot guard is
+  // exactly what made a partial delivery impossible to complete: a part number that arrives across
+  // several loads has to be markable more than once. Repeats are now legal and each appends an
+  // event; `qty_received` is RECOMPUTED as the ledger sum, never incremented, so it cannot drift.
+  it("receive is REPEATABLE: each call appends an event, qty_received is the recomputed sum", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "Piles", qty: 100 });
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 40 })).status).toBe(200);
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 35, note: "second load" })).status).toBe(200);
 
-    const repeat = await p(manager, `/api/fieldops/expected-material/${id}/receive`, { note: "again?" });
-    expect(repeat.status).toBe(409);
-    expect(((await repeat.json()) as { error: string }).error).toBe("already_actioned");
+    const ev = await events(id);
+    expect(ev).toHaveLength(2);
+    expect(ev.map((e) => e.qty)).toEqual([40, 35]);
     const row = await expRow(id);
-    expect(row.received_at).toBe(firstStamp); // no re-stamp
-    expect(row.note).toBeNull(); // the losing call wrote nothing
-    expect(await audits("expected_material_receive")).toHaveLength(1); // exactly one audit ever
+    expect(row.qty_received).toBe(75); // SUM over the ledger, not the last mark
+    expect(row.status).toBe("received");
+    expect(row.note).toBe("second load");
+    expect(await audits("expected_material_receipt")).toHaveLength(2); // one audit per event
+  });
+
+  it("the three-way mark: partial → partial → delivered rolls up over the ledger", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "Beams", qty: 120 });
+    const mark = (body: unknown) => p(manager, `/api/fieldops/expected-material/${id}/receipt`, body);
+
+    expect((await mark({ kind: "partial", qty: 50, note: "first truck" })).status).toBe(200);
+    // Partial leaves the coarse projection at 'expected' — the line is not complete.
+    expect((await expRow(id)).status).toBe("expected");
+    expect((await mark({ kind: "partial", qty: 40 })).status).toBe(200);
+    expect((await expRow(id)).qty_received).toBe(90);
+    expect((await mark({ kind: "delivered", qty: 30 })).status).toBe(200);
+
+    const row = await expRow(id);
+    expect(row.status).toBe("received");
+    expect(row.qty_received).toBe(120);
+    expect((await events(id)).map((e) => e.kind)).toEqual(["partial", "partial", "delivered"]);
+  });
+
+  it("not_delivered REQUIRES a note and REFUSES a qty (an incoherent mark, not a silent drop)", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "No-show" });
+    const mark = (body: unknown) => p(manager, `/api/fieldops/expected-material/${id}/receipt`, body);
+
+    expect((await mark({ kind: "not_delivered" })).status).toBe(400);
+    expect(((await (await mark({ kind: "not_delivered" })).json()) as { error: string }).error).toBe("note_required");
+    expect((await mark({ kind: "not_delivered", qty: 5, note: "truck never came" })).status).toBe(400);
+    expect((await mark({ kind: "nope", note: "x" })).status).toBe(400);
+    expect(((await (await mark({ kind: "nope", note: "x" })).json()) as { error: string }).error).toBe(
+      "invalid_receipt_kind",
+    );
+
+    expect((await mark({ kind: "not_delivered", note: "truck never came" })).status).toBe(200);
+    const row = await expRow(id);
+    expect(row.status).toBe("expected"); // still outstanding — that IS what not-delivered means
+    expect(row.qty_received).toBeNull(); // SUM over a qty-less event is NULL, not 0
+    expect((await events(id))[0].kind).toBe("not_delivered");
+  });
+
+  it("a shipment reference must belong to THIS line (400 invalid_shipment_id otherwise)", async () => {
+    const idA = await createExp(admin, "JOB-A", { description: "Line A" });
+    const idB = await createExp(admin, "JOB-A", { description: "Line B" });
+    const ship = await p(admin, "/api/fieldops/material-shipment", { line_id: idA, bol_number: "LD0867264", qty: 12 });
+    expect(ship.status).toBe(201);
+    const shipId = ((await ship.json()) as { id: number }).id;
+
+    // Against its own line: fine. Against a sibling line: refused before any write.
+    expect((await p(manager, `/api/fieldops/expected-material/${idA}/receipt`, { kind: "delivered", qty: 12, shipment_id: shipId })).status).toBe(200);
+    expect((await p(manager, `/api/fieldops/expected-material/${idB}/receipt`, { kind: "delivered", shipment_id: shipId })).status).toBe(400);
+    expect(await events(idB)).toHaveLength(0);
+    expect((await events(idA))[0].shipment_id).toBe(shipId);
   });
 
   it("scope: cross-job manager 403 forbidden_job; unplaced submitter 403; admin any job 200; empty body OK", async () => {
@@ -317,11 +387,25 @@ describe("POST /api/fieldops/expected-material/:id/flag-incident", () => {
     expect(row.received_by).toBe("mgr.mo");
     expect(await audits("expected_material_incident")).toHaveLength(1);
 
-    // Terminal for M1: neither a second flag nor a receive can re-flip it (guard-in-WHERE).
+    // flag-incident KEEPS its one-shot posture — an incident is a distinct axis with its own
+    // ledger (M3), and re-flagging is not a workflow anyone asked for.
     expect((await p(manager, `/api/fieldops/expected-material/${id}/flag-incident`, { note: "again" })).status).toBe(409);
-    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`)).status).toBe(409);
     expect(await audits("expected_material_incident")).toHaveLength(1);
-    expect(await audits("expected_material_receive")).toHaveLength(0);
+
+    // PR2: a delivery mark on a flagged line is now ACCEPTED (the goods did arrive) and recorded
+    // in the ledger — but `incident` is STICKY, so the coarse status keeps showing the problem.
+    // Under M1 this was a 409, which meant a flagged line could never record its eventual receipt.
+    const recv = await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 2 });
+    expect(recv.status).toBe(200);
+    // The RESPONSE BODY must say 'incident' too, not just the row. The daily form reads `status`
+    // off this payload, so a hardcoded "received" here would show the crew a resolved delivery
+    // while the §51 Material List mirror (reading the same column) still flags the problem —
+    // the two surfaces silently disagreeing. Asserting only expRow() misses exactly that.
+    expect(((await recv.json()) as { status: string }).status).toBe("incident");
+    const after = await expRow(id);
+    expect(after.status).toBe("incident"); // NOT flipped to received
+    expect(await events(id)).toHaveLength(1);
+    expect(await audits("expected_material_receipt")).toHaveLength(1);
   });
 
   it("scope holds for flag-incident too: cross-job manager → 403 forbidden_job", async () => {

@@ -754,14 +754,22 @@ def _mirror_job(
             }],
         )
         counters["mirrored"] += 1
-        # §51 archive-on-closure — the job was just mirrored; if it is CLOSED
-        # (lifecycle=archived) move its standing tracker sheets into the Archive
-        # workspace. Fully fenced inside the helper (any failure WARNs + returns),
-        # so a move failure NEVER un-does or fails the mirror above.
-        if str(job.get("lifecycle") or "").strip().lower() == "archived":
-            _archive_closed_job_trackers(
-                job_id, str(job.get("project_name") or "").strip(), correlation_id
-            )
+        # DISARMED (ROADMAP Track 6, PR-0). The §51 archive-on-closure move used to fire from
+        # HERE — `if lifecycle == 'archived': _archive_closed_job_trackers(...)` — on any mirror
+        # of an archived job.
+        #
+        # Its LOCATION was the defect. This is the job-dirty mirror path and the job is
+        # mark-synced immediately after, so a failed move was PERMANENT — `_warn_archive_move_failed`
+        # says exactly that in its own WARN text. Coupled to a portal dropdown that offered
+        # "Archived" with no confirmation, it was a one-click, un-retryable, four-sheet relocation
+        # whose only feedback was a WARN row on a sheet nobody watches in real time.
+        #
+        # The relocation moves to its own drained queue with its own gate, a durable per-container
+        # ledger, and real cross-cycle retry — the same shape as the hours / equipment / material
+        # passes. `_archive_closed_job_trackers` is PRESERVED below (§14 preservation-over-refactor)
+        # until that path is live-proven; it simply has no caller now, so nothing fires
+        # automatically. `tests/test_fieldops_sync.py::test_job_mirror_never_archives` is the
+        # standing fence that keeps the two decoupled.
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,

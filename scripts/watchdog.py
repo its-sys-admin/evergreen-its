@@ -280,6 +280,14 @@ TRACKED_JOBS: list[str] = [
     # false is a pre-lock no-op and writes NO marker (intentional dark state, the
     # lane ships dark). Register + activate together.
     "estimate_poll",
+    # Materials-manifest import daemon (field_ops.manifest_poll, PR3b / ADR-0005).
+    # Writes a manifest_poll.last_run marker each cycle once ACTIVE. Like estimate_poll
+    # it WARNs until the operator both LOADS the plist (`install.sh load
+    # org.solutionsmith.its.manifest-poll`) AND flips
+    # field_ops.manifest_poll.polling_enabled true — a loaded daemon with the gate
+    # false is a pre-lock no-op and writes NO marker (intentional dark state, the
+    # lane ships dark). Register + activate together.
+    "manifest_poll",
     # Outbound-RFQ generation daemon (po_materials.rfq_poll, ADR-0004 Lane 2 R2).
     # Writes an rfq_poll.last_run marker each cycle once ACTIVE. Like estimate_poll
     # it WARNs until the operator both LOADS the plist (`install.sh load
@@ -374,6 +382,11 @@ TRACKED_JOB_WINDOWS: dict[str, timedelta] = {
     # Same tunable-interval caveat as po_poll (po_materials.estimate_poll.
     # poll_interval_seconds / the install.sh arg — widen this window if raised).
     "estimate_poll": timedelta(minutes=10),
+    # manifest_poll runs every 120s (default). 10 min == ~5 cycles — same
+    # high-frequency-poller tolerance as estimate_poll (identical 120s cadence).
+    # Same tunable-interval caveat as po_poll (field_ops.manifest_poll.
+    # poll_interval_seconds / the install.sh arg — widen this window if raised).
+    "manifest_poll": timedelta(minutes=10),
     # rfq_poll runs every 120s (default). 10 min == ~5 cycles — same
     # high-frequency-poller tolerance as estimate_poll/subcontract_poll (identical
     # 120s cadence). Same tunable-interval caveat as po_poll

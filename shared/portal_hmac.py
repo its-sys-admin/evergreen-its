@@ -233,6 +233,39 @@ RFQ protocol (ADR-0004 R2)
     `verify_rfq` is the Mac-side recompute `po_materials.rfq_poll`'s pass ① runs
     before any render/Box-file/mark-filed (the downgrade defense, mirroring the PO
     drafts pass). The cross-language vector is pinned in tests/test_rfq_hmac_parity.py.
+
+Material-manifest protocol (PR3b — the materials-tracking import pool)
+---------------------------------------------------------------------
+    An office-uploaded materials MANIFEST — a BOM or a shipping log (`job_manifests`,
+    migration 0060) — is signed by the Worker at upload
+    (safety_portal/worker/fieldops_manifests.ts `manifestCanonical`) with the SAME key
+    + MAC over its own domain-separated canonical string:
+
+        canonical = "manifest:v1" \\n <manifest_uuid> \\n <job_id> \\n <filename>
+                    \\n <declared_mime> \\n <size_bytes (decimal)> \\n <sha256 hex>
+
+    * The `"manifest:v1"` literal domain-separates this protocol from every sibling
+      (submission uuid-first, "item_photo:v1", "daily_photo:v1", "po:v1", "sub:v1",
+      "po-att:v1", "est:v1", "rfq-form:v1", "rfq:v1") — cross-protocol signature
+      confusion is structurally impossible — and versions the string.
+    * This is the po-att:v1 / est:v1 flat CONTENT-COVERED shape with the binding
+      identity swapped: a manifest binds to a field-ops JOB (`job_id`), not to a PO
+      row (`po_id`) or a procurement job number (`job_no`). `manifest_uuid` + `job_id`
+      together mean a signed manifest cannot be replayed onto another row OR another
+      job — which matters more here than in the estimate lane, because the manifest
+      pool's dedupe is deliberately PER-JOB (one master BOM legitimately serves
+      sibling jobs), so the same bytes legitimately exist under two `job_id`s.
+    * Like its two content-covered siblings the CONTENT is signature-covered
+      (`size_bytes` + `sha256` of the DECODED bytes), so the Mac's own digest
+      recompute over the reassembled chunks extends the signature to the bytes
+      themselves: tampered chunks fail the digest, a tampered digest fails the HMAC.
+      The HMAC alone covers only the CLAIMS about the bytes — the length + digest
+      recompute is a separate, equally mandatory check.
+
+    `verify_manifest` is the recompute `field_ops.manifest_poll` runs before a single
+    hostile byte is §34-screened, handed to the sandboxed extractor, parsed, or filed
+    to Box (the downgrade defense). The cross-language vector is pinned in
+    tests/test_manifest_hmac_parity.py.
 """
 from __future__ import annotations
 
@@ -800,4 +833,107 @@ def verify_rfq(
     Constant-time; never raises (False on any mismatch — the caller refuses the row:
     one-shot flag + CRITICAL, never rendered, never filed, never marked)."""
     expected = sign_rfq(secret, rfq_id=rfq_id, rfq_number=rfq_number, canonical_json=canonical_json)
+    return _hmac.compare_digest(expected, provided_hmac or "")
+
+
+# ---- Material-manifest protocol (PR3b — the materials-tracking import pool) ----------
+
+# The manifest protocol's domain-separation literal — MUST match the Worker's
+# MANIFEST_HMAC_DOMAIN (safety_portal/worker/fieldops_manifests.ts) byte-for-byte.
+# Domain-separates manifest signatures from submission (uuid-first), item-photo
+# ("item_photo:v1"), daily-photo ("daily_photo:v1"), PO ("po:v1"), subcontract
+# ("sub:v1"), PO-attachment ("po-att:v1"), estimate ("est:v1"), quote-form
+# ("rfq-form:v1") and RFQ ("rfq:v1") signatures — cross-protocol confusion is
+# structurally impossible.
+MANIFEST_DOMAIN = "manifest:v1"
+
+
+def manifest_canonical(
+    *,
+    manifest_uuid: str,
+    job_id: str,
+    filename: str,
+    declared_mime: str,
+    size_bytes: int,
+    sha256: str,
+) -> str:
+    """The exact string the Worker signs for one uploaded materials manifest
+    (fieldops_manifests.ts ``manifestCanonical`` — field order + the ``\\n``
+    separator are load-bearing).
+
+    Binds identity (``manifest_uuid`` + ``job_id`` — a signed manifest cannot be
+    replayed onto a different row or a different job, which matters here because the
+    pool's dedupe is per-JOB and one master BOM legitimately serves sibling jobs),
+    naming (``filename`` + ``declared_mime`` — the values the §34 screener, the
+    extractor dispatch and the Box filing all consume), and CONTENT (``size_bytes`` +
+    ``sha256`` of the DECODED bytes) — so the caller's own sha256 recompute over the
+    reassembled chunks extends the signature to the bytes themselves: tampered chunks
+    fail the digest, a tampered digest fails the HMAC.
+
+    ``size_bytes`` renders via ``str(int)`` to mirror the Worker's ``String(sizeBytes)``.
+    That equivalence holds for ints ONLY — a float ``48213.0`` renders ``"48213.0"`` in
+    Python and ``"48213"`` in JS, silently breaking every signature — so callers must
+    reject a non-int before signing/verifying (``manifest_poll`` coerces to ``-1``,
+    which fails closed).
+    """
+    return "\n".join([
+        MANIFEST_DOMAIN,
+        manifest_uuid,
+        job_id,
+        filename,
+        declared_mime,
+        str(size_bytes),
+        sha256,
+    ])
+
+
+def sign_manifest(
+    secret: str,
+    *,
+    manifest_uuid: str,
+    job_id: str,
+    filename: str,
+    declared_mime: str,
+    size_bytes: int,
+    sha256: str,
+) -> str:
+    """HMAC-SHA256(secret, manifest canonical) → lowercase hex — identical to the
+    Worker's ``hmacHex`` over ``manifestCanonical``."""
+    msg = manifest_canonical(
+        manifest_uuid=manifest_uuid,
+        job_id=job_id,
+        filename=filename,
+        declared_mime=declared_mime,
+        size_bytes=size_bytes,
+        sha256=sha256,
+    ).encode("utf-8")
+    return _hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def verify_manifest(
+    secret: str,
+    provided_hmac: str | None,
+    *,
+    manifest_uuid: str,
+    job_id: str,
+    filename: str,
+    declared_mime: str,
+    size_bytes: int,
+    sha256: str,
+) -> bool:
+    """True iff `provided_hmac` matches the recomputed manifest signature.
+
+    Constant-time; never raises (False on any mismatch — the caller refuses the
+    manifest: one-shot flag + CRITICAL + a security-flagged Review-Queue row, never
+    screened, never extracted, never filed, and deliberately never result-posted so
+    the bytes stay in D1 for forensics)."""
+    expected = sign_manifest(
+        secret,
+        manifest_uuid=manifest_uuid,
+        job_id=job_id,
+        filename=filename,
+        declared_mime=declared_mime,
+        size_bytes=size_bytes,
+        sha256=sha256,
+    )
     return _hmac.compare_digest(expected, provided_hmac or "")

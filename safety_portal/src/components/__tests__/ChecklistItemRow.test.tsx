@@ -365,7 +365,11 @@ describe("ChecklistItemRow — form_linked / inspection dead-ends + Filed state"
     expect(container.textContent ?? "").toContain("filed by Mo Manager");
     expect(queryByLabelText("Complete File the Daily Field Report")).toBeNull();
     const link = getByLabelText("File another File the Daily Field Report");
-    expect(link.className).toContain("btn--ghost");
+    // Quiet secondary, never the primary — re-filing an already-filed form is not the
+    // obvious next action. (Was --ghost, which is the white-on-green HEADER variant and
+    // rendered invisible on this white card; --secondary is the light-surface equivalent.)
+    expect(link.className).toContain("btn--secondary");
+    expect(link.className).not.toContain("btn--primary");
     fireEvent.click(link);
     expect(props.onOpenForm).toHaveBeenCalledWith(item);
   });
