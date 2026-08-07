@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import * as api from "../lib/fieldops_expected_materials";
+import * as manifests from "../lib/fieldops_manifests";
+import { ManifestValidatePage } from "./ManifestValidatePage";
 import { fetchMaterials, type CatalogRow } from "../lib/fieldops_materials";
 import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/errorCopy";
@@ -114,6 +116,13 @@ export function JobMaterialsPage({
   const [shipFor, setShipFor] = useState<number | null>(null);
   const [shipDraft, setShipDraft] = useState<ShipDraft>(emptyShip());
 
+  // Manifest import (PR3b). Deliberately NOT routed through `busyId` — that sentinel space is
+  // shared with the add-line form (busyId = -1), so a manifest op reusing it would grey out an
+  // unrelated form. Its own state, its own single-flight.
+  const [manifestList, setManifestList] = useState<manifests.ManifestListRow[] | null>(null);
+  const [openManifest, setOpenManifest] = useState<number | null>(null);
+  const [manifestBusy, setManifestBusy] = useState(false);
+
   const load = useCallback(() => {
     setLoadError(null);
     api
@@ -124,9 +133,24 @@ export function JobMaterialsPage({
       .catch(() => setLoadError("Could not load this job's materials."));
   }, [jobId]);
 
+  // The manifest list is a SEPARATE read: it must survive a materials-load failure (a manifest
+  // still needs discarding even if the line list is down), and it refreshes on its own after an
+  // upload or a commit.
+  const loadManifests = useCallback(() => {
+    if (!canManage) return;
+    manifests
+      .fetchManifests(jobId)
+      .then((d) => setManifestList(d.manifests))
+      .catch(() => setManifestList([]));
+  }, [jobId, canManage]);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadManifests();
+  }, [loadManifests]);
 
   useEffect(() => {
     if (!canManage) return;
@@ -251,6 +275,29 @@ export function JobMaterialsPage({
 
   const busy = busyId !== null;
 
+  async function uploadManifestFile(file: File) {
+    if (manifestBusy) return;
+    if (file.size > manifests.MANIFEST_MAX_BYTES) {
+      setMsg({ ok: false, text: "That file is too large to import — split it or export a smaller range." });
+      return;
+    }
+    setManifestBusy(true);
+    setMsg(null);
+    try {
+      await manifests.uploadManifest(jobId, file);
+      loadManifests();
+      setMsg({
+        ok: true,
+        text: "Uploaded. It will be read in a minute or two — refresh to see it ready to check.",
+      });
+    } catch (e) {
+      const code = e && typeof e === "object" && "code" in e ? (e as { code: string | null }).code : null;
+      setMsg({ ok: false, text: code ? errorText(code) : "Could not upload that file." });
+    } finally {
+      setManifestBusy(false);
+    }
+  }
+
   return (
     <PageShell onHome={onHome}>
       <div className="dash-back-btn">
@@ -269,6 +316,21 @@ export function JobMaterialsPage({
           {msg.text}
         </p>
       )}
+
+      {openManifest !== null ? (
+        <ManifestValidatePage
+          key={openManifest}
+          manifestId={openManifest}
+          onClose={(notice, committed) => {
+            setOpenManifest(null);
+            if (notice) setMsg(notice);
+            loadManifests();
+            // A commit inserts expected-material lines, so the list behind this screen is stale
+            // the moment we finish.
+            if (committed) load();
+          }}
+        />
+      ) : null}
       {catalogError && canManage && (
         <p className="login__error" role="alert">
           The material catalog didn&apos;t load — you can still add lines as free text.
@@ -292,6 +354,75 @@ export function JobMaterialsPage({
           {canManage ? " Add the first line below." : ""}
         </p>
       )}
+
+      {canManage && openManifest === null ? (
+        <section className="card dash-section" aria-label="Import a manifest">
+          <h3 className="dash-detail__h2">Import from a document</h3>
+          <p className="dash__intro">
+            Upload a bill of materials or a shipping log (PDF or Excel). It is read on the office
+            Mac and comes back as a grid you check before anything is added — nothing reaches this
+            list until you import it.
+          </p>
+          <div className="dash-row">
+            <input
+              type="file"
+              accept={manifests.MANIFEST_ACCEPT}
+              aria-label="Manifest file"
+              disabled={manifestBusy}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                // Clear the picker so re-choosing the SAME file after a failure still fires.
+                e.target.value = "";
+                if (f) void uploadManifestFile(f);
+              }}
+            />
+            {manifestBusy ? <span>Uploading…</span> : null}
+          </div>
+
+          {manifestList && manifestList.length > 0 ? (
+            <div style={{ overflowX: "auto" }}>
+              <table className="dash-table">
+                <thead>
+                  <tr>
+                    <th scope="col">File</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Rows</th>
+                    <th scope="col" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {manifestList.map((m) => (
+                    <tr key={m.id}>
+                      <td>{m.filename}</td>
+                      <td>
+                        {m.status === "parsed"
+                          ? "Ready to check"
+                          : m.status === "pending" || m.status === "claimed"
+                            ? "Being read…"
+                            : m.status === "refused"
+                              ? `Refused${m.detail ? ` — ${m.detail}` : ""}`
+                              : m.status}
+                      </td>
+                      <td>{m.row_count ?? "—"}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn--secondary"
+                          aria-label={`Open ${m.filename}`}
+                          disabled={m.status === "pending" || m.status === "claimed"}
+                          onClick={() => setOpenManifest(m.id)}
+                        >
+                          {m.status === "parsed" ? "Check & import" : "Open"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {groups.map((group) => (
         <section key={group.name ?? "__all"} className="card dash-section" aria-label={group.name ?? "Materials"}>
