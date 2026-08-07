@@ -1740,7 +1740,16 @@ def _check_box_token_freshness() -> CheckResult:
 # Scoped to the ci.yml workflow = the REQUIRED suites (test/portal/secrets); the
 # separate CodeQL default-setup workflow (non-required, periodically infra-flaky)
 # is deliberately excluded so it can never false-page.
-GH_MAIN_CI_REPO = "SolutionSmith-debug/its"
+#
+# CORRECTED 2026-08-07: this read `SolutionSmith-debug/its` — a DIFFERENT, still-active
+# repository (both were pushed to on the day this was found; neither is a fork of the
+# other). Check S is the mechanical step 4 of the four-part landing verify: "did the code
+# this host is running actually land green on ITS OWN main?". Pointed at another repo it
+# answered a question about somebody else's code and could NEVER WARN about ours — a
+# silent false-green on a landing gate, which is worse than having no check at all. The
+# slug must name the repo `origin` points at; `test_check_s_repo_matches_origin_remote`
+# pins that and RED-lights on any future rename or re-point.
+GH_MAIN_CI_REPO = "its-sys-admin/evergreen-its"
 GH_MAIN_CI_WORKFLOW = "ci.yml"
 GH_MAIN_CI_TIMEOUT_SECONDS = 30
 
