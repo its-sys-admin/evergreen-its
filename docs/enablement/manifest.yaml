@@ -125,14 +125,14 @@ docs:
     title: "ITS System Architecture"
     version: v1
     source: docs/references/system_architecture.md
-    sha256: 4015eb2c7d90c957dd04e2a2bfafeb9069a235ad1eb1a3f95e4bd4bc873efc18
+    sha256: 63a5167e946e294cdd0961b354eb37f6eb3590827534b743dd090f1f473633f1
     audience: operator
 
   - key: daemon_reference
     title: "ITS Daemon Reference"
     version: v1
     source: docs/references/daemon_reference.md
-    sha256: f3b7d9d6cf19ca0c7673b94cc0b3b91eaed456bdbc78bb5f82c8502f834780eb
+    sha256: 00f7fab19169750b16c2fe14b5fa897d0fbabee2b6b81bb5c24d6a186c149874
     audience: operator
 
   - key: data_model_reference
@@ -146,7 +146,7 @@ docs:
     title: "ITS Integration Reference"
     version: v1
     source: docs/references/integration_reference.md
-    sha256: fa7feef1dfc16b16ac7e60c3a1c6f3d4e33d12ee6c71fd6171877f7704e86e93
+    sha256: 2905213e89aff414f7d6bb33f5c15a079294d97330f2acf1ed6034d9d4336a41
     audience: operator
 
   - key: security_trust_model

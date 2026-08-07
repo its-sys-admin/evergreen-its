@@ -13,8 +13,15 @@ BOTH:
 
 LABEL-ALLOWLISTED to the interval daemons install.sh knows (it mirrors that file's
 poll_interval_config_key table) — a label not in the allowlist is refused, so the
-verb can never touch a non-interval service (the dashboard itself, watchdog,
-weekly-generate) or a non-ITS label. The interval is bounds-validated. The
+verb can never touch the dashboard itself, a calendar daemon (weekly-generate), or
+a non-ITS label. NOTE since 2026-08-07: the WATCHDOG is now interval-driven too
+(`StartInterval 3600`), but it is deliberately still refused here — its cadence is
+NOT operator-tunable, because the hourly/daily tier split in
+`scripts/watchdog.py DAILY_ONLY_CHECKS` is calibrated against that specific 3600s
+period (a retuned interval would silently re-price the daily tier's 20h marker gate).
+Changing it is a code change, not a console edit; `install.sh`'s interval tables
+deliberately omit the label, which is what makes this refusal automatic.
+The interval is bounds-validated. The
 elevated-confirm ceremony (re-PIN + typed label) is enforced by the router BEFORE
 this runs — same weight as a Class-B config edit (it mutates launchctl AND
 ITS_Config). No secret is read or rotated here. Ships DARK behind the ACT surface
