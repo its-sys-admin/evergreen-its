@@ -106,6 +106,10 @@ _ENTRIES: list[ConfigEntry] = [
     _e("field_ops.fieldops_sync.equipment_enabled", "field_ops", _GATES, v_bool),
     _e("field_ops.fieldops_sync.materials_enabled", "field_ops", _GATES, v_bool),
     _e("field_ops.fieldops_sync.incidents_enabled", "field_ops", _GATES, v_bool),
+    _e("field_ops.fieldops_sync.archive_enabled", "field_ops", _GATES, v_bool,
+       note="Track 6 job-archive pass: drains the portal's archive queue and relocates a closed "
+            "job's six Smartsheet+Box containers. Turning this ON is what makes the portal's "
+            "Archive button actually move folders"),
     # FOOTGUN: read under Workstream='safety_reports' (intake's own workstream), NOT progress_reports.
     _e(
         "progress_reports.intake_enabled",

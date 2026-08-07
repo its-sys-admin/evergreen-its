@@ -228,6 +228,10 @@ PURPOSE_OVERRIDES: dict[str, str] = {
                                                 "Smartsheet. (Activation is gated on the §51 rider — read the row's "
                                                 "Description before flipping.)",
     "field_ops.fieldops_sync.incidents_enabled": "Per-stream gate: mirror material incidents from the portal into Smartsheet.",
+    "field_ops.fieldops_sync.archive_enabled": "Gate for the Track 6 job-archive pass: drains the portal's archive queue "
+                                               "and relocates a closed job's six Smartsheet + Box containers into the "
+                                               "archive (and back). Ships OFF; until it is on, the portal's Archive "
+                                               "button records intent that nothing acts on.",
     "po_materials.config_actuator.polling_enabled": "Runtime gate for the §50 config actuator daemon (applies approved "
                                                     "workstream-config changes on the Mac).",
     "po_materials.po_poll.polling_enabled": "Runtime gate for the PO pull daemon (pulls submitted POs from the Worker). Ships dark.",
