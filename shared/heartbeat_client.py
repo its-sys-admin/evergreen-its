@@ -3,7 +3,7 @@
 Purpose
 -------
 Single outbound GET to a configured Healthchecks.io ping URL, fired once
-per daily watchdog run (``scripts/watchdog.py`` ``main()``). The external
+per watchdog run (hourly since 2026-08-07) (``scripts/watchdog.py`` ``main()``). The external
 monitor expects this ping within its configured period+grace; a missed
 ping means "the watchdog (and almost certainly the whole MacBook) stopped
 running" and Healthchecks.io alerts the operator out-of-band. This is the

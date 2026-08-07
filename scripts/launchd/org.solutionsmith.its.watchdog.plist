@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  ITS daily watchdog. Per Operational Standards v8 §2.
-  Runs scripts/watchdog.py at 7:00 AM local time. launchd's
-  StartCalendarInterval catches up on wake, so if the laptop was
-  asleep at 7:00 AM the job runs as soon as it wakes.
+  ITS watchdog. Per Operational Standards v8 §2.
+
+  HOURLY since 2026-08-07 (was StartCalendarInterval 07:00 daily). A 12.7-hour
+  Smartsheet outage on 2026-08-06 — breaker OPEN 729 min, every Smartsheet-backed
+  daemon short-circuiting, "approved sends FROZEN and nothing is being filed" —
+  paged ZERO times, because the watchdog is the fleet's only cross-daemon observer
+  and it had already run for the day. Its cadence IS the outage-detection floor.
+
+  NOT every check runs hourly: scripts/watchdog.py DAILY_ONLY_CHECKS keeps the
+  expensive / mutating / daily-rhythm checks (D, G, I, L, O, U, W) on a ~24h tier,
+  gated by the watchdog_daily.last_run marker. See that constant's comment block for
+  why each one would be harmful at 1h.
 -->
 <plist version="1.0">
 <dict>
@@ -34,20 +42,20 @@
         <string>en_US.UTF-8</string>
     </dict>
 
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>7</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>3600</integer>
 
-    <!-- A2 (single-host resilience): RunAtLoad stays FALSE for a StartCalendarInterval
-         daemon. launchd fires a missed calendar job on wake; RunAtLoad=true would
-         MIS-fire it on every login (e.g. run a Friday compile on a Tuesday boot).
-         Reboot-recovery for the weekly compile is the watchdog Check-I catch-up. -->
+    <!-- RunAtLoad is TRUE for an interval daemon (matches picklist-sync, the existing
+         hourly precedent). The A2 rationale for FALSE applied to the old
+         StartCalendarInterval form, where RunAtLoad would MIS-fire a calendar job on
+         every login (e.g. a Friday compile on a Tuesday boot). That hazard does not
+         exist here: an interval sweep is idempotent and carries no calendar meaning,
+         and the calendar-bearing work — the weekly-compile catch-up — is Check I,
+         which is window-guarded on its own trigger date, not on when the sweep runs.
+         Firing once at load also closes the post-reboot gap that a bare 3600s timer
+         would otherwise leave. -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>ProcessType</key>
     <string>Background</string>

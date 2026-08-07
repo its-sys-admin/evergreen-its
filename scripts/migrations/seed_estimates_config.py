@@ -21,6 +21,7 @@ What it seeds (10 rows, workstream `po_materials`):
   Extraction-ladder rows (PR-B, ADR-0004 E4-E6 — the three tier gates dark):
 
     po_materials.estimate_extract.tier1_enabled        = false
+    po_materials.estimate_extract.tier1_xlsx_enabled   = false
     po_materials.estimate_extract.tier2_enabled        = false
     po_materials.estimate_extract.ocr_enabled          = false
     po_materials.estimate_extract.model                = qwen3.5:9b
@@ -114,6 +115,25 @@ CONFIG_ROWS: list[dict[str, Any]] = [
             "tests/fixtures/estimate_corpus_expectations.json. Gate off → every "
             "native-text doc lands needs_review (manual Tier-3), exactly the "
             "PR-A behavior."
+        ),
+    },
+    {
+        "Setting": "po_materials.estimate_extract.tier1_xlsx_enabled",
+        "Workstream": WORKSTREAM,
+        "Value": "false",
+        "Description": (
+            "Gate for the Tier-1 DETERMINISTIC VENDOR-SPREADSHEET extraction "
+            "(estimate_parse.parse_xlsx_estimate: sandboxed openpyxl grid -> the same "
+            "generic-table line logic as the PDF tier, with doc-level totals read from "
+            "the CELL grid rather than regexed from flattened text). NO AI. Separate "
+            "from tier1_enabled because it is a distinct parse path with its own "
+            "failure modes. ON: a vendor .xlsx quote is extracted onto the disposition "
+            "screen instead of being hand-keyed. OFF: those documents land needs_review "
+            "(manual Tier-3) — no other lane is affected either way. Independent of "
+            "Tier 0, which claims ITS's own HMAC-verified quote form first and is "
+            "always on. Note .xlsx documents get no rendered preview, so an accepting "
+            "import rides the 'no preview available - I verified against the original' "
+            "acknowledgment, exactly as a verified Tier-0 form does."
         ),
     },
     {

@@ -161,21 +161,21 @@ def test_extract_xlsx_rows_bounds_rows_and_columns_in_the_child():
     parent-side check that only fires once the child has already materialized the
     payload, so an over-declared workbook must be truncated child-side or it exhausts
     the child before the parent can refuse it."""
-    wide = [[f"c{i}" for i in range(estimate_sandbox.XLSX_MAX_COLS_PER_ROW + 25)]]
-    tall = [[i] for i in range(estimate_sandbox.XLSX_MAX_ROWS_PER_SHEET + 40)]
+    wide = [[f"c{i}" for i in range(estimate_sandbox.MANIFEST_XLSX_MAX_COLS_PER_ROW + 25)]]
+    tall = [[i] for i in range(estimate_sandbox.MANIFEST_XLSX_MAX_ROWS_PER_SHEET + 40)]
     out = _extract(_xlsx_bytes({"Wide": wide, "Tall": tall}))
     assert out is not None
     sheets = {s["name"]: s["rows"] for s in json.loads(out)["sheets"]}
-    assert len(sheets["Wide"][0]) == estimate_sandbox.XLSX_MAX_COLS_PER_ROW
-    assert len(sheets["Tall"]) == estimate_sandbox.XLSX_MAX_ROWS_PER_SHEET
+    assert len(sheets["Wide"][0]) == estimate_sandbox.MANIFEST_XLSX_MAX_COLS_PER_ROW
+    assert len(sheets["Tall"]) == estimate_sandbox.MANIFEST_XLSX_MAX_ROWS_PER_SHEET
 
 
 def test_extract_xlsx_rows_bounds_a_single_hostile_cell():
     """One cell holding megabytes of text must not ride into D1 and then into the
     validate screen's grid."""
-    out = _extract(_xlsx_bytes({"S": [["x" * (estimate_sandbox.XLSX_MAX_CELL_CHARS + 500)]]}))
+    out = _extract(_xlsx_bytes({"S": [["x" * (estimate_sandbox.MANIFEST_XLSX_MAX_CELL_CHARS + 500)]]}))
     assert out is not None
-    assert len(json.loads(out)["sheets"][0]["rows"][0][0]) == estimate_sandbox.XLSX_MAX_CELL_CHARS
+    assert len(json.loads(out)["sheets"][0]["rows"][0][0]) == estimate_sandbox.MANIFEST_XLSX_MAX_CELL_CHARS
 
 
 def test_extract_xlsx_rows_max_sheets_arg_is_honoured():

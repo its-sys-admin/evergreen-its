@@ -208,6 +208,48 @@ Prior art: `docs/runbooks/project_closure.md` (the §43 runbook this rewrites) �
 `docs/reports/2026-07-23_project_closure_policy_proposal.md` · its#682 · `docs/tech_debt.md`
 "Archive-on-closure". Design record lands as `docs/adr/0005-job-archive-workflow.md`.
 
+<!-- NUMBERING NOTE (reconcile 2026-08-07): this Track was scoped as "Track 6" on the
+     deployment repo while Track 6 above was already in flight on the development repo —
+     the two repositories allocated the number independently while they were split. Kept
+     both; renumbered the later-scoped one to 7. -->
+### Track 7 — Post-delivery: outage observability + estimate-lane determinism *(scoped 2026-08-07)*
+Scoped the day of delivery, after a live diagnosis session found a **12.7-hour Smartsheet outage (2026-08-06,
+breaker OPEN 729 min) that paged ZERO times**. Two code PRs + a docs pass; the debt-file half landed with this
+entry. Working notes: `~/.claude/plans/zany-brewing-ritchie.md` (scratch — this Track is the durable record).
+
+- **T6-1 — watchdog tiered cadence** *(fixes the blind spot; ordered first)*. The watchdog is the fleet's only
+  cross-daemon observer and fires **once/day at 07:00**, so Check J WARNed at 450 s on the 11:00Z sweep and
+  nothing looked again for twelve hours. Move to `StartInterval 3600` (precedent:
+  `org.solutionsmith.its.picklist-sync.plist`). **Not** a plain plist edit — six checks are actively harmful
+  hourly and must stay daily via a `DAILY_ONLY_CHECKS` **filter** (never a wrapper —
+  `tests/test_watchdog.py:124` pins `CHECKS` by exact identity): **W** (unconditional launchd truncate lane →
+  ~24 never-deleted `.gz`/log/day, inverting the growth bound it exists to enforce), **I** (a failing catch-up
+  → ~72 weekly compiles + 72 *unrotatable* open CRITICALs), **D** (no cross-run dedupe → 24 Review-Queue
+  rows/day), **O** (WARN-band writes a row into the very sheet it is warning about), **L** (creates+deletes a
+  real Smartsheet sheet per run), **U** (security-relevant drift window 24 h → 1 h). **G** also stays daily
+  until the Resend leg is fixed, or its retry loop pumps 24 WARN rows/day. Gate the daily tier on a
+  `watchdog_daily.last_run` marker >20 h old, **not** `hour == 7` — a sleeping laptop must not skip a whole day.
+  Tiering keeps `LOG_DIR_ROTATION_CRITICAL_THRESHOLD` and `LOG_ROTATION_TEMP_ORPHAN_AGE_SECONDS` semantically
+  correct for free. Closes the "Lever 1" tech-debt entry, which predicted this exact fix.
+- **T6-2 — deterministic `.xlsx` estimate tier**. A vendor's Excel quote is accepted, §34-screened and filed
+  today, but `estimate_poll.py:1334-1335` (`if declared_mime != MIME_PDF: return None`) sits between the Tier-0
+  branch and every extraction tier, so it can never be parsed — the office retypes every line from a file that
+  already holds a typed numeric grid. Proven cheap: an adapter into the existing `ParsedPdf` contract let the
+  **unmodified** `parse_generic_table` extract a vendor workbook (3/3 lines, integer cents, per-line math
+  verified). Put the parse in `estimate_parse.py` (inherits its capability-gating enrollment); run the hostile
+  parse in a new `estimate_sandbox.parse_xlsx_grid` child. **Read totals from CELLS via `to_cents`, never the
+  `_GENERIC_TOTALS` regex** — it requires exactly two decimals, openpyxl returns `4685.0`, and an absent total
+  makes `check_math` *skip* the comparison, so the doc posts `extracted` with no doc-level cross-check at all.
+  `.xlsx` gets no preview, so imports ride the `no_preview_verified` acknowledgment — **do not** synthesize a
+  preview from our own parse (it would make a wrong parse self-confirming). Per ADR-0004 E6 the gate flips true
+  only after `scripts/eval_estimate_ladder.py --write-expectations` baselines the corpus; the fixture is empty
+  today, so this finally qualifies **Tier 1** as well. Leaves Tier-2 (local Ollama) present but dark.
+- **T6-3 — tech-debt file cleanup + handoff — LANDED 2026-08-07 (this pass).** `docs/tech_debt.md` was
+  259,965 B, ~4 kB **over** its own 256 kB cap, and its 2026-07-14 triage index pointed at entries archived in
+  July (19 of 110 bullets, over-counting open debt by ~17%; two were `[CUTOVER-BLOCKING]`-tagged). Four entries
+  archived, six resolved sub-bullets swept, the index reconciled and re-counted (110 → 91), and the surviving
+  `/api/recent` authorization gap re-filed under its own honest title.
+
 ---
 
 ## Backlog — parked with unblock conditions (not on the near path)

@@ -1753,7 +1753,16 @@ def _check_box_token_freshness() -> CheckResult:
 # Scoped to the ci.yml workflow = the REQUIRED suites (test/portal/secrets); the
 # separate CodeQL default-setup workflow (non-required, periodically infra-flaky)
 # is deliberately excluded so it can never false-page.
-GH_MAIN_CI_REPO = "SolutionSmith-debug/its"
+#
+# CORRECTED 2026-08-07: this read `SolutionSmith-debug/its` — a DIFFERENT, still-active
+# repository (both were pushed to on the day this was found; neither is a fork of the
+# other). Check S is the mechanical step 4 of the four-part landing verify: "did the code
+# this host is running actually land green on ITS OWN main?". Pointed at another repo it
+# answered a question about somebody else's code and could NEVER WARN about ours — a
+# silent false-green on a landing gate, which is worse than having no check at all. The
+# slug must name the repo `origin` points at; `test_check_s_repo_matches_origin_remote`
+# pins that and RED-lights on any future rename or re-point.
+GH_MAIN_CI_REPO = "its-sys-admin/evergreen-its"
 GH_MAIN_CI_WORKFLOW = "ci.yml"
 GH_MAIN_CI_TIMEOUT_SECONDS = 30
 
@@ -2919,6 +2928,101 @@ CHECK_LETTERS: dict[str, str] = {
     "_check_log_dir_rotation": "W",
 }
 
+
+# ---- Cadence tiers (2026-08-07) ----------------------------------------------
+#
+# The watchdog moved from a once-daily 07:00 calendar fire to an HOURLY StartInterval after a
+# 12.7-hour Smartsheet outage on 2026-08-06 (breaker OPEN 729 min, 361 short-circuits across the
+# fleet — "approved sends are FROZEN and nothing is being filed") went completely UNPAGED: Check J
+# WARNed at 450s on the 11:00Z sweep and nothing looked again for twelve hours. The watchdog is the
+# fleet's only cross-daemon observer, so its cadence IS the outage-detection floor.
+#
+# Running EVERY check hourly is not the fix — these are actively harmful at that cadence and stay
+# on the daily tier:
+#
+#   D  _check_reviewer_chain_forward  no cross-run dedupe (see its docstring) -> a standing gap
+#                                     writes 24 ITS_Review_Queue rows/day. A 14-day FORWARD PTO
+#                                     scan has no hourly-resolution value anyway.
+#   G  _check_alert_dedupe_summaries  semantically fine hourly — its two-phase state machine emits
+#                                     exactly one summary per entry regardless of cadence, and
+#                                     hourly would cut summary latency 24h -> 1h. But its phase-1
+#                                     send currently fails on the Resend 403 WITHOUT marking the
+#                                     entry summarized, so it retries forever: each stuck key would
+#                                     pump 24 WARN rows/day. PROMOTE TO HOURLY once the Resend leg
+#                                     is fixed — that is the only reason G is here.
+#   I  _check_*_generate_catchup      a persistently failing catch-up re-fires a FULL weekly compile
+#                                     per run: 3 attempts across the 3-day window becomes ~72, each
+#                                     minting an open CRITICAL. Open CRITICALs are never terminal,
+#                                     so they are unrotatable at every floor INCLUDING the storm
+#                                     floor — the 20k-row lockout mechanism.
+#   L  _check_token_write_capability  creates AND deletes a real Smartsheet sheet per run; its own
+#                                     docstring prices this as "one create + one delete per daily
+#                                     watchdog run (negligible)", which does not survive 24x/day.
+#   O  _check_row_cap_rotation        in the 15k-16k WARN band it writes one ITS_Errors row per
+#                                     sweep — into the very sheet whose row count it is warning
+#                                     about. A positive feedback loop.
+#   U  _check_approver_drift          absorbs the change into its baseline every run, so the drift
+#                                     WARN's visibility window shrinks 24h -> 1h on a
+#                                     security-relevant signal (who may approve a send).
+#   W  _check_log_dir_rotation        its launchd lane truncates UNCONDITIONALLY by design (no
+#                                     per-file mtime skip — an always-on daemon always looks
+#                                     recent, F1) and that lane NEVER deletes, so hourly would mint
+#                                     ~24 permanent .gz archives per launchd log per day —
+#                                     inverting the very growth bound Check W exists to enforce.
+#
+# Keeping W on the daily tier ALSO preserves two cadence-coupled constants for free, so neither
+# needs touching: LOG_DIR_ROTATION_CRITICAL_THRESHOLD (3) keeps meaning three DAYS rather than
+# three hours, and LOG_ROTATION_TEMP_ORPHAN_AGE_SECONDS (3600.0) cannot collide with a 3600s sweep
+# interval and reap a temp file the CURRENT run is mid-write on.
+#
+# This is a FILTER, deliberately NOT a wrapper: `CHECKS` keeps its exact identity and order,
+# because tests/test_watchdog.py asserts the registry by function identity (plus four more tests
+# asserting membership / index position). Wrapping any check would break all five and would
+# decouple the registry from CHECK_LETTERS parity.
+DAILY_ONLY_CHECKS: frozenset[Callable[..., CheckResult]] = frozenset(
+    {
+        _check_reviewer_chain_forward,
+        _check_alert_dedupe_summaries,
+        _check_weekly_generate_catchup,
+        _check_progress_generate_catchup,
+        _check_token_write_capability,
+        _check_row_cap_rotation,
+        _check_approver_drift,
+        _check_log_dir_rotation,
+    }
+)
+
+# The daily tier is due when its own marker is older than this. Deliberately BELOW 24h: a 24h
+# window plus run-to-run jitter would eventually land just under the threshold and defer the tier
+# by a whole day.
+DAILY_TIER_WINDOW = timedelta(hours=20)
+DAILY_TIER_JOB = "watchdog_daily"
+
+
+def _daily_tier_due(now: datetime | None = None) -> bool:
+    """True when the DAILY_ONLY_CHECKS tier should run in THIS sweep.
+
+    Gated on the age of the `watchdog_daily.last_run` marker rather than on a wall-clock hour
+    (e.g. `hour == 7`): a laptop asleep at the designated hour must not skip the daily tier for a
+    whole day — precisely the "nobody looked" failure mode this whole change exists to remove.
+
+    FAIL-OPEN by design: an absent, unreadable, or unparseable marker RUNS the tier. A redundant
+    daily pass is cheap; a silently-skipped one is the bug.
+    """
+    marker = WATCHDOG_MARKER_DIR / f"{DAILY_TIER_JOB}.last_run"
+    try:
+        raw = marker.read_text().strip()
+    except OSError:
+        return True
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return True
+    if last.tzinfo is None:  # tolerate a naive stamp from an older writer
+        last = last.replace(tzinfo=UTC)
+    return (now or datetime.now(UTC)) - last >= DAILY_TIER_WINDOW
+
+
 # Per-sweep results file (operator-dashboard sweep panel's read-only source).
 # Written once per run via shared.state_io (atomic; single writer, whole-file
 # readers — no lock needed).
@@ -2945,9 +3049,38 @@ def main() -> None:
     # the equivalent gate.
     resolve_and_log(_SCRIPT, REQUIRED_CONFIG)
 
+    # Cadence tiering (see DAILY_ONLY_CHECKS): every sweep runs the hourly tier; the daily-only
+    # tier runs when its own marker has aged past DAILY_TIER_WINDOW. A deferred check still
+    # records a sweep row so the dashboard's sweep panel shows it as "deferred", never as a
+    # check that silently vanished from the registry.
+    daily_due = _daily_tier_due()
+    if not daily_due:
+        log(
+            Severity.INFO,
+            _SCRIPT,
+            f"hourly sweep — {len(DAILY_ONLY_CHECKS)} daily-tier check(s) deferred to the "
+            f"next pass due ≥{int(DAILY_TIER_WINDOW.total_seconds() // 3600)}h after the last",
+        )
+
     sweep_records: list[dict[str, str]] = []
     for check in CHECKS:
+        if not daily_due and check in DAILY_ONLY_CHECKS:
+            sweep_records.append(
+                {
+                    "check": check.__name__,
+                    "letter": CHECK_LETTERS.get(check.__name__, "?"),
+                    "severity": "INFO",
+                    "summary": "deferred this sweep — daily tier (runs ~once per 24h)",
+                }
+            )
+            continue
         sweep_records.append(_run_check(check, alerts_suppressed=alerts_suppressed))
+
+    # Stamp the daily tier AFTER its checks ran. Deliberately unconditional on their outcomes:
+    # every check is harness-isolated by _run_check, so a failing daily check must not pin the
+    # tier "due" forever and re-run it every hour — the exact amplification this tiering prevents.
+    if daily_due:
+        write_last_run_marker(DAILY_TIER_JOB)
 
     # Persist the sweep's per-check outcomes for the operator dashboard's
     # "watchdog sweep" panel — the "did last night's sweep run, which letters

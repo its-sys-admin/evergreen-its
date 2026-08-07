@@ -81,7 +81,8 @@ report its own death:
 | **Watchdog marker files** (`~/its/.watchdog/<slug>.last_run`) | ISO timestamp written each cycle | The **16** `TRACKED_JOBS` daemons | Watchdog **Check C** (marker-staleness floor) |
 
 <!-- src: scripts/watchdog.py:408-455 (Check C body); scripts/watchdog.py:240-287 (TRACKED_JOB_WINDOWS) | verified 2026-07-14 -->
-**Check C** (`_check_scheduled_jobs`) runs in the daily 07:00 watchdog pass. For each
+**Check C** (`_check_scheduled_jobs`) runs in every HOURLY watchdog sweep (it is on the
+hourly tier — see `DAILY_ONLY_CHECKS`). For each
 job in `TRACKED_JOBS` it reads `~/its/.watchdog/<slug>.last_run` and WARNs if the
 marker is missing, unreadable, or older than that job's freshness window
 (`TRACKED_JOB_WINDOWS`, default 24h). Because a daemon cannot detect its own total
@@ -142,7 +143,7 @@ runtime.
 | `config-actuator` | `po_materials.config_actuator` | interval, **120s** fixed | §50 actuator | yes | (not tracked) |
 | `picklist-sync` | `scripts/run_picklist_sync.py` | interval, **3600s** fixed | Schema | no | `safety_picklist_sync` |
 | `picklist-audit` | `scripts/audit_picklist_drift.py` | calendar, **Sun 15:00** | Schema | no | `safety_picklist_audit` |
-| `watchdog` | `scripts/watchdog.py` | calendar, **daily 07:00** | System | no | (watches others) |
+| `watchdog` | `scripts/watchdog.py` | interval, **3600s** (hourly tier + a ~24h daily tier) | System | no | (watches others) |
 | `dashboard` | `operator_dashboard` | **server** (KeepAlive) | System | no | (KeepAlive) |
 
 <!-- src: scripts/watchdog.py TRACKED_JOBS — 16 slugs (estimate_poll + rfq_poll + rfq_send_poll added); HeartbeatReporter( grep — 14 non-test constructors | verified 2026-07-19 -->
@@ -484,17 +485,17 @@ operator-gated activation** and both write an ITS_Daemon_Health heartbeat but ar
 
 ### watchdog — `scripts/watchdog.py`
 
-<!-- src: scripts/watchdog.py:2345-2417 (CHECKS registry); scripts/watchdog.py:174-232 (TRACKED_JOBS); scripts/launchd/org.solutionsmith.its.watchdog.plist:37-42 (daily 07:00) | verified 2026-07-14 -->
+<!-- src: scripts/watchdog.py:2345-2417 (CHECKS registry); scripts/watchdog.py:174-232 (TRACKED_JOBS); scripts/launchd/org.solutionsmith.its.watchdog.plist (StartInterval 3600); scripts/watchdog.py DAILY_ONLY_CHECKS | verified 2026-08-07 -->
 
 | Field | Value |
 |---|---|
-| **Purpose** | The daily liveness + integrity sweep. Runs the `CHECKS` registry (live letters A–V; E deferred, F retired, H never existed). Notable checks: **A** stale review-queue, **B** open CRITICALs, **C** `TRACKED_JOBS` marker staleness, **G** alert-dedupe sweep, **I** safety+progress Friday-crash catch-up, **N** stuck-WSR-send, **O** row-cap rotation, **Q/R** portal-poll resilience, **S** main-branch CI green, **T** stale-HELD rows, **U** approver drift, **V** portal-prune health. |
-| **Interval** | `StartCalendarInterval` — **daily 07:00** local (`Hour 7`, `Minute 0`; no `Weekday` ⇒ every day). Catches up on wake if the laptop was asleep. |
+| **Purpose** | The liveness + integrity sweep — **hourly since 2026-08-07** (was daily 07:00; a 12.7h Smartsheet outage on 2026-08-06 paged zero times because the watchdog had already run for the day). Runs the `CHECKS` registry (live letters A–V; E deferred, F retired, H never existed). Notable checks: **A** stale review-queue, **B** open CRITICALs, **C** `TRACKED_JOBS` marker staleness, **G** alert-dedupe sweep, **I** safety+progress Friday-crash catch-up, **N** stuck-WSR-send, **O** row-cap rotation, **Q/R** portal-poll resilience, **S** main-branch CI green, **T** stale-HELD rows, **U** approver drift, **V** portal-prune health. |
+| **Interval** | `StartInterval` — **3600s (hourly)**, `RunAtLoad` true. **Two tiers:** every sweep runs the hourly checks (A B C J K M N P Q R S T V); the `DAILY_ONLY_CHECKS` set (D G I L O U W) runs about once per 24h, gated on the `watchdog_daily.last_run` marker aging past 20h — those checks are expensive, mutating, or daily-rhythm and are harmful at hourly. The marker gate (not a wall-clock hour) means a sleeping host cannot skip the daily tier for a whole day. |
 | **Source of work** | Marker files, Smartsheet sheets, circuit breaker, heartbeats, GitHub CI, the portal Worker |
 | **Config gates** | None (MAINTENANCE-aware — defers inline-firing checks during MAINTENANCE) |
 | **Heartbeat row** | None — a daemon cannot reliably watch itself. Its OWN liveness is the external **Healthchecks.io** ping (the dead-man's switch for total host death), which is skipped until `system.heartbeat_url` is configured. |
 | **Log** | `~/its/logs/launchd/watchdog.out.log` / `.err.log` |
-| **Known failure modes** | If the watchdog itself dies, only the external **Healthchecks.io** ping surfaces it — and that ping is skipped while `system.heartbeat_url` holds its seed placeholder, so a dead watchdog is currently undetected externally. A missed daily run is caught on the next wake (calendar catch-up). |
+| **Known failure modes** | If the watchdog itself dies, only the external **Healthchecks.io** ping surfaces it — and that ping is skipped while `system.heartbeat_url` holds its seed placeholder, so a dead watchdog is currently undetected externally. A missed sweep is absorbed by the next hourly fire; a missed DAILY tier is absorbed by the marker gate (it stays due until it actually runs). |
 | **Restart** | Dashboard start/stop; shell `install.sh load org.solutionsmith.its.watchdog` |
 
 ### dashboard — `operator_dashboard`
@@ -590,7 +591,8 @@ the gate is flipped.
   and `config-actuator` report via ITS_Daemon_Health heartbeat only; the dashboard
   relies on `KeepAlive`. None of the three has a marker-staleness alert.
 - **Timezones are the Mac's local time.** All `StartCalendarInterval` fire times
-  (Fri 14:00 / Fri 14:30 / Sun 15:00 / daily 07:00) are local wall-clock.
+  (Fri 14:00 / Fri 14:30 / Sun 15:00) are local wall-clock. The watchdog is no longer among
+  them — it is interval-driven (hourly) since 2026-08-07.
 <!-- src: scripts/launchd/*.plist StandardOutPath vs ProgramArguments (po-send / subcontract-send / rfq-send) | verified 2026-07-19 -->
 - **The three `*-send` approval pollers log under the label, not the module.** `po-send`
   writes `po_send.out.log`, `subcontract-send` writes `subcontract_send.out.log`, and

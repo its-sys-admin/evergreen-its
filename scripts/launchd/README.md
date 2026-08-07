@@ -1,6 +1,6 @@
 # ITS launchd plists
 
-How ITS scheduled scripts get scheduled on macOS. Per **Operational Standards v8 §2**: launchd is the scheduling layer; `StartCalendarInterval` catches up on wake, so a 7:00 AM watchdog still fires when the laptop wakes at 9:00.
+How ITS scheduled scripts get scheduled on macOS. Per **Operational Standards v8 §2**: launchd is the scheduling layer. `StartCalendarInterval` catches up on wake, so a Friday 14:00 compile still fires when the laptop wakes at 16:00. (The watchdog itself moved OFF calendar to `StartInterval 3600` on 2026-08-07 — see `org.solutionsmith.its.watchdog.plist`.)
 
 ## What's here
 

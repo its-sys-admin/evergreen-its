@@ -1986,3 +1986,141 @@ in the worktree, confirm the branch is `state=MERGED` (already done above for al
 `--force` only if an untracked `.venv-wt`-style directory blocks the plain remove, as with `~/its-standup`),
 then `git worktree prune`. **Tag:** `worktree`, `operator-manual`, `cleanup`, `low-severity`.
 
+
+## [RESOLVED 2026-08-07 — audit] WS2 operator dashboard — completion parked items [OPEN 2026-07-13]
+
+> **Moved from tech_debt.md 2026-08-07 (delivery-day tech-debt cleanup):** All four sub-items are resolved or by-design, verified at HEAD `9eace59`: **WS2-1** brand assets present (`operator_dashboard/static/evergreen-logo.svg` + `great-vibes-OFL.txt`); **WS2-2** `grep 'No launchd plist yet' CLAUDE.md` returns ZERO hits and the `verify_cutover.py` docstring second surface was fixed by #658; **WS2-3** the `docs/enablement/operator_dashboard.md` delta landed 2026-07-22; **WS2-4** is an explicit Seth by-design decision (D13, no mutating send-lane verb), not deferred work. Nothing here is actionable.
+
+
+From the dashboard-completion session (Blocks 1-5 landed #567/#570/#574/#576). None blocks the ship; each
+is a deliberate scope line:
+
+- **WS2-1 — RESOLVED 2026-07-14.** No Canva export was needed — the Safety Portal brand already had the
+  vector + font. Pulled `evergreen-logo.svg` + `great-vibes.woff2` (+ OFL license) from `safety_portal/public/`
+  into `operator_dashboard/static/` and wired the real lockup into the dashboard header: the Evergreen mark on
+  a gold-bordered white plate + the "Integrated Technical System" gold-gradient Great Vibes script (the
+  portal's exact treatment incl. the WebKit background-clip cap-loop padding fix).
+- **WS2-2 (PARTIALLY RESOLVED 2026-07-14, PR #597).** CLAUDE.md's dashboard "stubbed vs real" row was stale
+  ("No launchd plist yet (D1-3b)"); #597 fixed it in the same PR as the `mark_errors_resolved` verb — the row
+  now reads "launchd-managed (`org.solutionsmith.its.dashboard`)" and lists the mark-resolved+clear verbs.
+  (Re-verified 2026-07-17: `grep operator_dashboard CLAUDE.md` no longer contains "No launchd plist yet.")
+  **Residual RESOLVED 2026-07-22 (#658):** the `verify_cutover.py` docstring now reads
+  "launchd-managed, `org.solutionsmith.its.dashboard`" — the second surface is fixed.
+- **WS2-3 — DELTA LANDED 2026-07-22 (session-close PR):** `docs/enablement/operator_dashboard.md` now
+  covers the sweep panel, the system-map operator briefs/doc links/Smartsheet out-links, and the reorganized
+  config editor. (The guide had already grown the verb/panel coverage in the interim; this delta brought it
+  current with the 2026-07-22 dashboard trilogy #655/#657/#658.)
+- **WS2-4 (Seth decision, by design) — no mutating send-lane verb.** The send-queue panel is read-only;
+  bulk-approve / resend-FAILED / clear-HELD are deliberately NOT built (D13). Trigger: an explicit operator
+  decision to expose a send-lane action (would need its own adversarial review).
+
+## [RESOLVED 2026-08-07 — audit] Aug-7 cutover readiness — deferred code follow-ups [OPEN 2026-07-10 — CO-1/CO-3/CO-4 RESOLVED; CO-2 code landed, operator-run pending]
+
+> **Moved from tech_debt.md 2026-08-07 (delivery-day tech-debt cleanup):** The code half is 4-for-4 done, verified at HEAD `9eace59`: **CO-1** `DEFAULT_POLLING_ENABLED = False` in all three send pollers (`po_send_poll.py:81`, `rfq_send_poll.py:86`, `subcontract_send_poll.py:60`); **CO-2** the live-clamd EICAR tests exist and are skip-gated (`tests/test_photo_screen.py:295` `_needs_live_clamd`, `:301` `test_live_clamd_flags_eicar`); **CO-3** already recorded RESOLVED; **CO-4** `build_its_active_jobs_sheet.py:58-59` now reads `WORKSPACE_SAFETY_PORTAL` / `"00_Safety Portal"` — the stale `WORKSPACE_OPERATIONS` + `"Safety Portal"` pair the entry describes has zero hits. **SCOPE CAVEAT:** the one genuinely-remaining item is the *operator-run* CO-2 EICAR smoke at the Phase-C hardening gate, which belongs to `docs/operations/cutover_operator_punchlist.md` (as this entry's own preamble says), not to the code-debt file. Keeping a `[CUTOVER-BLOCKING]`-adjacent code block alive for a punch-list item overstated cutover code risk.
+
+
+Surfaced during the cutover-readiness drive (PR #525); each is a real code follow-up not blocking
+the merged work, tracked so it isn't lost. The operator-gated cutover items live in
+`docs/operations/cutover_operator_punchlist.md`, not here.
+
+- **CO-1 — RESOLVED 2026-07-14 (PR #585, `45fe4df`):** `DEFAULT_POLLING_ENABLED = False` landed with the CO-1 comment in place (verified at HEAD 2026-07-22); this entry was stale. Original text: **(LOW, belt-and-suspenders) — `po_send_poll.py:77 DEFAULT_POLLING_ENABLED = True` diverges from
+  HOUSE_REFLEXES §5 (dark-ship default-False).** PO send ships dark via a seeded
+  `po_materials.po_send.polling_enabled=false` row, so the seeded row is load-bearing (a MISSING row would
+  default the SEND poller ENABLED). Flip the code default to `False` so a lost/absent row fails safe (a
+  send-gate should never fail-open to sending). **Deliberately NOT landed autonomously** — it touches a
+  `SEND_SCRIPTS`-enrolled send daemon, and the External Send Gate is a FIXED high-capability class; even a
+  fail-safe tightening on that surface is Seth's call. **Trigger:** any PO send-path session, or a §5 sweep.
+  **Tag:** `po_materials`, `po_send`, `external-send-gate`, `low-severity`.
+- **CO-2 — code half LANDED 2026-07-22 (this PR):** `tests/test_photo_screen.py::test_live_clamd_flags_eicar` + `test_live_clamd_end_to_end_clean_photo` — skip-if-no-clamd, runtime EICAR through the REAL daemon; the operator runs them at the Phase-C hardening gate (`pytest -k live_clamd`) once ClamAV installs on the production Mac. Original: **(MEDIUM, prove-the-control-bites) — no live-clamd EICAR end-to-end smoke for portal-upload
+  ClamAV.** `safety_reports/photo_screen._clamav_scan` is wired into every portal upload path and ships
+  default-OFF (`safety_reports.photo_screen.clamav_enabled`); the EICAR test (`test_photo_screen.py`) PATCHES
+  `_clamav_scan`, so no live clamd ever runs. Per HOUSE_REFLEXES §2, add a live EICAR-through-clamd smoke
+  (construct the EICAR string at runtime — do NOT commit a malicious file — feed it through
+  `screen_photo(..., clamav_enabled=True)`, assert disposition=malicious; skip-if-no-clamd). CI cannot run
+  clamd, so it's an operator-run Phase-C smoke (clamd installs in host-migration Phase A2). **Trigger:**
+  Phase-C hardening gate, when the operator enables `clamav_enabled`. **Tag:** `security`, `safety_reports`,
+  `clamav`, `prove-the-control-bites`.
+- **CO-3 (LOW, mechanical coverage) — VC-03 does not sandbox-scan every mirror-bearing config row. RESOLVED
+  2026-07-13 (as-designed):** the actionable sub-item is done — `system.operator_email` is enrolled in VC-03
+  with `sandbox_scan=True` (`scripts/verify_cutover.py:264`, comment "CO-3"). The 2 Box
+  `portal_root_folder_id` rows stay intentionally unenrolled (numeric IDs with no `evergreenmirror` marker to
+  scan; CL-14 grep + CL-12 sweep are their backstop). Original context — PR #525
+  enrolled the 2 extra `worker_base_url` copies + `po_send.from_mailbox`, but `system.operator_email` (global,
+  mirror-domain fallback) and the 2 Box `portal_root_folder_id` rows remain outside VC-03 — the manual CL-14
+  grep + the CL-12 sweep are their backstop. Enrolling `operator_email` (sandbox-scanned) would close another
+  gap. Deferred because it changes gate behaviour and the Box roots are numeric IDs (no `evergreenmirror`
+  marker to scan). **SUPERSEDED IN PART 2026-07-21 (gap-builder PR):** the 2 Box `portal_root_folder_id`
+  rows ARE now enrolled in VC-03 as `non_empty` (no `sandbox_scan`). CO-3 conflated two separate
+  assertions: **sandbox_scan**, which stays correctly N/A (a numeric Box folder id carries no
+  `evergreenmirror` marker — CO-3's reasoning holds), and **presence**, which was never the reason to
+  abstain and is now worth asserting because that PR adds `scripts/migrations/build_box_roots.py` — a
+  create-only builder that writes no config row, so its two printed ids reach ITS_Config only via a manual
+  operator paste at cutover. VC-03 now catches a skipped/fat-fingered paste. **Trigger:** the next
+  verify_cutover hardening pass. **Tag:** `cutover`, `verify_cutover`,
+  `low-severity`.
+- **CO-4 — RESOLVED 2026-07-22 (this PR):** both builders repointed to `WORKSPACE_SAFETY_PORTAL` with the live folder names (`00_Safety Portal` / `00_Form Catalog` — two different folders) and the aliased `FOLDER_OPERATIONS_SAFETY_PORTAL` bootstrap line replaced with the real constants; `safety_portal_config_sheets.md` runbook location fixed in the same pass. Landed BEFORE the Phase-1 production builder run this depended on. Original: **(HIGH, stale target) — `build_its_active_jobs_sheet.py` + `build_its_forms_catalog_sheet.py` still
+  target the pre-2026-06-05 Safety-Portal location.** Both hardcode `WORKSPACE = sheet_ids.WORKSPACE_OPERATIONS`
+  with `FOLDER_NAME = "Safety Portal"` (`build_its_active_jobs_sheet.py:50-51`,
+  `build_its_forms_catalog_sheet.py:52-53`), which is stale against the 2026-06-05 move to
+  `WORKSPACE_SAFETY_PORTAL` (whose live folders are `00_Safety Portal` + `00_Form Catalog`). **Failure
+  scenario at a fresh production tenant:** each script find-or-creates a THIRD, wrongly-named `Safety Portal`
+  folder under ITS — Operations, builds ITS_Active_Jobs + ITS_Forms_Catalog into it — orphaned from every
+  runtime constant, so no daemon can see either sheet — and its `[bootstrap]` line prints that folder's id
+  for `FOLDER_OPERATIONS_SAFETY_PORTAL`, an ALIAS of `FOLDER_SAFETY_PORTAL`, so pasting it overwrites the
+  real Safety-Portal folder id with the wrong one. Deliberately NOT fixed in the gap-builder PR (explicitly
+  out of its scope); recorded here rather than left silent. **Fix:** repoint both to `WORKSPACE_SAFETY_PORTAL`
+  + the live folder names (`00_Safety Portal` and `00_Form Catalog` respectively — they are two DIFFERENT
+  folders), and stop emitting the aliased bootstrap constant. **Trigger:** Phase-1 cutover, before running
+  the Safety-Portal sheet builders. **Tag:** `cutover`, `migrations`, `safety_reports`, `high-severity`.
+
+## [RESOLVED 2026-08-07 — audit] [OPEN 2026-06-09] Safety Portal M1 — authenticated submitter can overwrite a peer's PENDING submission
+
+> **Moved from tech_debt.md 2026-08-07 (delivery-day tech-debt cleanup):** The **titled** defect is fixed at HEAD `9eace59`: cross-actor overwrite is refused with `safety_portal/worker/index.ts:857` `return c.json({ error: "uuid_conflict" }, 409);` and every replace writes an atomic audit row at `:924` `stmts.push(auditStmt(c, actor, "submission_replace", attributed, {`. A security-sounding headline that is false at HEAD distorts every read of the portal's security posture, so this entry is archived rather than left open. **SCOPE CAVEAT — the narrower residual survives and was RE-FILED as its own honest entry in `tech_debt.md` on 2026-08-07:** `GET /api/recent` (`safety_portal/worker/index.ts:623`) is `requireSession`-only with no per-job ownership predicate. That gap is NOT closed by this archive.
+
+
+`worker/index.ts` `/api/submit` accepts a client-controlled `submission_uuid` and executes `INSERT OR REPLACE` — this resets `box_verified=0` on an existing row. `/api/recent` leaks any job's latest UUID+payload (not scoped to the authenticated user). The intake dedup only guards already-filed UUIDs; a plain overwrite writes no `audit_log` row. An authenticated submitter can therefore silently replace a peer's un-filed submission with attacker-controlled content, leaving no audit trail.
+
+Not currently exploitable remotely (requires an authenticated session), but a defense-in-depth gap before multi-user production rollout.
+
+**Fix:** server-generate `submission_uuid` (remove client control) OR reject a UUID collision from a different actor. Stop `/api/recent` from leaking arbitrary-job UUIDs not owned by the caller. Add an `audit_log` row for every overwrite attempt.
+
+**Collision risk:** active SPA work shares `worker/index.ts`. Coordinate with any in-flight Worker edits before touching `/api/submit`.
+
+**Tag:** `safety-portal`, `security`, `adversarial-input`, `medium`.
+
+**Revisit when:** next Worker security hardening pass, or before real PM users are provisioned on a live tenant.
+
+Surfaced: 2026-06-09 12-dimension forensic audit (M1).
+
+> **Audit 2026-07-24 (tech-debt janitorial pass):** M1 primary fix RESOLVED (PR #268 — 409 uuid_conflict on cross-actor overwrite + atomic submission_replace audit). STILL OPEN (narrowed): GET /api/recent is requireSession-only — any authenticated user can pull any active job's latest submission_uuid+payload for Amend prefill (no per-job ownership scope). Fix the stale top-of-file index line too.
+
+## [SUPERSEDED 2026-08-07 — audit] ITS scaling hardening — 20-job/20-user Tier-A roadmap [OPEN 2026-06-28]
+
+> **Moved from tech_debt.md 2026-08-07 (delivery-day tech-debt cleanup):** Superseded by `docs/ROADMAP.md` Track 3 per this entry's own status block ("The live marching order is `docs/ROADMAP.md` Track 3; the remaining open items live there") and its 2026-07-24 audit note ("effectively superseded-by-ROADMAP; kept as the pointer"). A pointer does not need 27 lines in the OPEN file — duplicated roadmaps are how the two surfaces drift. A1–A7 verified shipped at HEAD `9eace59`: `shared/sheet_capacity.py` exists (A1); watchdog Checks P/Q/R/O exist (A3/A4/A5). The successor surface is live at `docs/ROADMAP.md:75` `### Track 3 — Scale-hardening for the 20×20 cutover`. **SCOPE CAVEAT:** the A8 enablement-docs remainder and the two unverified Smartsheet quotas remain open — they live in ROADMAP Tracks 3/4, deliberately not re-duplicated here.
+
+
+> **Status (recovered from PR #324 on 2026-07-04; kept for provenance):** most Tier-A items have
+> since **shipped** — A1 `verify_sheet_cap` (#326), A2 single-host resilience (#327), A3 Box/Keychain
+> lock + watchdog Check P (#345), A4 backlog alerts + Checks Q/R (#349), A6 `weekly_generate`
+> hardening (#346), A7 photo-413 (CS2 #437), plus the broader forensic-hardening cluster (#342–#351).
+> The live marching order is **`docs/ROADMAP.md` Track 3**; the remaining open items live there. This
+> section is preserved verbatim below for the original analysis; the full report is
+> `docs/reports/2026-06-28_forensic-scaling-eval-20x20.md`.
+
+2026-06-28 forensic scaling evaluation (read-only; `improve`-skill + multi-agent Workflows; full report at `docs/reports/2026-06-28_forensic-scaling-eval-20x20.md`). Audited the system for a planned ramp to 20+ active jobs / 20+ daily **photo-heavy** portal users this quarter. 98 findings (7 CRITICAL / 33 HIGH; **39 silent-failure**). No code changed — diagnosis + logged executable specs only.
+
+**Tier-A (must-fix-before-cutover) — full self-contained specs in the report's Part II; all 7 code specs are first-draft `needs-revision`:**
+- **A1 (gating, do first):** verify the real Smartsheet per-workspace sheet-count cap + design a week-sheet archival/rollup strategy. ~1,040 new sheets/yr (20×52) is the #1 dollar cost (plan-tier upgrade $600 Pro / $2,400 Business) and a possible hard cap. `smartsheet_client` has no list/count-sheets method yet. Gates the cost + cutover timing.
+- **A2:** single-host resilience — daemon auto-start after reboot (LaunchAgent-at-login gap), SDK network timeouts (boxsdk has none → indefinite daemon hang), Keychain-locked-after-reboot handling.
+- **A3:** Box OAuth refresh-token cross-process lock + `keychain.set_secret` lock + 50-day idle warning (silent 60-day auth-death risk).
+- **A4:** unfiled-submission backlog/age alert + portal_poll outage escalation (`box_verified=0` rows never pruned → silent loss if the host dies).
+- **A5:** ITS_Review_Queue + ITS_Errors 5,000-row cap rotation (silent drop at cap).
+- **A6:** weekly_generate hardening — per-job timeout + streamed merge + partial-write resumability. **CORRECTION:** the original "launchd kills it at >1h" CRITICAL is FALSE — the plist sets no `ExitTimeOut`; real risk is wall-clock + memory.
+- **A7:** photo/payload 413 reconciliation (raise PAYLOAD_MAX envelope, keep the four-way §34 photo mirror synced — `worker/index.ts` + `photo_screen.py` + `PhotoField.tsx` + `publishValidation.ts`) + amend-prefill empty-payload guard. Doctrine flag RESOLVED — see report Part III.
+- **A8 (P1, parallel):** Operator & User Enablement Documentation program — a PDF guide / user manual / comprehensive troubleshooting tree for every ITS function (Portal, ~17 Smartsheet surfaces incl. an `ITS_Config` data-dictionary PDF, daemons/CLIs, future workstreams). Enabling precondition for the distributed-Evergreen-operator model; needs a doc-currency discipline.
+
+Cost at 20×20 ≈ **$610–$2,410/mo hard ≈ the Smartsheet tier decision** + ~$8 Cloudflare; Anthropic ~$0 (portal deterministic); labor distributed across existing Evergreen staff (not a bottleneck).
+
+**Revisit when:** the 20-job ramp is scheduled (start with A1's read-only cap verification), or any Tier-A item is picked up for implementation.
+
+> **Audit 2026-07-24 (tech-debt janitorial pass):** A1-A7 shipped/verified (merged). STILL OPEN: the A8 remainder + two unverified quotas (the real Smartsheet plan sheet-cap pending a support ticket, and pooled-attachment-storage) — these residuals now live in ROADMAP.md Track 3/4, not re-duplicated here. This entry is effectively superseded-by-ROADMAP; kept as the pointer.

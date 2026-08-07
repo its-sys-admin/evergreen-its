@@ -2092,6 +2092,47 @@ def test_check_s_registered_in_checks():
     assert watchdog._check_main_branch_ci_green in watchdog.CHECKS
 
 
+def test_check_s_repo_matches_origin_remote():
+    """Check S must watch THIS repo's main — the one whose code the daemons run.
+
+    Until 2026-08-07 `GH_MAIN_CI_REPO` named `SolutionSmith-debug/its`, a different and
+    still-active repository, so Check S — the mechanical step 4 of the four-part landing
+    verify — reported green about somebody else's code and could never WARN about ours.
+    A silent false-green on a landing gate is worse than no gate.
+
+    This pins the slug to the actual `origin` remote so a rename / re-point RED-lights in
+    CI instead of quietly re-breaking the check. Skips (never fails) when origin cannot be
+    resolved — a shallow tarball or a remote-less checkout must not fail the suite.
+    """
+    import re
+    import subprocess as sp
+
+    try:
+        proc = sp.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, sp.TimeoutExpired):  # pragma: no cover — environment-dependent
+        pytest.skip("git unavailable")
+    if proc.returncode != 0 or not proc.stdout.strip():  # pragma: no cover
+        pytest.skip("no origin remote configured")
+
+    # Accept both https://github.com/OWNER/REPO(.git) and git@github.com:OWNER/REPO(.git)
+    m = re.search(r"github\.com[:/]([^/]+/[^/\s]+?)(?:\.git)?$", proc.stdout.strip())
+    if m is None:  # pragma: no cover — non-GitHub remote
+        pytest.skip(f"origin is not a GitHub remote: {proc.stdout.strip()!r}")
+
+    assert watchdog.GH_MAIN_CI_REPO == m.group(1), (
+        f"Check S watches {watchdog.GH_MAIN_CI_REPO!r} but origin is {m.group(1)!r} — "
+        "Check S would report main-CI status for the WRONG repository and could never "
+        "warn about this one. Update GH_MAIN_CI_REPO in scripts/watchdog.py."
+    )
+
+
 def test_check_s_green_main_is_info(monkeypatch):
     _fake_gh(
         monkeypatch,
@@ -3517,3 +3558,158 @@ def test_sweep_results_path_lives_under_state_dir():
     """Location pin: the sweep file rides ~/its/state via shared.state_io (the
     state-write discipline; the write mechanism is CI-enforced separately)."""
     assert _REAL_RESULTS_PATH.parent == Path.home() / "its" / "state"
+
+
+# ---- Group Y: cadence tiering — hourly sweep vs the daily-only tier -----------
+#
+# The watchdog went hourly on 2026-08-07 after a 12.7h Smartsheet outage paged ZERO
+# times. Six checks are harmful at that cadence and stay daily (DAILY_ONLY_CHECKS);
+# these tests pin BOTH halves — that the hourly tier really runs every sweep, and that
+# the daily tier really is skipped in between.
+#
+# NOTE: the autouse fixture redirects WATCHDOG_MARKER_DIR to tmp_path, so the daily
+# marker is ABSENT by default and `_daily_tier_due()` fail-opens to True. That is why
+# the pre-existing Group E tests still legitimately see all 21 checks run.
+
+
+def _stamp_daily_marker(age: timedelta) -> Path:
+    """Write a `watchdog_daily.last_run` marker `age` in the past (tmp-redirected dir)."""
+    watchdog.WATCHDOG_MARKER_DIR.mkdir(parents=True, exist_ok=True)
+    marker = watchdog.WATCHDOG_MARKER_DIR / f"{watchdog.DAILY_TIER_JOB}.last_run"
+    marker.write_text((datetime.now(UTC) - age).isoformat())
+    return marker
+
+
+def test_daily_only_checks_are_all_registered_in_checks():
+    """Parity: a DAILY_ONLY entry absent from CHECKS would silently never run at all."""
+    assert set(watchdog.DAILY_ONLY_CHECKS) <= set(watchdog.CHECKS)
+
+
+def test_daily_tier_holds_exactly_the_harmful_at_hourly_letters():
+    """Pins the tier split. Changing it is a deliberate act, not a drive-by edit."""
+    letters = {watchdog.CHECK_LETTERS[c.__name__] for c in watchdog.DAILY_ONLY_CHECKS}
+    assert letters == {"D", "G", "I", "L", "O", "U", "W"}
+
+
+def test_hourly_tier_keeps_the_outage_detectors():
+    """The whole point: J (breaker-open), C (marker staleness), Q/R (portal outage and
+    backlog) and B (open CRITICALs) must stay HOURLY or the 2026-08-06 blind spot returns."""
+    hourly = {
+        watchdog.CHECK_LETTERS[c.__name__]
+        for c in watchdog.CHECKS
+        if c not in watchdog.DAILY_ONLY_CHECKS
+    }
+    assert {"B", "C", "J", "Q", "R"} <= hourly
+
+
+def test_daily_tier_due_when_marker_absent():
+    assert watchdog._daily_tier_due() is True
+
+
+def test_daily_tier_due_when_marker_older_than_window():
+    _stamp_daily_marker(watchdog.DAILY_TIER_WINDOW + timedelta(minutes=1))
+    assert watchdog._daily_tier_due() is True
+
+
+def test_daily_tier_not_due_when_marker_is_fresh():
+    _stamp_daily_marker(timedelta(minutes=5))
+    assert watchdog._daily_tier_due() is False
+
+
+def test_daily_tier_fails_open_on_unparseable_marker():
+    """A corrupt marker must RUN the tier — a redundant daily pass is cheap, a silently
+    skipped one is the failure this change exists to remove."""
+    watchdog.WATCHDOG_MARKER_DIR.mkdir(parents=True, exist_ok=True)
+    (watchdog.WATCHDOG_MARKER_DIR / f"{watchdog.DAILY_TIER_JOB}.last_run").write_text("garbage")
+    assert watchdog._daily_tier_due() is True
+
+
+def test_daily_tier_tolerates_a_naive_timestamp():
+    """`write_last_run_marker` writes tz-aware, but an older/foreign writer may not."""
+    watchdog.WATCHDOG_MARKER_DIR.mkdir(parents=True, exist_ok=True)
+    naive = (datetime.now(UTC) - timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+    (watchdog.WATCHDOG_MARKER_DIR / f"{watchdog.DAILY_TIER_JOB}.last_run").write_text(naive)
+    assert watchdog._daily_tier_due() is False
+
+
+def test_fresh_marker_defers_only_the_daily_tier(
+    mock_check_state, mock_log, mock_get_setting, mock_ping, mocker
+):
+    """The load-bearing assertion: an hourly sweep runs the hourly checks and NONE of
+    the daily-tier callables."""
+    mock_check_state.return_value = SystemState.ACTIVE
+    mock_get_setting.return_value = "https://hc-ping.com/test-uuid"
+    _stamp_daily_marker(timedelta(minutes=5))
+    run_check_spy = mocker.patch("watchdog._run_check")
+    run_check_spy.return_value = {
+        "check": "x", "letter": "?", "severity": "INFO", "summary": "ok"
+    }
+
+    watchdog.main()
+
+    hourly = [c for c in watchdog.CHECKS if c not in watchdog.DAILY_ONLY_CHECKS]
+    ran = {call.args[0] for call in run_check_spy.call_args_list}
+    assert run_check_spy.call_count == len(hourly)
+    assert ran == set(hourly)
+    assert not (ran & set(watchdog.DAILY_ONLY_CHECKS))
+
+
+def test_stale_marker_runs_every_check(
+    mock_check_state, mock_log, mock_get_setting, mock_ping, mocker
+):
+    mock_check_state.return_value = SystemState.ACTIVE
+    mock_get_setting.return_value = "https://hc-ping.com/test-uuid"
+    _stamp_daily_marker(watchdog.DAILY_TIER_WINDOW + timedelta(minutes=1))
+    run_check_spy = mocker.patch("watchdog._run_check")
+    run_check_spy.return_value = {
+        "check": "x", "letter": "?", "severity": "INFO", "summary": "ok"
+    }
+
+    watchdog.main()
+
+    assert run_check_spy.call_count == len(watchdog.CHECKS)
+
+
+def test_daily_marker_is_stamped_only_when_the_tier_actually_ran(
+    mock_check_state, mock_log, mock_get_setting, mock_ping, mocker
+):
+    """A deferred sweep must NOT refresh the marker — otherwise the daily tier is pushed
+    out an hour on every sweep and never runs again."""
+    mock_check_state.return_value = SystemState.ACTIVE
+    mock_get_setting.return_value = "https://hc-ping.com/test-uuid"
+    mocker.patch("watchdog._run_check").return_value = {
+        "check": "x", "letter": "?", "severity": "INFO", "summary": "ok"
+    }
+    marker = _stamp_daily_marker(timedelta(minutes=5))
+    before = marker.read_text()
+
+    watchdog.main()  # deferred sweep — must not touch the marker
+    assert marker.read_text() == before
+
+    stale = datetime.now(UTC) - watchdog.DAILY_TIER_WINDOW - timedelta(minutes=1)
+    marker.write_text(stale.isoformat())
+    watchdog.main()  # due sweep — must refresh it
+    assert marker.read_text() != stale.isoformat()
+    assert watchdog._daily_tier_due() is False
+
+
+def test_deferred_checks_still_appear_in_the_sweep_record(
+    mock_check_state, mock_log, mock_get_setting, mock_ping, mocker
+):
+    """The dashboard sweep panel must show a deferred check as deferred — never as a
+    check that silently vanished from the registry."""
+    mock_check_state.return_value = SystemState.ACTIVE
+    mock_get_setting.return_value = "https://hc-ping.com/test-uuid"
+    _stamp_daily_marker(timedelta(minutes=5))
+    mocker.patch("watchdog._run_check").return_value = {
+        "check": "ran", "letter": "?", "severity": "INFO", "summary": "ok"
+    }
+
+    watchdog.main()
+
+    results = json.loads(watchdog.WATCHDOG_RESULTS_PATH.read_text())["results"]
+    assert len(results) == len(watchdog.CHECKS)  # every check accounted for
+    deferred = [r for r in results if "deferred" in r["summary"]]
+    assert len(deferred) == len(watchdog.DAILY_ONLY_CHECKS)
+    assert {r["check"] for r in deferred} == {c.__name__ for c in watchdog.DAILY_ONLY_CHECKS}
+    assert all(r["severity"] == "INFO" for r in deferred)

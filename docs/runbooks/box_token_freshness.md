@@ -22,7 +22,7 @@ code or touch secrets. The §42 code-reader rationale lives in
 
 ## Purpose
 
-What to do when the daily watchdog reports the **Box OAuth refresh token is going
+What to do when the watchdog reports the **Box OAuth refresh token is going
 stale** (A3 — **Check P**), or when `box_oauth_refresh_lock_timeout` /
 `keychain_write_lock_timeout` WARNs appear. Box rotates the refresh token on every
 exchange and it **expires 60 days from last use**; once expired, **every** Box

@@ -348,3 +348,54 @@ the fixture. The eval touches NOTHING external — no Worker, no Smartsheet, no 
 localhost Ollama only under `--tier2`. Interpreting a regression or accepting a new
 baseline is a **code/doctrine decision → Seth**; *running* the eval read-only is
 low-class.
+
+---
+
+## Symptom 14 — a vendor EXCEL quote lands `needs_review` with an empty disposition screen
+
+**What you see.** The office uploads a `.xlsx` vendor quote. It screens clean, files to
+Box under `<job>/Purchase Orders/Vendor Quotes/`, gets an `Estimate_Log` row — and then the
+disposition screen shows no extracted lines, so someone re-types the whole quote by hand.
+
+**First: is this the gate, or a parse failure?** They look identical to the operator.
+
+1. Read the gate (Tier-1 xlsx is a SEPARATE switch from the PDF tier):
+
+   `po_materials.estimate_extract.tier1_xlsx_enabled` — Workstream `po_materials`.
+
+   `false` → this is expected behaviour, not a fault. Every vendor spreadsheet lands
+   `needs_review` by design. Flipping it to `true` is the fix, subject to the qualification
+   note below. **Read the row's own Description before flipping** (HOUSE_REFLEXES §5).
+
+2. Gate already `true` → look for the parse's own line in `~/its/logs/<date>.log`:
+
+   - `estimate_tier1_xlsx_extracted` — it DID extract; the problem is downstream (disposition
+     screen / Worker), not here.
+   - `estimate_tier1_xlsx_math_flagged` — extracted, but the numbers do not reconcile, so it
+     was deliberately routed to a human. **This is the control working.** The flags name the
+     mismatch (e.g. `Σextended … != subtotal …`). Do NOT "fix" this by disabling the tier —
+     the vendor's own totals disagree with their own line items, which is exactly what a human
+     should see. Escalate the *document* to procurement, not the code to Seth.
+   - `estimate_tier1_xlsx_failed` — openpyxl could not read the workbook (corrupt, password-
+     protected, or `.xls` masquerading as `.xlsx`). The document degrades to `needs_review`
+     safely; hand-keying is the correct outcome. Ask the vendor to re-send.
+   - **No line at all** — the document never reached the tier. Most likely it is ITS's OWN
+     quote form (it carries an `_ITS_META` sheet) and Tier 0 claimed it first; check for
+     `estimate_form_unverified`, which means the form's HMAC did not verify.
+
+**No preview is NORMAL for a spreadsheet.** Quartz cannot render a workbook, so `.xlsx`
+imports always require the reviewer to tick *"No preview available — I verified against the
+original document."* That is the designed path, identical to a verified quote form. If the
+checkbox is missing, the reviewer is looking at a PDF, not a spreadsheet.
+
+**Qualification note (before flipping the gate).** Per ADR-0004 E6 a tier gate flips `true`
+only after `scripts/eval_estimate_ladder.py` qualifies it against
+`tests/fixtures/estimate_corpus_expectations.json`. That fixture is currently EMPTY — no
+baseline has ever been snapshotted, for this tier or for the PDF tier — so qualification means
+running `--write-expectations` against the local corpus first (Symptom 13).
+
+**Escalate to Seth when:** the gate is `true`, the log shows `..._extracted`, and the numbers
+on the disposition screen are wrong (a parse-correctness bug, i.e. a code change — a FIXED
+high-capability class). Flipping the gate OFF to stop bad extractions reaching reviewers is a
+safe, low-class interim step you may take first: it returns those documents to hand-keying and
+affects no other lane.
