@@ -140,17 +140,30 @@ WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · 
 > mis-named folder in the live tree; a restore onto a re-grown live folder refuses rather than
 > merging. Still never exercised LIVE on either system.
 >
-> **REMAINING:** wire the pass into `fieldops_sync`'s cycle behind a dark, seeded-false gate;
-> `production_shares_manifest.json` needs `WORKSPACE_ARCHIVE` with a byte-exact name
-> (Safety Portal uses two EN DASHes, the others one EM dash) — **and an operator decision on WHO is
-> shared on it**, because a cross-workspace move changes who can READ the relocated contents (§46);
-> the SPA button + typed-confirm modal; docs (ADR-0005, the `project_closure.md` rewrite, the
-> troubleshooting-tree node, the system-map node **with its brief** —
-> `tests/test_system_map.py` enforces that); the **§51 doctrine rider**; and the attended sandbox
-> drill (the Smartsheet half is drilled; the Box half is not).
+> **The BUTTON and the DRAIN landed** — the last two structural pieces. The portal's Archive panel
+> records intent behind a typed confirmation and polls `job.archive.state` rather than claiming
+> completion from a 200; `fieldops_sync` drains `/archive-pending`, dispatches per direction, and
+> reports each container's outcome back to the commit point. The pass reads its OWN queue rather
+> than the job-dirty list — the reason a failed relocation now genuinely retries instead of being
+> silenced by an unrelated mirror success.
 >
-> **Archiving is UNAVAILABLE end-to-end until those land — deliberately.** Nothing is lost: the §51
-> move had never fired against live data in this system's history.
+> **The path is now complete end-to-end: button → D1 → queue → relocation → commit point → UI.**
+> Whether it DOES anything is a single ITS_Config row, `field_ops.fieldops_sync.archive_enabled`
+> (Workstream `field_ops`) — seeded so the switch exists rather than having to be invented. Read
+> ITS_Config for its live value; this file does not track it.
+>
+> **Do not turn it on yet.** Neither direction has been exercised live on the **Box** side: the
+> Smartsheet half was drilled against the sandbox 2026-08-06, and every Box test is mocked. The
+> attended sandbox drill is the precondition, not a formality — a wrong Box identity is undetectable
+> in-band (Box has no ownership discriminator) and the first live archive would relocate a
+> customer's closed-out documents.
+>
+> **REMAINING:** the attended sandbox drill (Box half) · `production_shares_manifest.json` needs
+> `WORKSPACE_ARCHIVE` with a byte-exact name (Safety Portal uses two EN DASHes, the others one EM
+> dash) — **and an operator decision on WHO is shared on it**, because a cross-workspace move
+> changes who can READ the relocated contents (§46) · docs (ADR-0005, the `project_closure.md`
+> rewrite, the troubleshooting-tree node, the system-map node **with its brief** —
+> `tests/test_system_map.py` enforces that) · the **§51 doctrine rider**.
 >
 > **Operator-blocked:** the sandbox Smartsheet PAT, the Box identity question, and the
 > `evergreen-its` push-access decision — all three now have `docs/tech_debt.md` entries dated
