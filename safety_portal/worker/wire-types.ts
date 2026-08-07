@@ -155,12 +155,56 @@ export interface JobRoutingBlock {
   progress_cc: string[];
 }
 
+/** Where a job sits in the archive workflow (migration 0058).
+ *
+ *  `requested` and `in_progress` mean the Mac-side pass owns the row; `partial` means SOME
+ *  containers moved and the rest are retryable; `failed` means none did. `partial` is deliberately
+ *  distinct from `failed` because the operator's repair differs between "4 of 6 moved" and
+ *  "nothing happened". */
+export type ArchiveState =
+  | "none" | "requested" | "in_progress" | "complete" | "partial" | "failed";
+
+/** Which way the in-flight relocation is going. '' when `state` is 'none'. */
+export type ArchiveDirection = "" | "archive" | "unarchive";
+
+/** One relocatable container's outcome, as the daemon reported it.
+ *
+ *  `label` is operator-facing copy ("Safety folder"), NOT the internal key — a half-archived job
+ *  has to be legible without opening a runbook. */
+export interface JobArchiveContainer {
+  key: string;
+  label: string;
+  moved: boolean;
+  note: string;
+}
+
+export interface JobArchiveStatus {
+  state: ArchiveState;
+  direction: ArchiveDirection;
+  /** Epoch seconds; null when the job has never entered the workflow. */
+  requested_at: number | null;
+  completed_at: number | null;
+  attempts: number;
+  /** Empty until the daemon's first progress report. */
+  containers: JobArchiveContainer[];
+}
+
+/** The response from POST /:job_id/archive and /:job_id/unarchive. */
+export interface JobArchiveResponse {
+  ok: true;
+  job_id: string;
+  archive: { state: ArchiveState; direction: ArchiveDirection };
+}
+
 export interface JobDetail {
   job_id: string;
   project_name: string;
   /** LEGACY — see JobRow.status. */
   status: string;
   lifecycle: JobLifecycle;
+  /** Archive workflow state — `cap.job.archive` holders ONLY; null for everyone else, the same
+   *  least-privilege shape as `routing`. */
+  archive: JobArchiveStatus | null;
   progress: number;
   /** The Evergreen YYYY.NNN tracking number ('' when unassigned) — 0057. */
   job_no: string;

@@ -2089,3 +2089,39 @@ h3,
 .po-config__tax-edit-row .field--rate {
   max-width: 8rem;
 }
+
+/* ── Modal (ConfirmTypedModal, Track 6) ───────────────────────────────────────────────────────
+   The SPA's first real modal — every other confirmation is a window.confirm. Kept deliberately
+   plain: this exists so a destructive, cross-system action can SAY what it will move, which a
+   native confirm cannot. Scoped classes only; nothing here restyles an existing surface. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 100;
+}
+.modal {
+  background: var(--c-white);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  max-width: 34rem;
+  width: 100%;
+  /* A long "what moves" list must scroll INSIDE the dialog rather than pushing the confirm
+     controls off-screen on a laptop. */
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 1.25rem;
+}
+.modal__title { margin: 0 0 0.75rem; font-size: 1.1rem; }
+.modal__body { font-size: 0.92rem; line-height: 1.5; }
+.modal__body p { margin: 0 0 0.6rem; }
+.modal__list { margin: 0.3rem 0 0.7rem 1.1rem; padding: 0; }
+.modal__list li { margin: 0.15rem 0; }
+.modal__field { display: block; margin: 0.9rem 0 0.4rem; }
+.modal__field input { width: 100%; margin-top: 0.3rem; }
+.modal__actions { justify-content: flex-end; }

@@ -127,6 +127,7 @@ const DETAIL: api.JobDetail = {
   project_name: "Alpha",
   status: "active",
   lifecycle: "active",
+  archive: null,
   progress: 60,
   job_no: "2026.123",
   routing: {
