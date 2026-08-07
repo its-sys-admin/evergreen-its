@@ -60,6 +60,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -728,6 +729,37 @@ def parse_with_template(parsed: ParsedPdf, tpl: VendorTemplate) -> ExtractionRes
 # ---- Generic table tier -------------------------------------------------------------
 
 
+@lru_cache(maxsize=512)
+def _kw_pattern(kw: str) -> re.Pattern[str]:
+    """Compile a header keyword into a NOT-INSIDE-A-LARGER-WORD matcher.
+
+    Plain substring matching was the original behaviour and it silently mis-assigned
+    columns, because several keywords are short enough to occur inside unrelated words.
+    The one that bit: the `unit` concept's `"um"` matched **"Part N-um-ber"**, so `unit`
+    claimed the part-number column and `part_number` — checked later, and forbidden from
+    re-claiming a taken cell — was left unassigned entirely.
+
+    Measured on the REAL RFQ quote form header
+    `['#','Part Number','Description','Qty','Unit','Unit Price','Extended']`:
+
+        substring : {'qty':3,'unit_price':5,'extended':6,'unit':1,'description':2}
+                     -> `unit` = "Part Number", NO part_number at all
+        this      : {'qty':3,'unit_price':5,'extended':6,'unit':4,
+                     'part_number':1,'description':2}
+
+    The guard is "not flanked by alphanumerics" rather than `\\b`, because several keywords
+    contain non-word characters (`"u/m"`, `"part #"`) where `\\b` behaves surprisingly.
+    Keywords that legitimately sit inside a longer word are unaffected, since the richer
+    keyword is listed FIRST and wins before the short one is tried (`"extended"` before
+    `"ext"`, `"description"` before `"desc"`).
+    """
+    return re.compile(rf"(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])")
+
+
+def _kw_matches(kw: str, cell: str) -> bool:
+    return _kw_pattern(kw).search(cell.strip().lower()) is not None
+
+
 def _infer_columns(row: list[str]) -> dict[str, int] | None:
     """Map column concepts → cell index from a candidate header row.
 
@@ -744,7 +776,7 @@ def _infer_columns(row: list[str]) -> dict[str, int] | None:
                 (
                     idx
                     for idx, cell in enumerate(row)
-                    if idx not in claimed and kw in cell.strip().lower()
+                    if idx not in claimed and _kw_matches(kw, cell)
                 ),
                 None,
             )
