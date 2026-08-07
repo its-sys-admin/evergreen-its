@@ -2092,6 +2092,47 @@ def test_check_s_registered_in_checks():
     assert watchdog._check_main_branch_ci_green in watchdog.CHECKS
 
 
+def test_check_s_repo_matches_origin_remote():
+    """Check S must watch THIS repo's main — the one whose code the daemons run.
+
+    Until 2026-08-07 `GH_MAIN_CI_REPO` named `SolutionSmith-debug/its`, a different and
+    still-active repository, so Check S — the mechanical step 4 of the four-part landing
+    verify — reported green about somebody else's code and could never WARN about ours.
+    A silent false-green on a landing gate is worse than no gate.
+
+    This pins the slug to the actual `origin` remote so a rename / re-point RED-lights in
+    CI instead of quietly re-breaking the check. Skips (never fails) when origin cannot be
+    resolved — a shallow tarball or a remote-less checkout must not fail the suite.
+    """
+    import re
+    import subprocess as sp
+
+    try:
+        proc = sp.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, sp.TimeoutExpired):  # pragma: no cover — environment-dependent
+        pytest.skip("git unavailable")
+    if proc.returncode != 0 or not proc.stdout.strip():  # pragma: no cover
+        pytest.skip("no origin remote configured")
+
+    # Accept both https://github.com/OWNER/REPO(.git) and git@github.com:OWNER/REPO(.git)
+    m = re.search(r"github\.com[:/]([^/]+/[^/\s]+?)(?:\.git)?$", proc.stdout.strip())
+    if m is None:  # pragma: no cover — non-GitHub remote
+        pytest.skip(f"origin is not a GitHub remote: {proc.stdout.strip()!r}")
+
+    assert watchdog.GH_MAIN_CI_REPO == m.group(1), (
+        f"Check S watches {watchdog.GH_MAIN_CI_REPO!r} but origin is {m.group(1)!r} — "
+        "Check S would report main-CI status for the WRONG repository and could never "
+        "warn about this one. Update GH_MAIN_CI_REPO in scripts/watchdog.py."
+    )
+
+
 def test_check_s_green_main_is_info(monkeypatch):
     _fake_gh(
         monkeypatch,
