@@ -183,3 +183,59 @@ a local inference process, untrusted-document parsing, and the disposition UI �
 and adversarial review as definition-of-done. Parked-not-hidden: vendor-direct upload (office-upload only),
 email intake (Email Triage's future scope), and cloud-AI escalation (a dark config tier only if local
 quality disappoints) are first-class future options, not silent gaps.
+
+---
+
+## Amendment 2026-08-07 — Tier 1 gains a deterministic VENDOR-SPREADSHEET path
+
+**Status:** accepted, additive. Nothing in the original decisions is reversed.
+
+**What was wrong.** The ladder as built could not extract a vendor `.xlsx` at all.
+`estimate_poll._attempt_extraction_ladder` bailed with `if declared_mime != MIME_PDF: return None`
+immediately below the Tier-0 branch, so a spreadsheet was screened, filed and then hand-keyed by
+the office — despite already being a typed numeric grid, i.e. the *easiest* thing in the lane to
+parse deterministically. Tier 0 could not help: it is bound to ITS's own artifact by an
+`_ITS_META` sheet probe plus the `rfq-form:v1` HMAC, exactly as decision 8 intends.
+
+**Decision.** Add **Tier 1 (xlsx)**: `estimate_parse.parse_xlsx_estimate`, gated by
+`po_materials.estimate_extract.tier1_xlsx_enabled` (seeded `false`). It is an **adapter, not a
+second parser** — a worksheet already IS the `list[list[list[list[str]]]]` shape
+`parse_generic_table` consumes, so column inference, section bands, `check_math` and
+`to_worker_payload` are reused verbatim. **No AI**, consistent with decision 1: Tier 2 remains the
+lane's only inference tier and is untouched (present, dark).
+
+**Three consequences worth recording, because each was a real decision:**
+
+1. **Doc-level totals are read from the CELL GRID, never regexed from flattened text.**
+   `_GENERIC_TOTALS` requires exactly two decimals; openpyxl returns the *stored* value, and a
+   round money amount stringifies with one (`str(4000.00) == "4000.0"`). Regexing therefore drops
+   round totals — subtotals especially — and `check_math` *skips* comparisons with absent
+   operands, so a book with a **wrong** subtotal posts as `extracted` with `math_ok=True` and the
+   cross-check never performed. Measured on lines summing to 4000.00 against a claimed 3999.00:
+   text-regex `math_ok=True, flags=[]`; cell-grid `math_ok=False` with both the subtotal and the
+   grand-total flags. This is a correctness control, not an optimization.
+2. **Merged cells fill DOWN only, never ACROSS.** Filling across copies one column's value into a
+   sibling that has none. Measured: merging the "Description" and "Qty" headers and filling across
+   overwrote the Qty header, `_infer_columns` claimed nothing, and the sheet yielded zero lines.
+   Filling down is semantically sound (a category cell merged over its member rows applies to each).
+3. **`.xlsx` gets no rendered preview, and that is left alone.** Quartz cannot open a workbook, so
+   an accepting import rides the `no_preview_verified` acknowledgment through the Worker fidelity
+   gate — precisely the path a verified Tier-0 form already takes. Synthesizing a preview *from our
+   own parse* was considered and **rejected**: it would render our extraction rather than the
+   vendor's document, making a wrong parse self-confirming and defeating decision 3's single
+   fidelity control. A real xlsx→PDF→PNG conversion (LibreOffice headless) is a new heavyweight
+   native toolchain on the highest-exposure hostile-byte path and stays out of scope.
+
+**Sandboxing.** The parse runs in the killable child (`estimate_sandbox.parse_xlsx_grid`), per
+decision 5 — openpyxl is a zip+XML parser and is no safer than pdfplumber. Tier 0's in-process
+openpyxl call remains defensible only because that file is ITS's own fixed-geometry, HMAC-verified
+form; a vendor workbook earns no such assumption.
+
+**E6 corpus gate still applies.** Per the original E6, a tier gate flips `true` only after
+`scripts/eval_estimate_ladder.py` qualifies it against
+`tests/fixtures/estimate_corpus_expectations.json`. The eval's xlsx branch now falls through from
+Tier 0 to this tier so it can score vendor books at all. **The fixture is still empty** (only its
+`_README`), so no baseline has ever been snapshotted — meaning this gate and the pre-existing
+`tier1_enabled` gate are BOTH unqualified until the operator runs `--write-expectations` against
+the local corpus. That run needs the corpus on the production host and is therefore an operator
+step, not a CI one.

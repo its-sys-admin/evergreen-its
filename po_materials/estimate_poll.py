@@ -154,6 +154,11 @@ CFG_MAX_PAGES_PREVIEW = "po_materials.estimate_poll.max_pages_preview"
 # Extraction-ladder keys (PR-B / E4-E6). The three gates ship FALSE (dark);
 # model/base-URL/threshold/timeout are the Tier-2 local-Ollama pins.
 CFG_TIER1_ENABLED = "po_materials.estimate_extract.tier1_enabled"
+# NOTE the namespace: every tier key is prefixed `estimate_extract.*`, but Tier 1 lives in
+# estimate_parse.py — estimate_extract.py is the TIER-2 local-LLM module. Keeping the new
+# xlsx key in the same namespace is deliberate (one prefix for the whole ladder); do not
+# infer a tier's implementation from its config prefix.
+CFG_TIER1_XLSX_ENABLED = "po_materials.estimate_extract.tier1_xlsx_enabled"
 CFG_TIER2_ENABLED = "po_materials.estimate_extract.tier2_enabled"
 CFG_OCR_ENABLED = "po_materials.estimate_extract.ocr_enabled"
 CFG_EXTRACT_MODEL = "po_materials.estimate_extract.model"
@@ -181,6 +186,7 @@ POLL_INTERVAL_SECONDS = 120  # registration metadata; mirrors the launchd StartI
 # ITS_Config rows are the operator's switches, scripts/migrations/
 # seed_estimates_config.py); the Tier-2 pins mirror the seeded values.
 DEFAULT_TIER1_ENABLED = False
+DEFAULT_TIER1_XLSX_ENABLED = False
 DEFAULT_TIER2_ENABLED = False
 DEFAULT_OCR_ENABLED = False
 DEFAULT_EXTRACT_MODEL = "qwen3.5:9b"
@@ -231,6 +237,19 @@ REQUIRED_CONFIG: list[ConfigKey] = [
         description=(
             "Gate for the Tier-1 deterministic native-text extraction "
             "(estimate_parse template→generic ladder). Ships FALSE (dark)."
+        ),
+    ),
+    ConfigKey(
+        CFG_TIER1_XLSX_ENABLED, WORKSTREAM, DEFAULT_TIER1_XLSX_ENABLED, "bool",
+        description=(
+            "Gate for the Tier-1 deterministic VENDOR-SPREADSHEET extraction "
+            "(estimate_parse.parse_xlsx_estimate: sandboxed openpyxl grid -> the same "
+            "generic-table line logic as the PDF tier, with doc-level totals read from "
+            "the CELL grid). NO AI. Separate from tier1_enabled because it is a distinct "
+            "parse path with its own failure modes. Turning it ON lets a vendor .xlsx "
+            "quote be extracted instead of hand-keyed; turning it OFF returns those "
+            "documents to needs_review — no other lane is affected. Independent of "
+            "Tier 0, which claims ITS's own HMAC-verified quote form first."
         ),
     ),
     ConfigKey(
@@ -404,6 +423,7 @@ class _TierConfig:
     """Per-cycle snapshot of the extraction-ladder ITS_Config knobs (PR-B)."""
 
     tier1_enabled: bool
+    tier1_xlsx_enabled: bool
     tier2_enabled: bool
     ocr_enabled: bool
     model: str
@@ -417,6 +437,9 @@ def _resolve_tier_config() -> _TierConfig:
     #336 resolve_and_log pass; this is the runtime behavior read)."""
     return _TierConfig(
         tier1_enabled=_read_bool_setting(CFG_TIER1_ENABLED, DEFAULT_TIER1_ENABLED),
+        tier1_xlsx_enabled=_read_bool_setting(
+            CFG_TIER1_XLSX_ENABLED, DEFAULT_TIER1_XLSX_ENABLED
+        ),
         tier2_enabled=_read_bool_setting(CFG_TIER2_ENABLED, DEFAULT_TIER2_ENABLED),
         ocr_enabled=_read_bool_setting(CFG_OCR_ENABLED, DEFAULT_OCR_ENABLED),
         model=_read_str_setting(CFG_EXTRACT_MODEL, DEFAULT_EXTRACT_MODEL),
@@ -1331,6 +1354,18 @@ def _attempt_extraction_ladder(
     # of OUR artifact, not an inference tier).
     if declared_mime == po_attach_screen.MIME_XLSX and _xlsx_has_form_meta(data):
         return _tier0_filled_form(data, secret, est_uuid, correlation_id)
+
+    # Tier 1 (xlsx) — a VENDOR workbook (no _ITS_META sheet, so Tier 0 declined it).
+    # Before this branch existed, the `!= MIME_PDF` bail below sat directly under Tier 0
+    # and no extraction tier could ever see a spreadsheet: a real Excel quote was screened,
+    # filed and then hand-keyed by the office, despite already being a typed numeric grid.
+    # Gated separately from the PDF tier because it is a distinct parse path with its own
+    # failure modes (openpyxl, merged cells, cell-typed totals).
+    if declared_mime == po_attach_screen.MIME_XLSX:
+        if tiers.tier1_xlsx_enabled:
+            return _tier1_xlsx(data, tiers, est_uuid, correlation_id)
+        return None
+
     if declared_mime != MIME_PDF:
         return None
 
@@ -1507,6 +1542,66 @@ def _tier1_parse(
         f"tier-1 extraction for {est_uuid} ({result.tier}): "
         f"{len(payload['lines'])} line(s)",
         error_code="estimate_tier1_extracted",
+        correlation_id=correlation_id,
+    )
+    return _LadderOutcome(
+        payload=payload, detail=f"tier1_extracted:{result.tier}"[:200],
+        vendor_name=str(payload.get("vendor_name") or ""),
+        quote_number=str(payload.get("quote_number") or ""),
+    )
+
+
+def _tier1_xlsx(
+    data: bytes, tiers: _TierConfig, est_uuid: str, correlation_id: str,
+) -> _LadderOutcome | None:
+    """Tier 1 (xlsx): the deterministic vendor-spreadsheet parse (estimate_parse).
+
+    The spreadsheet twin of `_tier1_parse`, deliberately structured identically — same
+    lazy gated import, same ImportError / broad-except degrade, same math-flag and
+    confidence gates, same anomaly gate, same `_LadderOutcome`. Only the parse call
+    differs: a worksheet already IS the grid `parse_generic_table` consumes, so the
+    extraction reuses that tier wholesale via `parse_xlsx_estimate`.
+
+    NO AI — `openpyxl` plus the existing deterministic table/line logic, run inside the
+    killable sandbox child. Reached only for a VENDOR workbook: ITS's own filled quote
+    form is claimed earlier by Tier 0 (HMAC-verified) and never arrives here.
+    """
+    try:
+        from po_materials import estimate_parse  # noqa: PLC0415 — lazy gated-tier import
+        result = estimate_parse.parse_xlsx_estimate(data)
+    except ImportError:
+        _warn_tier_module_missing("estimate_parse", 1, est_uuid, correlation_id)
+        return None
+    except Exception as exc:  # noqa: BLE001 — hostile workbook; degrade, never die
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"tier-1 xlsx parse failed for {est_uuid} (degrading): "
+            f"{type(exc).__name__}: {exc!r}",
+            error_code="estimate_tier1_xlsx_failed",
+            correlation_id=correlation_id,
+        )
+        return None
+    if result is None or not result.line_items:
+        return None
+    if getattr(result, "needs_review", False) or not result.math_ok:
+        error_log.log(
+            Severity.INFO, SCRIPT_NAME,
+            f"tier-1 xlsx parse for {est_uuid} math-flagged "
+            f"({getattr(result, 'math_flags', [])[:3]}) — needs_review",
+            error_code="estimate_tier1_xlsx_math_flagged",
+            correlation_id=correlation_id,
+        )
+        return None
+    if result.confidence < tiers.confidence_threshold:
+        return None
+    payload = _worker_payload_from_result(result, 1, est_uuid, correlation_id)
+    if payload is None or not _anomaly_gate(payload, 1, est_uuid, correlation_id):
+        return None
+    error_log.log(
+        Severity.INFO, SCRIPT_NAME,
+        f"tier-1 xlsx extraction for {est_uuid} ({result.tier}): "
+        f"{len(payload['lines'])} line(s)",
+        error_code="estimate_tier1_xlsx_extracted",
         correlation_id=correlation_id,
     )
     return _LadderOutcome(
