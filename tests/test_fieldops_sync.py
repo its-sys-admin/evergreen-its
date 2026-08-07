@@ -154,6 +154,14 @@ def _patch(mocker):
         "mat_row_cap": mocker.patch(
             "field_ops.fieldops_sync.material_list.check_row_cap", return_value=None
         ),
+        # Track 6 archive pass seam — archive_enabled defaults OFF so EVERY existing test stays
+        # byte-identical (the pass is skipped). This MUST be patched rather than left to the real
+        # reader: `_archive_enabled` resolves an ITS_Config row, which is a live Smartsheet call,
+        # and conftest's hermeticity guard fails any unit test that opens a real connection. The
+        # pass's own behaviour is covered in tests/test_fieldops_archive_pass.py.
+        "archive_enabled": mocker.patch(
+            "field_ops.fieldops_sync._archive_enabled", return_value=False
+        ),
         # P7 material-incidents pass seams — incidents_enabled defaults OFF so EVERY existing
         # job/hours/equipment/material test is byte-identical (the pass is skipped); the incident
         # tests below flip it on. All incident I/O is mocked so no test touches live Smartsheet / the

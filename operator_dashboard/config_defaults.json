@@ -14,6 +14,17 @@
       "origin": "daemon"
     },
     {
+      "setting": "field_ops.fieldops_sync.archive_enabled",
+      "workstream": "field_ops",
+      "kind": "bool",
+      "default": false,
+      "purpose": "Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's six Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on.",
+      "read_by": [
+        "field_ops.fieldops_sync"
+      ],
+      "origin": "daemon"
+    },
+    {
       "setting": "field_ops.fieldops_sync.equipment_enabled",
       "workstream": "field_ops",
       "kind": "bool",
