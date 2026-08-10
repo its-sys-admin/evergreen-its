@@ -2256,7 +2256,9 @@ Surfaced: 2026-06-05 Safety Portal Phase 5 PR 2 (transport queue).
 
 **Opened and closed the same day.** Raised by the #44 adversarial review (the
 `equipment-gayk-piledriver-v1` definition asserted a tech-debt pointer that did not yet exist), then
-built in #45 on operator request in the same session.
+built in #47 on operator request in the same session. (Corrected 2026-08-10, session-close: this
+entry originally cited "#45" — a same-day, unrelated daily-report PR — as the PR that built the
+resolution; the real PR is #47, verified via `gh pr view 47`.)
 
 **Was:** `reference_forms/GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` is a two-page
 document. Page 1 shipped as the pre-op form `equipment-gayk-piledriver-v1` (#44); page 2 ("Weekly
