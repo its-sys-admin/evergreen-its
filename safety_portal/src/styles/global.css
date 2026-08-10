@@ -322,6 +322,17 @@ h3 {
   cursor: default;
 }
 
+/* ARMED — a two-step action waiting for its confirming second click (the delivery marks on the
+   job Materials page). Deliberately loud: a thicker gold ring, because the whole point of the
+   state is that it must be NOTICED before the next tap records something that cannot be deleted.
+   The button's LABEL changes too — this styling is reinforcement, never the only signal, so a
+   colour-blind or screen-reader user gets the same information from the text and aria-label. */
+.btn.is-armed {
+  border-width: 2px;
+  border-color: var(--c-gold);
+  box-shadow: 0 0 0 2px rgba(198, 164, 78, 0.35);
+}
+
 /* Ghost button on the BRG header — white outline for contrast on green. */
 .btn--ghost {
   background: transparent;

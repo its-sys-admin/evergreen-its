@@ -19,6 +19,7 @@ import { formCatalog, getDefinition, resolveFormTarget } from "../forms/registry
 import {
   FormRenderer,
   initialValues,
+  seedExpectedMaterialsSnapshot,
   seedRequirementResponses,
   type ExpectedMaterialsAdapter,
   type FormLinkAdapter,
@@ -181,14 +182,25 @@ export function DailyReportTab({
   const reqKey = reqSection && "key" in reqSection ? reqSection.key : "job_requirements";
 
   // ── Expected materials (Material receipts M2) — the job's M1 receipt list, rendered inside
-  // the form's expected_materials section. Per JOB (not per date). Unlike requirements, NOTHING
-  // is seeded into values: the section files no values of its own — "Confirm receipt" appends a
-  // deliveries_received row instead, and problems file as the material-incident form's OWN
-  // submission (deep-linked below).
+  // the form's expected_materials section. Per JOB (not per date).
+  //
+  // v7 INVERTS the v5/v6 contract. Until now the section filed NO values of its own, on the
+  // rationale that "reprinting the live D1 list would snapshot mutable state the submission never
+  // carried". That is exactly backwards for a document of record: the manager signs a report that
+  // SHOWED a set of expected materials in a particular delivery state, and reconstructing that
+  // later from live D1 is impossible, because every later delivery mark rewrites it. So the day's
+  // list is now captured into values[<key>] as a SELF-DESCRIBING snapshot — the same shape and
+  // rationale as job_requirements (D4) — and the PDF renders what was on screen. Submissions filed
+  // under v5/v6 have no such key and are unaffected; that version boundary is the whole reason v7
+  // exists, since its sections are otherwise byte-identical to v6.
   const [expectedRows, setExpectedRows] = useState<ExpectedMaterialRow[] | null>(null);
   const [expectedError, setExpectedError] = useState<string | null>(null);
   const [expectedBusy, setExpectedBusy] = useState<ReadonlySet<number>>(new Set());
   const [expectedActionError, setExpectedActionError] = useState<string | null>(null);
+  // The section's value key, read from the definition (daily-report-v7: "expected_materials_receipt").
+  const emSection = def?.sections.find((s) => s.type === "expected_materials");
+  const emKey =
+    emSection && "key" in emSection ? emSection.key : "expected_materials_receipt";
 
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -477,6 +489,29 @@ export function DailyReportTab({
       active = false;
     };
   }, [placedJob, refreshToken]);
+
+  // ── v7 expected-materials day snapshot — keep values[emKey] equal to what the section is
+  // currently showing.
+  //
+  // Derived from `expectedRows` rather than seeded at each fetch site, so ONE effect covers all
+  // three ways the list changes: first load, Refresh, and the optimistic flip after a delivery
+  // mark. Seeding per fetch site would silently miss that third case and file a snapshot that
+  // contradicts the screen the manager just acted on.
+  //
+  // `setValues`, NEVER `editValues` — this is the load-bearing distinction. `editValues` sets
+  // dirtyRef, which gates draft persistence to sessionStorage and prefill suppression, so seeding
+  // through it would persist a draft the manager never typed and resurrect it on a later visit.
+  //
+  // Unconditional re-seed, NOT the merge-if-absent that requirements use (D4). Requirements hold
+  // USER-TYPED answers, so a draft must win; this value is entirely derived display state with
+  // nothing of the user's in it, so the freshest projection is always the correct one — and
+  // freezing the first-loaded copy would be a bug the moment a delivery is marked.
+  useEffect(() => {
+    if (expectedRows === null) return; // not loaded (or load failed) — file nothing rather than []
+    const snapshot = seedExpectedMaterialsSnapshot(expectedRows);
+    lastPrefill.current = { ...lastPrefill.current, [emKey]: snapshot };
+    setValues((v) => ({ ...v, [emKey]: snapshot }));
+  }, [expectedRows, emKey]);
 
   // ── Filed status (the form_link indicators + the filed banner) + the amend candidate. ──────────
   async function loadStatus(jobId: string, forDate: string) {

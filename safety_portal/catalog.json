@@ -288,8 +288,8 @@
           "identity": "daily-report",
           "variant_label": null,
           "status": "active",
-          "current_version": 6,
-          "current_form_code": "daily-report-v6",
+          "current_version": 7,
+          "current_form_code": "daily-report-v7",
           "versions": [
             {
               "version": 1,
@@ -314,6 +314,10 @@
             {
               "version": 6,
               "form_code": "daily-report-v6"
+            },
+            {
+              "version": 7,
+              "form_code": "daily-report-v7"
             }
           ],
           "display_order": 1

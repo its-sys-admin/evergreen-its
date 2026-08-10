@@ -14,7 +14,7 @@
  *
  * Mocks the two lib modules + useAuth (the FieldOpsJobTracker / ExpectedMaterialsSection convention).
  */
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/fieldops_expected_materials", async (importOriginal) => {
@@ -86,6 +86,15 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/** Delivery marks are two-step (arm → confirm) so a mis-tap cannot file a permanent ledger event.
+ *  Click the button, then click its ARMED label. */
+function markTwice(getByLabelText: (t: string) => HTMLElement, title: string, label: string) {
+  fireEvent.click(getByLabelText(`Mark ${title} ${label}`));
+  fireEvent.click(
+    getByLabelText(`Confirm ${label} for ${title} — tap again to record`),
+  );
+}
+
 describe("JobMaterialsPage — what it shows", () => {
   it("renders the part number, ship + delivery dates, the running total, loads and history", async () => {
     const { container } = mountAs("manager", RECEIVE_ONLY);
@@ -140,7 +149,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
     fireEvent.change(getByLabelText("Quantity received for 1P driven pile W8x10"), { target: { value: "30" } });
     fireEvent.change(getByLabelText("Note for 1P driven pile W8x10"), { target: { value: "third load" } });
     fireEvent.change(getByLabelText("Delivery date for 1P driven pile W8x10"), { target: { value: "2026-07-08" } });
-    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+    markTwice(getByLabelText, "1P driven pile W8x10", "delivered");
 
     await waitFor(() => expect(api.markReceipt).toHaveBeenCalled());
     expect(api.markReceipt).toHaveBeenCalledWith(1, {
@@ -153,7 +162,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
     await waitFor(() => expect(container.textContent ?? "").toContain("1P driven pile"));
     fireEvent.change(getByLabelText("Quantity received for 1P driven pile W8x10"), { target: { value: "30" } });
     fireEvent.change(getByLabelText("Note for 1P driven pile W8x10"), { target: { value: "truck never came" } });
-    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 not delivered"));
+    markTwice(getByLabelText, "1P driven pile W8x10", "not delivered");
 
     await waitFor(() => expect(api.markReceipt).toHaveBeenCalled());
     const body = vi.mocked(api.markReceipt).mock.calls[0][1];
@@ -166,17 +175,74 @@ describe("JobMaterialsPage — marking a delivery", () => {
     const { getByLabelText, container } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(container.textContent ?? "").toContain("1P driven pile"));
     fireEvent.change(getByLabelText("Load for 1P driven pile W8x10"), { target: { value: "5" } });
-    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 partially delivered"));
+    markTwice(getByLabelText, "1P driven pile W8x10", "partially delivered");
 
     await waitFor(() => expect(api.markReceipt).toHaveBeenCalled());
     expect(vi.mocked(api.markReceipt).mock.calls[0][1].shipment_id).toBe(5);
+  });
+
+  // ── two-step confirm on a delivery mark ────────────────────────────────────────────────
+  it("a SINGLE click does not record anything — it only arms the button", async () => {
+    // The whole point: a mark is an append-only ledger event with no delete path, so one stray
+    // tap must not be able to file one.
+    const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+    expect(api.markReceipt).not.toHaveBeenCalled();
+    // …and it SAYS it is armed, in the label — colour alone is not a confirmation prompt.
+    expect(
+      getByLabelText("Confirm delivered for 1P driven pile W8x10 — tap again to record"),
+    ).toBeTruthy();
+  });
+
+  it("the second click on the SAME button records the mark", async () => {
+    const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    markTwice(getByLabelText, "1P driven pile W8x10", "delivered");
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.markReceipt).mock.calls[0][1]).toMatchObject({ kind: "delivered" });
+  });
+
+  it("clicking a DIFFERENT kind re-arms it instead of committing the armed one", async () => {
+    // Changing your mind mid-decision must never file the kind you moved away from.
+    const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 not delivered"));
+    expect(api.markReceipt).not.toHaveBeenCalled();
+    // The first button is back to normal; the second is the armed one.
+    expect(getByLabelText("Mark 1P driven pile W8x10 delivered")).toBeTruthy();
+    expect(
+      getByLabelText("Confirm not delivered for 1P driven pile W8x10 — tap again to record"),
+    ).toBeTruthy();
+  });
+
+  it("arming EXPIRES — a forgotten armed button cannot be committed later by a stray tap", async () => {
+    vi.useFakeTimers();
+    try {
+      const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
+      await vi.waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+      fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+      expect(
+        getByLabelText("Confirm delivered for 1P driven pile W8x10 — tap again to record"),
+      ).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(6001);
+      });
+      // Reverted to its normal label, so the next tap re-arms rather than records.
+      expect(getByLabelText("Mark 1P driven pile W8x10 delivered")).toBeTruthy();
+      fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+      expect(api.markReceipt).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a refused mark is SAID, translated from the Worker's machine code (never silent)", async () => {
     vi.mocked(api.markReceipt).mockRejectedValue(new Error("note_required"));
     const { getByLabelText, findByRole, container } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(container.textContent ?? "").toContain("1P driven pile"));
-    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 not delivered"));
+    markTwice(getByLabelText, "1P driven pile W8x10", "not delivered");
     const alert = await findByRole("alert");
     // The copy comes from the CANONICAL registry (src/lib/errorCopy.ts), which
     // tests/test_error_copy_parity.py forces every field-ops code to have — not a local map.

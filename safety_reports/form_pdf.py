@@ -784,19 +784,66 @@ def _section_flowables(section: dict, values: dict, st: dict) -> list[Flowable]:
         out4.append(t)
         return out4
     if typ == "expected_materials":
-        # Expected-materials receipt list (Material receipts M2). DELIBERATELY a note line
-        # only: the section is an on-screen affordance (the Daily tab renders the job's live
-        # D1 expected-materials rows with Confirm-receipt / Report-a-problem actions) and
-        # files NO values under its own key — the receipt DATA the document of record needs
-        # already lands in the Deliveries Received table (the confirm action appends a row
-        # there) and in the material-incident form's OWN filed submission. Reprinting the
-        # live D1 list here would snapshot mutable state the submission never carried.
-        return [
-            _section_header(section.get("title", "Expected materials"), st, level="group"),
-            _p("Receipts recorded under Deliveries Received above; delivery problems are "
-               "filed as Material Incident Report submissions for this job and date.",
-               st["caption"]),
+        # Expected-materials day snapshot (v7). Rendered from the submission's SELF-DESCRIBING
+        # values array — the same mechanism as job_requirements above — so the filed document
+        # shows the materials and delivery state the manager actually saw, stable regardless of
+        # later edits or further delivery marks.
+        #
+        # THIS INVERTS THE v5/v6 BEHAVIOUR, deliberately. Those versions printed a note line and
+        # argued that reprinting the live D1 list "would snapshot mutable state the submission
+        # never carried". That reasoning had it backwards for a document of record: the manager
+        # signs a report that DISPLAYED a particular state, and because every later mark rewrites
+        # that state it cannot be reconstructed afterwards — so not capturing it was the data
+        # loss, not the protection against it.
+        #
+        # THE KEY'S ABSENCE AND ITS EMPTINESS MEAN DIFFERENT THINGS, and conflating them would
+        # silently rewrite history:
+        #   • key ABSENT      → a v5/v6 submission, which never filed one. Render the ORIGINAL
+        #                       note line, so re-rendering an old submission still produces the
+        #                       document that was filed. Returning [] here would quietly drop a
+        #                       paragraph from every historical daily report.
+        #   • key present, [] → a v7 submission for a job with no expected materials. Skip the
+        #                       section entirely (the job_requirements rule) — printing the v5
+        #                       note line would be actively misleading, since it points at
+        #                       receipts that do not exist.
+        #   • key present, [] → non-empty: the snapshot table below.
+        em_key = section.get("key", "expected_materials_receipt")
+        if em_key not in values:
+            return [
+                _section_header(section.get("title", "Expected materials"), st, level="group"),
+                _p("Receipts recorded under Deliveries Received above; delivery problems are "
+                   "filed as Material Incident Report submissions for this job and date.",
+                   st["caption"]),
+            ]
+        entries = values.get(em_key)
+        if not isinstance(entries, list) or not entries:
+            return []
+        cols = [
+            ("material", "Material"),
+            ("part_number", "Part no."),
+            ("expected", "Expected"),
+            ("status", "Delivery status"),
+            ("received", "Received"),
         ]
+        rows_em: list[list[Any]] = [[_p(head, st["colhead"]) for _, head in cols]]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue  # defensive: a malformed entry is dropped, never fatal
+            rows_em.append([_p(str(entry.get(key, "") or ""), st["cell"]) for key, _ in cols])
+        if len(rows_em) == 1:
+            return []
+        out_em: list[Flowable] = [
+            _section_header(section.get("title", "Expected materials"), st)
+        ]
+        w = _CONTENT_W
+        t_em = Table(
+            rows_em,
+            colWidths=[w - 3.7 * inch, 1.0 * inch, 0.9 * inch, 1.2 * inch, 0.6 * inch],
+            repeatRows=1,
+        )
+        t_em.setStyle(_grid_style(len(rows_em), len(cols)))
+        out_em.append(t_em)
+        return out_em
     if typ == "additional_photos":
         # Additional-photos pool mount (DR-photo-pool Slice 1). The submission carries only
         # POOL REFERENCES (values[<key>] = [{pool_id, caption?}]) — the photo BYTES were

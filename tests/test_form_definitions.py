@@ -536,7 +536,7 @@ def test_daily_report_v6_photo_pool_and_incident_link() -> None:
 
     # v6 is the catalog CURRENT (identity-keyed floor applies in full — the glob test above
     # proves it passes), and v5 dropped to historical (exempt from section-type floors only).
-    assert "daily-report-v6" in CURRENT_FORM_CODES
+    assert "daily-report-v6" not in CURRENT_FORM_CODES  # superseded by v7
     assert "daily-report-v5" not in CURRENT_FORM_CODES
     # The D4/M2 floor mounts survive the cut (required_section_types names them).
     types = {s["type"] for s in d["sections"]}
@@ -545,3 +545,34 @@ def test_daily_report_v6_photo_pool_and_incident_link() -> None:
     # added — it is deliberately NOT a required field key.
     spec = REQUIRED_CONTENT["parents"]["daily-report"]
     assert "additional_photos" not in spec.get("required_field_keys", [])
+
+
+def test_daily_report_v7_is_v6_plus_only_an_identity_change() -> None:
+    """daily-report-v7 — the expected-materials section becomes VALUE-BEARING.
+
+    The whole point of this cut is that the SECTIONS DO NOT CHANGE. v7 exists to mark a semantic
+    change the section JSON cannot express: from v7 on the daily report FILES the day's
+    expected-materials list under `expected_materials_receipt`, and the PDF prints it as a table.
+    Asserting byte-identity mechanically (rather than eyeballing the diff) is what keeps a stray
+    content edit from riding along under cover of a version bump.
+    """
+    v6 = _load(FORMS_DIR / "daily-report-v6.json")
+    v7 = _load(FORMS_DIR / "daily-report-v7.json")
+    assert v7["version"] == 7 and v7["form_code"] == "daily-report-v7"
+
+    # BYTE-IDENTICAL sections — the load-bearing assertion of this cut.
+    assert json.dumps(v7["sections"], sort_keys=True) == json.dumps(v6["sections"], sort_keys=True)
+    # …and ONLY the three identity/provenance keys differ anywhere in the document.
+    assert {k for k in set(v6) | set(v7) if v6.get(k) != v7.get(k)} == {
+        "form_code", "version", "comment",
+    }
+
+    # v7 is the catalog CURRENT; v6 drops to historical (append-only — it stays in-tree).
+    assert "daily-report-v7" in CURRENT_FORM_CODES
+    assert (FORMS_DIR / "daily-report-v6.json").exists()
+    # The D4/M2 floor mounts survive the cut.
+    types = {s["type"] for s in v7["sections"]}
+    assert "job_requirements" in types and "expected_materials" in types
+    # Exactly ONE expected_materials mount, and it keeps the key the host seeds + the PDF reads.
+    mounts = [s for s in v7["sections"] if s["type"] == "expected_materials"]
+    assert len(mounts) == 1 and mounts[0]["key"] == "expected_materials_receipt"

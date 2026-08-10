@@ -40,6 +40,11 @@ import { pacificToday } from "../components/myTasksShared";
 type MarkDraft = { qty: string; note: string; date: string; shipmentId: string };
 const emptyMark = (): MarkDraft => ({ qty: "", note: "", date: pacificToday(), shipmentId: "" });
 
+/** How long a delivery-mark button stays ARMED before reverting to its normal label. Long enough
+ *  to read the confirm and tap it deliberately, short enough that a forgotten armed button is not
+ *  still live when the phone comes back out of a pocket. */
+const MARK_ARM_TIMEOUT_MS = 6000;
+
 /** Shipment editor state (strings while typing; parsed at submit). */
 type ShipDraft = {
   partNumber: string;
@@ -115,6 +120,26 @@ export function JobMaterialsPage({
   const [marks, setMarks] = useState<Record<number, MarkDraft>>({});
   const [shipFor, setShipFor] = useState<number | null>(null);
   const [shipDraft, setShipDraft] = useState<ShipDraft>(emptyShip());
+
+  // ── Two-step confirm on every delivery mark (operator request, 2026-08-10) ────────────────
+  // A mark is an APPEND-ONLY ledger event with no delete path: a mis-tap cannot be undone, only
+  // corrected by recording a compensating event, and until someone notices, the running total and
+  // the §51 Material Receipts mirror both read wrong. These three buttons also sit right next to
+  // each other on a phone held on a job site. So the first click ARMS the button and the second
+  // commits.
+  //
+  // Arming EXPIRES. A button left armed — the manager got distracted, pocketed the phone — must
+  // not still be one stray tap from filing a delivery minutes later; after the timeout it reverts
+  // to its normal label and the next click merely re-arms.
+  //
+  // Arming is keyed by (line, kind), so clicking a DIFFERENT button re-arms that one instead of
+  // committing: changing your mind from "Delivered" to "Not delivered" can never commit the first.
+  const [armed, setArmed] = useState<{ lineId: number; kind: api.MaterialReceiptKind } | null>(null);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(null), MARK_ARM_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [armed]);
 
   // Manifest import (PR3b). Deliberately NOT routed through `busyId` — that sentinel space is
   // shared with the add-line form (busyId = -1), so a manifest op reusing it would grey out an
@@ -226,6 +251,13 @@ export function JobMaterialsPage({
   }
 
   function onMark(line: api.ExpectedMaterialRow, kind: api.MaterialReceiptKind) {
+    // First click on this (line, kind) only ARMS it — see the `armed` state above for why a
+    // delivery mark is not a one-click action.
+    if (!(armed && armed.lineId === line.id && armed.kind === kind)) {
+      setArmed({ lineId: line.id, kind });
+      return;
+    }
+    setArmed(null);
     const d = marks[line.id] ?? emptyMark();
     const body: Parameters<typeof api.markReceipt>[1] = { kind, event_date: d.date || undefined };
     if (d.note.trim()) body.note = d.note.trim();
@@ -520,33 +552,37 @@ export function JobMaterialsPage({
                         ))}
                       </select>
                     )}{" "}
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      disabled={busy}
-                      aria-label={`Mark ${rowTitle(line)} delivered`}
-                      onClick={() => onMark(line, "delivered")}
-                    >
-                      Delivered
-                    </button>{" "}
-                    <button
-                      type="button"
-                      className="btn btn--secondary"
-                      disabled={busy}
-                      aria-label={`Mark ${rowTitle(line)} partially delivered`}
-                      onClick={() => onMark(line, "partial")}
-                    >
-                      Partially delivered
-                    </button>{" "}
-                    <button
-                      type="button"
-                      className="btn btn--retire"
-                      disabled={busy}
-                      aria-label={`Mark ${rowTitle(line)} not delivered`}
-                      onClick={() => onMark(line, "not_delivered")}
-                    >
-                      Not delivered
-                    </button>
+                    {/* Two-step: the first click arms, the second commits. The armed button says
+                        so in its LABEL, not only its styling — a colour change alone is not a
+                        confirmation prompt, and the aria-label carries the same words so a screen
+                        reader hears the state change too. */}
+                    {(
+                      [
+                        { kind: "delivered", label: "Delivered", cls: "btn--primary" },
+                        { kind: "partial", label: "Partially delivered", cls: "btn--secondary" },
+                        { kind: "not_delivered", label: "Not delivered", cls: "btn--retire" },
+                      ] as const
+                    ).map(({ kind, label, cls }, i) => {
+                      const isArmed = armed?.lineId === line.id && armed.kind === kind;
+                      return (
+                        <span key={kind}>
+                          {i > 0 ? " " : null}
+                          <button
+                            type="button"
+                            className={`btn ${isArmed ? "btn--primary is-armed" : cls}`}
+                            disabled={busy}
+                            aria-label={
+                              isArmed
+                                ? `Confirm ${label.toLowerCase()} for ${rowTitle(line)} — tap again to record`
+                                : `Mark ${rowTitle(line)} ${label.toLowerCase()}`
+                            }
+                            onClick={() => onMark(line, kind)}
+                          >
+                            {isArmed ? `Confirm ${label.toLowerCase()}?` : label}
+                          </button>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
 

@@ -1,0 +1,828 @@
+{
+  "form_code": "daily-report-v7",
+  "parent_form_code": "daily-report",
+  "form_name": "Daily Field Report",
+  "variant_label": null,
+  "version": 7,
+  "archetype": "sectioned_assessment",
+  "source_pdf": "daily-field-report.pdf",
+  "comment": [
+    "[v7 — 2026-08-10] The expected-materials section becomes VALUE-BEARING. Its sections are",
+    "BYTE-IDENTICAL to v6; the only changes are form_code, version and this comment. The cut",
+    "exists to mark a semantic change the section JSON cannot express: from v7 on, the daily",
+    "report FILES the day's expected-materials list under `expected_materials_receipt` and the",
+    "PDF prints it as a table.",
+    "",
+    "WHY a snapshot. v5/v6 filed nothing there, reasoning that reprinting the live D1 list",
+    "'would snapshot mutable state the submission never carried'. For a document of record that",
+    "is backwards: the manager signs a report that DISPLAYED a set of materials in a particular",
+    "delivery state, and because every later delivery mark rewrites that state, it cannot be",
+    "reconstructed afterwards. Not capturing it was the data loss.",
+    "",
+    "v5/v6 submissions carry no such key, render nothing for the section, and their filed PDFs",
+    "stay byte-identical — which is exactly what the version boundary buys."
+  ],
+  "branding": {
+    "logo": true,
+    "title": "DAILY FIELD REPORT — SITE SUPERVISOR SOP"
+  },
+  "sections": [
+    {
+      "type": "header",
+      "fields": [
+        {
+          "key": "job",
+          "label": "Job",
+          "input": "text"
+        },
+        {
+          "key": "work_date",
+          "label": "Report Date",
+          "input": "date"
+        },
+        {
+          "key": "weather",
+          "label": "Weather",
+          "input": "text"
+        },
+        {
+          "key": "average_temp",
+          "label": "Average Temp",
+          "input": "number"
+        },
+        {
+          "key": "prepared_by",
+          "label": "Prepared By",
+          "input": "text"
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "SITE SUPERVISOR — STANDARD OPERATING PROCEDURE",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Evergreen Renewables, LLC  |  Utility-Scale Solar Construction"
+        },
+        {
+          "type": "p",
+          "text": "PURPOSE: This SOP defines the minimum daily standards, safety responsibilities, quality oversight duties, and reporting expectations for all Site Supervisors employed by or representing Evergreen Renewables, LLC. Compliance with this document is mandatory and non-negotiable on every project."
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "7:30 AM — Arrive On Site — You Set the Tone",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Show up before the crew. Your presence before workers arrive communicates accountability and sets the standard for the entire day."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Unlock the site and open all access points before workers arrive.",
+            "Conduct a brief visual walkthrough of the site before work begins — look for overnight hazards, security issues, or conditions that could affect the day's plan.",
+            "Confirm that the work area is clear of standing water, debris, or other hazards before crews begin."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "arrival",
+      "groups": [
+        {
+          "key": "arrival_duties",
+          "label": "Arrival & walkthrough",
+          "scale": [
+            "Confirmed"
+          ],
+          "items": [
+            {
+              "key": "arrived_walkthrough",
+              "label": "Arrived before the crew and completed the pre-work site walkthrough"
+            },
+            {
+              "key": "walkthrough_notes",
+              "label": "Walkthrough notes (optional)",
+              "kind": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "A. Morning Kickoff — 1. Sign Workers In",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Every worker must be signed in before starting work — no exceptions.",
+            "No one touches a tool until they are logged.",
+            "Verify that each worker on site is on the approved subcontractor roster. Workers not pre-approved by the Construction Manager must not begin work until authorization is confirmed."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "sign_in",
+      "groups": [
+        {
+          "key": "sign_in_duties",
+          "label": "Worker sign-in",
+          "scale": [
+            "Confirmed"
+          ],
+          "items": [
+            {
+              "key": "workers_signed_in",
+              "label": "All workers signed in before starting work"
+            },
+            {
+              "key": "manpower_total",
+              "label": "Total manpower on site",
+              "kind": "numeric"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "2. PPE Verification",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Before any worker begins their shift, the Site Supervisor must verify that all personnel are wearing appropriate PPE for the scope of work. PPE requirements include, but are not limited to:"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Hard hat (ANSI/ISEA Z89.1 compliant) — required at all times on active construction areas.",
+            "High-visibility safety vest or shirt (ANSI Class 2 minimum) — required at all times.",
+            "Safety-toed boots (ASTM F2413 compliant) — required at all times.",
+            "Safety glasses or goggles — required during any cutting, grinding, drilling, or material handling.",
+            "Gloves — required when handling sharp materials, energized components (arc-rated), or during lifting operations.",
+            "Arc flash PPE — required for any work within the limited or restricted approach boundary of energized electrical equipment. Verify arc flash hazard category and ensure appropriate PPE is on hand before any electrical work begins.",
+            "Fall protection harness and lanyard — required when working at heights of 6 feet or greater, or per applicable OSHA standards.",
+            "Sun protection — encourage SPF sunscreen, long sleeves (permitted), and hydration, especially in summer months."
+          ]
+        },
+        {
+          "type": "callout",
+          "style": "note",
+          "text": "NOTE: Any worker found without required PPE must immediately stop work and obtain the proper equipment before resuming. Repeat violations must be reported to the Construction Manager and documented."
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "ppe",
+      "groups": [
+        {
+          "key": "ppe_duties",
+          "label": "PPE verification",
+          "scale": [
+            "Confirmed"
+          ],
+          "items": [
+            {
+              "key": "ppe_verified",
+              "label": "PPE verified for all personnel on site"
+            },
+            {
+              "key": "ppe_notes",
+              "label": "PPE notes (optional)",
+              "kind": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "3. Complete the Daily JHA (Job Hazard Analysis)",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Create the JHA for that day's specific scope of work — a generic or copy-pasted JHA is not acceptable.",
+            "Walk the crew through it verbally — do not just hand it to them to sign.",
+            "Every crew member must sign acknowledging they understand the hazards and controls before work begins.",
+            "The JHA must be updated mid-day if the scope of work changes significantly.",
+            "JHAs must be retained on site and made available to the owner's rep, inspectors, or OSHA personnel upon request."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "form_link",
+      "label": "Create Job Hazard Analysis",
+      "parent_form_code": "jha",
+      "helper": "File today's JHA for this job before work begins."
+    },
+    {
+      "type": "guidance",
+      "heading": "4. Visitor Log",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Any visitor on site (owner's rep, inspector, delivery driver, engineer, etc.) must be signed into the visitor log before entering the active work area.",
+            "All visitors must be provided with appropriate PPE — maintain a supply of visitor hard hats, vests, and glasses on site.",
+            "The Site Supervisor is responsible for supervising all visitors while they are on site. Do not leave visitors unaccompanied in active work areas."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "form_link",
+      "label": "Create Visitor Sign-In",
+      "parent_form_code": "visitor-sign-in",
+      "helper": "Sign visitors in on the visitor log before they enter the work area."
+    },
+    {
+      "type": "repeating_table",
+      "key": "site_visitors",
+      "title": "Site Visitors (or N/A)",
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "visitor_name",
+          "label": "Visitor",
+          "input": "text"
+        },
+        {
+          "key": "company_role",
+          "label": "Company / Role",
+          "input": "text"
+        },
+        {
+          "key": "discussion_summary",
+          "label": "Discussion",
+          "input": "textarea"
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "B. OSHA Compliance & Ongoing Safety Oversight — 5. Trenching & Excavation (29 CFR 1926 Subpart P)",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Trenching for conduit, grounding, and cable runs is common on solar projects. The Site Supervisor must enforce all applicable OSHA trenching requirements:"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "No worker may enter a trench or excavation 5 feet or deeper without a protective system in place (sloping, shoring, or trench box/shield). Trenches under 5 feet may still require protection if conditions are hazardous.",
+            "A competent person must inspect all excavations and trenches before each shift and after any rain event, before workers are permitted to enter.",
+            "Spoil piles must be kept a minimum of 2 feet from the edge of the trench.",
+            "Ladders or ramps must be available for egress in trenches 4 feet or deeper, within 25 feet of any worker.",
+            "Trenches in Type C soil (unstable, granular, or previously disturbed) require 1.5:1 sloping or a trench box — verify soil classification with the competent person before work begins.",
+            "Any workers observed entering an unprotected trench must be immediately stopped. This is a life-safety issue — do not delay response."
+          ]
+        },
+        {
+          "type": "callout",
+          "style": "critical",
+          "text": "CRITICAL RULE: Never allow workers in an unprotected trench. Trench collapses are fatal and instantaneous. There is zero tolerance for this violation."
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "trenching",
+      "groups": [
+        {
+          "key": "trenching_duties",
+          "label": "Trenching & excavation",
+          "scale": [
+            "Confirmed",
+            "N/A today"
+          ],
+          "items": [
+            {
+              "key": "trenching_inspected",
+              "label": "Trenching & excavation protections inspected before entry",
+              "scale": [
+                "Confirmed",
+                "N/A today"
+              ]
+            },
+            {
+              "key": "trenching_notes",
+              "label": "Trenching notes (optional)",
+              "kind": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "6. Electrical Safety",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Verify that all electrical work is performed by qualified persons as defined by OSHA 29 CFR 1910.332.",
+            "Lock Out / Tag Out (LOTO) procedures must be followed whenever workers are exposed to the unexpected energization or release of hazardous energy. Confirm that the crew has LOTO equipment on site.",
+            "Module strings and combiner outputs are energized once exposed to sunlight — treat all DC circuits as live unless confirmed de-energized through proper LOTO.",
+            "Maintain appropriate approach boundaries around any energized equipment per NFPA 70E.",
+            "No damaged, cut, or unprotected wiring may be left exposed at the end of any workday."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "electrical",
+      "groups": [
+        {
+          "key": "electrical_duties",
+          "label": "Electrical safety",
+          "scale": [
+            "Confirmed",
+            "N/A today"
+          ],
+          "items": [
+            {
+              "key": "electrical_safe",
+              "label": "Electrical safety requirements verified",
+              "scale": [
+                "Confirmed",
+                "N/A today"
+              ]
+            },
+            {
+              "key": "electrical_notes",
+              "label": "Electrical notes (optional)",
+              "kind": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "7. General OSHA Compliance",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Ensure a first aid kit is accessible and fully stocked on site at all times.",
+            "Post the OSHA 300 log (or equivalent) and the OSHA Job Safety and Health poster at the site office or trailer.",
+            "Confirm that all subcontractors have their own OSHA 10 or 30-hour certified foreman on site per project requirements.",
+            "Scaffold, aerial lift (boom lift, scissor lift), and forklift operators must have documented training/certification on file. Verify before operation begins.",
+            "Heat illness prevention — monitor conditions when temperature or heat index exceeds 80°F. Ensure access to drinking water (1 qt/hour/worker), shade, and rest breaks. Implement a heat illness prevention plan when conditions exceed 95°F.",
+            "Housekeeping — the work area must be kept reasonably clean throughout the day. Tripping hazards, excess materials, and debris must be managed continuously, not just at end of day.",
+            "Fire extinguishers must be present and accessible within 100 feet of any welding, cutting, or grinding work."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "osha_compliance",
+      "groups": [
+        {
+          "key": "osha_compliance_duties",
+          "label": "OSHA compliance walk",
+          "scale": [
+            "Confirmed"
+          ],
+          "items": [
+            {
+              "key": "osha_walk_done",
+              "label": "General OSHA compliance walk completed"
+            },
+            {
+              "key": "osha_notes",
+              "label": "OSHA compliance notes (optional)",
+              "kind": "text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "C. Quality Control — Verifying the Work",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "The Site Supervisor is Evergreen’s eyes on the ground for quality. You are not a passive observer — you are responsible for actively verifying that work is installed correctly and to specification. Subcontractors are responsible for their own work quality, but you are responsible for catching and escalating issues before they become costly rework."
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "8. Post/Pile Installation",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Verify post depth against the approved pile schedule or drawings. Spot-check driven or helical pile embedment depth throughout the day — do not rely solely on the subcontractor’s word.",
+            "Post plumb and alignment: Confirm posts are within tolerance for plumb (typically ±1° from vertical unless otherwise specified) and are aligned in row. Misaligned posts create cascading racking issues.",
+            "Post spacing: Verify bay spacing matches the racking drawings. Spot-check with a tape measure — do not assume the sub’s layout is correct.",
+            "If driven piles are being installed, verify that the final installation log (blow counts, depth, torque, etc.) is being recorded by the subcontractor and confirm the data is being retained.",
+            "Any posts that are out of spec (too shallow, out of plumb, wrong spacing) must be flagged immediately. Do not allow racking to be installed over out-of-spec posts without Construction Manager approval."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "9. Racking & Tracker Installation",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Verify that racking is being installed per the manufacturer’s drawings and installation manual. Deviations require engineering approval.",
+            "Confirm all torque specifications are being met. Spot-check bolt torque throughout the day using a calibrated torque wrench or by direct observation of the crew using proper tools. Document spot-check results.",
+            "Check that all clip orientations, module clamp placements, and bonding jumpers/grounding hardware are installed per the drawings.",
+            "For tracker systems: verify motor and drive assembly installation, row alignment, and that all mechanical stops are installed correctly per manufacturer instructions.",
+            "Verify that no modules are installed on racking that has not been fully torqued and inspected. Modules should not be placed on incomplete rows.",
+            "Confirm that module serial numbers are being recorded if required by the project’s QC plan."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "10. Electrical & Wiring",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Verify that wire runs are being installed in the correct conduit, with correct wire gauge and color coding per the single-line and wiring diagrams.",
+            "Ensure wire management is clean and consistent — conductors must be properly supported, not draped or pulling against fittings.",
+            "Confirm conduit bends, offsets, and entries meet NEC requirements (no more than 360° of bends between pull points; proper support spacing per conduit type).",
+            "At the end of each day, verify that all open conduit ends are capped or plugged. No open conduit ends overnight.",
+            "String wiring: verify that string lengths match the design before crews move to the next section. Incorrect string configuration will not be caught until commissioning — catch it now."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "11. General Quality Checks",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Level checks: Verify that racking tables are within the specified slope and level tolerances at each installation milestone. Document any tables that require shimming or adjustment before modules are installed.",
+            "Module installation: Confirm modules are seated fully in clamps, clamps are properly torqued, and all inter-module bonding is in place where required.",
+            "Grounding: Verify grounding electrode conductors, equipment grounding, and bonding installations are progressing per drawings. Grounding deficiencies are frequently cited during AHJ inspections.",
+            "Concrete and ballast: If applicable, verify that concrete pours meet the specified mix design and that ballast quantities match the approved layout plan.",
+            "As-builts: Maintain an ongoing record of any field deviations from the design drawings. All deviations must be communicated to the Construction Manager and documented for the as-built set."
+          ]
+        },
+        {
+          "type": "callout",
+          "style": "quality",
+          "text": "QUALITY RULE: Do not allow work to be buried, covered, or built over that has not been visually confirmed as correct. If something is covered before it is verified, it is your responsibility to have it uncovered. Never sign off on work you have not inspected."
+        }
+      ]
+    },
+    {
+      "type": "repeating_table",
+      "key": "qc_spot_checks",
+      "title": "QC Spot Checks",
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "area",
+          "label": "Area",
+          "input": "text"
+        },
+        {
+          "key": "checked",
+          "label": "Checked",
+          "input": "select",
+          "options": [
+            "Yes",
+            "No"
+          ]
+        },
+        {
+          "key": "result_notes",
+          "label": "Result / Notes",
+          "input": "textarea"
+        }
+      ]
+    },
+    {
+      "type": "repeating_table",
+      "key": "crew_progress",
+      "title": "Crew / Subcontractor Progress",
+      "min_rows": 1,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "crew_subcontractor",
+          "label": "Crew / Subcontractor",
+          "input": "text"
+        },
+        {
+          "key": "manpower",
+          "label": "Manpower",
+          "input": "number"
+        },
+        {
+          "key": "todays_progress",
+          "label": "Today's Progress",
+          "input": "textarea"
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "D. Throughout the Day — 12. Photo Documentation",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Photos must cover: progress milestones, material conditions, QC verification (post plumb, torque, level), safety conditions, and any notable items (positive or negative).",
+            "Document any NCR (Non-Conformance) items with clear photos showing the deficiency before and after correction."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "header",
+      "title": "Site photos",
+      "fields": [
+        {
+          "key": "site_photos",
+          "label": "Site photos",
+          "input": "photo"
+        }
+      ]
+    },
+    {
+      "type": "additional_photos",
+      "key": "additional_photos",
+      "title": "Additional site photos"
+    },
+    {
+      "type": "guidance",
+      "heading": "13. Material & Equipment Deliveries",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "The Site Supervisor must personally sign off on all deliveries — this cannot be delegated.",
+            "Before signing anything, inspect all materials and equipment for damage, shortages, or discrepancies against the packing list or bill of lading.",
+            "Check module condition upon delivery. Damaged modules must be photographed, flagged on the delivery receipt, and reported to the Construction Manager before signing.",
+            "If something doesn’t look right, document it with photos and notify the Construction Manager before signing.",
+            "Verify that delivered materials match the approved submittal (correct manufacturer, model, rating). Do not allow installation of materials that have not been approved through the submittal process."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "expected_materials",
+      "key": "expected_materials_receipt",
+      "title": "Expected materials"
+    },
+    {
+      "type": "repeating_table",
+      "key": "deliveries_received",
+      "title": "Deliveries Received (or N/A)",
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "item_material",
+          "label": "Item / Material",
+          "input": "text"
+        },
+        {
+          "key": "condition",
+          "label": "Condition",
+          "input": "text"
+        },
+        {
+          "key": "notes",
+          "label": "Notes",
+          "input": "textarea"
+        }
+      ]
+    },
+    {
+      "type": "form_link",
+      "label": "Report a material incident",
+      "parent_form_code": "material-incident",
+      "helper": "If a delivery arrived damaged, short, or wrong, report the material incident before signing for it."
+    },
+    {
+      "type": "repeating_table",
+      "key": "equipment_on_site",
+      "title": "Equipment On Site",
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "equipment_type",
+          "label": "Equipment Type",
+          "input": "text"
+        },
+        {
+          "key": "owner_rental",
+          "label": "Owner / Rental Company",
+          "input": "text"
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "14. Safety Oversight",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "You are responsible for safety on that job site — own it.",
+            "Actively monitor the crew throughout the day. Walk the site regularly — do not stay in the office or trailer for extended periods during active work.",
+            "Issue verbal corrections immediately for any unsafe behavior. Document repeat violations.",
+            "Any unsafe behavior or condition must be reported to the Construction Manager immediately. Do not wait until end of day to report safety concerns.",
+            "If an imminent danger situation exists, stop work immediately and clear personnel from the hazard area. Notify the Construction Manager before resuming work.",
+            "Near-miss events must be reported to the Construction Manager the same day and documented on the appropriate incident form."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "freeform",
+      "key": "safety_observations",
+      "label": "Safety Observations",
+      "input": "textarea"
+    },
+    {
+      "type": "checklist",
+      "key": "incidents",
+      "groups": [
+        {
+          "key": "incidents_duties",
+          "label": "Incidents & near-misses",
+          "scale": [
+            "None today"
+          ],
+          "items": [
+            {
+              "key": "incidents_none",
+              "label": "Incidents / near-misses today",
+              "scale": [
+                "None today"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "form_link",
+      "label": "Create Incident Report",
+      "parent_form_code": "incident-report",
+      "helper": "Report any incident or near-miss the same day it occurs."
+    },
+    {
+      "type": "guidance",
+      "heading": "E. Check-Ins with Construction Manager — 2x Per Day (Minimum)",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Morning Check-In"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Connect with the Construction Manager at the start of the day.",
+            "Cover the day’s plan, any concerns, deliveries expected, issues from the previous day, and any QC or safety items requiring follow-up.",
+            "Confirm you have received and reviewed any RFIs, ASIs, or revised drawings that affect the day’s scope before work begins."
+          ]
+        },
+        {
+          "type": "p",
+          "text": "End-of-Day Check-In"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Connect with the Construction Manager before leaving the site.",
+            "Cover: what was completed, quality observations and any NCRs, safety observations, delivery receipts, and the plan for tomorrow.",
+            "Report any scope deviations, subcontractor concerns, or potential change order items identified during the day."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "cm_checkins",
+      "groups": [
+        {
+          "key": "cm_checkins_duties",
+          "label": "Construction Manager check-ins",
+          "scale": [
+            "Confirmed"
+          ],
+          "items": [
+            {
+              "key": "cm_checkin_am",
+              "label": "Morning check-in with the Construction Manager"
+            },
+            {
+              "key": "cm_checkin_pm",
+              "label": "End-of-day check-in with the Construction Manager"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "guidance",
+      "heading": "END OF DAY — Before Leaving the Site",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "You do not leave until all of the following are confirmed:"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "All site photos are uploaded.",
+            "All workers are signed out.",
+            "Site is secure: gate locked, equipment secured, materials tarped or stored as required, and all hazards addressed or marked.",
+            "All open conduit ends are capped or plugged.",
+            "No energized or live conductors are exposed or accessible.",
+            "Excavations and trenches are barricaded or covered to prevent unauthorized entry overnight.",
+            "Any tools, equipment, or materials that could become projectiles or cause injury overnight have been secured.",
+            "Daily sign-in/sign-out sheet, JHA, visitor log, and delivery receipts are filed or transmitted as required.",
+            "End-of-day check-in with the Construction Manager is complete."
+          ]
+        }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "end_of_day",
+      "groups": [
+        {
+          "key": "end_of_day_duties",
+          "label": "End of day",
+          "scale": [
+            "Confirmed"
+          ],
+          "items": [
+            {
+              "key": "eod_secure",
+              "label": "End-of-day list complete — site secured"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "freeform",
+      "key": "tomorrows_goals",
+      "label": "Tomorrow's Progress Goals",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "comments",
+      "label": "Comments",
+      "input": "textarea"
+    },
+    {
+      "type": "job_requirements",
+      "key": "job_requirements",
+      "title": "Job-specific requirements"
+    },
+    {
+      "type": "guidance",
+      "heading": "F. General Expectations & Standards of Conduct",
+      "blocks": [
+        {
+          "type": "bullets",
+          "items": [
+            "Lead by example. The crew takes their cues from you. If you wear your PPE consistently, so will they.",
+            "Never sign or approve anything you have not personally verified. Your signature on a delivery receipt, JHA, or daily report is your professional endorsement.",
+            "Be proactive, not reactive. Identifying a quality issue before it is buried is exponentially better than discovering it at inspection or commissioning.",
+            "Document everything. If it isn’t written down and photographed, it didn’t happen.",
+            "Escalate early. If a subcontractor is performing below standard, falling behind, or creating quality or safety issues, notify the Construction Manager immediately — do not attempt to manage it alone.",
+            "Maintain professional relationships on site, but never compromise Evergreen’s quality or safety standards to avoid conflict."
+          ]
+        },
+        {
+          "type": "callout",
+          "style": "note",
+          "text": "FINAL STATEMENT: As Site Supervisor, you are Evergreen Renewables’ most direct representative in the field. The quality of the project, the safety of the workforce, and the reputation of our company depend on the standards you enforce every day. Hold the line."
+        }
+      ]
+    }
+  ]
+}
