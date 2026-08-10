@@ -2903,3 +2903,28 @@ catalog.json entry and a `publishValidation` pass, so it is a slice, not a patch
 checklist's count items actually recorded.
 
 Surfaced: 2026-08-10 (#44 adversarial review).
+
+## [OPEN 2026-08-10, low] Three new form definitions have not been re-archived to the manual-fallback blank-PDF store
+
+`scripts/generate_form_archive.py --upload` regenerates every published form definition's blank
+fillable PDF + cover sheet and re-uploads them to Box `00_Form_Archive` (version-on-conflict, no
+duplicates) — the paper fallback for a crew that can't reach the portal. It has not been re-run
+since #44/#47 shipped `equipment-excavator-360-v1`, `equipment-gayk-piledriver-v1`, and
+`equipment-training-waiver-gayk-ram-v1`. (The two `generic_inspection` library templates from the
+same PRs — the transport start-up/loading checklists and the weekly-maintenance checklist — render
+inline on an existing library page rather than as standalone forms, so they are not part of this
+gap.)
+
+**Not urgent:** the live portal renders and files against `forms/*.json` directly; the blank-PDF
+archive is a fallback artifact, not on any submission path. Nothing is broken — the fallback packet
+is just stale for these three form codes until the re-run happens.
+
+**Fix:** operator/Tier-3-gated, one command — `python scripts/generate_form_archive.py --upload`
+(`docs/runbooks/safety_portal_forms.md` "Refresh the manual-fallback blank-form archive").
+
+**Tag:** `safety-portal`, `checklists`, `low`.
+
+**Revisit when:** the next Box-publish/Tier-3 pass runs, or a field crew reports the printed
+fallback packet is missing one of these three forms.
+
+Surfaced: 2026-08-10 (session-close, #44/#47 follow-up).
