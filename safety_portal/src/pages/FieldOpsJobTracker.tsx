@@ -10,6 +10,7 @@ import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection
 import { InlineRowMsg, SectionError, TaskDue, errMsg, type RowFeedback } from "../components/myTasksShared";
 import { JobDailyRequirementsSection } from "../components/JobDailyRequirementsSection";
 import { statusLabel, lifecycleLabel } from "../lib/labels";
+import { JobArchivePanel } from "../components/JobArchivePanel";
 
 // R7 — a load-failure that owns a working Retry (never a dead banner, never a lying empty state).
 interface RetryableError {
@@ -1255,6 +1256,17 @@ export function FieldOpsJobTracker({
             )}
           </section>
         )}
+
+        {/* Archive lives in its OWN section at the bottom of the manage area — deliberately away
+            from the routine active/inactive selector above. That one is day-to-day; this relocates
+            the job's folders across two external systems. The panel renders nothing at all unless
+            the viewer holds cap.job.archive (the worker withholds the block, so this is not a
+            UI-only gate). */}
+        <JobArchivePanel
+          job={job}
+          canArchive={(user?.capabilities ?? []).includes("cap.job.archive")}
+          onChanged={reloadDetail}
+        />
 
         {job.client && (
           <section className="card dash-section">
