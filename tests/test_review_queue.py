@@ -417,3 +417,72 @@ def test_now_override_used():
     # Brief-specified case: Created At 4 days ago + 24h SLA + now override.
     row = {"Created At": "2026-05-15", "SLA Tier": "24h"}
     assert review_queue.is_past_sla(row, now=date(2026, 5, 19)) is True
+
+
+# ---- safe_add — the never-raise fence ticket ---------------------------------------
+
+
+def test_safe_add_returns_true_and_forwards_every_field(mocker):
+    add = mocker.patch("shared.review_queue.add", return_value=123)
+    ok = review_queue.safe_add(
+        script_name="po_materials.rfq_poll",
+        workstream="po_materials",
+        summary="s",
+        payload={"k": "v"},
+        sla_tier=review_queue.SlaTier.RFQ_DRAFT,
+        reason=review_queue.ReviewReason.POLICY_EDGE,
+        source_file="rfq:2",
+    )
+    assert ok is True
+    kw = add.call_args.kwargs
+    assert kw["workstream"] == "po_materials"
+    assert kw["summary"] == "s"
+    assert kw["sla_tier"] is review_queue.SlaTier.RFQ_DRAFT
+    assert kw["source_file"] == "rfq:2"
+
+
+def test_safe_add_swallows_the_raise_and_fires_critical(mocker):
+    """The whole point: `add` propagates by contract, and every fence writes its ticket
+    BEFORE its one-shot flag — so a propagating ticket cost the flag and turned a
+    PERMANENT fence into an unbounded per-cycle re-ticketing loop. safe_add must return
+    (never raise) so the caller's flag write is reachable, and must escalate the lost
+    ticket to CRITICAL — the item is fenced either way, so a silent loss would leave the
+    operator with no signal at all."""
+    mocker.patch(
+        "shared.review_queue.add",
+        side_effect=review_queue.smartsheet_client.SmartsheetError("flaked"),
+    )
+    log = mocker.patch("shared.review_queue.error_log.log")
+
+    ok = review_queue.safe_add(
+        script_name="po_materials.rfq_poll",
+        workstream="po_materials",
+        summary="RFQ-1 refused",
+        payload={},
+        sla_tier=review_queue.SlaTier.RFQ_DRAFT,
+        reason=review_queue.ReviewReason.POLICY_EDGE,
+        source_file="rfq:2",
+        error_code="rfq_fence_ticket_failed",
+    )
+
+    assert ok is False  # the caller can branch; most just proceed to flag
+    (severity, script, message), kwargs = log.call_args
+    assert severity is Severity.CRITICAL
+    assert script == "po_materials.rfq_poll"
+    assert kwargs["error_code"] == "rfq_fence_ticket_failed"
+    # The message must tell the operator the row's fate is UNKNOWN — a Smartsheet write
+    # that raises may still have committed, so "re-ticket by hand" needs a check first.
+    assert "rfq:2" in message and "non-idempotent" in message
+
+
+def test_safe_add_swallows_even_a_non_smartsheet_error(mocker):
+    """A ValueError from a bad workstream (or anything else) must not escape either —
+    the flag write behind it is what keeps the fence one-shot."""
+    mocker.patch("shared.review_queue.add", side_effect=ValueError("bad workstream"))
+    log = mocker.patch("shared.review_queue.error_log.log")
+    assert review_queue.safe_add(
+        script_name="x", workstream="po_materials", summary="s", payload={},
+        sla_tier=review_queue.SlaTier.RFQ_DRAFT,
+        reason=review_queue.ReviewReason.POLICY_EDGE,
+    ) is False
+    assert log.call_args.args[0] is Severity.CRITICAL

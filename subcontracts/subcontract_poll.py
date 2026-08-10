@@ -545,7 +545,16 @@ def _poll_inside_lock(drafts_on: bool, subs_on: bool, status_on: bool) -> Subcon
 
     _write_heartbeat()
     total_errors = counters["draft_errors"] + counters["sub_errors"] + counters["status_errors"]
-    total_flagged = counters["rejected"] + counters["fenced"] + counters["subs_reviewed"]
+    # `skipped_flagged` counts items ALREADY one-shot-flagged — permanently wedged out
+    # of the queue until an operator fixes the cause and clears the entry. Omitting it
+    # made Last Cycle Status flip back to OK on the very next cycle, so the daemon read
+    # healthy while an item sat fenced indefinitely (2026-08-10, rfq_poll). A standing
+    # fence is a standing WARN by design: ITS_Daemon_Health is a visibility surface, not
+    # a push surface, so this pages nobody — and it self-clears when the flag is cleared.
+    total_flagged = (
+        counters["rejected"] + counters["fenced"] + counters["subs_reviewed"]
+        + counters["skipped_flagged"]
+    )
     if bearer_rejected:
         cycle_status: HeartbeatStatus = "ERROR"
     elif total_errors > 0:
@@ -561,6 +570,8 @@ def _poll_inside_lock(drafts_on: bool, subs_on: bool, status_on: bool) -> Subcon
     else:
         error_summary = (
             f"errors={total_errors} flagged={total_flagged}"
+            + (f" standing={counters['skipped_flagged']}"
+               if counters["skipped_flagged"] else "")
             + (" bearer_rejected" if bearer_rejected else "")
         )
     try:
@@ -1008,7 +1019,8 @@ def _handle_subcontract_hmac_failure(
     the FIRST sighting; the flag set suppresses per-cycle re-flag spam."""
     # Tripwire (Invariant 2, Layer 5) — record the suspicious pattern.
     anomaly_logger.check({"subcontract_hmac_failure": sc_id, "sc_number": sc_number})
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"subcontract: HMAC verification FAILED for SC {sc_number or sc_id} — "
@@ -1056,7 +1068,8 @@ def _fence_subcontract(
     The row is never filed and never mark-filed; it stays queued in D1. Remediation:
     fix the cause, then delete the sc_id entry from `subcontract_poll_flagged.json` (the
     daemon retries it the next cycle)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=f"subcontract: SC {sc_number or sc_id} refused before filing — {detail}",
         payload={"sc_id": sc_id, "sc_number": sc_number, "detail": detail},
@@ -1261,7 +1274,8 @@ def _subcontractor_up_sync_pass(creds: _SubcontractCreds, counters: dict[str, in
             # PERMANENT — the row will never succeed as-is; ticket the operator, leave the
             # subcontractor dirty (the Worker keeps serving it; the ticket is the de-dup).
             counters["subs_reviewed"] += 1
-            review_queue.add(
+            review_queue.safe_add(
+                script_name=SCRIPT_NAME,
                 workstream=WORKSTREAM,
                 summary=(
                     f"subcontract: subcontractor up-sync PERMANENT failure for {sub_key!r} "

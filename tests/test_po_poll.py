@@ -1084,3 +1084,26 @@ def test_polling_gate_transient_error_resolves_to_default(mocker):
     mocker.patch("po_materials.po_poll.error_log.log")
 
     assert po_poll._polling_enabled() is po_poll.DEFAULT_POLLING_ENABLED
+
+
+def test_hmac_fence_flags_even_when_the_ticket_write_fails(_patch):
+    """A fence must STOP the item (flag) and TELL the operator (ticket). The ticket write
+    used to come first and `review_queue.add` propagates, so a Smartsheet blip at fence
+    time cost the flag — the PO re-served next cycle and re-ticketed, forever. Now the
+    ticket rides `review_queue.safe_add` (never raises), so the flag still lands and the
+    lost ticket escalates to CRITICAL instead of vanishing."""
+    row = _signed_row()
+    row["hmac"] = "0" * 64
+    _patch["pending"].return_value = [row]
+    _patch["review_q"].side_effect = SmartsheetError("smartsheet flaked")
+
+    stats = _run(_patch)
+
+    assert stats.rejected == 1 and stats.filed == 0
+    _patch["flags_persist"].assert_called_once()
+    (persisted,), _ = _patch["flags_persist"].call_args
+    assert persisted == {"7": "hmac"}
+    codes = _logged_codes(_patch)
+    assert "po_hmac_failure" in codes
+    assert "review_queue_ticket_failed" in codes
+    _patch["mark_filed"].assert_not_called()

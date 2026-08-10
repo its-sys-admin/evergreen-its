@@ -920,3 +920,22 @@ def test_polling_gate_transient_error_resolves_to_default(mocker):
     mocker.patch("subcontracts.subcontract_poll.error_log.log")
 
     assert subcontract_poll._polling_enabled() is subcontract_poll.DEFAULT_POLLING_ENABLED
+
+
+def test_hmac_fence_flags_even_when_the_ticket_write_fails(_patch):
+    """Twin of the po_poll/rfq_poll durability test: a failed Review-Queue ticket must
+    never cost the one-shot flag, or the PERMANENT fence degrades into unbounded
+    per-cycle re-ticketing."""
+    row = _signed_row()
+    row["hmac"] = "0" * 64
+    _patch["pending"].return_value = [row]
+    _patch["review_q"].side_effect = SmartsheetError("smartsheet flaked")
+
+    _run(_patch)
+
+    _patch["flags_persist"].assert_called_once()
+    (persisted,), _ = _patch["flags_persist"].call_args
+    assert persisted == {"42": "hmac"}
+    codes = _logged_codes(_patch)
+    assert "subcontract_hmac_failure" in codes or "sc_hmac_failure" in codes
+    assert "review_queue_ticket_failed" in codes
