@@ -2097,3 +2097,22 @@ def test_verify_write_capability_propagates_circuit_open(mocker):
     )
     with pytest.raises(SmartsheetCircuitOpenError):
         smartsheet_client.verify_write_capability()
+
+
+def test_resolve_cells_rejects_empty_multipicklist(mocker):
+    """An empty collection is an UNWRITABLE MULTI_PICKLIST payload: the API answers
+    errorCode 1012 "Required object attribute(s) are missing from your request:
+    multiPickList.values[]". Emitting it produced an opaque HTTP 400 at the daemon —
+    raise a self-explaining ValueError at construction instead, naming the column and
+    the fix (omit the key to leave the cell untouched). Callers that mean "unchanged"
+    drop the key (po_materials.vendors / subcontracts.subcontractors do)."""
+    mocker.patch(
+        "shared.smartsheet_client._column_map",
+        return_value={"Supply Categories": 101, "Vendor Name": 102},
+    )
+    with pytest.raises(ValueError, match="Supply Categories"):
+        smartsheet_client._resolve_cells(1, {"Supply Categories": []})
+
+    # A NON-empty collection still builds a MULTI_PICKLIST objectValue.
+    [cell] = smartsheet_client._resolve_cells(1, {"Supply Categories": ["modules"]})
+    assert list(cell.object_value.values) == ["modules"]

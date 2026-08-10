@@ -193,6 +193,27 @@ def test_upsert_drops_blank_picklist_scalars(mocker) -> None:
     assert vendors.COL_TERMS_PROFILE not in cells
 
 
+def test_upsert_drops_empty_multipicklist(mocker) -> None:
+    """An EMPTY Supply Categories list is DROPPED from the payload, exactly like a
+    blank picklist scalar. The Smartsheet API rejects an empty MULTI_PICKLIST
+    (`objectValue.values: []`) with errorCode 1012 "Required object attribute(s) are
+    missing … multiPickList.values[]", so emitting the key at all is an unwritable
+    payload — the vendor could never up-sync. Regression: 25 of 33 vendors carry no
+    categories and every one of them permanently fenced on 2026-08-10."""
+    mocker.patch("po_materials.vendors.get_vendor_by_key", return_value=None)
+    add = mocker.patch(
+        "po_materials.vendors.smartsheet_client.add_rows", return_value=[1]
+    )
+    vendors.upsert_vendor(_portal_vendor(supply_categories=[]))
+    (_, [cells]), _ = add.call_args
+    assert vendors.COL_SUPPLY_CATEGORIES not in cells
+    # A NON-empty list is still written through unchanged.
+    add.reset_mock()
+    vendors.upsert_vendor(_portal_vendor(supply_categories=["modules"]))
+    (_, [cells]), _ = add.call_args
+    assert cells[vendors.COL_SUPPLY_CATEGORIES] == ["modules"]
+
+
 def test_upsert_rejects_unkeyable_payload(mocker) -> None:
     add = mocker.patch("po_materials.vendors.smartsheet_client.add_rows")
     with pytest.raises(ValueError):
