@@ -1428,6 +1428,85 @@ def ensure_picklist_options(
 
 
 @_breaker_guard
+def ensure_columns(sheet_id: int, specs: list[dict[str, Any]]) -> list[str]:
+    """Find-or-ADD columns on an EXISTING sheet by title; return the titles actually added.
+
+    Purpose
+        The schema-drift closer for a standing tracker sheet. `create_sheet_in_folder` fixes a
+        sheet's columns at CREATE time, so a tracker that later grows a column has two populations:
+        sheets made after the change (which have it) and sheets made before (which do not). Writing
+        the new cell to the second population raises `KeyError` out of `_resolve_cells` — correctly,
+        since inventing a column silently would be worse — and that error is what deferred the PR2
+        Material List columns. This makes the column exist instead of softening the write.
+
+    Cost
+        NEAR-ZERO in steady state, which is what makes it safe to call per cycle. It reads the
+        title→id map through `_column_map`, which is CACHED per process; when nothing is missing it
+        issues NO API call at all and returns `[]`. The daemon resolves that same map moments later
+        for the row write, so on the common path this adds a dict lookup and nothing else.
+        (Contrast `create_picklist_column`, whose docstring calls a column add operator/maintenance
+        work — true of an unconditional add, which is why this one is conditional.)
+
+    Invariants
+        - **ADDITIVE ONLY.** Adds titles that are absent; never edits, retypes, reorders or removes
+          an existing column. A title already present is left completely alone, whatever its type —
+          this helper does not reconcile a type mismatch, it only closes an absence.
+        - **APPENDED, never inserted.** New columns land after the last existing one, in `specs`
+          order. Deliberate: inserting at a "logical" index would give back-filled sheets a
+          different column ORDER from freshly-created ones, so the two populations would converge on
+          the same column SET but diverge visually forever. Keep the matching spec at the END of the
+          creation list too and every sheet — old and new — reads identically. Column order is a
+          display property; the operator can reorder in the UI without touching data.
+        - **Idempotent + race-tolerant.** Re-running is a no-op. If a concurrent process adds the
+          same title first, the post-add cache invalidation means the next caller simply sees it
+          present. (Smartsheet permits duplicate titles, so a genuine simultaneous double-add could
+          create one; the cache refresh before the add makes that window small, and a duplicate is
+          visible rather than data-losing.)
+
+    Spec shape
+        Same dicts `create_sheet_in_folder` takes — `{"title": str, "type": str, ...}` — minus
+        `primary` (a sheet's primary column is fixed at create and cannot be added later). A spec
+        carrying `primary` is rejected rather than silently stripped.
+
+    Failure modes
+        Underlying SDK error surfaces as the typed `SmartsheetError` hierarchy;
+        `SmartsheetCircuitOpenError` when the breaker is OPEN (a column add is a WRITE, hence
+        `@_breaker_guard`). Invalidates the sheet's column cache on success so the very next
+        title→id lookup resolves the new columns.
+    """
+    wanted = [s for s in specs if s.get("title")]
+    if any(s.get("primary") for s in wanted):
+        raise ValueError(
+            "ensure_columns cannot add a primary column — a sheet's primary is fixed at create."
+        )
+    columns = _column_map(sheet_id)
+    missing = [s for s in wanted if str(s["title"]) not in columns]
+    if not missing:
+        return []  # the common path: zero API calls
+
+    # Re-read once before writing: the cache may predate another process's add, and adding a column
+    # that already exists would create a duplicate title rather than fail.
+    invalidate_column_cache(sheet_id)
+    columns = _column_map(sheet_id)
+    missing = [s for s in wanted if str(s["title"]) not in columns]
+    if not missing:
+        return []
+
+    start = len(columns)
+    bodies = []
+    for offset, spec in enumerate(missing):
+        body = {k: v for k, v in spec.items() if k != "primary"}
+        body["index"] = start + offset  # append, in specs order
+        bodies.append(smartsheet.models.Column(body))
+    try:
+        get_client().Sheets.add_columns(sheet_id, bodies)
+    except sdk_exc.SmartsheetException as e:
+        raise _translate(e, idempotent=False) from e
+    invalidate_column_cache(sheet_id)
+    return [str(s["title"]) for s in missing]
+
+
+@_breaker_guard
 def create_picklist_column(
     sheet_id: int,
     title: str,

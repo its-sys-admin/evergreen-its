@@ -533,10 +533,12 @@ def get_fieldops_material_list_snapshot(base_url: str, token: str) -> FieldopsMa
 
     Returns a `FieldopsMaterialListSnapshot(lines, jobs_with_materials)`:
       - `lines` — dicts with `line_uuid, job_id, project_name, material_id, catalog_name,
-        description, qty, unit, expected_date, status, received_at, qty_received,
-        received_by_display, note, unplanned, seq`. `catalog_name` is the resolved catalog model_id
-        (NULL for a free-text line); `received_by_display` is the DISPLAY name only (never a
-        username — House Reflex §5). A SNAPSHOT (the live per-job list re-projected every cycle),
+        description, qty, unit, expected_date, status, part_number, category, expected_ship_date,
+        received_at, qty_received, received_by_display, note, unplanned, seq`. `catalog_name` is the
+        resolved catalog model_id (NULL for a free-text line); `received_by_display` is the DISPLAY
+        name only (never a username — House Reflex §5). `expected_ship_date` (0059) is the SHIP date
+        and is DISTINCT from `expected_date`, which keeps its 0031 meaning of expected DELIVERY.
+        A SNAPSHOT (the live per-job list re-projected every cycle),
         NOT an event drain: no watermark, no mark-mirrored companion. The Worker returns the
         complete set (uncapped — the daemon needs the full list to compute retire-removed).
       - `jobs_with_materials` — dicts `{job_id, project_name}` for every active job with ANY

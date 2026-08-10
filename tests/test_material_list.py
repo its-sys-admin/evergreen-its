@@ -58,6 +58,11 @@ def sc(mocker):
         "get_setting": mocker.patch(
             "progress_reports.material_list.smartsheet_client.get_setting", return_value="15000"
         ),
+        # 0059 column back-fill on the FIND branch. Defaults to "nothing was missing" so every
+        # pre-existing test stays byte-identical; the back-fill tests below make it return titles.
+        "ensure_columns": mocker.patch(
+            "progress_reports.material_list.smartsheet_client.ensure_columns", return_value=[]
+        ),
     }
 
 
@@ -296,5 +301,127 @@ def test_row_cap_check_never_raises_on_read_failure(sc):
     material_list.check_row_cap(9001, "Job One — Material List", row_count=99999)
     assert any(
         c.kwargs.get("error_code") == "material_list_row_cap_check_failed"
+        for c in sc["log"].call_args_list
+    )
+
+
+# ---- 0059 columns (Part Number / Category / Expected Ship Date) ------------
+
+
+def test_new_columns_are_in_the_creation_schema_and_tracked():
+    for col in (
+        material_list.COL_PART_NUMBER,
+        material_list.COL_CATEGORY,
+        material_list.COL_EXPECTED_SHIP_DATE,
+    ):
+        assert col in [c["title"] for c in material_list.MATERIAL_LIST_COLUMNS]
+        # In _TRACKED_COLS too, or a change to one of them would never trigger an update_rows.
+        assert col in material_list._TRACKED_COLS
+
+
+def test_expected_ship_date_is_a_date_column_and_distinct_from_expected_date():
+    by_title = {c["title"]: c for c in material_list.MATERIAL_LIST_COLUMNS}
+    assert by_title[material_list.COL_EXPECTED_SHIP_DATE]["type"] == "DATE"
+    # Two SEPARATE columns: 0059 keeps Expected Date meaning DELIVERY. One column cannot carry both.
+    assert material_list.COL_EXPECTED_SHIP_DATE != material_list.COL_EXPECTED_DATE
+    assert material_list.COL_EXPECTED_DATE in by_title
+
+
+def test_backfill_set_is_every_non_primary_creation_column():
+    # A tail slice would have to be re-cut by hand on each future addition, and getting it wrong is
+    # silent. Deriving it means a new column is back-filled automatically.
+    titles = {c["title"] for c in material_list.BACKFILL_COLUMNS}
+    assert titles == {
+        c["title"] for c in material_list.MATERIAL_LIST_COLUMNS if not c.get("primary")
+    }
+    # The primary is excluded — a sheet's primary column is fixed at create and cannot be added.
+    assert material_list.COL_LINE not in titles
+
+
+def test_new_columns_appended_last_so_old_and_new_sheets_match():
+    # ensure_columns APPENDS. If the creation schema slotted these mid-list, a back-filled sheet and
+    # a freshly-created one would hold the same columns in a different ORDER, forever.
+    tail = [c["title"] for c in material_list.MATERIAL_LIST_COLUMNS[-3:]]
+    assert tail == [
+        material_list.COL_PART_NUMBER,
+        material_list.COL_CATEGORY,
+        material_list.COL_EXPECTED_SHIP_DATE,
+    ]
+
+
+def test_upsert_writes_the_new_columns(sc):
+    sc["get_rows"].return_value = []
+    material_list.upsert_line_row(
+        9001, line_uuid="u-1", line="Piles", material="—", description="piles",
+        qty="120", unit="ea", expected_date="2026-07-10", status="expected",
+        delivered_qty="", received_at="", received_by="", note="", unplanned="",
+        part_number="7000153", category="HARDWARE", expected_ship_date="2026-07-02",
+    )
+    cells = sc["add_rows"].call_args.args[1][0]
+    assert cells[material_list.COL_PART_NUMBER] == "7000153"
+    assert cells[material_list.COL_CATEGORY] == "HARDWARE"
+    assert cells[material_list.COL_EXPECTED_SHIP_DATE] == "2026-07-02"
+    assert cells[material_list.COL_EXPECTED_DATE] == "2026-07-10"  # delivery, untouched
+
+
+def test_upsert_defaults_the_new_columns_blank_for_a_pre_0059_line(sc):
+    # A line written before the migration has no value for these; '' is the truthful reading.
+    sc["get_rows"].return_value = []
+    material_list.upsert_line_row(
+        9001, line_uuid="u-1", line="Piles", material="—", description="piles",
+        qty="120", unit="ea", expected_date="2026-07-10", status="expected",
+        delivered_qty="", received_at="", received_by="", note="", unplanned="",
+    )
+    cells = sc["add_rows"].call_args.args[1][0]
+    assert cells[material_list.COL_PART_NUMBER] == ""
+    assert cells[material_list.COL_CATEGORY] == ""
+    assert cells[material_list.COL_EXPECTED_SHIP_DATE] == ""
+
+
+def test_ensure_backfills_columns_on_the_find_branch(sc):
+    sc["find_sheet"].return_value = 4242
+    assert material_list.ensure_material_list_sheet("Job One") == 4242
+    sc["ensure_columns"].assert_called_once_with(4242, material_list.BACKFILL_COLUMNS)
+    sc["create_sheet"].assert_not_called()
+
+
+def test_ensure_does_not_backfill_on_the_create_branch(sc):
+    # A sheet created from MATERIAL_LIST_COLUMNS already has every column — a back-fill there would
+    # be a pointless read on the hot create path.
+    material_list.ensure_material_list_sheet("Job One")
+    sc["create_sheet"].assert_called_once()
+    sc["ensure_columns"].assert_not_called()
+
+
+def test_backfill_logs_what_it_added(sc):
+    sc["find_sheet"].return_value = 4242
+    sc["ensure_columns"].return_value = ["Part Number", "Category"]
+    material_list.ensure_material_list_sheet("Job One")
+    assert any(
+        c.kwargs.get("error_code") == "material_list_columns_backfilled"
+        for c in sc["log"].call_args_list
+    )
+
+
+def test_backfill_is_silent_when_nothing_was_missing(sc):
+    # The steady-state path must not WARN every cycle for every job — that is how a log stops being
+    # read.
+    sc["find_sheet"].return_value = 4242
+    sc["ensure_columns"].return_value = []
+    material_list.ensure_material_list_sheet("Job One")
+    assert not any(
+        c.kwargs.get("error_code") == "material_list_columns_backfilled"
+        for c in sc["log"].call_args_list
+    )
+
+
+def test_backfill_failure_warns_but_still_returns_the_sheet(sc):
+    # A stale-schema sheet still mirrors every column it DOES have; a top-up failure must not stop
+    # the mirror.
+    sc["find_sheet"].return_value = 4242
+    sc["ensure_columns"].side_effect = RuntimeError("breaker open")
+    assert material_list.ensure_material_list_sheet("Job One") == 4242
+    assert any(
+        c.kwargs.get("error_code") == "material_list_column_backfill_failed"
         for c in sc["log"].call_args_list
     )
