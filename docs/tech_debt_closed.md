@@ -2124,3 +2124,51 @@ Cost at 20×20 ≈ **$610–$2,410/mo hard ≈ the Smartsheet tier decision** + 
 **Revisit when:** the 20-job ramp is scheduled (start with A1's read-only cap verification), or any Tier-A item is picked up for implementation.
 
 > **Audit 2026-07-24 (tech-debt janitorial pass):** A1-A7 shipped/verified (merged). STILL OPEN: the A8 remainder + two unverified quotas (the real Smartsheet plan sheet-cap pending a support ticket, and pooled-attachment-storage) — these residuals now live in ROADMAP.md Track 3/4, not re-duplicated here. This entry is effectively superseded-by-ROADMAP; kept as the pointer.
+
+## [RESOLVED 2026-08-10 — PR #33 `db509e4`] Track 6 archive — button + drain landed but three activation gaps remain [OPEN 2026-08-10]
+
+> **Moved from tech_debt.md 2026-08-10 (session-close).** All three gaps this entry named are now
+> closed by a live drill, not just code review:
+
+1. **`field_ops.fieldops_sync.archive_enabled` row.** Root-caused precisely as predicted —
+   `_read_bool_setting(default=False)` gated `_archive_pass` off because the row genuinely did not
+   exist (the seeder shipped in #20, `scripts/migrations/seed_daemon_gate_config.py`, had never been
+   RUN against this tenant). **Fixed:** the row was seeded `false`, then flipped `true` by explicit
+   operator direction. A second, latent blocker surfaced only once the first was cleared:
+   `field_ops.box.archive_root_folder_id` also had no row, and the "ITS Archive" Box root folder it
+   should have pointed at did not exist yet either — `build_box_roots.py` created it
+   (id `408071931845`) and the Config row was added to match.
+2. **Launchd job loaded.** Re-verified live via `launchctl list`: `org.solutionsmith.its.fieldops-sync`
+   WAS already loaded and running (~90s cycle) — this bullet's original claim ("zero ITS entries") did
+   not hold at drill time. The archive pass rides the already-running daemon; no separate plist was
+   needed.
+3. **Box leg drilled live.** With both Config rows in place and the gate flipped, the daemon picked up
+   the queued job (D1 `JOB-000030` "Production test", which had sat at `archive_state='requested'`,
+   `attempts=0` for days — see the WARN-storm findings below) on its very next cycle and completed the
+   full six-container relocation: `smartsheet:safety` + `smartsheet:progress` + `box:safety` moved
+   (the other three legs correctly reported "nothing to move" — the shared-safety-root design means one
+   Box move carries PO/RFQ/subcontracts), `archive_state='complete'`, `attempts=0`, folder ids preserved
+   (`1566626123409284`, `553426158413700`, `407341446878`).
+
+**What this drill also surfaced (filed as new issues, not fixed here — each is its own finding):**
+during the days the gate was silently off, `_archive_pass` WARNed `config_row_missing` every ~90s with
+no escalation (a WARN never triple-fires) — 3,442 occurrences sitting unread in the logs. That
+observability gap plus the drill itself produced six issues: **#24** (job-archive has no §43
+successor-remediation runbook — three failure messages in `job_archive.py` point at
+`docs/runbooks/project_closure.md`, which has no archive symptom), **#25** (no watchdog check covers a
+stale archive request), **#26** (watchdog Check P reports "fresh" through a live Box `invalid_grant`
+because it only reads local-marker age, never live auth state; separately the refresh lock in
+`box_client._store_tokens` serializes the Keychain **persist**, not the token **exchange** — two
+concurrent processes can still race a single-use refresh token), **#27** (`verify_cutover.py`, the one
+tool whose VC-03 check would have named both missing rows by name, runs nowhere — not CI, not launchd,
+not `install.sh` — this session-close entry's own generalization of that gap lives in the OPEN file as
+"seeders-are-never-run"), **#29** (`partial` is TERMINAL for the archive queue but only WARNs — the
+heartbeat's `cycle_status` sums `archive["errors"]`, not `archive["partial"]`/`["failed"]`, so a
+half-moved job leaves the daemon reporting green), **#30** (`JobArchivePanel.tsx:195` tells the operator
+"The system retries automatically" on a partial, which is false).
+
+**Fix (this entry, done):** ran the seeder-equivalent action, seeded + flipped the gate, created the
+missing Box root + Config row, drilled live end-to-end successfully. **Residual work is real and
+tracked as GitHub issues #24/#25/#26/#27/#29/#30**, not re-duplicated in this closed-entry writeup.
+
+**Tag:** `field_ops`, `archive-on-closure`, `host-migration`, `resolved`.
