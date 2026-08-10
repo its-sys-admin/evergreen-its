@@ -2537,3 +2537,81 @@ Coordinate with in-flight Worker edits before touching `index.ts`.
 **Revisit when:** the next Worker security-hardening pass, or before the subcontractor user population grows
 beyond the current pilot set. **Tag:** `safety-portal`, `security`, `authorization`, `worker`, `medium`.
 
+
+## [OPEN 2026-08-07, high] Manifest import went live with the parser-eval go-live precondition WAIVED — the parser has never run against a real document on the production host
+
+`docs/runbooks/material_manifest_import.md` (§ Go-live) lists four preconditions. Precondition **3 of 4** —
+*"Confirm a clean run of the parser eval over the sample corpus"* (expected 10/10) — **was not run** when the
+lane was activated on 2026-08-07. It was consciously waived by Seth, not overlooked: the corpus
+(`~/Desktop/evergreen project/manifests`) does not exist on the production Mac, and the offered alternatives
+(copy it across, or run it on the dev Mac at the same commit) were declined in favour of flipping
+`field_ops.manifest_poll.polling_enabled` immediately. Full narrative in
+[`docs/session_logs/2026-08-07_manifest-import-activation.md`](session_logs/2026-08-07_manifest-import-activation.md).
+
+**Why a green CI does not close this.** `tests/test_manifest_parse.py` pins the parser against grids
+*transcribed* from real documents — the right CI boundary, because the source files are customer data that must
+not enter the repo. `scripts/eval_manifest_parse.py` exists precisely to cover what that boundary cannot, and
+says so in its own docstring: *"a transcription is a model of a document, not the document."* So the suite being
+green is not evidence about pdfplumber/openpyxl behaviour on real manifests. Nothing in the repo currently
+exercises that path.
+
+**This exact failure mode has already bitten this repo once — in the adjacent lane, the same week.** PR #16
+(`4c63068`, 2026-08-07) fixed a Tier-1 column-inference bug where the `unit` keyword `"um"` matched inside
+`"Part NUMber"`, silently stealing the part-number column so `part_number` went unassigned entirely. Its own
+commit message names how it was found: *"Found by testing the xlsx tier against the REAL artifact instead of a
+synthetic fixture."* Synthetic fixtures were green the whole time. That is precisely the class the manifest eval
+exists to catch, and precisely what is currently unrun. (The manifest parser does **not** share that code —
+`field_ops/manifest_parse.py` imports only stdlib — so #16 is a *precedent*, not a suspected live defect here.)
+
+**Why real traffic has not retired it.** As of the 2026-08-10 soak re-verification the daemon had run **1791
+clean cycles across three days with every cycle all-zero** (`scanned=0 filed=0 … errors=0`) — the lane is
+healthy but has processed **zero** manifests, because nothing has been uploaded yet. The first real office
+upload will therefore be the first time the parser meets a real document on this host, *in production*, with no
+prior eval. That ordering is the actual risk, and it is why this is tagged `high` despite the daemon being
+demonstrably stable.
+
+**Fix:** run the eval and record the result. Either copy the corpus to the production Mac, or run it on the dev
+Mac against a checkout verified at commit parity (`git -C ~/its log --oneline -1`):
+
+```
+cd ~/its && .venv/bin/python -m scripts.eval_manifest_parse --corpus "$HOME/Desktop/evergreen project/manifests"
+```
+
+The script is pure and credential-free (*"Reads only. Writes nothing, uploads nothing, and needs no
+credentials... Nothing here is on the daemon path."*), so it is safe to run on either host; it validates the
+parser, not the host. **Do not** treat "the daemon has been up for N days" as satisfying this — uptime on an
+empty pool is not parser evidence.
+
+**Secondary — corpus durability.** A go-live precondition that can only be satisfied on one specific laptop is
+fragile; this activation is the proof. The corpus is customer data and correctly out of the repo, but it needs a
+durable, findable home (Box, with the runbook pointing at it) so the next operator is not blocked the same way.
+
+**Tag:** `field_ops`, `manifest-import`, `go-live`, `verification-gap`, `waived-precondition`, `high`.
+
+**Revisit when:** immediately — before the first real manifest upload, if at all possible. Otherwise at the next
+field-ops session. Close by moving to `tech_debt_closed.md` with the eval's actual pass/fail result recorded.
+
+Surfaced: 2026-08-07 manifest-import activation session; re-verified against live state 2026-08-10.
+
+## [OPEN 2026-08-07, low] Dev Mac's `ITS_PORTAL_MANIFEST_TOKEN` is superseded after the production-side rotation
+
+Activating the manifest lane on the production Mac required a Keychain twin for the Worker's
+`PORTAL_MANIFEST_API_TOKEN`, which was **absent on that host** (it existed only on the dev Mac). Because
+Cloudflare cannot read a secret back, the value was unrecoverable, so the token was **rotated on both sides**
+(Worker secret + production Keychain) rather than copied. Verified live afterwards: no bearer → `401`, wrong
+bearer → `401`, rotated bearer → `200`.
+
+**Consequence:** the dev Mac's Keychain still holds the pre-rotation value. Running `field_ops/manifest_poll.py`
+from there will `401` on every route. Nothing else is affected — this bearer is privilege-separated to
+`/api/fieldops/manifests/internal/*` (`worker/index.ts:293`, `requireManifestToken`), so no other lane, daemon,
+or token tier is touched.
+
+**Fix:** copy the current value into the dev Mac's Keychain via `shared.keychain.set_secret` (not the raw
+`security` CLI — the `/dev/tty` trap that corrupted the Box refresh token twice, and `set_secret` also defaults
+`account` to `getpass.getuser()`, matching what `get_secret` looks up).
+
+**Tag:** `field_ops`, `secrets`, `dev-host`, `low`.
+
+**Revisit when:** next time manifest work happens on the dev Mac, or at the next secrets-hygiene pass.
+
+Surfaced: 2026-08-07 manifest-import activation session.
