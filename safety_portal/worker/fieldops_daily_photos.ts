@@ -316,17 +316,74 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
 
     const actor = c.get("session").username;
 
+    // ── Optional material-line binding (0063) ────────────────────────────────────────────────
+    // Both fields are OPTIONAL: an ordinary day photo sends neither and is completely
+    // unaffected. When present they are validated HERE, against THIS job's own rows — the
+    // binding is established at upload precisely because the submission's photo refs keep their
+    // exact {pool_id, caption?} shape, so a foreign key can never ride payload_json in from the
+    // client. `parseAdditionalPhotoRefs` stays untouched.
+    //
+    // 422 rather than 400 on an unknown line/event: the body is well-formed and the caller is
+    // authorized — the referenced row simply is not on this job, which is a semantic refusal.
+    let lineUuid: string | null = null;
+    let receiptEventId: number | null = null;
+    if (body.line_uuid !== undefined && body.line_uuid !== null) {
+      if (typeof body.line_uuid !== "string" || body.line_uuid.length > 64) {
+        return c.json({ error: "invalid_line_uuid" }, 400);
+      }
+      // Scoped to this job AND active=1: binding to another job's line, or a deactivated one,
+      // must fail rather than silently store a cross-job pointer.
+      const line = await c.env.DB.prepare(
+        "SELECT id FROM job_expected_materials WHERE line_uuid = ?1 AND job_id = ?2 AND active = 1",
+      )
+        .bind(body.line_uuid, jobId)
+        .first<{ id: number }>();
+      if (!line) return c.json({ error: "unknown_material_line" }, 422);
+      lineUuid = body.line_uuid;
+
+      if (body.receipt_event_id !== undefined && body.receipt_event_id !== null) {
+        if (typeof body.receipt_event_id !== "number" || !Number.isInteger(body.receipt_event_id)) {
+          return c.json({ error: "invalid_receipt_event_id" }, 400);
+        }
+        // The event must belong to the line just resolved. Otherwise a photo could be filed
+        // against line A while pointing at an event on line B — reading as evidence for a
+        // delivery it has nothing to do with.
+        const ev = await c.env.DB.prepare(
+          "SELECT id FROM material_receipt_events WHERE id = ?1 AND line_id = ?2",
+        )
+          .bind(body.receipt_event_id, line.id)
+          .first<{ id: number }>();
+        if (!ev) return c.json({ error: "unknown_receipt_event" }, 422);
+        receiptEventId = body.receipt_event_id;
+      }
+    } else if (body.receipt_event_id !== undefined && body.receipt_event_id !== null) {
+      // An event without its line is not bindable: the line is what scopes the check to this
+      // job, so accepting the event alone would skip the only ownership test there is.
+      return c.json({ error: "receipt_event_without_line" }, 400);
+    }
+
     // Fail closed on a misconfigured Worker: never sign with an undefined secret — a signature
     // the Mac side could never verify would be silent evidence loss (mirrors /api/submit).
     if (!c.env.HMAC_PAYLOAD_SECRET) return c.json({ error: "server_misconfigured" }, 503);
     // photo_json = the EXACT stored string the HMAC covers: the wire PhotoValue + the
     // AUTHENTICATED uploader (the G1 contract — see dailyPhotoCanonical).
+    // The 0063 binding rides INSIDE photo_json so the HMAC COVERS it. A bare column would not
+    // be signature-covered, so anything trust-bearing (the Mac's screening pass, any later
+    // audit) must read the binding out of the verified photo_json — the columns below are a
+    // queryable denormalization of these exact values, never the authority.
+    //
+    // Keys are omitted entirely when unbound rather than written as null, so an ordinary day
+    // photo serializes byte-for-byte as it did before 0063 and its signature is unchanged. The
+    // Mac parses photo_json with .get() and is key-tolerant, so the added keys are backward-
+    // compatible in both directions.
     const photoJson = JSON.stringify({
       data: photo.data,
       name: photo.name,
       taken_at: photo.taken_at,
       gps: photo.gps,
       uploaded_by: actor,
+      ...(lineUuid !== null ? { line_uuid: lineUuid } : {}),
+      ...(receiptEventId !== null ? { receipt_event_id: receiptEventId } : {}),
     });
     const hmac = await hmacHex(c.env.HMAC_PAYLOAD_SECRET, dailyPhotoCanonical(jobId, workDate, photoJson));
 
@@ -343,8 +400,12 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
     const res = await c.env.DB.batch([
       c.env.DB
         .prepare(
-          `INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac)
-           SELECT ?1, ?2, ?3, 'pending', ?4, ?5
+          // The 0063 binding columns are threaded INTO this INSERT…SELECT, never written by a
+          // follow-up UPDATE: the caps ride this statement's own WHERE, so a second write would
+          // sit outside the atomic fold and could land on a row the caps had refused.
+          `INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac,
+                                         line_uuid, receipt_event_id)
+           SELECT ?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7
            WHERE (SELECT COUNT(*) FROM daily_photo_pool
                   WHERE job_id = ?1 AND work_date = ?2 AND uploaded_by = ?3 AND status != 'refused')
                  < ${POOL_CAP_PER_DAY}
@@ -352,7 +413,7 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
                  < ${POOL_PENDING_GLOBAL_MAX}
            RETURNING id`,
         )
-        .bind(jobId, workDate, actor, photoJson, hmac),
+        .bind(jobId, workDate, actor, photoJson, hmac, lineUuid, receiptEventId),
       auditStmtIfChanged(c, actor, "daily_photo_add", jobId, {
         job_id: jobId,
         work_date: workDate,
