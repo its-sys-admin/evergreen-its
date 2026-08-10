@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, get, post, seedJob, seedPersonnel, json } from "./helpers";
-import { POOL_CAP_PER_DAY, POOL_PENDING_GLOBAL_MAX } from "../worker/fieldops_daily_photos";
+import {
+  POOL_CAP_PER_DAY,
+  POOL_PENDING_GLOBAL_MAX,
+  parseAdditionalPhotoRefs,
+} from "../worker/fieldops_daily_photos";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DR-photo-pool Slice 1 — the daily-report additional-photo POOL + the /api/submit claim.
@@ -724,5 +728,152 @@ describe("DR S2 — GET /api/internal/pending carries the daily-photo claim mani
     const byId = new Map(withRefs.daily_photos.map((m) => [m.id, m]));
     expect(byId.get(p1)).toMatchObject({ status: "clean", box_file_id: "box-7" });
     expect(byId.get(p2)).toMatchObject({ status: "pending", box_file_id: null });
+  });
+});
+
+// ── 0062: optional material-line binding ────────────────────────────────────────────────────
+// The binding is established at UPLOAD and validated against the job's own rows, because the
+// submission's photo refs keep their exact {pool_id, caption?} shape — a foreign key must never
+// be able to ride payload_json in from the client.
+
+/** Seed an ACTIVE expected-material line on `jobId`; returns its id + line_uuid. */
+async function seedLine(
+  jobId: string,
+  opts: { active?: 0 | 1 } = {},
+): Promise<{ id: number; line_uuid: string }> {
+  const lineUuid = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO job_expected_materials (job_id, description, qty, unit, status, seq, active, line_uuid)
+     VALUES (?,?,?,?,?,?,?,?)`,
+  )
+    .bind(jobId, "piles", 40, "ea", "expected", 0, opts.active ?? 1, lineUuid)
+    .run();
+  const row = (await env.DB.prepare("SELECT id FROM job_expected_materials WHERE line_uuid=?")
+    .bind(lineUuid)
+    .first<{ id: number }>())!;
+  return { id: row.id, line_uuid: lineUuid };
+}
+
+async function seedReceiptEvent(lineId: number, jobId: string): Promise<number> {
+  await env.DB.prepare(
+    `INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, qty, actor)
+     VALUES (?,?,?,?,?,?)`,
+  )
+    .bind(crypto.randomUUID(), lineId, jobId, "partial", 10, "mgr.mo")
+    .run();
+  const row = (await env.DB.prepare(
+    "SELECT id FROM material_receipt_events WHERE line_id=? ORDER BY id DESC LIMIT 1",
+  )
+    .bind(lineId)
+    .first<{ id: number }>())!;
+  return row.id;
+}
+
+describe("daily photo — material-line binding (0062)", () => {
+  it("an unbound photo stores NULL binding columns and omits the keys from photo_json", async () => {
+    // The backward-compatibility assertion: an ordinary day photo must serialize exactly as it
+    // did before 0062, or every pre-existing signature would change meaning.
+    const id = await uploadOk(manager);
+    const row = (await env.DB.prepare(
+      "SELECT line_uuid, receipt_event_id, photo_json FROM daily_photo_pool WHERE id=?",
+    )
+      .bind(id)
+      .first<{ line_uuid: string | null; receipt_event_id: number | null; photo_json: string }>())!;
+    expect(row.line_uuid).toBeNull();
+    expect(row.receipt_event_id).toBeNull();
+    const parsed = JSON.parse(row.photo_json) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["data", "gps", "name", "taken_at", "uploaded_by"],
+    );
+  });
+
+  it("binds a line, stores it in the column AND inside the HMAC-covered photo_json", async () => {
+    const line = await seedLine("JOB-A");
+    const id = await uploadOk(manager, { line_uuid: line.line_uuid });
+    const row = (await env.DB.prepare(
+      "SELECT line_uuid, photo_json, hmac FROM daily_photo_pool WHERE id=?",
+    )
+      .bind(id)
+      .first<{ line_uuid: string; photo_json: string; hmac: string }>())!;
+    expect(row.line_uuid).toBe(line.line_uuid);
+    // The column is a denormalization; the AUTHORITY is the signed photo_json.
+    const parsed = JSON.parse(row.photo_json) as Record<string, unknown>;
+    expect(parsed.line_uuid).toBe(line.line_uuid);
+    // …and the signature actually covers it: recomputing over the stored string matches.
+    const expected = await hmacHexTest(
+      "test-hmac-payload-secret",
+      ["daily_photo:v1", "JOB-A", DATE, row.photo_json].join("\n"),
+    );
+    expect(row.hmac).toBe(expected);
+  });
+
+  it("422 unknown_material_line for a line on ANOTHER job (no cross-job pointer)", async () => {
+    const other = await seedLine("JOB-B");
+    const res = await upload(manager, { line_uuid: other.line_uuid });
+    expect(res.status).toBe(422);
+    expect((await json<{ error: string }>(res)).error).toBe("unknown_material_line");
+    expect(await poolRows()).toHaveLength(0); // refused BEFORE the insert
+  });
+
+  it("422 unknown_material_line for a DEACTIVATED line", async () => {
+    const dead = await seedLine("JOB-A", { active: 0 });
+    const res = await upload(manager, { line_uuid: dead.line_uuid });
+    expect(res.status).toBe(422);
+    expect((await json<{ error: string }>(res)).error).toBe("unknown_material_line");
+  });
+
+  it("422 unknown_material_line for a line that does not exist at all", async () => {
+    const res = await upload(manager, { line_uuid: crypto.randomUUID() });
+    expect(res.status).toBe(422);
+  });
+
+  it("binds a receipt event that belongs to the line", async () => {
+    const line = await seedLine("JOB-A");
+    const evId = await seedReceiptEvent(line.id, "JOB-A");
+    const id = await uploadOk(manager, { line_uuid: line.line_uuid, receipt_event_id: evId });
+    const row = (await env.DB.prepare(
+      "SELECT receipt_event_id, photo_json FROM daily_photo_pool WHERE id=?",
+    )
+      .bind(id)
+      .first<{ receipt_event_id: number; photo_json: string }>())!;
+    expect(row.receipt_event_id).toBe(evId);
+    expect((JSON.parse(row.photo_json) as Record<string, unknown>).receipt_event_id).toBe(evId);
+  });
+
+  it("422 unknown_receipt_event when the event belongs to a DIFFERENT line", async () => {
+    // Otherwise a photo files against line A while pointing at an event on line B — reading as
+    // evidence for a delivery it has nothing to do with.
+    const lineA = await seedLine("JOB-A");
+    const lineB = await seedLine("JOB-A");
+    const evOnB = await seedReceiptEvent(lineB.id, "JOB-A");
+    const res = await upload(manager, { line_uuid: lineA.line_uuid, receipt_event_id: evOnB });
+    expect(res.status).toBe(422);
+    expect((await json<{ error: string }>(res)).error).toBe("unknown_receipt_event");
+  });
+
+  it("400 receipt_event_without_line — an event alone skips the only ownership check", async () => {
+    const line = await seedLine("JOB-A");
+    const evId = await seedReceiptEvent(line.id, "JOB-A");
+    const res = await upload(manager, { receipt_event_id: evId });
+    expect(res.status).toBe(400);
+    expect((await json<{ error: string }>(res)).error).toBe("receipt_event_without_line");
+  });
+
+  it("400 on a malformed line_uuid / receipt_event_id (shape before semantics)", async () => {
+    expect((await upload(manager, { line_uuid: 42 })).status).toBe(400);
+    expect((await upload(manager, { line_uuid: "x".repeat(65) })).status).toBe(400);
+    const line = await seedLine("JOB-A");
+    expect(
+      (await upload(manager, { line_uuid: line.line_uuid, receipt_event_id: "1" })).status,
+    ).toBe(400);
+  });
+
+  it("the submission ref shape is UNCHANGED — a line_uuid on a ref is still rejected", async () => {
+    // The binding lives at upload precisely so this stays closed. If this ever loosens, an
+    // attacker-controlled foreign key rides payload_json into a filed submission.
+    const refs = parseAdditionalPhotoRefs({
+      additional_photos: [{ pool_id: 1, line_uuid: "anything" }],
+    });
+    expect(refs).toBe("ref_unknown_key");
   });
 });

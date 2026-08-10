@@ -209,6 +209,18 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_event_date: "That isn't a valid delivery date.",
   invalid_shipment_id: "That load isn't on this material line — pick one of its own loads.",
   invalid_line_id: "That material line no longer exists — refresh and try again.",
+  // ── daily-photo → material-line binding (0062) ───────────────────────────────────────────────
+  // Deliberately DISTINCT codes from invalid_line_id above: that one means "the line you are
+  // marking vanished", these mean "the photo could not be attached to that line". Related cause,
+  // different thing the field user has to actually do about it.
+  unknown_material_line:
+    "That material line isn't on this job any more — refresh, then attach the photo again.",
+  unknown_receipt_event:
+    "That delivery record isn't on this material line — refresh and attach the photo again.",
+  receipt_event_without_line:
+    "A delivery photo has to say which material it's for. Pick the line, then attach it again.",
+  invalid_line_uuid: "That material line reference isn't valid — refresh and try again.",
+  invalid_receipt_event_id: "That delivery reference isn't valid — refresh and try again.",
   duplicate_event:
     "That delivery was already recorded — refresh to see it.",
   invalid_category: "The category is too long (64 characters max).",
