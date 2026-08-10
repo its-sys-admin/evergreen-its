@@ -122,7 +122,7 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Safety Portal M7 — publish daemon runs destructive git on live ~/its tree — Still runs git clean/checkout on the live tree without worktree isolation; daemon-hardening code change. Trigger: next publish-daemon hardening; before cutover.
 - Safety Portal — Worker-side capability-gate for TS not covered by Python AST gate — Still no TS capability-gate (grep: no eslint no-restricted / no .ts coverage in test_capability_gating.py); duplicate of the later ts-sendgate entry — revisit when Worker gains outbound code path.
 - safety_reports week-folder create-find race condition — Rare at single-machine cadence; WARN+operator-visibility preferred over auto-clean. Trigger: race observed in practice (multi-machine ops).
-- SDK-vs-live body-shape mismatches need integration coverage — Mitigation landed (test_smartsheet_client_integration.py); kept open as standing pattern-to-extend reminder for new SDK wrappers.
+- SDK-vs-live body-shape mismatches need integration coverage — **ARCHIVED 2026-08-10** → `tech_debt_closed.md`. The mitigation generalised to 20 `test_*_integration.py` wrappers, and the standing reminder is now canonical doctrine (HOUSE_REFLEXES §2) plus the `sdk-integration-test-scaffold` agent — a duplicate reflex, not live debt.
 - Severity-tiered + multi-recipient alert routing — Phase 2 post-Customer-1; single-recipient ITS_Config routing is adequate for the solo/Customer-0 stage — trigger = team expansion or Customer 2 onboarding.
 - Smartsheet API constraint: AUTO_NUMBER columns rejected at sheet creation — Permanent platform constraint with row-ID workaround ("likely never"); reference note. Trigger: a workstream needs user-visible auto-IDs.
 - Smartsheet API constraint: column FORMAT must be set via model attribute, not dict constructor — Documented SDK-vs-live reference gotcha; apply_column_styles already uses the attribute path — revisit only when new column-format code is written.
@@ -134,7 +134,7 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Summary email content depth (filter-criteria vs inline correlation IDs) — Pull-from-SoR design accepted; schema upgrade deferred. Trigger: open-summary→open-ITS_Errors friction becomes frequent.
 - weekly_send upload-session chunk-retry hardening (deferred) — Cross-cycle session-resume/cancel deferred, restart-from-zero cheap today; revisit on recurring mid-upload failures or packets nearing the 150 MB ceiling.
 - weekly_send upload-session threshold = 2.5 MB (heuristic, not measured) — Send-path threshold tuning against the live tenant; revisit when the first live photo packet crosses ~2.5 MB or a graph_error cluster appears near 3 MB.
-- Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate) — Confirmed no TS send-gate CI rule exists; Worker stays send-free by design — add fetch-allowlist grep/ESLint when it gains an outbound path or at deploy hardening.
+- Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate) — **ARCHIVED 2026-08-10** → `tech_debt_closed.md`. The "no TS send-gate CI rule exists" claim went stale: `tests/test_worker_send_free.py` (PR #393 / `6dc0431`) is a CI-collected grep forbidding any `fetch(` in `safety_portal/worker/**` except `ASSETS.fetch(` — exactly the allowlist this entry proposed. See entry 123 for the residual it does NOT cover (import-level gating).
 - §6a enablement-doc DoD owed per Progress-Reporting slice — PARTIALLY_MITIGATED — manifest pipeline now exists; residual = retire in-doc TODOs, add material_catalog guide, D2-2/D2-3 content. Trigger: each Progress-Reporting slice brief.
 
 ---
@@ -1229,26 +1229,6 @@ Surfaced: PR β (watchdog summary sweep) brief, 2026-05-20.
 
 Surfaced: Picklist sync hardening review, 2026-05-20.
 
-## SDK-vs-live body-shape mismatches need integration coverage [OPEN 2026-05-20]
-
-PRs #47/#48/#49 each surfaced one body-shape mismatch the Smartsheet SDK accepted silently but the live API rejected, in successive iterations:
-
-- **PR #47**: `id` in body — errorCode 1032 ("attribute(s) column.id are not allowed for this operation").
-- **PR #48**: `type` missing from body — errorCode 1090 ("Column.type is required when changing options").
-- **PR #49**: `type` present but wrapped as `EnumeratedValue`, SDK silently strips it — wire body becomes `{"options": [...]}` with no `type`, API rejects same as #48.
-
-Class of bug: `SimpleNamespace`-based mocks at the SDK boundary don't enforce the live API's contract on body shape, required fields, or value wrapping. Mock tests passed; live calls failed.
-
-**Mitigation landed in this PR (2026-05-21):** `tests/test_smartsheet_client_integration.py` runs create → list → update → delete round-trips against live sandbox sheets. Registered as `@pytest.mark.integration`; default `pytest` skips them (pyproject.toml `addopts = -m 'not integration'`). Operator runs `pytest -m integration` pre-deployment after any `shared/smartsheet_client.py` or `shared/picklist_sync.py` change.
-
-**Pattern to extend:** any future `shared/*` SDK wrapper that exercises a non-trivial verb (update/create/delete) on typed columns or rows should gain a parallel integration test. The pattern: create the minimum live state required, exercise the verb, assert post-state, tear down in `finally`.
-
-**Urgency:** addressed. Note kept open for visibility — any new wrapper that lands without parallel integration coverage re-introduces the class of bug.
-
-Surfaced: PR #46 → #47 → #48 → #49 iteration, 2026-05-20/21.
-
-> **Audit 2026-07-24 (tech-debt janitorial pass):** Concrete debt RESOLVED — live-API integration coverage exists (tests/test_smartsheet_client_integration.py + parallel coverage for every in-scope shared/* wrapper, @pytest.mark.integration, skipped by default). What remains is only a standing forward-guard, now canonical in HOUSE_REFLEXES §2 — a candidate to close as a duplicate reflex rather than a live gap.
-
 ## Smartsheet UI-only constraints (Forms, CF, Filter Views, Restrict-to-dropdown) [OPEN]
 
 Several Smartsheet features are exposed only through the Smartsheet web UI and have NO REST/SDK surface — meaning Claude Code can NOT provision, audit, or sync these per-customer settings during deployment. Operator must configure each manually at deployment time and document the choices.
@@ -1655,28 +1635,6 @@ The parent/variant mechanism is built (ITS_Forms_Catalog `Parent Form` + `Varian
 **Revisit when:** PM identifies a job with site-specific JHA requirements.
 
 Surfaced: 2026-06-05 Safety Portal Phase 4 PR 1 session (PR #164). Related: `safety_portal/forms/meta-schema.json` `variantOf`, ITS_Forms_Catalog `Parent Form`/`Variant Tag` columns.
-
-## [OPEN] Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate)
-
-**What:** `tests/test_capability_gating.py` enforces Invariant 1 (no send capability on
-generation scripts; no AI on send scripts) by AST-scanning Python under `shared/` +
-`safety_reports/`. It does NOT reach the TypeScript Cloudflare Worker
-(`safety_portal/worker/`). As of Phase 5 PR 2 the Worker holds the HMAC signing secret +
-the internal bearer token, so it is no longer trivially "send-free by binding-absence" —
-its send-free posture rests on code review + the module docstring only. The **pull model**
-keeps the Worker send-free by design (it serves a queue + accepts a receipt; it never
-initiates outbound), but nothing structurally PREVENTS a future Worker edit from acquiring
-an outbound `fetch()` to an external host.
-
-**Fix (when the Worker surface grows):** add a CI grep / ESLint rule forbidding `fetch(` in
-`safety_portal/worker/` except to an allowlist (the ASSETS binding), as the TS-side
-equivalent of `test_capability_gating.py`. Surfaced by `ops-stds-enforcer` (W2).
-
-**Tag:** `safety-portal`, `security`, `invariant-1`, `phase-5`, `medium`.
-
-**Revisit when:** the Worker gains any new outbound-capable code path, or at the deploy hardening pass.
-
-Surfaced: 2026-06-05 Safety Portal Phase 5 PR 2 (transport queue).
 
 ## [OPEN — production-tenant pending; sandbox RESOLVED 2026-07-22] Safety Portal Phase 5 — deploy prerequisites (was CUTOVER-BLOCKING, OPEN 2026-06-05)
 

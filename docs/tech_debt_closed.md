@@ -2127,8 +2127,19 @@ Cost at 20×20 ≈ **$610–$2,410/mo hard ≈ the Smartsheet tier decision** + 
 
 ## [RESOLVED 2026-08-10 — PR #33 `db509e4`] Track 6 archive — button + drain landed but three activation gaps remain [OPEN 2026-08-10]
 
-> **Moved from tech_debt.md 2026-08-10 (session-close).** All three gaps this entry named are now
-> closed by a live drill, not just code review:
+> **Moved from tech_debt.md 2026-08-10 (session-close).** Gaps 1 and 2 are closed by a live drill,
+> not just code review. **Gap 3 is closed only HALF-WAY** — see the correction below it.
+>
+> **CORRECTION, same day.** An adversarial re-check of this archival caught that the first pass
+> over-claimed. Gap 3 as originally written read *"The Box leg has never been drilled live, **either
+> direction**"*, and the drill exercised the **archive** direction only. The RESTORE (un-archive)
+> direction remains undrilled on both systems, on every tenant — and it is not a symmetry freebie:
+> the Smartsheet two-call order INVERTS per direction (archive move→rename, restore rename→move),
+> and restore has its own no-create probe, label-then-key search, and live-collision refusal. It is
+> operator-reachable today. No other tech-debt entry covered it, so archiving this one whole would
+> have destroyed the only record. **That residual now lives as issue #42** — this entry is retained
+> here for the two gaps it genuinely closed, and must not be read as proof the archive works in both
+> directions.
 
 1. **`field_ops.fieldops_sync.archive_enabled` row.** Root-caused precisely as predicted —
    `_read_bool_setting(default=False)` gated `_archive_pass` off because the row genuinely did not
@@ -2172,3 +2183,69 @@ missing Box root + Config row, drilled live end-to-end successfully. **Residual 
 tracked as GitHub issues #24/#25/#26/#27/#29/#30**, not re-duplicated in this closed-entry writeup.
 
 **Tag:** `field_ops`, `archive-on-closure`, `host-migration`, `resolved`.
+
+## [RESOLVED 2026-08-10 — duplicate reflex] SDK-vs-live body-shape mismatches need integration coverage [OPEN 2026-05-20]
+
+> **Moved from tech_debt.md 2026-08-10 (session-close trim).** Closed as a DUPLICATE REFLEX,
+> not as unfinished work. The named mitigation generalised well beyond the original scope —
+> `tests/test_smartsheet_client_integration.py` plus 19 sibling `test_*_integration.py`
+> wrappers (box_client, active_jobs_writer, portal_client, weekly_send, …), all
+> `@pytest.mark.integration` and deselected by default. The entry's own in-place 2026-07-24
+> audit note already read "Concrete debt RESOLVED … what remains is only a standing
+> forward-guard". That guard is now canonical in HOUSE_REFLEXES §2 and automated by the
+> `sdk-integration-test-scaffold` agent, so keeping it here duplicated doctrine.
+
+PRs #47/#48/#49 each surfaced one body-shape mismatch the Smartsheet SDK accepted silently but the live API rejected, in successive iterations:
+
+- **PR #47**: `id` in body — errorCode 1032 ("attribute(s) column.id are not allowed for this operation").
+- **PR #48**: `type` missing from body — errorCode 1090 ("Column.type is required when changing options").
+- **PR #49**: `type` present but wrapped as `EnumeratedValue`, SDK silently strips it — wire body becomes `{"options": [...]}` with no `type`, API rejects same as #48.
+
+Class of bug: `SimpleNamespace`-based mocks at the SDK boundary don't enforce the live API's contract on body shape, required fields, or value wrapping. Mock tests passed; live calls failed.
+
+**Mitigation landed in this PR (2026-05-21):** `tests/test_smartsheet_client_integration.py` runs create → list → update → delete round-trips against live sandbox sheets. Registered as `@pytest.mark.integration`; default `pytest` skips them (pyproject.toml `addopts = -m 'not integration'`). Operator runs `pytest -m integration` pre-deployment after any `shared/smartsheet_client.py` or `shared/picklist_sync.py` change.
+
+**Pattern to extend:** any future `shared/*` SDK wrapper that exercises a non-trivial verb (update/create/delete) on typed columns or rows should gain a parallel integration test. The pattern: create the minimum live state required, exercise the verb, assert post-state, tear down in `finally`.
+
+**Urgency:** addressed. Note kept open for visibility — any new wrapper that lands without parallel integration coverage re-introduces the class of bug.
+
+Surfaced: PR #46 → #47 → #48 → #49 iteration, 2026-05-20/21.
+
+> **Audit 2026-07-24 (tech-debt janitorial pass):** Concrete debt RESOLVED — live-API integration coverage exists (tests/test_smartsheet_client_integration.py + parallel coverage for every in-scope shared/* wrapper, @pytest.mark.integration, skipped by default). What remains is only a standing forward-guard, now canonical in HOUSE_REFLEXES §2 — a candidate to close as a duplicate reflex rather than a live gap.
+
+## [RESOLVED 2026-08-10 — PR #393 `6dc0431`] [OPEN] Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate)
+
+> **Moved from tech_debt.md 2026-08-10 (session-close trim).** Closed by
+> `tests/test_worker_send_free.py` (PR #393 / `6dc0431`): a CI-collected test that greps every
+> `safety_portal/worker/**/*.ts` and fails on any `fetch(` other than `ASSETS.fetch(` — exactly
+> the allowlist grep this entry proposed. It carries no pytest marker, so it runs in the
+> blocking `test` job.
+>
+> **Scope caveat, recorded deliberately.** This closes the outbound-`fetch` vector ONLY. It is a
+> line-regex forbidden-CALL grep, NOT the AST forbidden-IMPORT gate that
+> `tests/test_capability_gating.py` applies to Python — which still excludes `safety_portal`
+> entirely. Import-shaped egress (`cloudflare:email` + a send binding, `cloudflare:sockets` /
+> `node:net` `connect()` under the enabled `nodejs_compat` flag) remains ungated, and the regex
+> is evadable by aliasing. That residual stays OPEN in tech_debt.md as the sibling
+> "Safety Portal — Worker-side capability-gate for TS" entry; do not read this closure as
+> covering it.
+
+**What:** `tests/test_capability_gating.py` enforces Invariant 1 (no send capability on
+generation scripts; no AI on send scripts) by AST-scanning Python under `shared/` +
+`safety_reports/`. It does NOT reach the TypeScript Cloudflare Worker
+(`safety_portal/worker/`). As of Phase 5 PR 2 the Worker holds the HMAC signing secret +
+the internal bearer token, so it is no longer trivially "send-free by binding-absence" —
+its send-free posture rests on code review + the module docstring only. The **pull model**
+keeps the Worker send-free by design (it serves a queue + accepts a receipt; it never
+initiates outbound), but nothing structurally PREVENTS a future Worker edit from acquiring
+an outbound `fetch()` to an external host.
+
+**Fix (when the Worker surface grows):** add a CI grep / ESLint rule forbidding `fetch(` in
+`safety_portal/worker/` except to an allowlist (the ASSETS binding), as the TS-side
+equivalent of `test_capability_gating.py`. Surfaced by `ops-stds-enforcer` (W2).
+
+**Tag:** `safety-portal`, `security`, `invariant-1`, `phase-5`, `medium`.
+
+**Revisit when:** the Worker gains any new outbound-capable code path, or at the deploy hardening pass.
+
+Surfaced: 2026-06-05 Safety Portal Phase 5 PR 2 (transport queue).
