@@ -978,6 +978,10 @@ def _mat_row(line_uuid: str = "u-10", job_id: str = "JOB-1", **over: Any) -> dic
         "note": None,
         "unplanned": 0,
         "seq": 10,
+        # 0059 additions — projected by the snapshot route from PR4 on.
+        "part_number": "7000153",
+        "category": "HARDWARE",
+        "expected_ship_date": "2026-07-02",
     }
     e.update(over)
     return e
@@ -1044,6 +1048,30 @@ def test_material_free_text_line_maps_placeholder_and_primary(_patch):
     assert kw["line"] == "Rebar bundles"
     assert kw["material"] == fieldops_sync.material_list.MATERIAL_NONE
     assert kw["unplanned"] == fieldops_sync.material_list.UNPLANNED_YES
+
+
+def test_material_0059_columns_are_mirrored(_patch):
+    _patch["materials_enabled"].return_value = True
+    _patch["material_snapshot"].return_value = _mat_snap([_mat_row("u-10")])
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_mat"].call_args.kwargs
+    assert kw["part_number"] == "7000153"
+    assert kw["category"] == "HARDWARE"
+    # SHIP vs DELIVERY are two separate fields; 0059 keeps expected_date meaning DELIVERY.
+    assert kw["expected_ship_date"] == "2026-07-02"
+    assert kw["expected_date"] == "2026-07-10"
+    assert kw["expected_ship_date"] != kw["expected_date"]
+
+
+def test_material_pre_0059_line_maps_new_columns_blank(_patch):
+    # A line written before the migration projects NULL for all three — blank cells, not a crash.
+    _patch["materials_enabled"].return_value = True
+    _patch["material_snapshot"].return_value = _mat_snap(
+        [_mat_row("u-10", part_number=None, category=None, expected_ship_date=None)]
+    )
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_mat"].call_args.kwargs
+    assert kw["part_number"] == "" and kw["category"] == "" and kw["expected_ship_date"] == ""
 
 
 def test_material_retire_uses_full_snapshot_not_just_succeeded(_patch):

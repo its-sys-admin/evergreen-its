@@ -192,8 +192,10 @@ export function JobArchivePanel({
               </>
             )}
             <div className="muted">
-              The system retries automatically. If it keeps failing, check <code>ITS_Errors</code>{" "}
-              and see the project-closure runbook — do not drag the folders by hand.
+              <strong>This will not retry on its own</strong> — press “Try again” to resume it.
+              The office Mac only picks up archives that are still in progress, so a stopped one
+              waits for you. If it keeps failing, check <code>ITS_Errors</code> and see the
+              project-closure runbook — do not drag the folders by hand.
             </div>
           </div>
           <div className="dash-row">

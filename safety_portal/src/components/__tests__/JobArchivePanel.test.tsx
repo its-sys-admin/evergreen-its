@@ -145,6 +145,21 @@ describe("JobArchivePanel — a partial must be legible without opening logs", (
     show(archiveBlock({ state: "partial", direction: "archive", containers: CONTAINERS }));
     expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
   });
+
+  it.each(["partial", "failed"] as const)(
+    "tells the operator a %s does NOT retry on its own",
+    (state) => {
+      // The queue route serves only archive_state IN ('requested','in_progress'), so 'partial'
+      // and 'failed' are TERMINAL for the daemon — the row leaves the queue and nothing picks it
+      // up again. This copy previously said "The system retries automatically", which sent the
+      // operator away from the one control that resumes it while their job sat half-relocated
+      // across two external systems.
+      show(archiveBlock({ state, direction: "archive", containers: CONTAINERS.map((c) => ({ ...c, moved: false })) }));
+      const alert = screen.getByRole("alert").textContent ?? "";
+      expect(alert).toMatch(/will not retry on its own/i);
+      expect(alert).not.toMatch(/retries automatically/i);
+    },
+  );
 });
 
 describe("JobArchivePanel — the request is gated on the typed confirmation", () => {

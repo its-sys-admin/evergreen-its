@@ -343,7 +343,10 @@ def test_sandbox_degrade_refuses_as_unreadable_not_as_a_security_event(_patch):
     assert _logs(_patch, Severity.WARN, "manifest_unreadable")
     assert not _logs(_patch, Severity.CRITICAL)
     assert _patch["review"].call_args.kwargs["reason"] is ReviewReason.POLICY_EDGE
-    assert "security_flag" not in _patch["review"].call_args.kwargs
+    # Falsy, not absent: the fence now routes through review_queue.safe_add, which
+    # forwards security_flag explicitly (default False). The assertion's intent —
+    # "this is not a security event" — is unchanged.
+    assert not _patch["review"].call_args.kwargs.get("security_flag")
     assert _patch["post_result"].call_args.kwargs["detail"] == "extract_failed"
     _patch["upload"].assert_not_called()
 

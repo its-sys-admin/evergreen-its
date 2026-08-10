@@ -2314,7 +2314,11 @@ app.get("/api/internal/fieldops/equipment-snapshot", requireFieldopsToken, async
  *     route) → `catalog_name` = the catalog model_id for a catalog-picked line, NULL for free-text;
  *   - `received_by_display` resolves the stored ACCOUNT username → the personnel DISPLAY NAME only
  *     (House Reflex §5 / W9 — an unmatched account yields NULL, the raw username never leaves the
- *     Worker), resolved EXACTLY as the expected-materials read route resolves received_by.
+ *     Worker), resolved EXACTLY as the expected-materials read route resolves received_by;
+ *   - `part_number` / `category` / `expected_ship_date` (0059). 0059 deliberately left this route on
+ *     pre-0059 columns and deferred their mirror exposure to PR4 — this is that exposure.
+ *     `expected_ship_date` is the SHIP date; `expected_date` keeps its 0031 meaning of expected
+ *     DELIVERY, which is why both are projected rather than one replacing the other.
  *
  * Read-only; FULLY bound (the single `'active'` literal is bound as ?1 for trust-boundary hygiene
  * even though the route takes NO client input); leaks nothing beyond the projected fields. NOT
@@ -2337,6 +2341,7 @@ app.get("/api/internal/fieldops/material-list-snapshot", requireFieldopsToken, a
         `SELECT jem.line_uuid, jem.job_id, j.project_name, jem.material_id,
                 (SELECT mc.model_id FROM material_catalog mc WHERE mc.id = jem.material_id) AS catalog_name,
                 jem.description, jem.qty, jem.unit, jem.expected_date, jem.status,
+                jem.part_number, jem.category, jem.expected_ship_date,
                 jem.received_at, jem.qty_received,
                 (SELECT p.name FROM personnel p WHERE p.username = jem.received_by ORDER BY p.id ASC LIMIT 1)
                   AS received_by_display,

@@ -528,6 +528,26 @@ def _reset_pending_fetch_failures() -> None:
         pass
 
 
+def _cycle_error_summary(
+    total_errors: int, total_reviewed: int, stopped_archives: int
+) -> str | None:
+    """The `ITS_Daemon_Health` Error Summary cell for one cycle, or None when there is nothing to say.
+
+    A stopped archive is called out BY NAME rather than folded into the errors count, because the
+    two need different things from the operator. An `errors=` count means "the daemon hit failures;
+    it will try again next cycle". A stopped archive means "a job is half-relocated across two
+    external systems and NOTHING will resume it until you press Archive again" — the queue serves
+    only `requested`/`in_progress`, so there is no next cycle for it. A number that reads like the
+    self-healing kind would send the operator right past the kind that isn't.
+    """
+    if total_errors == 0 and total_reviewed == 0:
+        return None
+    summary = f"errors={total_errors} reviewed={total_reviewed}"
+    if stopped_archives:
+        summary += f" — {stopped_archives} archive(s) STOPPED, will not resume without a re-press"
+    return summary
+
+
 def _sync_inside_lock() -> SyncStats:
     """Body of sync_once running under the file lock."""
     creds = _resolve_credentials()
@@ -677,9 +697,23 @@ def _sync_inside_lock() -> SyncStats:
         archive = _archive_pass(base_url, bearer)
 
     _write_heartbeat()
+    # A `partial` or `failed` archive counts as an ERROR for the cycle, not merely an outcome.
+    #
+    # This is not bookkeeping pedantry. Those two states are TERMINAL for the daemon — the queue
+    # route serves only `archive_state IN ('requested','in_progress')`, so a stopped archive leaves
+    # the queue and NOTHING picks it up again until a human presses Archive. Until 2026-08-10 they
+    # were tallied only into `archive["partial"]`/`["failed"]`, which fed `items_processed` and
+    # never `total_errors` — so a job left half-relocated across Smartsheet AND Box reported
+    # `cycle_status="OK"` and a green heartbeat, with a single WARN row as the only trace. The one
+    # archive outcome that always needs a human was the one outcome nothing surfaced.
+    #
+    # `archive["errors"]` alone is not sufficient: it counts the pass's own failures (queue fetch,
+    # pre-flight, a raising job), not a relocation that ran to completion and came up short.
+    stopped_archives = archive["partial"] + archive["failed"]
     total_errors = (
         counters["errors"] + hours["errors"] + equip["errors"] + materials["errors"]
         + incidents["errors"] + receipts["errors"] + archive["errors"]
+        + stopped_archives
     )
     total_reviewed = (
         counters["reviewed"] + hours["reviewed"] + equip["reviewed"] + materials["reviewed"]
@@ -702,11 +736,7 @@ def _sync_inside_lock() -> SyncStats:
                 + materials["upserted"] + incidents["upserted"] + receipts["upserted"]
                 + archive["complete"] + archive["partial"]
             ),
-            error_summary=(
-                None
-                if total_errors == 0 and total_reviewed == 0
-                else f"errors={total_errors} reviewed={total_reviewed}"
-            ),
+            error_summary=_cycle_error_summary(total_errors, total_reviewed, stopped_archives),
         )
     except Exception as exc:  # noqa: BLE001 — heartbeat must never block
         error_log.log(
@@ -1666,6 +1696,12 @@ def _reconcile_job_with_materials(
                 received_by=str(e.get("received_by_display") or "").strip(),
                 note=str(e.get("note") or "").strip(),
                 unplanned=material_list.UNPLANNED_YES if e.get("unplanned") else "",
+                # 0059 line additions. `expected_ship_date` is the SHIP date — deliberately NOT the
+                # same field as `expected_date` above, which is the expected DELIVERY date; both are
+                # mirrored because the office schedules against one and receives against the other.
+                part_number=str(e.get("part_number") or "").strip(),
+                category=str(e.get("category") or "").strip(),
+                expected_ship_date=str(e.get("expected_ship_date") or "").strip(),
             )
             out["upserted"] += 1
         except (

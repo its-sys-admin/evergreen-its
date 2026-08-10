@@ -122,7 +122,7 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Safety Portal M7 — publish daemon runs destructive git on live ~/its tree — Still runs git clean/checkout on the live tree without worktree isolation; daemon-hardening code change. Trigger: next publish-daemon hardening; before cutover.
 - Safety Portal — Worker-side capability-gate for TS not covered by Python AST gate — Still no TS capability-gate (grep: no eslint no-restricted / no .ts coverage in test_capability_gating.py); duplicate of the later ts-sendgate entry — revisit when Worker gains outbound code path.
 - safety_reports week-folder create-find race condition — Rare at single-machine cadence; WARN+operator-visibility preferred over auto-clean. Trigger: race observed in practice (multi-machine ops).
-- SDK-vs-live body-shape mismatches need integration coverage — Mitigation landed (test_smartsheet_client_integration.py); kept open as standing pattern-to-extend reminder for new SDK wrappers.
+- SDK-vs-live body-shape mismatches need integration coverage — **ARCHIVED 2026-08-10** → `tech_debt_closed.md`. The mitigation generalised to 20 `test_*_integration.py` wrappers, and the standing reminder is now canonical doctrine (HOUSE_REFLEXES §2) plus the `sdk-integration-test-scaffold` agent — a duplicate reflex, not live debt.
 - Severity-tiered + multi-recipient alert routing — Phase 2 post-Customer-1; single-recipient ITS_Config routing is adequate for the solo/Customer-0 stage — trigger = team expansion or Customer 2 onboarding.
 - Smartsheet API constraint: AUTO_NUMBER columns rejected at sheet creation — Permanent platform constraint with row-ID workaround ("likely never"); reference note. Trigger: a workstream needs user-visible auto-IDs.
 - Smartsheet API constraint: column FORMAT must be set via model attribute, not dict constructor — Documented SDK-vs-live reference gotcha; apply_column_styles already uses the attribute path — revisit only when new column-format code is written.
@@ -134,7 +134,7 @@ Every open entry below was triaged against live HEAD on 2026-07-14 (8-agent veri
 - Summary email content depth (filter-criteria vs inline correlation IDs) — Pull-from-SoR design accepted; schema upgrade deferred. Trigger: open-summary→open-ITS_Errors friction becomes frequent.
 - weekly_send upload-session chunk-retry hardening (deferred) — Cross-cycle session-resume/cancel deferred, restart-from-zero cheap today; revisit on recurring mid-upload failures or packets nearing the 150 MB ceiling.
 - weekly_send upload-session threshold = 2.5 MB (heuristic, not measured) — Send-path threshold tuning against the live tenant; revisit when the first live photo packet crosses ~2.5 MB or a graph_error cluster appears near 3 MB.
-- Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate) — Confirmed no TS send-gate CI rule exists; Worker stays send-free by design — add fetch-allowlist grep/ESLint when it gains an outbound path or at deploy hardening.
+- Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate) — **ARCHIVED 2026-08-10** → `tech_debt_closed.md`. The "no TS send-gate CI rule exists" claim went stale: `tests/test_worker_send_free.py` (PR #393 / `6dc0431`) is a CI-collected grep forbidding any `fetch(` in `safety_portal/worker/**` except `ASSETS.fetch(` — exactly the allowlist this entry proposed. See entry 123 for the residual it does NOT cover (import-level gating).
 - §6a enablement-doc DoD owed per Progress-Reporting slice — PARTIALLY_MITIGATED — manifest pipeline now exists; residual = retire in-doc TODOs, add material_catalog guide, D2-2/D2-3 content. Trigger: each Progress-Reporting slice brief.
 
 ---
@@ -1229,26 +1229,6 @@ Surfaced: PR β (watchdog summary sweep) brief, 2026-05-20.
 
 Surfaced: Picklist sync hardening review, 2026-05-20.
 
-## SDK-vs-live body-shape mismatches need integration coverage [OPEN 2026-05-20]
-
-PRs #47/#48/#49 each surfaced one body-shape mismatch the Smartsheet SDK accepted silently but the live API rejected, in successive iterations:
-
-- **PR #47**: `id` in body — errorCode 1032 ("attribute(s) column.id are not allowed for this operation").
-- **PR #48**: `type` missing from body — errorCode 1090 ("Column.type is required when changing options").
-- **PR #49**: `type` present but wrapped as `EnumeratedValue`, SDK silently strips it — wire body becomes `{"options": [...]}` with no `type`, API rejects same as #48.
-
-Class of bug: `SimpleNamespace`-based mocks at the SDK boundary don't enforce the live API's contract on body shape, required fields, or value wrapping. Mock tests passed; live calls failed.
-
-**Mitigation landed in this PR (2026-05-21):** `tests/test_smartsheet_client_integration.py` runs create → list → update → delete round-trips against live sandbox sheets. Registered as `@pytest.mark.integration`; default `pytest` skips them (pyproject.toml `addopts = -m 'not integration'`). Operator runs `pytest -m integration` pre-deployment after any `shared/smartsheet_client.py` or `shared/picklist_sync.py` change.
-
-**Pattern to extend:** any future `shared/*` SDK wrapper that exercises a non-trivial verb (update/create/delete) on typed columns or rows should gain a parallel integration test. The pattern: create the minimum live state required, exercise the verb, assert post-state, tear down in `finally`.
-
-**Urgency:** addressed. Note kept open for visibility — any new wrapper that lands without parallel integration coverage re-introduces the class of bug.
-
-Surfaced: PR #46 → #47 → #48 → #49 iteration, 2026-05-20/21.
-
-> **Audit 2026-07-24 (tech-debt janitorial pass):** Concrete debt RESOLVED — live-API integration coverage exists (tests/test_smartsheet_client_integration.py + parallel coverage for every in-scope shared/* wrapper, @pytest.mark.integration, skipped by default). What remains is only a standing forward-guard, now canonical in HOUSE_REFLEXES §2 — a candidate to close as a duplicate reflex rather than a live gap.
-
 ## Smartsheet UI-only constraints (Forms, CF, Filter Views, Restrict-to-dropdown) [OPEN]
 
 Several Smartsheet features are exposed only through the Smartsheet web UI and have NO REST/SDK surface — meaning Claude Code can NOT provision, audit, or sync these per-customer settings during deployment. Operator must configure each manually at deployment time and document the choices.
@@ -1655,28 +1635,6 @@ The parent/variant mechanism is built (ITS_Forms_Catalog `Parent Form` + `Varian
 **Revisit when:** PM identifies a job with site-specific JHA requirements.
 
 Surfaced: 2026-06-05 Safety Portal Phase 4 PR 1 session (PR #164). Related: `safety_portal/forms/meta-schema.json` `variantOf`, ITS_Forms_Catalog `Parent Form`/`Variant Tag` columns.
-
-## [OPEN] Worker-side send-gate enforcement (the TS Worker is outside the Python AST capability-gate)
-
-**What:** `tests/test_capability_gating.py` enforces Invariant 1 (no send capability on
-generation scripts; no AI on send scripts) by AST-scanning Python under `shared/` +
-`safety_reports/`. It does NOT reach the TypeScript Cloudflare Worker
-(`safety_portal/worker/`). As of Phase 5 PR 2 the Worker holds the HMAC signing secret +
-the internal bearer token, so it is no longer trivially "send-free by binding-absence" —
-its send-free posture rests on code review + the module docstring only. The **pull model**
-keeps the Worker send-free by design (it serves a queue + accepts a receipt; it never
-initiates outbound), but nothing structurally PREVENTS a future Worker edit from acquiring
-an outbound `fetch()` to an external host.
-
-**Fix (when the Worker surface grows):** add a CI grep / ESLint rule forbidding `fetch(` in
-`safety_portal/worker/` except to an allowlist (the ASSETS binding), as the TS-side
-equivalent of `test_capability_gating.py`. Surfaced by `ops-stds-enforcer` (W2).
-
-**Tag:** `safety-portal`, `security`, `invariant-1`, `phase-5`, `medium`.
-
-**Revisit when:** the Worker gains any new outbound-capable code path, or at the deploy hardening pass.
-
-Surfaced: 2026-06-05 Safety Portal Phase 5 PR 2 (transport queue).
 
 ## [OPEN — production-tenant pending; sandbox RESOLVED 2026-07-22] Safety Portal Phase 5 — deploy prerequisites (was CUTOVER-BLOCKING, OPEN 2026-06-05)
 
@@ -2640,26 +2598,6 @@ or token tier is touched.
 
 Surfaced: 2026-08-07 manifest-import activation session.
 
-## Track 6 archive — button + drain landed (PRs #726/#728 dev, #18/#20/#21 production) but three activation gaps remain [OPEN 2026-08-10]
-
-The archive path is code-complete end-to-end (portal button → D1 queue → `fieldops_sync` drain →
-`job_archive.py` relocation → commit point), all four-part verified. It is not yet safe to activate:
-
-1. **`field_ops.fieldops_sync.archive_enabled` has no live `ITS_Config` row.** Reads
-   `SmartsheetNotFoundError` where the sibling `sync_enabled` key resolves fine on the same sheet — the
-   seeder shipped in #20 (`scripts/migrations/seed_daemon_gate_config.py`, seeds `false`) has not been RUN
-   against this tenant. Exactly the HOUSE_REFLEXES §5 "seed the gate row" failure mode, except this time the
-   seeder exists and simply hasn't executed. **Fix:** run the seeder once; verify the row reads `false`.
-2. **No launchd job is loaded on this host** (`launchctl list` shows zero ITS entries) — reaffirms PM-1
-   below; nothing drains `/archive-pending` regardless of the gate.
-3. **The Box leg has never been drilled live, either direction.** The Smartsheet half was drilled against
-   the sandbox 2026-08-06 (ROADMAP Track 6 status block); every Box test remains mocked. Extends "Box
-   identity on the dev host is UNCONFIRMED" below — Box has no ownership discriminator, so a wrong identity
-   is silent, not just unauthenticated.
-
-**Trigger:** before flipping `archive_enabled` true on any tenant. **Tag:** `field_ops`, `archive-on-closure`,
-`host-migration`, `seth-owned`.
-
 ## PM-5 addendum — `evergreen-its` branch protection CONFIRMED LIVE, narrowing but not closing the `_wait_for_ci` risk [OPEN 2026-08-10]
 
 PM-5 (production-host migration section, above) flagged `publish_daemon._wait_for_ci`'s `mergeStateStatus ==
@@ -2824,6 +2762,115 @@ of this session-close pass's scope.
 
 Surfaced: 2026-08-10 session close (cross-repo supersession check).
 
+## [OPEN 2026-08-10, low] Operator-run one-shot seeders ship, then silently never get executed — the Track 6 archive-gate outage is one instance of a class
+
+The Track 6 archive activation gap (resolved this session — see `tech_debt_closed.md`) traced to a
+specific, narrow cause: `scripts/migrations/seed_daemon_gate_config.py` shipped in PR #20 with the
+`field_ops.fieldops_sync.archive_enabled` row spec, correctly written, correctly tested — and then simply
+never RUN against this tenant. Nothing in the system distinguishes "the seeder was never invoked" from
+"the row legitimately doesn't exist yet" until a daemon starts WARNing about it, and a WARN never
+triple-fires (Op Stds v21 — CRITICAL is the only escalating severity), so the outage was invisible on
+every alerting surface for days (3,442 `config_row_missing` WARN occurrences in the logs, none acted on).
+
+This is a **pattern**, not a one-off: `scripts/migrations/` holds a growing family of operator-run
+one-shot scripts (seeders, gate migrations, folder builders) whose entire safety model is "the operator
+remembers to run this after merge." Nothing enumerates which seeders exist, which have been run against
+which tenant, or flags a merged-but-unexecuted seeder as a distinct, visible state. `verify_cutover.py`'s
+VC-03 check is the one tool that *would* have caught this specific instance (it named both missing rows
+by check-key), but per the sibling entry below, that script runs nowhere — so even the one existing
+detector was never exercised.
+
+**Fix (not scoped this session):** either (a) a lightweight seeder-execution ledger (a Config row or
+sheet each seeder stamps on successful run, checked at watchdog cadence for "seeder X shipped in commit Y
+N days ago, never stamped"), or (b) fold every new gate/config-row seeder into the CI-blocking
+`verify_cutover.py` run proposed in the sibling entry, so a merged-but-unseeded row fails a required check
+rather than silently WARNing in production.
+
+**Tag:** `field_ops`, `archive-on-closure`, `seeders`, `observability`, `process`, `low`.
+
+**Revisit when:** the next seeder-shaped migration script ships, or `verify_cutover.py` scheduling (below)
+is addressed — the two fixes are complementary, not redundant.
+
+Surfaced: 2026-08-10 session close, following the Track 6 archive activation drill. See issue #27.
+
+## [OPEN 2026-08-10, medium] `box_client._store_tokens`'s refresh lock covers the Keychain persist, not the token exchange — and watchdog Check P can't see the difference
+
+Filed as GitHub issue #26 this session; recorded here as the execution-repo debt ledger entry.
+
+`shared/box_client.py:161-197` (`_store_tokens`, the boxsdk `store_tokens` callback) takes a cross-process
+sidecar lock (`state_io.with_path_lock(_BOX_OAUTH_REFRESH_LOCK_ANCHOR)`) around the Keychain persist +
+freshness-marker write. The docstring is explicit about the scope: *"boxsdk owns the token exchange
+itself, so this serializes the persist seam ... not the HTTP exchange."* Box rotates the refresh token on
+every exchange (single-use); two ITS processes that both decide to refresh in the same window can each
+independently call boxsdk's exchange before either persists, so the second exchange can consume a token
+the first has already invalidated server-side — a race the lock cannot prevent because it starts one step
+too late.
+
+Compounding this: **watchdog Check P** (`scripts/watchdog._check_box_token_freshness`) is purely
+time-based — it reads `box_client.BOX_TOKEN_REFRESH_MARKER`'s `last_refresh_utc` and reports `INFO`
+"fresh (idle Nd)" as long as the marker is recent, with **no live auth call**. A host whose Box identity
+has already failed (e.g. `invalid_grant` from exactly the race above) can sit on a marker written before
+the failure and have Check P report "fresh" indefinitely — the check confirms the marker is recent, not
+that Box actually works.
+
+**Fix (not scoped this session):** (a) either serialize the exchange itself (e.g. lock around the whole
+refresh-triggering call site, not just the callback) or accept the race and add exchange-failure
+detection/retry; (b) have Check P make (or piggyback on) a cheap live Box call — even a HEAD/whoami — on
+some cadence, rather than trusting marker age alone.
+
+**Tag:** `field_ops`, `box`, `oauth`, `race-condition`, `watchdog`, `medium`.
+
+**Revisit when:** next Box-auth incident, or a concurrency/multi-daemon-on-Box hardening pass. See issue #26.
+
+Surfaced: 2026-08-10 session close, following the Track 6 archive activation drill.
+
+## [OPEN 2026-08-10, low] `tests/test_state_io.py::test_concurrent_writers_lock_serializes_overlap` is a flaky timing test
+
+Observed both fail and pass on the **identical commit**, back to back, this session — a genuine timing
+flake, not a code regression. The test asserts that concurrent writers serialize through
+`state_io.with_path_lock`'s sidecar-`.lock` `fcntl` flock by racing real threads/processes and checking
+non-overlap; timing-based concurrency assertions of this shape are inherently sensitive to scheduler
+jitter on a loaded machine. No fix attempted this session — flagging so a future intermittent-red CI run
+on this test isn't mistaken for a real lock regression.
+
+**Fix (not scoped this session):** either widen the timing margins, switch to a deterministic
+synchronization primitive (e.g. a barrier/semaphore instead of a sleep-based race) to prove ordering
+without relying on wall-clock overlap, or mark it `@pytest.mark.flaky`-equivalent with a bounded retry if
+this repo's tooling supports one.
+
+**Tag:** `testing`, `state_io`, `flaky-test`, `low`.
+
+**Revisit when:** this test is next seen red in CI, or the next `shared/state_io.py` touch.
+
+Surfaced: 2026-08-10 session close.
+
+## [OPEN 2026-08-10, low] `tests/test_publish_daemon.py` — 29 local failures on an unmodified tree that CI runs green
+
+Running the full local suite this session, `tests/test_publish_daemon.py` produced 29 failures on a
+completely clean, unmodified checkout — reproduced identically on a second run. The same file passes in
+CI on the same commit (confirmed via the four-part PR-landing verify elsewhere this session, which reads
+main-branch CI as green). This means **local pre-merge test runs of this file are not currently
+trustworthy** — something about the local macOS environment (working-tree git state the daemon inspects,
+`gh`/`git` auth context, filesystem timing, or a fixture that assumes a CI-shaped sandbox) diverges from
+what CI provides. Not diagnosed this session; no code changed.
+
+**Risk:** a developer relying on `pytest tests/test_publish_daemon.py` locally to gate a real change to
+`scripts/publish_daemon.py` gets 29 false-red results and either wastes time chasing phantom failures or,
+worse, starts ignoring red on this file specifically — which would mask a genuine regression the next time
+one lands.
+
+**Fix (not scoped this session):** diagnose the local-vs-CI divergence (`diagnose` skill territory — an
+SDK/environment-boundary bug class per Op Stds §30) — likely candidates are the daemon's live `git`/`gh`
+introspection calls hitting this repo's actual (dirty, worktree-adjacent) local state versus CI's clean
+checkout, or a missing local env var CI sets. Until diagnosed, treat local runs of this file as
+uninformative and rely on CI.
+
+**Tag:** `testing`, `publish_daemon`, `ci-divergence`, `low`.
+
+**Revisit when:** next `scripts/publish_daemon.py` change needs local test confidence, or bandwidth for a
+dedicated `diagnose` pass.
+
+Surfaced: 2026-08-10 session close.
 ---
 
 ## [OPEN 2026-08-10, low] GAYK/DOYLE **weekly** maintenance checklist (source page 2) is not modeled anywhere
