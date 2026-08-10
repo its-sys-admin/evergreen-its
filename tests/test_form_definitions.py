@@ -88,7 +88,12 @@ def test_jha_mandatory_footer_and_signature_present() -> None:
 
 
 def test_equipment_lockout_legal_text_present() -> None:
-    for code in ("equipment-telehandler-v1", "equipment-skid-steer-v1"):
+    for code in (
+        "equipment-telehandler-v1",
+        "equipment-skid-steer-v1",
+        "equipment-excavator-360-v1",
+        "equipment-gayk-piledriver-v1",
+    ):
         d = _load(FORMS_DIR / f"{code}.json")
         texts = [s["text"] for s in d["sections"] if s["type"] == "static_text"]
         assert any("lock/tag-out" in t for t in texts), code
@@ -100,6 +105,54 @@ def test_equipment_telehandler_item_count() -> None:
     checklist = next(s for s in d["sections"] if s["type"] == "checklist")
     total = sum(len(g["items"]) for g in checklist["groups"])
     assert total == 64, f"expected 64 telehandler items, got {total}"
+
+
+def test_equipment_excavator_360_item_count() -> None:
+    # The 16 check rows of the source week-grid sheet — no silent drop.
+    d = _load(FORMS_DIR / "equipment-excavator-360-v1.json")
+    checklist = next(s for s in d["sections"] if s["type"] == "checklist")
+    total = sum(len(g["items"]) for g in checklist["groups"])
+    assert total == 16, f"expected 16 excavator items, got {total}"
+
+
+def test_equipment_gayk_piledriver_item_count() -> None:
+    # 12 checklist items = the source's 13 daily bullets minus the final free-text
+    # block, which is a freeform SECTION (operating_issues), not a checklist item.
+    d = _load(FORMS_DIR / "equipment-gayk-piledriver-v1.json")
+    checklist = next(s for s in d["sections"] if s["type"] == "checklist")
+    total = sum(len(g["items"]) for g in checklist["groups"])
+    assert total == 12, f"expected 12 piledriver items, got {total}"
+    assert any(
+        s["type"] == "freeform" and s["key"] == "operating_issues" for s in d["sections"]
+    )
+
+
+def test_equipment_scales_render_with_recognised_response_words() -> None:
+    """Every equipment pre-inspection scale value must colour in the filed PDF.
+
+    `form_pdf._response_hex` colours only vocabulary it recognises; an unlisted word
+    falls through to neutral ink, so a "Defective" answer would render the same as an
+    "Okay" one — a scannability regression on exactly the answer a reviewer must not
+    miss. This pins the two sets together so a future variant cannot introduce an
+    uncoloured scale word silently.
+    """
+    from safety_reports.form_pdf import _BAD_WORDS, _NA_WORDS, _OK_WORDS
+
+    known = _OK_WORDS | _BAD_WORDS | _NA_WORDS
+    for path in DEF_PATHS:
+        d = _load(path)
+        if d.get("parent_form_code") != "equipment-preinspection":
+            continue
+        for section in d["sections"]:
+            if section.get("type") != "checklist":
+                continue
+            for group in section["groups"]:
+                for word in group["scale"]:
+                    assert word.strip().upper() in known, (
+                        f"{d['form_code']} group {group['key']}: scale word {word!r} is "
+                        "not in form_pdf's _OK_WORDS/_BAD_WORDS/_NA_WORDS, so it renders "
+                        "as neutral ink instead of green/amber/grey"
+                    )
 
 
 def test_hsse_has_eleven_assessment_categories() -> None:

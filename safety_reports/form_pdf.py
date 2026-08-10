@@ -409,9 +409,16 @@ def _rich_body(text: str, st: dict) -> list[Flowable]:
 # scale) — a first-scale answer on a NON-pass/fail scale (e.g. an incident report's
 # "EMS" on EMS/WORKER/N-A) must NOT read as a green "pass" (2026-07-23 polish fix;
 # previously any scale[0] answer coloured green).
-_OK_WORDS = frozenset({"OK", "YES", "ACCEPTABLE", "PASS", "GOOD", "CONFIRMED",
+# "OKAY"/"DEFECTIVE" are the 360-excavator source form's own two-state vocabulary
+# (equipment-excavator-360-v1, 2026-08-10). Without them that variant's responses fall
+# through to neutral ink while its skid-steer / telehandler siblings colour green+amber —
+# a scannability regression on a pre-op inspection sheet, where "Defective" is the one
+# answer a reviewer must not miss. Additive only: no shipped scale uses either word, and
+# "DEFECTIVE" is a real negative so _is_confirm_scale still returns False for
+# ["Okay", "Defective"] (the full Item/Response/Comments table, matching the siblings).
+_OK_WORDS = frozenset({"OK", "OKAY", "YES", "ACCEPTABLE", "PASS", "GOOD", "CONFIRMED",
                        "COMPLETE", "COMPLETED", "DONE", "NONE", "NONE TODAY", "SAFE"})
-_BAD_WORDS = frozenset({"NOT OK", "NO", "FAIL", "BAD", "DEFECT", "UNSAFE",
+_BAD_WORDS = frozenset({"NOT OK", "NO", "FAIL", "BAD", "DEFECT", "DEFECTIVE", "UNSAFE",
                         "NOT ACCEPTABLE", "NEEDS REPAIR"})
 _NA_WORDS = frozenset({"N/A", "NA", "N/A TODAY"})
 
