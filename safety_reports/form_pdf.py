@@ -409,9 +409,16 @@ def _rich_body(text: str, st: dict) -> list[Flowable]:
 # scale) — a first-scale answer on a NON-pass/fail scale (e.g. an incident report's
 # "EMS" on EMS/WORKER/N-A) must NOT read as a green "pass" (2026-07-23 polish fix;
 # previously any scale[0] answer coloured green).
-_OK_WORDS = frozenset({"OK", "YES", "ACCEPTABLE", "PASS", "GOOD", "CONFIRMED",
+# "OKAY"/"DEFECTIVE" are the 360-excavator source form's own two-state vocabulary
+# (equipment-excavator-360-v1, 2026-08-10). Without them that variant's responses fall
+# through to neutral ink while its skid-steer / telehandler siblings colour green+amber —
+# a scannability regression on a pre-op inspection sheet, where "Defective" is the one
+# answer a reviewer must not miss. Additive only: no shipped scale uses either word, and
+# "DEFECTIVE" is a real negative so _is_confirm_scale still returns False for
+# ["Okay", "Defective"] (the full Item/Response/Comments table, matching the siblings).
+_OK_WORDS = frozenset({"OK", "OKAY", "YES", "ACCEPTABLE", "PASS", "GOOD", "CONFIRMED",
                        "COMPLETE", "COMPLETED", "DONE", "NONE", "NONE TODAY", "SAFE"})
-_BAD_WORDS = frozenset({"NOT OK", "NO", "FAIL", "BAD", "DEFECT", "UNSAFE",
+_BAD_WORDS = frozenset({"NOT OK", "NO", "FAIL", "BAD", "DEFECT", "DEFECTIVE", "UNSAFE",
                         "NOT ACCEPTABLE", "NEEDS REPAIR"})
 _NA_WORDS = frozenset({"N/A", "NA", "N/A TODAY"})
 
@@ -1587,9 +1594,16 @@ def _blank_checklist_section(section: dict, st: dict, namer: _FieldNamer) -> lis
             head.append(_p("Comments", st["colhead"]))
         rows: list[list[Any]] = [head]
         for it in g["items"]:
-            # Per-item override: an explicit "comment": false suppresses the comment
-            # field for that one item even in a comment_per_item group.
-            item_comment = want_comment and it.get("comment", True)
+            # Per-item override, mirroring the SPA's `it.comment ?? group.comment_per_item
+            # ?? false` (FormRenderer.tsx GroupView). The default MUST be the group flag, not
+            # True: `want_comment` above is ALSO set by any single item carrying
+            # "comment": true, so in a comment_per_item:false group a True default hands a
+            # comment box to every OTHER item — boxes the on-screen form never shows, on a
+            # blank form operators print and fill by hand. (Exposed by
+            # equipment-gayk-piledriver-v1, the first mixed-shape group: 5 of 12 items opt in.
+            # No-op for every comment_per_item:true group shipped before it, where the group
+            # flag IS True; an explicit "comment": false still suppresses.)
+            item_comment = want_comment and it.get("comment", bool(g.get("comment_per_item")))
             row: list[Any] = [
                 _p(it["label"], st["cell"]),
                 _blank_checklist_item_response(it, g, namer, st),

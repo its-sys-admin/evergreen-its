@@ -48,6 +48,34 @@
             }
           ],
           "display_order": 3
+        },
+        {
+          "identity": "equipment-excavator-360",
+          "variant_label": "360 Excavator",
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "equipment-excavator-360-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "equipment-excavator-360-v1"
+            }
+          ],
+          "display_order": 4
+        },
+        {
+          "identity": "equipment-gayk-piledriver",
+          "variant_label": "GAYK/DOYLE Piledriver",
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "equipment-gayk-piledriver-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "equipment-gayk-piledriver-v1"
+            }
+          ],
+          "display_order": 5
         }
       ]
     },

@@ -6,6 +6,7 @@ TS display runtime + the Python PDF renderer) consume, so they MUST conform to
 """
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from pathlib import Path
@@ -88,7 +89,12 @@ def test_jha_mandatory_footer_and_signature_present() -> None:
 
 
 def test_equipment_lockout_legal_text_present() -> None:
-    for code in ("equipment-telehandler-v1", "equipment-skid-steer-v1"):
+    for code in (
+        "equipment-telehandler-v1",
+        "equipment-skid-steer-v1",
+        "equipment-excavator-360-v1",
+        "equipment-gayk-piledriver-v1",
+    ):
         d = _load(FORMS_DIR / f"{code}.json")
         texts = [s["text"] for s in d["sections"] if s["type"] == "static_text"]
         assert any("lock/tag-out" in t for t in texts), code
@@ -100,6 +106,96 @@ def test_equipment_telehandler_item_count() -> None:
     checklist = next(s for s in d["sections"] if s["type"] == "checklist")
     total = sum(len(g["items"]) for g in checklist["groups"])
     assert total == 64, f"expected 64 telehandler items, got {total}"
+
+
+def test_equipment_excavator_360_item_count() -> None:
+    # The 16 check rows of the source week-grid sheet — no silent drop.
+    d = _load(FORMS_DIR / "equipment-excavator-360-v1.json")
+    checklist = next(s for s in d["sections"] if s["type"] == "checklist")
+    total = sum(len(g["items"]) for g in checklist["groups"])
+    assert total == 16, f"expected 16 excavator items, got {total}"
+
+
+def test_equipment_gayk_piledriver_item_count() -> None:
+    # 12 checklist items = the source's 13 daily bullets minus the final free-text
+    # block, which is a freeform SECTION (operating_issues), not a checklist item.
+    d = _load(FORMS_DIR / "equipment-gayk-piledriver-v1.json")
+    checklist = next(s for s in d["sections"] if s["type"] == "checklist")
+    total = sum(len(g["items"]) for g in checklist["groups"])
+    assert total == 12, f"expected 12 piledriver items, got {total}"
+    assert any(
+        s["type"] == "freeform" and s["key"] == "operating_issues" for s in d["sections"]
+    )
+
+
+def test_blank_checklist_comment_boxes_match_the_spa_rule() -> None:
+    """The blank fillable must give a comment box to exactly the items the SPA does.
+
+    The SPA rule is `it.comment ?? group.comment_per_item ?? false` (FormRenderer.tsx
+    GroupView). The blank renderer builds its Comments COLUMN when the group flag is
+    set OR any single item opts in — so in a `comment_per_item: false` group its
+    per-item default must be the group flag, not True, or every non-opted-in item
+    gets a hand-fill box the on-screen form never shows.
+
+    Exercised by equipment-gayk-piledriver-v1, the first mixed-shape group (5 of 12
+    items opt in); asserted over every shipped definition so a future one cannot
+    reintroduce the drift.
+    """
+    from safety_reports import form_pdf
+
+    for path in DEF_PATHS:
+        d = _load(path)
+        for section in d["sections"]:
+            if section.get("type") != "checklist":
+                continue
+            for group in section["groups"]:
+                group_flag = bool(group.get("comment_per_item"))
+                want_column = group_flag or any(i.get("comment") for i in group["items"])
+                for item in group["items"]:
+                    spa = item.get("comment", group.get("comment_per_item", False))
+                    pdf = want_column and item.get(
+                        "comment", bool(group.get("comment_per_item"))
+                    )
+                    assert bool(spa) == bool(pdf), (
+                        f"{d['form_code']} group {group['key']} item {item['key']}: "
+                        f"SPA shows comment={bool(spa)} but the blank PDF shows "
+                        f"comment={bool(pdf)} — the two renderers must not drift"
+                    )
+    # Pin the implementation the rule above mirrors, so a future edit of form_pdf
+    # cannot silently restore the True default while this test still passes.
+    src = inspect.getsource(form_pdf._blank_checklist_section)
+    assert 'it.get("comment", bool(g.get("comment_per_item")))' in src, (
+        "form_pdf._blank_checklist_section no longer defaults a checklist item's "
+        "comment box to the GROUP flag — it will drift from the SPA again"
+    )
+
+
+def test_equipment_scales_render_with_recognised_response_words() -> None:
+    """Every equipment pre-inspection scale value must colour in the filed PDF.
+
+    `form_pdf._response_hex` colours only vocabulary it recognises; an unlisted word
+    falls through to neutral ink, so a "Defective" answer would render the same as an
+    "Okay" one — a scannability regression on exactly the answer a reviewer must not
+    miss. This pins the two sets together so a future variant cannot introduce an
+    uncoloured scale word silently.
+    """
+    from safety_reports.form_pdf import _BAD_WORDS, _NA_WORDS, _OK_WORDS
+
+    known = _OK_WORDS | _BAD_WORDS | _NA_WORDS
+    for path in DEF_PATHS:
+        d = _load(path)
+        if d.get("parent_form_code") != "equipment-preinspection":
+            continue
+        for section in d["sections"]:
+            if section.get("type") != "checklist":
+                continue
+            for group in section["groups"]:
+                for word in group["scale"]:
+                    assert word.strip().upper() in known, (
+                        f"{d['form_code']} group {group['key']}: scale word {word!r} is "
+                        "not in form_pdf's _OK_WORDS/_BAD_WORDS/_NA_WORDS, so it renders "
+                        "as neutral ink instead of green/amber/grey"
+                    )
 
 
 def test_hsse_has_eleven_assessment_categories() -> None:
