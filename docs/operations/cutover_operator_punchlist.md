@@ -61,7 +61,7 @@ Ref: `host_migration_runbook.md` Phase B. #1 hazard = daemon double-run. **Must 
 - [ ] (4) rsync `state/` + `.watchdog/` markers to the new host.
 - [ ] (5) Box re-auth via a fresh `setup_box_oauth.py` on the **new host ONLY** — never run Box code
   on the dev box again.
-- [ ] (6) `git pull origin main` on the new host, then load all daemons but `po-send` **and `rfq-send`** (both SEND daemons stay unloaded — send-gate; both in `DARK_UNLOADED_LABELS`). Their go-live is a FIXED External-Send-Gate flip + load done with Seth, never at cutover.
+- [ ] (6) `git pull origin main` on the new host, then load every daemon EXCEPT any label in `DARK_UNLOADED_LABELS` — a set that is **EMPTY as of 2026-08-10** (`po-send` and `rfq-send` were both activated by the operator and removed from it), so all shipped plists load. Derive the skip-list from the constant, never from a name in this line. First-enabling or re-darkening a send lane remains a FIXED External-Send-Gate action done with Seth, never at cutover.
 - [ ] (7) verification gate: labels loaded, fresh Check-C markers, ITS_Daemon_Health advancing, portal
   round-trip, **and the Healthchecks.io prove-it-bites**. Note the watchdog pings **once per day
   at 07:00** (`StartCalendarInterval`), so an unload-and-wait-35-min drill proves nothing — run the
@@ -170,8 +170,8 @@ Ref: `aug7_delivery_runbook.md`. Thu Aug 6 = T-1 buffer (no build work). HARD CO
   shutdown after portal_poll quiets.
 - [ ] On-site: the **7 ordered install gates** (do not demo past a red gate) — power/placement, network
   (outbound 443), boot+login → `launchctl list | grep -c solutionsmith` matches the must-load count (the
-  shipped plist set minus `po-send` + `rfq-send`, both dark-unloaded — send-gate; VC-02
-  derives it, 18 at last count), Tailscale reverse
+  shipped plist set minus `DARK_UNLOADED_LABELS`, which is EMPTY as of 2026-08-10 — every send lane is
+  activated; VC-02 derives the count, so read it from there rather than from prose), Tailscale reverse
   access over hotspot, clear MAINTENANCE→ACTIVE, `verify_cutover` re-run on-site (exit 0, paste to log),
   fresh Check-C markers.
 - [ ] Demo (~40 min, mind the Friday-14:00 `weekly_generate` rule — narrate it live or pre-empt via
