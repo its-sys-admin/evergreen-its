@@ -770,6 +770,19 @@ def _resolve_cells(sheet_id: int, values: dict[str, Any]) -> list[Any]:
                 f"Available: {sorted(columns)}"
             )
         if isinstance(value, (list, tuple, set, frozenset)):
+            if not value:
+                # An empty MULTI_PICKLIST is UNWRITABLE: the API answers errorCode 1012
+                # ("Required object attribute(s) are missing from your request:
+                # multiPickList.values[]"). Emitting it surfaced as an opaque HTTP 400
+                # at the caller — a permanent per-row fence with no hint of the cause.
+                # Raise here instead, naming the column and the remedy. A caller that
+                # means "leave the cell unchanged" DROPS the key (the picklist analogue
+                # of a None cell — po_materials.vendors / subcontracts.subcontractors).
+                raise ValueError(
+                    f"smartsheet_client: empty MULTI_PICKLIST for column {title!r} on "
+                    f"sheet {sheet_id} — the API rejects an empty values[] (errorCode "
+                    f"1012). Omit the key to leave the cell untouched."
+                )
             ordered = list(value) if isinstance(value, (list, tuple)) else sorted(value, key=str)
             multi_cell = smartsheet.models.Cell()
             multi_cell.column_id = columns[title]

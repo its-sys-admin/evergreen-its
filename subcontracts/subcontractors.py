@@ -209,6 +209,12 @@ def upsert_subcontractor(subcontractor: dict[str, Any]) -> int:
     for col in (COL_STATE, COL_TERMS_PROFILE):
         if not cells[col]:
             del cells[col]
+    # Same rule for the MULTI_PICKLIST: an EMPTY Trades list is UNWRITABLE (the API
+    # rejects an empty values[] with errorCode 1012), so an empty list means "leave the
+    # cell alone". Without this a subcontractor carrying no trades can NEVER up-sync —
+    # it fences PERMANENTLY every cycle. Twin of the ITS_Vendors Supply Categories fix.
+    if not cells[COL_TRADES]:
+        del cells[COL_TRADES]
 
     existing = get_subcontractor_by_key(sub_key)
     if existing is not None:

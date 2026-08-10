@@ -202,6 +202,12 @@ def upsert_vendor(vendor: dict[str, Any]) -> int:
     for col in (COL_REGION, COL_TERMS_PROFILE):
         if not cells[col]:
             del cells[col]
+    # Same rule for the MULTI_PICKLIST: an EMPTY Supply Categories list is UNWRITABLE
+    # (the API rejects an empty values[] with errorCode 1012), so an empty list means
+    # "leave the cell alone". Without this a vendor carrying no categories can NEVER
+    # up-sync — it fences PERMANENTLY every cycle (25 of 33 vendors, 2026-08-10).
+    if not cells[COL_SUPPLY_CATEGORIES]:
+        del cells[COL_SUPPLY_CATEGORIES]
 
     existing = get_vendor_by_key(vendor_key)
     if existing is not None:
