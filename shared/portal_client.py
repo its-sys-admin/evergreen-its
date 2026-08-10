@@ -80,6 +80,7 @@ FIELDOPS_HOURS_MARK_MIRRORED_PATH = "/api/internal/fieldops/hours-mark-mirrored"
 FIELDOPS_EQUIPMENT_SNAPSHOT_PATH = "/api/internal/fieldops/equipment-snapshot"
 FIELDOPS_MATERIAL_LIST_SNAPSHOT_PATH = "/api/internal/fieldops/material-list-snapshot"
 FIELDOPS_MATERIAL_INCIDENTS_PATH = "/api/internal/fieldops/material-incidents"
+FIELDOPS_MATERIAL_RECEIPTS_PATH = "/api/internal/fieldops/material-receipts"
 PROGRESS_ROLLUP_PATH = "/api/internal/progress-rollup"
 PRUNE_STATUS_PATH = "/api/internal/prune-status"
 PO_PENDING_PATH = "/api/po/internal/pending"
@@ -597,6 +598,45 @@ def get_fieldops_material_incidents(base_url: str, token: str) -> list[dict[str,
         )
     # Defensive: keep only dict rows; a non-dict element is malformed transport.
     return [row for row in incidents if isinstance(row, dict)]
+
+
+def get_fieldops_material_receipts(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Pull the delivery-mark ledger for active jobs: GET
+    /api/internal/fieldops/material-receipts (P7 Material Receipts up-sync, PR4).
+
+    Each dict carries `event_uuid, job_id, project_name, kind, qty, note, event_date, line_uuid,
+    material_description, unit, part_number, line_qty_expected, line_status, line_qty_received,
+    bol_number, received_by_display`. `received_by_display` is the DISPLAY name only (never the
+    acting username — House Reflex §5); `event_date` is a naive 'YYYY-MM-DD' Pacific work day.
+
+    TWO of those fields are DERIVED and legitimately change after the event is written, which is why
+    the mirror re-projects rather than writing once: `line_status` (the referenced line's coarse
+    status, which goes 'incident' if a problem is later flagged) and `line_qty_received` (the ledger
+    ROLLUP across every event for that line, recomputed in the Worker's SELECT rather than stored, so
+    it can never drift from the events it summarizes). Every other field is copied from a row.
+
+    Like `get_fieldops_material_incidents` — and deliberately UNLIKE
+    `get_fieldops_material_list_snapshot` — this is an APPEND-ONLY EVENT LEDGER, not a re-projected
+    snapshot: somebody signed for something on a date, which is an immutable historical fact. There
+    is NO reconcile roster and the daemon NEVER retires a row, so no NamedTuple, just the event list;
+    that is also what makes the count-drops-to-zero / #468 zero-drop class structurally impossible
+    here — there is no retire path to wrongly zero. The Worker's active-job JOIN bounds the working
+    set (receipts on closed jobs drop out; their sheet is archive-moved on closure).
+
+    A control-plane read of OUR OWN Worker (bearer = the SEPARATE field-ops token
+    `PORTAL_FIELDOPS_API_TOKEN`, same as `get_fieldops_material_incidents`), NOT a customer send.
+    Same typed-error contract: `PortalAuthError` (401) / `PortalRateLimitError` (429/503 exhausted) /
+    `PortalTransportError` (any other, incl. a non-object / missing-array body).
+    """
+    data = _request("GET", base_url, FIELDOPS_MATERIAL_RECEIPTS_PATH, token)
+    receipts = data.get("receipts")
+    if not isinstance(receipts, list):
+        raise PortalTransportError(
+            f"GET {FIELDOPS_MATERIAL_RECEIPTS_PATH} missing/invalid 'receipts' array "
+            f"(got {type(receipts).__name__})"
+        )
+    # Defensive: keep only dict rows; a non-dict element is malformed transport.
+    return [row for row in receipts if isinstance(row, dict)]
 
 
 # ---- Request-driven PDF cache (PR-4 Part A — the Mac PDF-servicing pass I/O) ----

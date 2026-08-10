@@ -120,7 +120,7 @@ base URL / bearer fails **closed** (Symptom B/C), never silently.
 Removed and has no retire path, so the count-drops-to-zero / zero-drop class simply does not exist
 here (unlike the Material List). A resolved incident stays on the ledger; only its `Line Status` cell
 flips (e.g. to `received`). An archived job's ledger is MOVED to the Archive workspace on closure
-(never deleted) — one of the four standing trackers the §51 archive-on-closure hook relocates; the
+(never deleted) — one of the five standing trackers the §51 archive-on-closure hook relocates; the
 whole-job closure picture is in [project_closure.md](project_closure.md), the move-failed repair in
 [hours_log_sync.md](hours_log_sync.md) Fault F.
 
@@ -142,6 +142,62 @@ whole-job closure picture is in [project_closure.md](project_closure.md), the mo
   Smartsheet ~20k row cap (it grows monotonically, unlike the bounded Material List). Operator
   **period-splits** it (archive this sheet, start a fresh one) — **NEVER delete rows** (§51 SoR).
   **Low-class** but coordinate with Seth on the archive location.
+
+## Symptom G — Material Receipts ledger (PR4): sheet not appearing, or a delivery missing
+
+**What it is.** A per-job `<Job> — Material Receipts` Smartsheet (beside the Hours Log / Equipment /
+Material List / Material Incidents) that mirrors every **delivery mark** made in the portal — one row
+per event, `Delivered` / `Partial` / `Not delivered`, each carrying its own qty, note, BOL, signer and
+date. It answers "what actually showed up, and when" for anyone who reads Smartsheet instead of the
+app. An **APPEND-ONLY LEDGER**. Runs inside `fieldops_sync`; gated by
+`field_ops.fieldops_sync.receipts_enabled` — read that row in ITS_Config for its current value, never
+this document (turning it ON is an operator decision; pausing it is safe at any time).
+
+**Activation sequence (order matters; Developer-Operator / Seth).** (1) Deploy the Worker (the read
+route `GET /api/internal/fieldops/material-receipts` must exist first — **no D1 migration needed**,
+the `material_receipt_events` table landed with migration 0059). (2) Confirm the ITS_Config row
+`receipts_enabled` (Workstream `field_ops`) exists — it is seeded at `false` by
+`scripts/migrations/seed_daemon_gate_config.py`, because a MISSING row reads identically to `false`
+and would leave you hunting for a switch that does not exist (HOUSE_REFLEXES §5). (3) Flip that row
+to `true`, from the dashboard's config editor or the sheet. A cell-flip is the only activation; a
+wrong Worker base URL / bearer fails **closed** (Symptom B/C), never silently.
+
+**Pausing loses nothing.** The whole ledger re-projects every cycle — there is no watermark and no
+mark-mirrored write-back — so time spent switched off is caught up in full on the first cycle after
+it is switched back on. This is also why every transient fault below self-heals.
+
+**Nothing is ever removed.** A signed-for delivery is an immutable historical fact — the pass has no
+retire path and never marks a row Removed, so the count-drops-to-zero / #468 zero-drop class does not
+exist here (unlike the Material List). Two cells on an existing row *do* legitimately change as later
+events land against the same line: **`Line Status`** (goes `incident` if a problem is flagged) and
+**`Line Qty Received`** (the running rollup across every event for that line). Seeing those move on an
+old row is correct behaviour, not a bug. An archived job's ledger is MOVED to the Archive workspace on
+closure (never deleted) — the fifth of the five standing trackers the §51 archive-on-closure hook
+relocates; the whole-job closure picture is in [project_closure.md](project_closure.md), the
+move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.
+
+**Symptoms → repair (all LOW-class unless noted).**
+- `fieldops_receipt_permanent` → a Review-Queue row (workstream `progress_reports`): a permanent
+  Smartsheet reject (validation) on one job or event. Read the row's payload (`phase`, `event_uuid`),
+  fix the offending data or sheet, and it re-projects next cycle (idempotent). **Low-class.**
+- `fieldops_receipts_fetch_failed`, `fieldops_receipts_sheet_transient`,
+  `fieldops_receipt_upsert_transient` → transient (Worker blip / Smartsheet 5xx); the ledger
+  re-projects every cycle, so these **self-heal** — no action unless sustained. **Low-class**
+  (re-run `sync_once` from a worktree venv to confirm recovery).
+- `fieldops_receipt_row_malformed` → a WARN (never silent): an event row missing
+  event_uuid/job_id/project_name is skipped. Usually a Worker payload defect — escalate if it
+  persists.
+- `fieldops_receipts_fetch_auth_failed` (CRITICAL, 401) → the field-ops bearer was rejected. Same as
+  Symptom C/E: **secrets/auth → escalate to Seth** (the Successor-Operator does not rotate tokens).
+- `material_receipts_row_cap_warn` → a Review-Queue row: the ledger is nearing the Smartsheet ~20k row
+  cap. This is the **fastest-growing** per-job tracker — a job with many lines delivered across many
+  truckloads writes an event per load — so expect it here before the incident ledger. Operator
+  **period-splits** it (archive this sheet, start a fresh one) — **NEVER delete rows** (§51 SoR).
+  **Low-class** but coordinate with Seth on the archive location.
+- A `Kind` cell showing a raw lower-case value (e.g. `returned` rather than `Not delivered`) → the D1
+  `kind` CHECK constraint grew a value the mirror's display map does not know. Harmless to the data
+  (the mark is still recorded verbatim rather than blanked), but it means code and schema have
+  drifted: **escalate to Seth** — a code change, which is a FIXED high-capability class.
 
 ## Why the daemon is shaped this way (pointer to §42)
 

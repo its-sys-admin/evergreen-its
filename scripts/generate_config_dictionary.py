@@ -224,10 +224,18 @@ PURPOSE_OVERRIDES: dict[str, str] = {
                                             "Ships OFF; the operator flips it on at cutover after the mirror slices land.",
     "field_ops.fieldops_sync.hours_enabled": "Per-stream gate: mirror crew hours from the portal into Smartsheet.",
     "field_ops.fieldops_sync.equipment_enabled": "Per-stream gate: mirror equipment status from the portal into Smartsheet.",
-    "field_ops.fieldops_sync.materials_enabled": "Per-stream gate: mirror material receipts from the portal into "
-                                                "Smartsheet. (Activation is gated on the §51 rider — read the row's "
-                                                "Description before flipping.)",
+    # NB: this gate drives the material LIST mirror (/material-list-snapshot → the per-job Material
+    # List sheet), NOT deliveries — those are `receipts_enabled` below. The text used to read
+    # "material receipts", which was harmless while no receipts gate existed and actively misleading
+    # the moment one did.
+    "field_ops.fieldops_sync.materials_enabled": "Per-stream gate: mirror the expected-material list from the portal "
+                                                "into Smartsheet. (Activation is gated on the §51 rider — read the "
+                                                "row's Description before flipping.)",
     "field_ops.fieldops_sync.incidents_enabled": "Per-stream gate: mirror material incidents from the portal into Smartsheet.",
+    "field_ops.fieldops_sync.receipts_enabled": "Per-stream gate: mirror the delivery-receipt ledger (delivered / "
+                                               "partial / not-delivered marks) from the portal into the per-job "
+                                               "Material Receipts sheet. Append-only — the ledger re-projects in "
+                                               "full each cycle, so pausing loses nothing.",
     "field_ops.fieldops_sync.archive_enabled": "Gate for the Track 6 job-archive pass: drains the portal's archive queue "
                                                "and relocates a closed job's six Smartsheet + Box containers into the "
                                                "archive (and back). Ships OFF; until it is on, the portal's Archive "

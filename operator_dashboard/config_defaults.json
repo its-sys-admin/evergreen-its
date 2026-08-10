@@ -62,7 +62,18 @@
       "workstream": "field_ops",
       "kind": "bool",
       "default": false,
-      "purpose": "Per-stream gate: mirror material receipts from the portal into Smartsheet. (Activation is gated on the §51 rider — read the row's Description before flipping.)",
+      "purpose": "Per-stream gate: mirror the expected-material list from the portal into Smartsheet. (Activation is gated on the §51 rider — read the row's Description before flipping.)",
+      "read_by": [
+        "field_ops.fieldops_sync"
+      ],
+      "origin": "daemon"
+    },
+    {
+      "setting": "field_ops.fieldops_sync.receipts_enabled",
+      "workstream": "field_ops",
+      "kind": "bool",
+      "default": false,
+      "purpose": "Per-stream gate: mirror the delivery-receipt ledger (delivered / partial / not-delivered marks) from the portal into the per-job Material Receipts sheet. Append-only — the ledger re-projects in full each cycle, so pausing loses nothing.",
       "read_by": [
         "field_ops.fieldops_sync"
       ],
@@ -598,6 +609,17 @@
       "kind": "int",
       "default": 15000,
       "purpose": "Row-count on the mirror sheet at which progress_reports.material_list WARNs that the sheet is approaching the Smartsheet per-sheet row cap.",
+      "read_by": [
+        "field_ops.fieldops_sync"
+      ],
+      "origin": "daemon"
+    },
+    {
+      "setting": "progress_reports.material_receipts.row_cap_warn_threshold",
+      "workstream": "progress_reports",
+      "kind": "int",
+      "default": 15000,
+      "purpose": "Row-count on the mirror sheet at which progress_reports.material_receipts WARNs that the sheet is approaching the Smartsheet per-sheet row cap.",
       "read_by": [
         "field_ops.fieldops_sync"
       ],

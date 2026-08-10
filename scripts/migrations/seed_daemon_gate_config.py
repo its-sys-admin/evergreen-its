@@ -50,6 +50,7 @@ sandbox scan):
     field_ops.fieldops_sync.equipment_enabled         / field_ops        / false
     field_ops.fieldops_sync.materials_enabled         / field_ops        / false
     field_ops.fieldops_sync.incidents_enabled         / field_ops        / false
+    field_ops.fieldops_sync.receipts_enabled          / field_ops        / false
     field_ops.fieldops_sync.archive_enabled           / field_ops        / false
 
 Blank-value repair: a row that EXISTS with an empty Value is a half-written
@@ -387,6 +388,19 @@ CONFIG_ROWS: list[dict[str, Any]] = [
         "Description": (
             "M3 Slice 2 — the Material Incidents append-only ledger up-sync pass in "
             "fieldops_sync (true = ON; false = pass skipped). " + _REHEARSAL_NOTE
+        ),
+    },
+    {
+        "Setting": "field_ops.fieldops_sync.receipts_enabled",
+        "Workstream": "field_ops",
+        "Value": "false",
+        "Description": (
+            "PR4 — the Material Receipts append-only delivery-ledger up-sync pass in "
+            "fieldops_sync (true = ON; false = pass skipped). Mirrors every delivery mark "
+            "(delivered / partial / not delivered) into the per-job Material Receipts sheet so "
+            "\"what actually showed up, and when\" is answerable outside the portal. Pause "
+            "anytime by setting it back to false — the ledger re-projects in full on the next "
+            "cycle, so nothing is lost while it is off. " + _REHEARSAL_NOTE
         ),
     },
     {

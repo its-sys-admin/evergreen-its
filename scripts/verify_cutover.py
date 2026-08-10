@@ -387,7 +387,7 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     ConfigRow("progress_reports.progress_send.polling_enabled", "progress_reports", "true"),
     ConfigRow("progress_reports.intake_enabled", "safety_reports", "true"),
     ConfigRow("field_ops.fieldops_sync.sync_enabled", "field_ops", "true"),
-    # The four per-stream sub-gates the master gate fans out to. Only the master was
+    # The five per-stream sub-gates the master gate fans out to. Only the master was
     # enrolled, so a cutover could pass VC-03 with every field-capture stream silently
     # unseeded. `non_empty`, never forced 'true': materials_enabled carries a §51 rider
     # precondition in its Description and is not ours to assert ON.
@@ -395,6 +395,7 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     ConfigRow("field_ops.fieldops_sync.equipment_enabled", "field_ops", "non_empty"),
     ConfigRow("field_ops.fieldops_sync.materials_enabled", "field_ops", "non_empty"),
     ConfigRow("field_ops.fieldops_sync.incidents_enabled", "field_ops", "non_empty"),
+    ConfigRow("field_ops.fieldops_sync.receipts_enabled", "field_ops", "non_empty"),
     # Track 6 archive pass. `non_empty`, never forced true — the dark-ship reflex: the row must
     # EXIST so activation is a visible cell-flip rather than a switch the operator cannot find,
     # but demanding "true" would force archiving on at cutover, which is an operator decision.
