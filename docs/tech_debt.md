@@ -579,15 +579,18 @@ The items below are what stand-up left open.
   Was explicitly NOT a migration blocker per operator decision, but is now a confirmed-
   undeliverable gap on the production host, not just the dev host. **Tag:** `alerting`,
   `resend`, `host-migration`, `CL-10`.
-- **PM-4 (MEDIUM, watchdog false-green) — `scripts/watchdog.py:1743` `GH_MAIN_CI_REPO` hardcodes
-  `"SolutionSmith-debug/its"`.** Check S (main-branch CI health) on the production host queries
-  the WRONG repo — it will report green by construction, not by correctly skipping, since the
-  hardcoded repo's CI state has nothing to do with the production host's own `evergreen-its`
-  checkout. A watchdog check whose entire purpose is catching main-branch breakage silently
-  checks the wrong branch on the new host. Needs a PR — parameterize per-host (e.g. via
-  `ITS_Config` or a repo-detection helper) rather than a second hardcode. **Trigger:** before
-  trusting Check S results on the production host. **Tag:** `host-migration`, `watchdog`,
-  `observability`.
+- ~~**PM-4 (MEDIUM, watchdog false-green) — `scripts/watchdog.py:1743` `GH_MAIN_CI_REPO` hardcodes
+  `"SolutionSmith-debug/its"`.**~~ **RESOLVED 2026-08-07 (PR #13, `23ca3d1`).** `GH_MAIN_CI_REPO`
+  now reads `"its-sys-admin/evergreen-its"`, and `tests/test_check_s_repo_matches_origin_remote`
+  pins the constant to the live `origin` remote so a future rename/re-point RED-lights instead of
+  silently re-breaking Check S. The two repos were separately reconciled the same week (PR #15,
+  `ed03877`, 2026-08-07): 27 commits from the then-still-active `SolutionSmith-debug/its` were
+  merged into this repo, `origin` was confirmed to name `its-sys-admin/evergreen-its`, and the
+  other repo is now referred to as the `dev` remote — not deleted, still real, just no longer
+  canonical. **Residual, tracked separately below** ("Post-reconciliation residual" entry,
+  2026-08-10): several doc/test surfaces still hardcode the string `"SolutionSmith-debug/its"` and
+  were deliberately not swept here because some of them may legitimately still target the `dev`
+  remote. **Tag:** `host-migration`, `watchdog`, `observability`, `resolved`.
 - **PM-5 (MEDIUM→HIGH once publish-daemon loads, §50-adjacent) — `publish_daemon._wait_for_ci`
   returns on `mergeStateStatus == CLEAN` BEFORE `statusCheckRollup` is ever reached.**
   `safety_reports/publish_daemon.py:459-465` fetches `mergeStateStatus,statusCheckRollup` in one
@@ -2700,3 +2703,123 @@ by #18's merged versions. Also holds untracked drill-local sandbox `sheet_ids.py
 first, since #18/#20 may have already carried equivalent fixes), discard the obsolete SPA files, remove the
 worktree. **Tag:** `field_ops`, `archive-on-closure`, `worktree-hygiene`.
 
+## [OPEN 2026-08-10, medium] Post-reconciliation residual: ~15 surfaces still name `SolutionSmith-debug/its` — unclassified as live-`dev`-remote references vs. stale assertions
+
+PR #13 (`23ca3d1`, 2026-08-07) fixed watchdog Check S's `GH_MAIN_CI_REPO` hardcode, and PR #15
+(`ed03877`, same day) reconciled the two repositories that had diverged while both were pushed
+to — `origin` now names `its-sys-admin/evergreen-its`; the other repo is referred to as `dev`,
+still real, just no longer canonical. Neither PR swept every string reference to the old name,
+deliberately: unlike Check S (unambiguously wrong — comparing this host's own daemon code
+against a *different* repo's CI), several of these surfaces could be legitimately correct if
+they intend to keep pointing at the `dev` remote.
+
+Confirmed still present at HEAD (`grep -rl "SolutionSmith-debug/its"`):
+- `README.md` — the CI badge URL (line 3) and the its-blueprint link (line 13). The CI badge is
+  the highest-visibility one: if this is wrong, anyone viewing the repo page sees a badge for a
+  *different* repository's Actions run, not this one's.
+- `CLAUDE.md` — the `codeql-fp-triager` agent description names `SolutionSmith-debug/its` as
+  where it triages CodeQL alerts.
+- `context-pack/repo-overview.md` — the `Repository:` field.
+- Six `.claude/agents/*.md` files (`ops-stds-enforcer`, `brief-validator`, `pr-landed-verifier`,
+  `portal-worker-security-reviewer`, `form-definition-reviewer`, `codeql-fp-triager`).
+- `tests/test_hook_block_codeql_dismiss.py` — hardcodes the slug in three `gh api` assertion
+  strings.
+
+**Why this needs a human pass, not a mechanical sed:** if CodeQL alerts / GitHub default-setup
+scanning genuinely still runs against `SolutionSmith-debug/its` (the `dev` remote) rather than
+`its-sys-admin/evergreen-its`, then `codeql-fp-triager` and its dismissal-block test are
+*correctly* scoped today, and repointing them would break a working control. If CodeQL now runs
+on this repo instead, they're stale and should follow Check S's fix. The README CI badge and
+`context-pack` "Repository:" field are lower-ambiguity (this repo describing itself) and more
+likely simply stale.
+
+**Fix:** an operator-confirmed pass classifying each reference as (a) correctly still targets
+`dev` — leave, ideally with a comment saying so explicitly; (b) should repoint to
+`its-sys-admin/evergreen-its` — fix; or (c) is now genuinely dual-repo and should say so.
+
+**Tag:** `host-migration`, `repo-topology`, `docs`, `codeql`, `medium`.
+
+**Revisit when:** next docs-hygiene pass, or before further CodeQL-alert work with
+`codeql-fp-triager`.
+
+Surfaced: 2026-08-10 session close, following up on PR #13/#15.
+
+## [OPEN 2026-08-10, high] `po_materials.estimate_extract.tier1_enabled` reads live TRUE with the ADR-0004 E6 corpus eval never run — predates this session
+
+While seeding the new `po_materials.estimate_extract.tier1_xlsx_enabled` gate `false` (per the
+dark-ship-a-new-gate convention), this session found its sibling gate — **`tier1_enabled`, the
+PDF-tier gate** — already reading `true` in live `ITS_Config`. This predates the session; nothing
+this session did flipped it.
+
+Per `docs/adr/0004-rfq-estimate-lane.md` ("E6 corpus gate still applies"), a tier gate is only
+supposed to flip `true` after `scripts/eval_estimate_ladder.py` qualifies it against
+`tests/fixtures/estimate_corpus_expectations.json` — **that fixture still holds only its
+`_README` placeholder**, so no baseline has ever been snapshotted for *either* Tier-1 gate.
+`scripts/verify_cutover.py`'s check on this row is `non_empty` (present-and-any-value), so a
+green cutover run gives no signal that the value is doctrine-qualified. Worse, the corpus itself
+lives only on the **development Mac** (`~/Desktop/Evergreen project/Z. Quotes 1`) — confirmed
+absent on the production host this session (Desktop held one screenshot, a home-wide search
+found no quote corpus, `Estimate_Log` had 0 rows, three sampled Box `Quotes` folders were empty)
+— so the eval cannot even be run where the gate is actually live.
+
+This is the same failure shape as the manifest-import "waived precondition" entry above (a gate
+whose go-live precondition is unmet, discovered after the fact) — a distinct lane (estimates, not
+manifests), and here the divergence predates this session rather than being introduced by it.
+
+**Operator decision this session:** waived, not fixed. The acceptance bar was narrowed to "it can
+process the RFQ Excel sheets," verified directly against real output of
+`quote_form.render_quote_form` (part numbers, units, and the M-divisor line — 2,500 @
+$1,098.90/M = $2,747.25 — checked exact). `tier1_xlsx_enabled` stays seeded `false` pending the
+same eval. Full narrative in auto-memory `estimate-corpus-lives-on-dev-mac.md`.
+
+**Fix:** either (a) get the corpus onto the production host or a durable Box home (mirroring the
+"corpus durability" gap already tracked on the manifest-import entry above) and run
+`eval_estimate_ladder.py --write-expectations`, formally qualifying `tier1_enabled` after the
+fact; or (b) have Seth ratify the narrowed RFQ-form acceptance bar, in writing, as superseding
+ADR-0004 E6's original corpus-eval requirement for this gate.
+
+**Tag:** `po_materials`, `estimates`, `adr-0004`, `verification-gap`, `waived-precondition`,
+`high`.
+
+**Revisit when:** before the next estimate-extraction hardening pass, or immediately if Seth
+wants the corpus run properly.
+
+Surfaced: 2026-08-10 session close; see auto-memory `estimate-corpus-lives-on-dev-mac.md`.
+
+## [OPEN 2026-08-10, low] `docs/doctrine_manifest.yaml`'s `workstreams: slugs` list is stale — undercounts real blueprint workstreams, and M5's coverage matching misses case/hyphen variants
+
+Cross-repo supersession check (session-close routine) against the fetched blueprint
+`origin/main`: the blueprint currently has 10 workstream directories (`ai-employee-capabilities`,
+`email-triage`, `field-ops-portal`, `operator-dashboard`, `progress-reporting`,
+`purchase-orders`, `safety-portal`, `safety-reports`, `subcontracts`, `urs-marine-portal`), but
+`docs/doctrine_manifest.yaml`'s `workstreams.slugs` list still reads `count: 6` with only
+`safety_reports, safety_portal, email_triage, purchase_orders, subcontracts,
+ai_employee_capabilities` — missing **`progress_reports`, `field_ops`, `operator_dashboard`, and
+`urs_marine_portal`** entirely, all four of which are real, live, exec-acknowledged workstreams
+(CLAUDE.md carries a "What's stubbed vs. real" row for each of the first three; `urs_marine` is
+explicitly out-of-repo-scope by design — a different, future customer). This was already flagged
+once before and not completed: `docs/tech_debt_closed.md`'s closed Progress-Reporting §51 entry
+names "propagate `docs/doctrine_manifest.yaml` ... the blueprint `workstreams.slugs`/`count` if
+the canonical set is updated" as a fix step at the v20 doctrine bump — that step was never done.
+
+Running `scripts/check_doctrine_drift.py` confirms the consequence: its `check_workstream_coverage`
+(M5) can only check slugs actually IN the list, so it is structurally blind to drift on
+`progress_reports`/`field_ops`/`operator_dashboard`/`urs_marine_portal` today. Separately, M5's
+own matching against the two slugs it DOES check is too narrow: it flags both `email_triage` and
+`ai_employee_capabilities` as "no exec-repo mention" even though CLAUDE.md mentions "Email Triage
+workstream" in prose — the check's variant set (`slug`, `slug.replace("_","-")`,
+`slug.replace("_","")`) is case-sensitive and doesn't handle a space-separated Title Case
+mention, so it false-negatives on a real acknowledgment. (`ai_employee_capabilities` may be a
+genuine gap — it reads as a cross-cutting capabilities catalog, not a coded module, and does not
+appear verbatim in CLAUDE.md under any casing.)
+
+**Fix:** update `workstreams.slugs`/`count` in `docs/doctrine_manifest.yaml` to the current 10
+(or however many are exec-scoped), and loosen `check_workstream_coverage`'s matching to be
+case-insensitive and space/hyphen/underscore-insensitive. Both are `scripts/`-code changes, out
+of this session-close pass's scope.
+
+**Tag:** `doctrine-manifest`, `cross-repo`, `docs`, `low`.
+
+**Revisit when:** next doctrine-manifest touch, or the next `doc-reconciliation-auditor` pass.
+
+Surfaced: 2026-08-10 session close (cross-repo supersession check).
