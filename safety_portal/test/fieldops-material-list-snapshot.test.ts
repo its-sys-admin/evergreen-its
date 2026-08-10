@@ -25,6 +25,9 @@ interface LineRow {
   unit: string | null;
   expected_date: string | null;
   status: string;
+  part_number: string | null;
+  category: string | null;
+  expected_ship_date: string | null;
   received_at: number | null;
   qty_received: number | null;
   received_by_display: string | null;
@@ -55,14 +58,18 @@ async function seedLine(
     seq?: number;
     active?: 0 | 1;
     unplanned?: 0 | 1;
+    partNumber?: string | null;
+    category?: string | null;
+    expectedShipDate?: string | null;
   } = {},
 ): Promise<{ id: number; line_uuid: string }> {
   const lineUuid = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO job_expected_materials
        (job_id, material_id, description, qty, unit, expected_date, status,
-        received_at, received_by, qty_received, note, seq, active, unplanned, line_uuid)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        received_at, received_by, qty_received, note, seq, active, unplanned, line_uuid,
+        part_number, category, expected_ship_date)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   )
     .bind(
       jobId,
@@ -80,6 +87,9 @@ async function seedLine(
       opts.active ?? 1,
       opts.unplanned ?? 0,
       lineUuid,
+      opts.partNumber ?? null,
+      opts.category ?? null,
+      opts.expectedShipDate ?? null,
     )
     .run();
   const id = (await env.DB.prepare("SELECT id FROM job_expected_materials WHERE line_uuid=?")
@@ -124,6 +134,9 @@ describe("GET /api/internal/fieldops/material-list-snapshot", () => {
       expectedDate: "2026-07-10",
       status: "expected",
       seq: 10,
+      partNumber: "7000153",
+      category: "HARDWARE",
+      expectedShipDate: "2026-07-02",
     });
 
     const res = await call(PATH, { bearer: FIELDOPS_BEARER });
@@ -141,8 +154,46 @@ describe("GET /api/internal/fieldops/material-list-snapshot", () => {
       unit: "panels",
       expected_date: "2026-07-10",
       status: "expected",
+      // 0059 additions. 0059 deliberately left this route on pre-0059 columns and deferred their
+      // mirror exposure to PR4 — this pins that it happened.
+      part_number: "7000153",
+      category: "HARDWARE",
+      expected_ship_date: "2026-07-02",
       unplanned: 0,
       seq: 10,
+    });
+  });
+
+  it("projects expected_ship_date and expected_date as DISTINCT fields (ship vs delivery)", async () => {
+    // 0059 is explicit that expected_date KEEPS its 0031 meaning (expected DELIVERY) and the new
+    // column is the SHIP date. Collapsing the two would silently change the meaning of live data on
+    // every surface already rendering "Expected Date".
+    await seedJob("JOB-A", { projectName: "Job Alpha", status: "active" });
+    await seedLine("JOB-A", {
+      description: "piles",
+      expectedDate: "2026-07-10",     // delivery
+      expectedShipDate: "2026-07-02", // ship — earlier, and separately tracked
+    });
+
+    const res = await call(PATH, { bearer: FIELDOPS_BEARER });
+    const { lines } = (await res.json()) as { lines: LineRow[] };
+    expect(lines[0].expected_date).toBe("2026-07-10");
+    expect(lines[0].expected_ship_date).toBe("2026-07-02");
+    expect(lines[0].expected_date).not.toBe(lines[0].expected_ship_date);
+  });
+
+  it("a pre-0059 line projects part_number / category / expected_ship_date as NULL", async () => {
+    // Every line written before the 0059 ALTERs has NULL there; the mirror must render blank cells
+    // rather than fail, which is what the daemon's `or ""` mapping relies on.
+    await seedJob("JOB-A", { projectName: "Job Alpha", status: "active" });
+    await seedLine("JOB-A", { description: "legacy line" });
+
+    const res = await call(PATH, { bearer: FIELDOPS_BEARER });
+    const { lines } = (await res.json()) as { lines: LineRow[] };
+    expect(lines[0]).toMatchObject({
+      part_number: null,
+      category: null,
+      expected_ship_date: null,
     });
   });
 

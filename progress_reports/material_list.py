@@ -57,7 +57,7 @@ COL_MATERIAL = "Material"            # catalog model_id, or '—' for a free-tex
 COL_DESCRIPTION = "Description"
 COL_QTY = "Qty"                      # expected quantity (pre-formatted string)
 COL_UNIT = "Unit"
-COL_EXPECTED_DATE = "Expected Date"  # DATE (estimated arrival)
+COL_EXPECTED_DATE = "Expected Date"  # DATE — the expected DELIVERY date (0031 meaning, unchanged)
 COL_STATUS = "Status"                # expected | received | incident — TEXT controlled-vocab
 COL_DELIVERED_QTY = "Delivered Qty"  # actual quantity recorded at receipt (pre-formatted string)
 COL_RECEIVED_AT = "Received At"      # DATE (receipt stamped)
@@ -65,6 +65,14 @@ COL_RECEIVED_BY = "Received By"      # DISPLAY NAME (personnel.name) — NEVER a
 COL_NOTE = "Note"
 COL_UNPLANNED = "Unplanned"          # Yes | blank (off-manifest field-added line)
 COL_ON_LIST = "On List"              # Active | Removed — TEXT controlled-vocab, NOT a PICKLIST
+# PR2 (migration 0059) line additions, mirrored from PR4 on. APPENDED at the end of the schema
+# rather than slotted beside their logical neighbours: `ensure_columns` back-fills pre-existing
+# sheets by APPENDING, so keeping the creation order identical is what stops the two sheet
+# populations diverging visually forever. Column order is a display property — an operator can
+# reorder in the Smartsheet UI without touching data.
+COL_PART_NUMBER = "Part Number"      # BOM part no.; the key PR3's manifest importer matches loads on
+COL_CATEGORY = "Category"            # BOM grouping (e.g. 'HARDWARE') — display-only
+COL_EXPECTED_SHIP_DATE = "Expected Ship Date"  # DATE — the SHIP date; Expected Date is DELIVERY
 
 # Controlled vocabulary (TEXT cells, NOT picklist — avoids the REGISTRY-parity footgun; mirrors
 # equipment_status's On Job choice).
@@ -88,6 +96,7 @@ UNPLANNED_YES = "Yes"
 _TRACKED_COLS: tuple[str, ...] = (
     COL_LINE, COL_MATERIAL, COL_DESCRIPTION, COL_QTY, COL_UNIT, COL_EXPECTED_DATE, COL_STATUS,
     COL_DELIVERED_QTY, COL_RECEIVED_AT, COL_RECEIVED_BY, COL_NOTE, COL_UNPLANNED, COL_ON_LIST,
+    COL_PART_NUMBER, COL_CATEGORY, COL_EXPECTED_SHIP_DATE,
 )
 
 # Schema passed to create_sheet_in_folder. Order = left-to-right UI order. Exactly one primary
@@ -107,6 +116,24 @@ MATERIAL_LIST_COLUMNS: list[dict[str, Any]] = [
     {"title": COL_NOTE, "type": "TEXT_NUMBER"},
     {"title": COL_UNPLANNED, "type": "TEXT_NUMBER"},
     {"title": COL_ON_LIST, "type": "TEXT_NUMBER"},
+    # 0059 additions — APPENDED, which is what lets a back-filled sheet end up with the identical
+    # layout (`ensure_columns` appends too). See BACKFILL_COLUMNS below.
+    {"title": COL_PART_NUMBER, "type": "TEXT_NUMBER"},
+    {"title": COL_CATEGORY, "type": "TEXT_NUMBER"},
+    {"title": COL_EXPECTED_SHIP_DATE, "type": "DATE"},
+]
+
+# What `ensure_material_list_sheet` back-fills onto an ALREADY-CREATED sheet: EVERY non-primary
+# column, not just the newest three. Derived from the creation schema so the two cannot drift.
+#
+# Deliberately the whole set rather than a tail slice. A slice would have to be re-cut by hand on
+# every future addition, and getting it wrong is silent — appending a fourth column while the slice
+# still says "last three" would quietly stop back-filling `Part Number` onto sheets that never got
+# it. Passing everything costs nothing, because `ensure_columns` resolves all titles against ONE
+# cached map and issues no API call when none are missing; it also self-heals a column an operator
+# deleted by hand. The primary is excluded because a sheet's primary is fixed at create.
+BACKFILL_COLUMNS: list[dict[str, Any]] = [
+    c for c in MATERIAL_LIST_COLUMNS if not c.get("primary")
 ]
 
 # Cosmetic styling — Smartsheet format-descriptor strings (mirror equipment_status's palette).
@@ -131,6 +158,9 @@ MATERIAL_LIST_STYLES: list[dict[str, Any]] = [
     {"title": COL_NOTE, "width": 260},
     {"title": COL_UNPLANNED, "width": 100},
     {"title": COL_ON_LIST, "width": 100},
+    {"title": COL_PART_NUMBER, "width": 130},
+    {"title": COL_CATEGORY, "width": 130},
+    {"title": COL_EXPECTED_SHIP_DATE, "width": 130, "format": FMT_DATE},
 ]
 
 
@@ -221,18 +251,58 @@ def _warn_on_thin_headroom(sheet_name: str) -> None:
         )
 
 
+def _backfill_columns_best_effort(sheet_id: int, sheet_name: str) -> None:
+    """Add any `BACKFILL_COLUMNS` title missing from an existing sheet. Never raises.
+
+    Best-effort on purpose. A back-fill failure (breaker OPEN, a 403, an API blip) must NOT stop the
+    mirror: a sheet whose schema is one column behind still mirrors every column it does have, and
+    the next cycle retries. The cells for a genuinely-absent column still surface loudly through the
+    per-line fence rather than being silently dropped — this closes the common cause, it does not
+    hide the symptom.
+    """
+    try:
+        added = smartsheet_client.ensure_columns(sheet_id, BACKFILL_COLUMNS)
+    except Exception as exc:  # noqa: BLE001 — schema top-up; never block the mirror
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"could not back-fill columns on Material List {sheet_name!r} (sheet {sheet_id}); "
+            f"cells for any missing column will fail per-line until this succeeds: "
+            f"{type(exc).__name__}: {exc!r}",
+            error_code="material_list_column_backfill_failed",
+        )
+        return
+    if added:
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"added {len(added)} missing column(s) to Material List {sheet_name!r} "
+            f"(sheet {sheet_id}): {', '.join(added)} — a pre-existing sheet was brought up to the "
+            f"current tracker schema.",
+            error_code="material_list_columns_backfilled",
+        )
+
+
 def ensure_material_list_sheet(project_name: str) -> int:
     """Find-or-create the job's single standing Material List sheet; return its sheet ID.
 
     Idempotent: a second call returns the same sheet with no write. Race-tolerant at both the folder
     and sheet levels (re-find after create, adopt first, WARN the duplicate). The A1 capacity
     tripwire runs ONLY on the create branch.
+
+    On the FIND branch it also back-fills any missing column (`BACKFILL_COLUMNS`). A sheet's columns
+    are fixed at CREATE, so every tracker addition splits the estate in two — sheets new enough to
+    have the column, and sheets that predate it, where writing the new cell raises `KeyError` out of
+    `_resolve_cells`. That error is what deferred the 0059 Part Number / Category / Expected Ship
+    Date columns; closing it here means the mirror never has to choose between erroring on old
+    sheets and silently under-writing them. Costs nothing when nothing is missing (see
+    `smartsheet_client.ensure_columns`), and is best-effort: a back-fill failure WARNs and returns
+    the sheet, because a stale-schema sheet still mirrors every column it DOES have.
     """
     folder_id = _ensure_job_folder(project_name)
     name = material_list_sheet_name(project_name)
 
     existing = smartsheet_client.find_sheet_by_name_in_folder(folder_id, name)
     if existing is not None:
+        _backfill_columns_best_effort(existing, name)
         return existing
 
     _warn_on_thin_headroom(name)
@@ -294,6 +364,9 @@ def upsert_line_row(
     received_by: str,
     note: str,
     unplanned: str,
+    part_number: str = "",
+    category: str = "",
+    expected_ship_date: str = "",
 ) -> int:
     """CHANGE-ONLY find-or-create of one material line as an On-List row; return its row ID.
 
@@ -307,6 +380,12 @@ def upsert_line_row(
     All values are pre-formatted strings; `line` is the primary label (catalog name or description);
     `received_by` is the DISPLAY name only; `unplanned` is `'Yes'` or `''`. NEVER deletes — a removed
     line is marked in place by `retire_removed`.
+
+    `part_number` / `category` / `expected_ship_date` (0059) default to `''` — the ONLY defaulted
+    parameters here. They are defaulted because a line predating the migration genuinely has no value
+    for them, so `''` is the truthful reading rather than a placeholder; every other field is
+    required precisely so a caller cannot forget one. `expected_ship_date` is the SHIP date and is
+    distinct from `expected_date`, which keeps its 0031 meaning of expected DELIVERY.
     """
     desired: dict[str, str] = {
         COL_LINE: line,
@@ -322,6 +401,9 @@ def upsert_line_row(
         COL_NOTE: note,
         COL_UNPLANNED: unplanned,
         COL_ON_LIST: ON_LIST_ACTIVE,
+        COL_PART_NUMBER: part_number,
+        COL_CATEGORY: category,
+        COL_EXPECTED_SHIP_DATE: expected_ship_date,
     }
 
     existing = find_line_row(sheet_id, line_uuid)

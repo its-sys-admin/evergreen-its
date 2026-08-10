@@ -1666,6 +1666,12 @@ def _reconcile_job_with_materials(
                 received_by=str(e.get("received_by_display") or "").strip(),
                 note=str(e.get("note") or "").strip(),
                 unplanned=material_list.UNPLANNED_YES if e.get("unplanned") else "",
+                # 0059 line additions. `expected_ship_date` is the SHIP date — deliberately NOT the
+                # same field as `expected_date` above, which is the expected DELIVERY date; both are
+                # mirrored because the office schedules against one and receives against the other.
+                part_number=str(e.get("part_number") or "").strip(),
+                category=str(e.get("category") or "").strip(),
+                expected_ship_date=str(e.get("expected_ship_date") or "").strip(),
             )
             out["upserted"] += 1
         except (
