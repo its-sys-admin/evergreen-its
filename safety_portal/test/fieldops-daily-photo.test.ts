@@ -731,7 +731,7 @@ describe("DR S2 — GET /api/internal/pending carries the daily-photo claim mani
   });
 });
 
-// ── 0062: optional material-line binding ────────────────────────────────────────────────────
+// ── 0063: optional material-line binding ────────────────────────────────────────────────────
 // The binding is established at UPLOAD and validated against the job's own rows, because the
 // submission's photo refs keep their exact {pool_id, caption?} shape — a foreign key must never
 // be able to ride payload_json in from the client.
@@ -769,10 +769,10 @@ async function seedReceiptEvent(lineId: number, jobId: string): Promise<number> 
   return row.id;
 }
 
-describe("daily photo — material-line binding (0062)", () => {
+describe("daily photo — material-line binding (0063)", () => {
   it("an unbound photo stores NULL binding columns and omits the keys from photo_json", async () => {
     // The backward-compatibility assertion: an ordinary day photo must serialize exactly as it
-    // did before 0062, or every pre-existing signature would change meaning.
+    // did before 0063, or every pre-existing signature would change meaning.
     const id = await uploadOk(manager);
     const row = (await env.DB.prepare(
       "SELECT line_uuid, receipt_event_id, photo_json FROM daily_photo_pool WHERE id=?",

@@ -316,7 +316,7 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
 
     const actor = c.get("session").username;
 
-    // ── Optional material-line binding (0062) ────────────────────────────────────────────────
+    // ── Optional material-line binding (0063) ────────────────────────────────────────────────
     // Both fields are OPTIONAL: an ordinary day photo sends neither and is completely
     // unaffected. When present they are validated HERE, against THIS job's own rows — the
     // binding is established at upload precisely because the submission's photo refs keep their
@@ -367,13 +367,13 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
     if (!c.env.HMAC_PAYLOAD_SECRET) return c.json({ error: "server_misconfigured" }, 503);
     // photo_json = the EXACT stored string the HMAC covers: the wire PhotoValue + the
     // AUTHENTICATED uploader (the G1 contract — see dailyPhotoCanonical).
-    // The 0062 binding rides INSIDE photo_json so the HMAC COVERS it. A bare column would not
+    // The 0063 binding rides INSIDE photo_json so the HMAC COVERS it. A bare column would not
     // be signature-covered, so anything trust-bearing (the Mac's screening pass, any later
     // audit) must read the binding out of the verified photo_json — the columns below are a
     // queryable denormalization of these exact values, never the authority.
     //
     // Keys are omitted entirely when unbound rather than written as null, so an ordinary day
-    // photo serializes byte-for-byte as it did before 0062 and its signature is unchanged. The
+    // photo serializes byte-for-byte as it did before 0063 and its signature is unchanged. The
     // Mac parses photo_json with .get() and is key-tolerant, so the added keys are backward-
     // compatible in both directions.
     const photoJson = JSON.stringify({
@@ -400,7 +400,7 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
     const res = await c.env.DB.batch([
       c.env.DB
         .prepare(
-          // The 0062 binding columns are threaded INTO this INSERT…SELECT, never written by a
+          // The 0063 binding columns are threaded INTO this INSERT…SELECT, never written by a
           // follow-up UPDATE: the caps ride this statement's own WHERE, so a second write would
           // sit outside the atomic fold and could land on a row the caps had refused.
           `INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac,

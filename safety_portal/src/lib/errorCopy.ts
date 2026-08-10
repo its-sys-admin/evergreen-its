@@ -209,7 +209,7 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_event_date: "That isn't a valid delivery date.",
   invalid_shipment_id: "That load isn't on this material line — pick one of its own loads.",
   invalid_line_id: "That material line no longer exists — refresh and try again.",
-  // ── daily-photo → material-line binding (0062) ───────────────────────────────────────────────
+  // ── daily-photo → material-line binding (0063) ───────────────────────────────────────────────
   // Deliberately DISTINCT codes from invalid_line_id above: that one means "the line you are
   // marking vanished", these mean "the photo could not be attached to that line". Related cause,
   // different thing the field user has to actually do about it.
