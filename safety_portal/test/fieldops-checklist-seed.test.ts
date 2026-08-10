@@ -196,6 +196,50 @@ describe("0061 seed — GAYK/DOYLE transport checklists", () => {
     expect(await templateItems(GAYK_LOADING)).toEqual(beforeLoading);
   });
 
+  it("0062 seeds the weekly maintenance template with its 9 source duties, all manual_attest", async () => {
+    const GAYK_WEEKLY = "GAYK/DOYLE Piledriver Weekly Maintenance Check";
+    const rows = (await env.DB.prepare(
+      "SELECT id, job_id, active FROM checklist_templates WHERE kind='generic_inspection' AND title=?1",
+    ).bind(GAYK_WEEKLY).all<{ id: number; job_id: string | null; active: number }>()).results ?? [];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].job_id).toBeNull();
+    expect(rows[0].active).toBe(1);
+
+    const items = await templateItems(GAYK_WEEKLY);
+    expect(items.map((i) => i.seq)).toEqual([10, 20, 30, 40, 50, 60, 70, 80, 90]);
+    expect(items.every((i) => i.item_type === "manual_attest")).toBe(true);
+    expect(items.every((i) => i.target_count === null)).toBe(true);
+    // The source's compound first bullet is SPLIT into grease (10) + track tension (20) so a skipped
+    // track check cannot ride in on a completed greasing round.
+    expect(items[0].label).toContain("Kajo MOS 2 grease");
+    expect(items[1].label).toContain("track tension");
+    // Torque and clearance figures are the whole point of a maintenance checklist — pin them.
+    expect(items[2].label).toContain("75Nm/55 ft-lbs");
+    expect(items[1].label).toContain('25mm/1"');
+    expect(items[7].label).toContain('25mm/1"');
+  });
+
+  it("re-applying every 0062 statement TWICE changes nothing (NOT-EXISTS guards hold)", async () => {
+    const GAYK_WEEKLY = "GAYK/DOYLE Piledriver Weekly Maintenance Check";
+    const beforeTpl = (await env.DB.prepare("SELECT COUNT(*) n FROM checklist_templates").first<{ n: number }>())!.n;
+    const beforeItems = (await env.DB.prepare("SELECT COUNT(*) n FROM checklist_items").first<{ n: number }>())!.n;
+    const before = await templateItems(GAYK_WEEKLY);
+
+    await reapplyMigration("0062");
+    await reapplyMigration("0062");
+
+    expect((await env.DB.prepare("SELECT COUNT(*) n FROM checklist_templates").first<{ n: number }>())!.n).toBe(beforeTpl);
+    expect((await env.DB.prepare("SELECT COUNT(*) n FROM checklist_items").first<{ n: number }>())!.n).toBe(beforeItems);
+    expect(await templateItems(GAYK_WEEKLY)).toEqual(before);
+  });
+
+  it("0062 seeds NO recurrence row — cadence is an operator assignment, not a migration guess", async () => {
+    // checklist_recurrences requires a NOT NULL assignee_personnel_id AND job_id (0040). A seeded
+    // row would invent an assignment against live tenant data the migration cannot know.
+    const n = (await env.DB.prepare("SELECT COUNT(*) n FROM checklist_recurrences").first<{ n: number }>())!.n;
+    expect(n).toBe(0);
+  });
+
   it("0061 does not disturb the daily_default or the 0028 library", async () => {
     expect(await dailyItems()).toEqual(EXPECTED_DAILY);
     const titles = ((await env.DB.prepare(
