@@ -100,3 +100,60 @@ describe("validateDraft — header input types", () => {
     );
   });
 });
+
+// ── Definition-managed section keys join the uniqueness check ────────────────────
+// THE BUG this guards: `validateSection` is a switch that returns void, and the project does
+// not set `noImplicitReturns` — so a section type with NO case falls out silently and tsc
+// cannot see the hole. `additional_photos` was missing from BOTH editor mirrors
+// (editorValidation.ts + FormEditor.tsx) while editorModel.ts already carried it in its two
+// registries, so its key never entered `topLevel` and a collision passed the inline check,
+// only to be refused later by the Worker's publish validation.
+//
+// Driven off READ_ONLY_SECTION_TYPES so a definition-managed type added without a case fails HERE.
+
+/** A draft whose definition-managed section deliberately COLLIDES with a freeform key. */
+function draftWithCollidingKey(section: Record<string, unknown>): FormDefinition {
+  return {
+    form_code: "probe-v1",
+    parent_form_code: "probe",
+    form_name: "Probe",
+    variant_label: null,
+    version: 1,
+    archetype: "sectioned_assessment",
+    source_pdf: "",
+    sections: [
+      { type: "freeform", key: "clash", label: "Clash" },
+      section,
+    ] as unknown as FormDefinition["sections"],
+  };
+}
+
+const KEYED_READ_ONLY: Record<string, Record<string, unknown>> = {
+  job_requirements: { type: "job_requirements", key: "clash", title: "R" },
+  expected_materials: { type: "expected_materials", key: "clash", title: "M" },
+  additional_photos: { type: "additional_photos", key: "clash", title: "P" },
+};
+
+describe("validateDraft — definition-managed section keys occupy the value namespace", () => {
+  it.each(Object.keys(KEYED_READ_ONLY))(
+    "%s: a key colliding with another section is caught INLINE, not at publish",
+    (type) => {
+      const errors = validateDraft(draftWithCollidingKey(KEYED_READ_ONLY[type]), CTX);
+      expect(
+        errors.some((e) => /used in more than one section/i.test(e)),
+        `"${type}" key never reached the uniqueness check — a missing case in validateSection`,
+      ).toBe(true);
+    },
+  );
+
+  it("every KEYED read-only type has a fixture above (guard against list drift)", async () => {
+    const { READ_ONLY_SECTION_TYPES } = await import("../editorModel");
+    // guidance / form_link are the two read-only types that carry NO key, so they are
+    // legitimately absent from the collision fixtures.
+    const keyless = new Set(["guidance", "form_link"]);
+    for (const t of READ_ONLY_SECTION_TYPES) {
+      if (keyless.has(t)) continue;
+      expect(KEYED_READ_ONLY[t], `no collision fixture for keyed read-only type "${t}"`).toBeTruthy();
+    }
+  });
+});

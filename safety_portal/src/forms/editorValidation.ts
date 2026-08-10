@@ -226,9 +226,24 @@ function validateSection(s: Section, idx: number, topLevel: string[], errors: st
       checkSectionKey(s.key, where, topLevel, errors);
       return;
     // expected_materials (Material receipts M2): read-only in the builder like
-    // job_requirements. It files NO values under its key, but the key is still RESERVED in
-    // the value namespace (mirrors worker/publishValidation.ts), so it joins the check.
+    // job_requirements. From daily-report-v7 its key IS value-bearing (the host files the day's
+    // expected-materials snapshot there); either way the key occupies the value namespace
+    // (mirrors worker/publishValidation.ts), so it joins the uniqueness check.
     case "expected_materials":
+      checkSectionKey(s.key, where, topLevel, errors);
+      return;
+    // additional_photos (DR-photo-pool Slice 1): read-only in the builder, same as the two
+    // above. Its key is the FIXED wire key 'additional_photos' and the submission files pool
+    // REFERENCES under it, so it very much occupies the value namespace.
+    //
+    // This case was MISSING. `validateSection` returns void and the project does not set
+    // `noImplicitReturns`, so a section type with no case falls out of the switch silently and
+    // tsc cannot see the hole. The consequence was narrow but real: an additional_photos key
+    // colliding with another section's key passed the in-builder check and was caught only
+    // later by the Worker's publish validation — turning an inline editor error into a failed
+    // publish. `FormEditor.readonly.test.tsx` now carries an additional_photos fixture so the
+    // omission cannot recur unnoticed.
+    case "additional_photos":
       checkSectionKey(s.key, where, topLevel, errors);
       return;
   }
