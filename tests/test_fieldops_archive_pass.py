@@ -301,3 +301,55 @@ def test_the_gate_is_operator_editable_and_cutover_verified():
     # non_empty, never forced true — demanding "true" would force archiving ON at cutover, which
     # is an operator decision, not a cutover gate's.
     assert row.requirement == "non_empty"
+
+
+def test_a_stopped_archive_makes_the_whole_cycle_degraded_not_ok(mocker):
+    """`partial` / `failed` must make the whole cycle DEGRADED, never leave it OK.
+
+    Both states are TERMINAL for the daemon — the queue serves only
+    `archive_state IN ('requested','in_progress')` — so a stopped archive leaves a job
+    half-relocated across Smartsheet AND Box with nothing to resume it. Until 2026-08-10 they were
+    tallied only into `archive["partial"]`/`["failed"]`, which fed `items_processed` and never
+    `total_errors`, so the one archive outcome that always needs a human reported a GREEN heartbeat.
+
+    This drives the real `_sync_inside_lock` tally rather than the summary helper: an earlier
+    version of this test asserted only on `_cycle_error_summary` and stayed green when the fix was
+    reverted, which is the green-test-proves-nothing trap (HOUSE_REFLEXES §2).
+    """
+    mocker.patch.object(fieldops_sync, "_resolve_credentials",
+                        return_value=("https://portal.example", "tok"))
+    mocker.patch.object(fieldops_sync, "_write_heartbeat", return_value=None)
+    mocker.patch.object(fieldops_sync, "_write_watchdog_marker", return_value=None)
+    mocker.patch.object(fieldops_sync, "error_log")
+    mocker.patch.object(fieldops_sync.circuit_breaker, "is_open", return_value=False)
+    mocker.patch.object(fieldops_sync.portal_client, "get_fieldops_pending_jobs", return_value=[])
+    mocker.patch.object(fieldops_sync, "_reset_pending_fetch_failures", return_value=None)
+    for gate in ("_hours_enabled", "_equipment_enabled", "_materials_enabled",
+                 "_incidents_enabled", "_receipts_enabled"):
+        if hasattr(fieldops_sync, gate):
+            mocker.patch.object(fieldops_sync, gate, return_value=False)
+    mocker.patch.object(fieldops_sync, "_archive_enabled", return_value=True)
+    hb_row = mocker.patch.object(fieldops_sync, "_write_heartbeat_row", return_value=None)
+
+    # One job relocated PART of the way and stopped. The pass itself raised nothing: errors=0.
+    mocker.patch.object(
+        fieldops_sync, "_archive_pass",
+        return_value={"complete": 0, "partial": 1, "failed": 0, "capped": 0, "errors": 0},
+    )
+
+    fieldops_sync._sync_inside_lock()
+
+    kwargs = hb_row.call_args.kwargs
+    assert kwargs["status"] == "DEGRADED", (
+        "a partial archive left the cycle status green — the job is half-relocated across two "
+        "external systems and nothing will resume it"
+    )
+    assert "STOPPED" in (kwargs["error_summary"] or "")
+
+
+def test_cycle_error_summary_names_a_stopped_archive_distinctly():
+    """An `errors=` count reads as "it will retry"; a stopped archive will not. The summary says so."""
+    assert fieldops_sync._cycle_error_summary(0, 0, 0) is None
+    summary = fieldops_sync._cycle_error_summary(1, 0, 1)
+    assert "errors=1" in summary and "STOPPED" in summary and "re-press" in summary
+    assert "STOPPED" not in fieldops_sync._cycle_error_summary(2, 0, 0)
