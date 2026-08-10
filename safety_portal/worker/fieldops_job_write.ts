@@ -491,6 +491,14 @@ const ARCHIVE_IN_FLIGHT = new Set(["requested", "in_progress"]);
  *  Set so the two cannot drift — `archiveTransition` asserts they agree at call time. */
 const ARCHIVE_RESTARTABLE_SQL = "('none','partial','failed')";
 
+/** The states a STALLED relocation may be RESUMED from, as distinct from newly raised. `none` is
+ *  deliberately absent: it means nothing is half-done, so there is nothing to resume. Un-archive
+ *  needs this because its normal entry point is `complete` — without a resume arm a half-restored
+ *  job has no forward path at all, and the UI's only retry control would have to run the OPPOSITE
+ *  direction to move at all. (issue #54) */
+const ARCHIVE_RESUMABLE = new Set(["partial", "failed"]);
+const ARCHIVE_RESUMABLE_SQL = "('partial','failed')";
+
 /** Unicode "Other or Separator" — the complement of Python's `str.isprintable()` (which excepts
  *  the ASCII space, handled at the call site). Cc/Cf/Cs/Co/Cn + Zl/Zp/Zs. */
 const NONPRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u;
@@ -600,8 +608,15 @@ async function archiveTransition(
     if (state === "complete") return c.json({ error: "already_archived" }, 409);
     if (!ARCHIVE_RESTARTABLE.has(state)) return c.json({ error: "archive_in_flight" }, 409);
   } else {
-    // Un-archiving is only meaningful once an archive completed.
-    if (state !== "complete") return c.json({ error: "not_archived" }, 409);
+    // Un-archiving is meaningful once an archive completed — OR as a RESUME of a stalled
+    // un-archive of our own (`partial`/`failed` still carrying direction='unarchive'). Without
+    // that second arm a half-restored job is stranded: `complete` is gone (the archive was
+    // consumed), so every un-archive request 409s and the only control the UI offers on a
+    // partial is "Try again", which would then have to run the OPPOSITE direction to move at
+    // all. A `partial` carrying direction='archive' is NOT resumable here — that one is still
+    // an archive, and belongs to the branch above. (issue #54)
+    const resumable = ARCHIVE_RESUMABLE.has(state) && inFlightDir === "unarchive";
+    if (state !== "complete" && !resumable) return c.json({ error: "not_archived" }, 409);
   }
 
   // Un-archive returns the job to INACTIVE, never active. Bringing folders back is a retrieval,
@@ -627,7 +642,8 @@ async function archiveTransition(
   const stateGuard =
     direction === "archive"
       ? `AND archive_state IN ${ARCHIVE_RESTARTABLE_SQL}`
-      : "AND archive_state = 'complete'";
+      : `AND (archive_state = 'complete' OR (archive_state IN ${ARCHIVE_RESUMABLE_SQL} ` +
+        "AND archive_direction = 'unarchive'))";
 
   // ONE batch: the mutation and its audit row land together or not at all (the "W4" class).
   const res = await c.env.DB.batch([
