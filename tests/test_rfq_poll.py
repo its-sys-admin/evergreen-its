@@ -755,3 +755,75 @@ def test_perjob_helper_is_idempotent_against_target_sheet(mocker):
     )
 
     append.assert_not_called()
+
+
+# ---- Fence durability: a failed Review-Queue ticket must NEVER cost the flag -------
+#
+# 2026-08-10 incident. Every fence wrote its Review-Queue row BEFORE the one-shot flag,
+# and `review_queue.add` propagates SmartsheetError by contract. So a Smartsheet blip at
+# fence time skipped the flag, the RFQ re-served next cycle, and a PERMANENT one-shot
+# fence degraded into unbounded per-cycle re-ticketing: 4 PENDING rows for ONE RFQ across
+# two cycles — and the first ticket had actually COMMITTED (the non-idempotent
+# unknown-commit case), so the "retry" duplicated a row that was already there.
+
+
+def test_all_vendors_fenced_flags_even_when_the_ticket_write_fails(_patch):
+    """The rfq-level fence one-shot-flags the RFQ even if its Review-Queue write raises,
+    and escalates the lost ticket to CRITICAL (the item IS fenced — an operator with no
+    ticket would otherwise never learn it). Revert the fix and the flag is never written,
+    which is exactly the unbounded re-fence loop."""
+    _patch["pending"].return_value = [_rfq_row(vendor_keys=["VEN-000007"])]
+    _patch["vendor"].return_value = None  # the sole vendor is unknown -> all fenced
+    _patch["review_q"].side_effect = rfq_poll.smartsheet_client.SmartsheetError("boom")
+
+    stats = _run(_patch)
+
+    # The flag reached disk despite BOTH ticket writes failing.
+    _patch["flags_persist"].assert_called_once()
+    persisted = _patch["flags_persist"].call_args.args[0]
+    assert persisted == {"7": "vendors_fenced"}
+    # ... and the lost tickets are loud, not silent.
+    codes = _logged_codes(_patch)
+    assert "rfq_fence_ticket_failed" in codes
+    assert stats.fenced == 1
+    # The RFQ was NOT receipted (nothing filed) — unchanged behaviour.
+    _patch["mark_filed"].assert_not_called()
+
+
+def test_hmac_fence_flags_even_when_the_ticket_write_fails(_patch):
+    """Same durability for the SECURITY fence. Its docstring promises the CRITICAL fires
+    'only on the FIRST sighting' — a lost flag breaks that promise and re-fires a
+    security CRITICAL + security-flagged row every 120 s."""
+    row = _rfq_row(vendor_keys=["VEN-000001"])
+    row["hmac"] = "deadbeef" * 8  # wrong signature
+    _patch["pending"].return_value = [row]
+    _patch["review_q"].side_effect = rfq_poll.smartsheet_client.SmartsheetError("boom")
+
+    _run(_patch)
+
+    _patch["flags_persist"].assert_called_once()
+    assert _patch["flags_persist"].call_args.args[0] == {"7": "hmac"}
+    codes = _logged_codes(_patch)
+    assert "rfq_hmac_failure" in codes
+    assert "rfq_fence_ticket_failed" in codes
+    _patch["render"].assert_not_called()  # never rendered, never filed
+    _patch["mark_filed"].assert_not_called()
+
+
+def test_standing_flagged_item_keeps_the_daemon_off_ok(_patch):
+    """An item flag-skipped every cycle is a PERMANENTLY WEDGED item, so the heartbeat
+    must not read OK. `total_flagged` omitted `skipped_flagged`, so the cycle AFTER a
+    fence flipped Last Cycle Status back to OK and the daemon looked healthy while the
+    RFQ sat wedged out of the queue forever."""
+    _patch["pending"].return_value = [_rfq_row(vendor_keys=["VEN-000001"])]
+    _patch["flags_load"].return_value = {"7": "vendors_fenced"}
+
+    stats = _run(_patch)
+
+    assert stats.skipped_flagged == 1
+    assert stats.filed == 0
+    _patch["render"].assert_not_called()
+    status = _patch["hb_row"].call_args.kwargs["status"]
+    assert status == "WARN", f"a standing fence must not read OK (got {status!r})"
+    summary = _patch["hb_row"].call_args.kwargs["error_summary"]
+    assert summary is not None and "standing=1" in summary
