@@ -23,32 +23,55 @@ rationale lives in `safety_portal/forms/README.md` (the definition contract) and
 
 Each form is **one JSON file** in `safety_portal/forms/` (the field/section layout,
 transcribed faithfully from the source PDF in `safety_portal/reference_forms/`). The
-**`ITS_Forms_Catalog`** Smartsheet sheet drives the portal dropdowns: a **parent**
-row per form type, plus **variant** rows for the types that have variants (Equipment,
-Toolbox Talk). The portal shows the parents; if the picked parent has variants, a 3rd
-picklist appears. Only **Active** rows appear.
+git-committed manifest **`safety_portal/catalog.json`** drives the portal dropdowns: one
+**parent** entry per form type, each holding one or more **forms** (variants). The portal
+shows the parents; if the picked parent holds more than one variant, a 3rd picklist
+appears. Only forms with `"status": "active"` appear.
 
-| Catalog column | Meaning |
+> **⚠️ Corrected 2026-08-10 — if you learned this runbook before today, re-read this.**
+> This section used to say the **`ITS_Forms_Catalog`** Smartsheet sheet drives the
+> dropdowns. It does not, and has not for some time: `safety_portal/src/forms/registry.ts`
+> states outright that `catalog.json` "REPLACES the never-built
+> ITS_Forms_Catalog→D1→/api/forms sync". **Editing that sheet changes nothing in the
+> portal.** The hazard this hid was not cosmetic — the old "Retire a form" step told you to
+> set a Smartsheet row to Inactive, so you would believe a form was withdrawn while it
+> stayed live and fillable in the field. The real retire step is below.
+
+| `catalog.json` field | Meaning |
 |---|---|
-| Form Name | Display label |
-| Form Code | The definition key (the `<form_code>.json` file). For a *variant* parent (Equipment / Toolbox), the parent's Form Code is the parent key, not a definition. |
-| **Parent Form Code** | Empty on a parent row; the parent's Form Code on a variant row. |
-| **Variant Label** | The 3rd-picklist label (e.g. "Skid Steer"); empty on parent / no-variant forms. |
-| Active | Active / Inactive / Archived — only **Active** appears in the portal. |
-| Display Order | Ascending sort. |
+| `parent_form_code` | The form-type key (e.g. `jha`, `equipment-preinspection`); matches every member definition's `parent_form_code`. |
+| `name` | Display label in the form-type dropdown. |
+| `category` | The workflow the type belongs to (`safety` / `progress`). |
+| `identity` | Version-independent key for one form = its `form_code` minus the `-vN` suffix. |
+| **`variant_label`** | The 3rd-picklist label (e.g. "Skid Steer"); `null` when the parent holds a single form. A parent is all-`null` or all-non-`null` — never mixed. |
+| **`status`** | `active` / `retired` — the **only** active-set gate. |
+| `current_form_code` | The version PMs currently fill; resolves to `safety_portal/forms/<code>.json`. |
+| `versions[]` | Every version ever published (append-only, so filed submissions still resolve). |
+| `display_order` | Ascending sort — among parents, and within a parent. |
+
+Definition files on disk are **append-only**: retiring or replacing a form flips this
+manifest and never deletes a `.json`, so every historical `form_code` keeps resolving for
+submissions already filed against it.
 
 ## Tasks (low-class — Successor-Operator can do)
 
 ### Retire a form or variant
-- Set the catalog row's **Active = Inactive** (temporarily off) or **Archived**
-  (permanently). It leaves the portal dropdown on the next sync. Never delete the row.
+- In the **portal → Forms** page, open the form and press **Retire**. That enqueues a
+  publish request; the Mac publish daemon flips the manifest entry to
+  `"status": "retired"`, opens and merges the PR, and redeploys. The form leaves the
+  picker once that publish reaches `live` (watch the admin **Status Monitor**).
+- Nothing is deleted — the definition file and its version history stay, so already-filed
+  submissions still render. Re-activating is the same flow in reverse.
+- **Do NOT hand-edit `catalog.json`** and do not touch `ITS_Forms_Catalog` — the first is a
+  code change (Tier 3), the second does nothing.
 
 ### Add a new Toolbox topic or Equipment variant (needs a definition file → escalate the code part)
-1. The **definition file** (`safety_portal/forms/<new-code>.json`) is a **code change**
-   — escalate to Seth (or a Claude Code session) to author it from the source PDF.
-2. Once the file exists, **you** add the catalog row: Form Name, **Form Code** =
-   the new file's `form_code`, **Parent Form Code** = the parent (e.g. `toolbox-talk`),
-   **Variant Label** = the picklist label, Active = Active. It appears next sync.
+1. The **definition file** (`safety_portal/forms/<new-code>.json`) is a **code change** —
+   escalate to Seth (or a Claude Code session) to author it from the source PDF.
+2. The catalog entry lands **in that same change**, not as a separate step you perform:
+   a definition without a manifest entry is invisible to the portal, so the two ship
+   together. Your part is confirming the new form appears in the picker afterwards, and
+   that its wording matches the source document.
 
 ### Update a form's wording/fields
 - Editing a `<form_code>.json` is a **code change** (escalate). After it lands, both
