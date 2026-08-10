@@ -17,7 +17,7 @@ vi.mock("../dayPhase", { spy: true });
 
 import { dayPhaseFor } from "../dayPhase";
 import { FormRenderer, initialValues } from "../FormRenderer";
-import { getDefinition } from "../registry";
+import { formCatalog, getDefinition } from "../registry";
 import type { FormDefinition } from "../types";
 
 /** Owns the values state like a real host (Daily tab / fill page) so keystrokes re-render. */
@@ -30,7 +30,13 @@ afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
 
 describe("StaticSectionView — memo short-circuit on keystroke re-renders", () => {
-  const DEF = getDefinition("daily-report-v5") as FormDefinition;
+  // Resolve the CURRENT daily report from the catalog rather than naming a version. The eager
+// registry window is "current + immediately-previous" (vite-plugin-eager-forms), so a
+// hard-coded code silently becomes null two cuts later — which is exactly what v7 did to the
+// v5 references here. These tests are about renderer behaviour, not a historical version.
+const DEF = getDefinition(
+  formCatalog().find((p) => p.parent_form_code === "daily-report")!.form_code!,
+) as FormDefinition;
   const GUIDANCE_COUNT = DEF.sections.filter((s) => s.type === "guidance").length;
 
   it("a keystroke re-render does NOT re-render guidance sections (dayPhaseFor call count stays flat)", () => {

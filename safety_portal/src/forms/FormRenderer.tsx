@@ -71,11 +71,56 @@ export interface JobRequirementResponse {
   response: string;
 }
 
+/** One row of the v7 expected-materials day snapshot. All display strings — see
+ *  `seedExpectedMaterialsSnapshot` for why this carries no ids. */
+export interface ExpectedMaterialSnapshotEntry {
+  material: string;
+  part_number: string;
+  expected: string;
+  status: string;
+  received: string;
+}
+
 /** A fresh (all-empty) values array for a fetched requirement set — the HOST seeds
  *  values[<section key>] with this when the items load, so a submission filed with zero
  *  interaction still carries the requirements it displayed. */
 export function seedRequirementResponses(items: DailyRequirementItem[]): JobRequirementResponse[] {
   return items.map((it) => ({ label: it.label, kind: it.kind, response: "" }));
+}
+
+/** Delivery state in the words the report uses on screen. The 0059 `receipt_status` rollup wins
+ *  when a mark exists; otherwise the coarse `status`, which also carries the orthogonal sticky
+ *  `incident` flag. */
+function receiptStatusLabel(r: ExpectedMaterialRow): string {
+  if (r.receipt_status === "delivered") return "Delivered";
+  if (r.receipt_status === "partial") return "Partially delivered";
+  if (r.receipt_status === "not_delivered") return "Not delivered";
+  if (r.status === "incident") return "Problem reported";
+  if (r.status === "received") return "Received";
+  return "Expected";
+}
+
+/** The day's expected-materials SNAPSHOT (v7) — what the report SHOWED, frozen into the values the
+ *  submission files.
+ *
+ *  Self-describing display strings, deliberately, exactly like `seedRequirementResponses`: the PDF
+ *  renders these generically, so a filed document keeps reading correctly however the live D1 list
+ *  is later edited, and a new field renders without a form-definition change. Nothing here is an id
+ *  or a foreign key — this is a printed record, not a join.
+ *
+ *  Why snapshot at all: the manager signs a report that displayed a set of materials in a
+ *  particular delivery state, and every later mark rewrites that state, so it cannot be
+ *  reconstructed from live data afterwards. v5/v6 filed nothing here; their PDFs are unchanged. */
+export function seedExpectedMaterialsSnapshot(
+  rows: ExpectedMaterialRow[],
+): ExpectedMaterialSnapshotEntry[] {
+  return rows.map((r) => ({
+    material: r.material_name || r.description || "",
+    part_number: r.part_number ?? "",
+    expected: r.qty == null ? "" : `${r.qty}${r.unit ? ` ${r.unit}` : ""}`,
+    status: receiptStatusLabel(r),
+    received: r.qty_received_total == null ? "" : String(r.qty_received_total),
+  }));
 }
 
 /** Adapter for `expected_materials` sections (Material receipts M2). Like FormLinkAdapter, the

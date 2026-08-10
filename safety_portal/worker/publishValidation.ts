@@ -380,11 +380,14 @@ function validateSection(s: unknown, idx: number, topLevel: string[]): string | 
       if (s.title !== undefined && !isStr(s.title)) return `${where}: job_requirements invalid title`;
       return null;
     }
-    // Expected-materials receipt placeholder (Material receipts M2): a keyed mount point with
-    // NO content of its own — the Daily tab renders the job's expected materials (D1
-    // job_expected_materials, M1) here. It files NO values under its key, but the key still
-    // goes through keyedSectionKey: reserving it in the value namespace keeps the mount from
-    // colliding with (or being shadowed by) a future value-bearing section of the same name.
+    // Expected-materials mount (Material receipts M2): a keyed mount with no content of its own
+    // in the DEFINITION — the Daily tab renders the job's expected materials (D1
+    // job_expected_materials, M1) here. From daily-report-v7 the key is VALUE-BEARING: the host
+    // files values.<key> = the day's self-describing expected-materials snapshot, which the PDF
+    // prints. (v5/v6 filed nothing under it; the namespace was reserved through keyedSectionKey
+    // precisely so a later value-bearing section of the same name could not collide with or
+    // shadow the mount — which is exactly what arrived, by design, at v7.) The validation is the
+    // same either way: a keyed section's key must be unique, whether or not it carries values.
     // AT MOST ONE per definition — enforced in validateDefinition, same discipline as
     // job_requirements; documented in forms/meta-schema.json.
     case "expected_materials": {

@@ -771,12 +771,11 @@ def test_daily_report_v4_renders_with_requirements_and_v3_content() -> None:
 
 
 # ── expected_materials section (Material receipts M2) ────────────────────────────
-def test_expected_materials_renders_note_line_only_in_submission_mode() -> None:
-    """The daily PDF's expected_materials section is DELIBERATELY a title + note line
-    pointing at Deliveries Received / the material-incident filings — the section is an
-    on-screen receipt affordance that files NO values of its own (the receipt data the
-    document of record needs already lands in the deliveries_received table + the incident
-    form's own submission). Even a stray value under the section's key changes nothing."""
+def test_expected_materials_absent_key_renders_the_original_note_line() -> None:
+    """A v5/v6 submission filed NO key here, and re-rendering one must still produce the
+    document that was filed. This is the historical-fidelity half of the v7 change: the key's
+    ABSENCE keeps the original title + note line, so no past daily report silently loses a
+    paragraph. (Its EMPTINESS means something different — see the test below.)"""
     definition = _load("daily-report-v5.json")
     submission = {
         "job_name": "Bradley 1", "work_date": "2026-07-02",
@@ -785,9 +784,6 @@ def test_expected_materials_renders_note_line_only_in_submission_mode() -> None:
                 {"item_material": "Q.PEAK DUO", "condition": "Received OK",
                  "notes": "qty 40 panels"},
             ],
-            # Defensive: nothing should ever write here (the section files no values) —
-            # and if something does, the renderer must NOT dump it into the document.
-            "expected_materials_receipt": [{"label": "should never render"}],
         },
     }
     text = _norm(_pdf_text(render_submission_pdf(definition, submission)))
@@ -795,9 +791,70 @@ def test_expected_materials_renders_note_line_only_in_submission_mode() -> None:
     assert "Expected materials" in text
     assert "Receipts recorded under Deliveries Received above" in text
     assert "Material Incident Report submissions" in text
-    assert "should never render" not in text
     # The receipt row the confirm action appended renders in the deliveries table.
     assert "Q.PEAK DUO" in text and "Received OK" in text and "qty 40 panels" in text
+
+
+def test_expected_materials_v7_snapshot_renders_as_a_table() -> None:
+    """From v7 the section IS value-bearing: the day's snapshot prints as a table.
+
+    This deliberately INVERTS the v5/v6 assertion that a value here must never reach the PDF.
+    That rule was wrong for a document of record — the report is signed against a delivery state
+    that every later mark rewrites, so refusing to print it was the data loss, not the guard."""
+    definition = _load("daily-report-v7.json")
+    submission = {
+        "job_name": "Bradley 1", "work_date": "2026-08-10",
+        "values": {
+            "expected_materials_receipt": [
+                {"material": "Q.PEAK DUO panels", "part_number": "7000153",
+                 "expected": "120 panels", "status": "Partially delivered", "received": "40"},
+                {"material": "Ground screws", "part_number": "", "expected": "500 ea",
+                 "status": "Expected", "received": ""},
+            ],
+        },
+    }
+    text = _norm(_pdf_text(render_submission_pdf(definition, submission)))
+    assert "Expected materials" in text
+    for cell in ("Q.PEAK DUO panels", "7000153", "120 panels", "Partially delivered",
+                 "Ground screws", "500 ea"):
+        assert cell in text, cell
+    # The v5/v6 note line is GONE once a snapshot exists — it pointed elsewhere for this data.
+    assert "Receipts recorded under Deliveries Received above" not in text
+
+
+def test_expected_materials_empty_snapshot_is_skipped_not_note_lined() -> None:
+    """A v7 job with NO expected materials files an empty array. Skip the section (the
+    job_requirements rule) rather than falling back to the v5 note line, which would point the
+    reader at receipts that do not exist."""
+    definition = _load("daily-report-v7.json")
+    submission = {
+        "job_name": "Bradley 1", "work_date": "2026-08-10",
+        "values": {"expected_materials_receipt": []},
+    }
+    text = _norm(_pdf_text(render_submission_pdf(definition, submission)))
+    assert "Receipts recorded under Deliveries Received above" not in text
+
+
+def test_expected_materials_malformed_entry_is_dropped_never_fatal() -> None:
+    """A non-dict entry is skipped and unknown keys render blank — a bad snapshot degrades the
+    row, never the document."""
+    definition = _load("daily-report-v7.json")
+    submission = {
+        "job_name": "Bradley 1", "work_date": "2026-08-10",
+        "values": {
+            "expected_materials_receipt": [
+                "not a dict",
+                {"label": "wrong shape"},
+                {"material": "Real row", "part_number": "", "expected": "", "status": "",
+                 "received": ""},
+            ],
+        },
+    }
+    out = render_submission_pdf(definition, submission)
+    assert out[:5] == b"%PDF-"
+    text = _norm(_pdf_text(out))
+    assert "Real row" in text
+    assert "wrong shape" not in text  # an unknown key is never dumped into the document
 
 
 def test_expected_materials_blank_mode_renders_title_and_placeholder() -> None:
