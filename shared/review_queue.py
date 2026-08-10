@@ -46,7 +46,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from . import sheet_ids, smartsheet_client
+from . import error_log, sheet_ids, smartsheet_client
 from .error_log import Severity
 
 # 2× SLA expressed as days, for date-arithmetic comparison against the
@@ -210,6 +210,67 @@ def add(
     }
     [row_id] = smartsheet_client.add_rows(sheet_ids.SHEET_REVIEW_QUEUE, [row])
     return row_id
+
+
+def safe_add(
+    *,
+    script_name: str,
+    workstream: str,
+    summary: str,
+    payload: dict[str, Any],
+    sla_tier: SlaTier,
+    reason: ReviewReason,
+    severity: Severity = Severity.WARN,
+    source_file: str = "",
+    security_flag: bool = False,
+    correlation_id: str = "",
+    error_code: str = "review_queue_ticket_failed",
+) -> bool:
+    """`add`, but it NEVER raises. Returns True iff the ticket landed.
+
+    Use this from any PERMANENT-refusal path that also records a one-shot flag. `add`
+    propagates `SmartsheetError` by contract, and every such path wrote its ticket BEFORE
+    its flag — so a Smartsheet blip at fence time skipped the flag, the item re-served
+    next cycle, and a PERMANENT one-shot fence degraded into unbounded per-cycle
+    re-ticketing. Observed 2026-08-10 on `rfq_poll`: four PENDING rows for ONE RFQ across
+    two cycles, and the first ticket had actually COMMITTED (Smartsheet writes are
+    non-idempotent, so the client cannot tell a lost response from a lost write) — the
+    "retry" duplicated a row that was already there.
+
+    Not raising keeps the caller's flag write reachable, which is what makes the fence
+    genuinely one-shot. A lost ticket escalates to CRITICAL rather than passing quietly:
+    the item IS fenced either way, so an operator with no ticket would never learn it
+    exists — exactly what the out-of-band push surface is for. Callers that want to know
+    may branch on the return value; most simply proceed to write their flag.
+
+    (Generalised from `safety_reports.generate_core._safe_review_queue`, which earned the
+    same never-raise property the same way: 189 duplicate rows for one job in one day.)
+    """
+    try:
+        add(
+            workstream=workstream,
+            summary=summary,
+            payload=payload,
+            sla_tier=sla_tier,
+            reason=reason,
+            severity=severity,
+            source_file=source_file,
+            security_flag=security_flag,
+        )
+    except Exception as exc:  # noqa: BLE001 — a lost ticket must never cost the flag
+        error_log.log(
+            Severity.CRITICAL, script_name,
+            f"Review-Queue ticket FAILED for {source_file or workstream} — the item is "
+            f"still fenced (one-shot flag set, it will NOT retry) but has NO operator "
+            f"ticket. The row may or may not have committed (Smartsheet writes are "
+            f"non-idempotent): check ITS_Review_Queue for {source_file or workstream} "
+            f"before re-ticketing by hand. Intended summary: {summary!r}. "
+            f"Cause: {type(exc).__name__}: {exc!r}",
+            error_code=error_code,
+            correlation_id=correlation_id,
+        )
+        return False
+    return True
 
 
 def get_status(item_id: str) -> ReviewStatus:

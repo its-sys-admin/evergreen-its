@@ -533,7 +533,16 @@ def _poll_inside_lock() -> ManifestPollStats:
         )
 
     _write_heartbeat()
-    total_flagged = counters["refused"] + counters["integrity_failures"]
+    # `skipped_flagged` counts items ALREADY one-shot-flagged — permanently wedged out
+    # of the queue until an operator fixes the cause and clears the entry. Omitting it
+    # made Last Cycle Status flip back to OK on the very next cycle, so the daemon read
+    # healthy while an item sat fenced indefinitely (2026-08-10, rfq_poll). A standing
+    # fence is a standing WARN by design: ITS_Daemon_Health is a visibility surface, not
+    # a push surface, so this pages nobody — and it self-clears when the flag is cleared.
+    total_flagged = (
+        counters["refused"] + counters["integrity_failures"]
+        + counters["skipped_flagged"]
+    )
     if bearer_rejected:
         cycle_status: HeartbeatStatus = "ERROR"
     elif counters["errors"] > 0:
@@ -549,6 +558,8 @@ def _poll_inside_lock() -> ManifestPollStats:
         if (counters["errors"] == 0 and total_flagged == 0 and not bearer_rejected)
         else (
             f"errors={counters['errors']} flagged={total_flagged}"
+            + (f" standing={counters['skipped_flagged']}"
+               if counters["skipped_flagged"] else "")
             + (" bearer_rejected" if bearer_rejected else "")
         )
     )
@@ -1032,7 +1043,8 @@ def _handle_integrity_failure(
     """A tampered or malformed row. Deliberately NO result post: the bytes stay in D1
     for forensics and the row stays visible in the pool. One-shot flagged so the alert
     fires once, not every interval."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"manifest: INTEGRITY FAILURE on {filename!r} (uuid {manifest_uuid}, job "
@@ -1078,7 +1090,8 @@ def _refuse_screened(
     """
     detail = f"{result.layer}:{result.detail}"
     if result.disposition == "malicious":
-        review_queue.add(
+        review_queue.safe_add(
+            script_name=SCRIPT_NAME,
             workstream=WORKSTREAM,
             summary=(
                 f"manifest: MALICIOUS upload {filename!r} (uuid {manifest_uuid}, job "
@@ -1106,7 +1119,8 @@ def _refuse_screened(
         )
     else:  # suspicious
         security = po_attach_screen.is_structural_active_content(result)
-        review_queue.add(
+        review_queue.safe_add(
+            script_name=SCRIPT_NAME,
             workstream=WORKSTREAM,
             summary=(
                 f"manifest: upload {filename!r} (uuid {manifest_uuid}, job {job_id}) "
@@ -1145,7 +1159,8 @@ def _refuse_unreadable(
     """A CLEAN document the pipeline could not turn into a grid — a scanned BOM, a
     corrupt workbook, an empty export. Not a security event: an ordinary review item
     telling the office to send a different file."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"manifest: {filename!r} (uuid {manifest_uuid}, job {job_id}) could not be "
