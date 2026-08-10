@@ -11,6 +11,7 @@ References use `topic-slug.md` filenames (no date prefix); their
 <!-- BEGIN AUTO-INDEX -->
 | Date | Type | Status | Workstream | Title | PRs |
 |------|------|--------|------------|-------|-----|
+| 2026-08-10 | reference | active | _–_ | [Platform constraints and vendor gotchas](platform_constraints.md) | _–_ |
 | 2026-07-15 | reference | active | _–_ | [ITS Documentation Index](documentation_index.md) | _–_ |
 | 2026-07-15 | reference | active | _–_ | [ITS Glossary](glossary.md) | _–_ |
 | 2026-07-14 | reference | active | _–_ | [ITS Daemon Reference](daemon_reference.md) | _–_ |
