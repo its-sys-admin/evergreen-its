@@ -497,8 +497,15 @@ def _poll_inside_lock() -> RfqPollStats:
         )
 
     _write_heartbeat()
+    # `skipped_flagged` counts items ALREADY one-shot-flagged — permanently wedged out of
+    # the queue until an operator fixes the cause and clears the entry. Omitting it made
+    # Last Cycle Status flip back to OK on the very next cycle, so the daemon read healthy
+    # while an RFQ sat fenced indefinitely (2026-08-10). A standing fence is a standing
+    # WARN by design: ITS_Daemon_Health is a visibility surface, not a push surface, so
+    # this never pages anyone — and it self-clears the moment the flag entry is cleared.
     total_flagged = (
         counters["rejected"] + counters["fenced"] + counters["vendors_fenced"]
+        + counters["skipped_flagged"]
     )
     total_errors = counters["errors"] + counters["status_errors"]
     if bearer_rejected:
@@ -516,6 +523,11 @@ def _poll_inside_lock() -> RfqPollStats:
     else:
         error_summary = (
             f"errors={total_errors} flagged={total_flagged}"
+            # Distinguish NEW fences this cycle from items merely STANDING flagged, so
+            # the operator can tell "something just broke" from "something is still
+            # waiting on me" without opening the log.
+            + (f" standing={counters['skipped_flagged']}"
+               if counters["skipped_flagged"] else "")
             + (" bearer_rejected" if bearer_rejected else "")
         )
     try:
@@ -844,13 +856,14 @@ def _file_one_vendor(
     vendor = vendors.get_vendor_by_key(vendor_key)
     if vendor is None:
         counters["vendors_fenced"] += 1
-        review_queue.add(
-            workstream=WORKSTREAM,
+        _safe_review_queue_add(
             summary=(
                 f"rfq: vendor {vendor_key!r} on RFQ {rfq_number or rfq_id} not "
                 f"found in ITS_Vendors (the SoR) — this vendor's copy NOT rendered; "
-                f"the other vendors proceed. Fix the vendor row, then re-queue this "
-                f"vendor's copy (see docs/runbooks/rfq_generation_path.md)."
+                f"the other vendors proceed. Add the ITS_Vendors row, THEN clear this "
+                f"RFQ's entry from state/rfq_poll_flagged.json — the original RFQ "
+                f"re-serves and files this vendor itself. Do NOT compose a replacement "
+                f"RFQ (it double-files). See docs/runbooks/rfq_generation_path.md."
             ),
             payload={
                 "rfq_id": rfq_id,
@@ -858,10 +871,8 @@ def _file_one_vendor(
                 "vendor_key": vendor_key,
                 "job_no": rfq.get("job_no"),
             },
-            sla_tier=review_queue.SlaTier.RFQ_DRAFT,
-            reason=review_queue.ReviewReason.POLICY_EDGE,
-            severity=Severity.WARN,
             source_file=f"rfq:{rfq_id}",
+            correlation_id=correlation_id,
         )
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
@@ -1031,6 +1042,58 @@ def _render_and_file_quote_form(
         return None, ""
 
 
+def _safe_review_queue_add(
+    *,
+    summary: str,
+    payload: dict[str, Any],
+    source_file: str,
+    correlation_id: str,
+    reason: review_queue.ReviewReason = review_queue.ReviewReason.POLICY_EDGE,
+    severity: Severity = Severity.WARN,
+    security_flag: bool = False,
+) -> None:
+    """Write a fence's Review-Queue ticket WITHOUT ever raising.
+
+    A fence does two things: STOP the item (its caller's one-shot flag) and TELL the
+    operator (this ticket). `review_queue.add` propagates `SmartsheetError` by contract
+    (`shared/review_queue.py` — "callers should log CRITICAL if the queue write is itself
+    a failure-mode signal"), and every fence wrote its ticket BEFORE its flag. So a
+    Smartsheet blip at fence time skipped the flag, the row re-served next cycle, and a
+    PERMANENT one-shot fence degraded into unbounded per-cycle re-ticketing — 2026-08-10:
+    FOUR PENDING rows for one RFQ across two cycles, and the first ticket had actually
+    COMMITTED (Smartsheet's documented NON-IDEMPOTENT unknown-commit case), so the
+    "retry" duplicated a row that was already there.
+
+    Never propagating keeps every caller's flag write reachable. A lost ticket escalates
+    to CRITICAL rather than passing quietly: the item IS fenced, so an operator without a
+    ticket would never learn it exists — precisely what the out-of-band push surface is
+    for. (Same never-raise property as `safety_reports.generate_core._safe_review_queue`,
+    which earned it the same way: 189 duplicate rows for one job in one day.)
+    """
+    try:
+        review_queue.add(
+            workstream=WORKSTREAM,
+            summary=summary,
+            payload=payload,
+            sla_tier=review_queue.SlaTier.RFQ_DRAFT,
+            reason=reason,
+            severity=severity,
+            source_file=source_file,
+            security_flag=security_flag,
+        )
+    except Exception as exc:  # noqa: BLE001 — a lost ticket must never cost the flag
+        error_log.log(
+            Severity.CRITICAL, SCRIPT_NAME,
+            f"Review-Queue ticket FAILED for {source_file} — the item is still fenced "
+            f"(one-shot flag set, it will NOT retry) but has NO operator ticket. The row "
+            f"may or may not have committed (Smartsheet writes are non-idempotent): check "
+            f"ITS_Review_Queue for {source_file} before re-ticketing by hand. "
+            f"Intended summary: {summary!r}. Cause: {type(exc).__name__}: {exc!r}",
+            error_code="rfq_fence_ticket_failed",
+            correlation_id=correlation_id,
+        )
+
+
 def _handle_rfq_hmac_failure(
     rfq_id: int, rfq_number: str, rfq: dict[str, Any],
     correlation_id: str, flags: dict[str, str],
@@ -1043,8 +1106,7 @@ def _handle_rfq_hmac_failure(
     per-cycle re-flag spam."""
     # Tripwire (Invariant 2, Layer 5) — record the suspicious pattern.
     anomaly_logger.check({"rfq_hmac_failure": rfq_id, "rfq_number": rfq_number})
-    review_queue.add(
-        workstream=WORKSTREAM,
+    _safe_review_queue_add(
         summary=(
             f"rfq: HMAC verification FAILED for RFQ {rfq_number or rfq_id} — "
             f"rejected, NOT rendered or filed"
@@ -1057,11 +1119,11 @@ def _handle_rfq_hmac_failure(
             # The HMAC value is deliberately NOT recorded (signature material —
             # same posture as the PO twin); the raw row stays in D1.
         },
-        sla_tier=review_queue.SlaTier.RFQ_DRAFT,
         reason=review_queue.ReviewReason.SECURITY_TRIGGER,
         severity=Severity.CRITICAL,
         source_file=f"rfq:{rfq_id}",
         security_flag=True,
+        correlation_id=correlation_id,
     )
     error_log.log(
         Severity.CRITICAL, SCRIPT_NAME,
@@ -1088,14 +1150,11 @@ def _fence_rfq(
     it. The row is never receipted; it stays queued in D1. Remediation: fix the
     cause, then delete the rfq_id entry from `rfq_poll_flagged.json` (the daemon
     retries it the next cycle)."""
-    review_queue.add(
-        workstream=WORKSTREAM,
+    _safe_review_queue_add(
         summary=f"rfq: RFQ {rfq_number or rfq_id} refused before filing — {detail}",
         payload={"rfq_id": rfq_id, "rfq_number": rfq_number, "detail": detail},
-        sla_tier=review_queue.SlaTier.RFQ_DRAFT,
-        reason=review_queue.ReviewReason.POLICY_EDGE,
-        severity=Severity.WARN,
         source_file=f"rfq:{rfq_id}",
+        correlation_id=correlation_id,
     )
     error_log.log(
         Severity.WARN, SCRIPT_NAME,

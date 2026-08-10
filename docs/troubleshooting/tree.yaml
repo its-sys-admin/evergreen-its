@@ -555,9 +555,9 @@ workflows:
             symptom: An RFQ (or one vendor's copy) is refused / missing.
             signals: ["rfq_hmac_failure", "rfq_vendor_unknown", "rfq_all_vendors_fenced", "one-shot-flagged"]
             checks:
-              - An unknown-vendor fence names the Vendor Key in its Review-Queue row (the other vendors still filed); an HMAC failure is a security event with a CRITICAL + security-flagged row.
+              - An unknown-vendor fence names the Vendor Key in its Review-Queue row. The vendors that resolved do file, but the RFQ itself stays queued and converges to a vendors_fenced flag — expect 2-3 PENDING rows for one RFQ, which is the convergence and not a second fault. A deactivated vendor is NOT this case (the resolver matches the key alone and reads no status column). If EVERY vendor is fencing, ITS_Vendors is empty rather than missing one row — a seeding activation step, see po_poll Symptom 10. An HMAC failure is a security event with a CRITICAL + security-flagged row.
             resolutions:
-              - Unknown vendor → fix/add the ITS_Vendors row, then re-issue that vendor's copy (or unflag an all-vendors-fenced RFQ). HMAC failures escalate (security, FIXED high-class).
+              - Unknown vendor → add/fix the ITS_Vendors row FIRST, then clear that RFQ's vendors_fenced entry from state/rfq_poll_flagged.json (order is load-bearing — unflagging first re-serves into an unchanged sheet and just re-fences). The original RFQ then re-serves and files the missing copy itself; do NOT compose a replacement (it double-files) — cancel it in the portal if unwanted. Resolve the leftover PENDING rows afterwards or they trip Check A. HMAC entries are NEVER cleared and escalate (security, FIXED high-class).
             class: seth_coresolve
             runbook: docs/runbooks/rfq_generation_path.md
       - id: po_send

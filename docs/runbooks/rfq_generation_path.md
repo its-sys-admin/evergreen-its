@@ -61,9 +61,24 @@ Permanent refusals (HMAC failures, malformed due dates, empty/unknown vendor lis
 recorded in `state/rfq_poll_flagged.json` as `{rfq_id: reason}` and **skipped every
 subsequent cycle** (no Review-Queue spam every 120 s).
 
-**Retry after fixing the cause = delete the RFQ's entry from that file** (or the whole
-file) — the daemon re-attempts it on the next cycle. Deleting a flag entry is a
-low-class Tier-2 repair.
+**Retry after fixing the cause = delete THAT RFQ's entry from the file** — the daemon
+re-attempts it on the next cycle. Deleting a `vendors_fenced` / `due_date` /
+`no_vendors` entry, once the cause is genuinely fixed, is a low-class Tier-2 repair.
+
+**Never delete the whole file, and never delete an `hmac` entry.** The same file also
+holds security fences, written as `{rfq_id: "hmac"}`; clearing one re-opens a rejected
+signature for reprocessing and re-fires the security CRITICAL. An `hmac` entry is a
+FIXED high-class escalation — see Symptom 4. So read the file before editing it: if any
+value is `"hmac"`, stop and escalate to Seth.
+
+**How to edit it.** The file lives under `~/its/state/`, where the daemon is also
+writing. Do not hand-edit it, and do not use `Path.write_text` — that skips the
+atomic-write + lock guarantees and is rejected at review and in CI
+(`tests/test_state_write_discipline.py`). Have Claude Code do a read-modify-write
+through `shared/state_io`: `with_path_lock(path)` around `atomic_write_json(path, flags)`,
+which is exactly how the daemon writes it (`po_materials/rfq_poll.py::_persist_flags`).
+The daemon does **not** need to be stopped first — it is one-shot-per-fire and takes its
+own cycle lock.
 
 ## Symptom 1 — "Composed RFQs are not being pulled / nothing appears in RFQ_Log"
 
@@ -88,18 +103,45 @@ The Worker rejected the RFQ bearer (401). This will not self-heal — the token 
 rotated on one side only. **Escalate to Seth (secrets/auth, FIXED high-class).**
 Everything stays queued; no data is lost while it waits.
 
-## Symptom 3 — "One vendor's copy is missing; the Review Queue says `vendor … not found in ITS_Vendors`"
+## Symptom 3 — "The Review Queue says `vendor … not found in ITS_Vendors`"
 
-The RFQ named a vendor key with no ITS_Vendors row (or a retired one). The OTHER
-vendors' copies filed normally — only this vendor was fenced. Repair (low-class):
+The RFQ named a Vendor Key that has **no row** in ITS_Vendors. A *deactivated* vendor is
+not this case: `vendors.get_vendor_by_key` matches on the Vendor Key alone and reads no
+status column, so an `Inactive` or `Archived` row still resolves and still renders — the
+`Active` picklist only hides a vendor from the portal's picker. The fence has exactly one
+cause: no row whose Vendor Key cell equals the key after whitespace-strip.
 
-1. Fix/add the vendor row in ITS_Vendors (Vendor Key must match exactly, `VEN-######`).
-2. The RFQ has already been receipted (it will not re-serve). Re-issue THIS vendor's
-   copy by composing a new RFQ to that vendor in the portal, OR escalate if the
-   original RFQ must be preserved verbatim.
-3. If **ALL** vendors were fenced, the RFQ was NOT receipted — it re-serves once you
-   fix the vendor rows and delete the `{rfq_id: "vendors_fenced"}` entry from
-   `state/rfq_poll_flagged.json`.
+Vendors that *did* resolve file normally, but **the RFQ itself does not complete.** It
+stays `queued`, re-serves next cycle, fences the missing vendor a second time, and then
+one-shot-flags `vendors_fenced`. Expect **2–3 PENDING Review-Queue rows for one RFQ** —
+that is the convergence, not a second fault. Partial and total fences end in the same
+place, so the repair below is the same either way.
+
+Repair (low-class):
+
+1. **Check the scale first.** If *every* RFQ is fencing *every* vendor, ITS_Vendors is
+   empty — not missing one row. Corroborate with `po_poll`'s `po_vendors_empty_projection`
+   WARN ("ITS_Vendors projected EMPTY — refusing to down-sync an empty vendor set"). That
+   is a seeding **activation step**, not a row fix — see `docs/runbooks/po_poll.md`
+   Symptom 10 and coordinate per its checklist.
+2. **Add or fix the vendor row** in ITS_Vendors (Vendor Key exact, `VEN-######`; Vendor
+   Name + Contact Email at minimum). If the vendor was edited in the portal instead,
+   confirm the vendor up-sync pass ran (`po_poll.md` Symptom 10).
+3. **Only then** delete that RFQ's `{rfq_id: "vendors_fenced"}` entry from
+   `state/rfq_poll_flagged.json` (mechanism + the `hmac` carve-out: see
+   [The one-shot flag file](#the-one-shot-flag-file--how-permanent-refusals-are-retried)).
+   **The order is load-bearing:** clear the flag first and the RFQ re-serves within one
+   120 s cycle into an unchanged sheet, re-fences, and rewrites the flag — no progress and
+   two more queue rows.
+4. **Do not compose a replacement RFQ.** The original re-serves and files the missing
+   vendor's copy itself once step 3 lands; a replacement double-files a second RFQ number
+   to the same vendor. If the RFQ is simply unwanted, cancel it in the portal instead —
+   the RFQ detail screen offers **Cancel** while it is `draft` or `queued`, which retires
+   it permanently and needs no state-file edit.
+5. **Close the loop.** The fence leaves its PENDING Review-Queue rows behind; nothing
+   resolves them automatically, and past their 24 h SLA they trip watchdog **Check A**.
+   Resolve them once the RFQ has filed — operator dashboard → Review Queue → resolve, with
+   a Workstream/Summary filter (the filter is required; there is no unfiltered mass-resolve).
 
 ## Symptom 4 — "ITS_Errors shows `rfq_hmac_failure` (CRITICAL) / a security-flagged Review-Queue row"
 
