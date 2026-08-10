@@ -2615,3 +2615,67 @@ or token tier is touched.
 **Revisit when:** next time manifest work happens on the dev Mac, or at the next secrets-hygiene pass.
 
 Surfaced: 2026-08-07 manifest-import activation session.
+
+## Track 6 archive — button + drain landed (PRs #726/#728 dev, #18/#20/#21 production) but three activation gaps remain [OPEN 2026-08-10]
+
+The archive path is code-complete end-to-end (portal button → D1 queue → `fieldops_sync` drain →
+`job_archive.py` relocation → commit point), all four-part verified. It is not yet safe to activate:
+
+1. **`field_ops.fieldops_sync.archive_enabled` has no live `ITS_Config` row.** Reads
+   `SmartsheetNotFoundError` where the sibling `sync_enabled` key resolves fine on the same sheet — the
+   seeder shipped in #20 (`scripts/migrations/seed_daemon_gate_config.py`, seeds `false`) has not been RUN
+   against this tenant. Exactly the HOUSE_REFLEXES §5 "seed the gate row" failure mode, except this time the
+   seeder exists and simply hasn't executed. **Fix:** run the seeder once; verify the row reads `false`.
+2. **No launchd job is loaded on this host** (`launchctl list` shows zero ITS entries) — reaffirms PM-1
+   below; nothing drains `/archive-pending` regardless of the gate.
+3. **The Box leg has never been drilled live, either direction.** The Smartsheet half was drilled against
+   the sandbox 2026-08-06 (ROADMAP Track 6 status block); every Box test remains mocked. Extends "Box
+   identity on the dev host is UNCONFIRMED" below — Box has no ownership discriminator, so a wrong identity
+   is silent, not just unauthenticated.
+
+**Trigger:** before flipping `archive_enabled` true on any tenant. **Tag:** `field_ops`, `archive-on-closure`,
+`host-migration`, `seth-owned`.
+
+## PM-5 addendum — `evergreen-its` branch protection CONFIRMED LIVE, narrowing but not closing the `_wait_for_ci` risk [OPEN 2026-08-10]
+
+PM-5 (production-host migration section, above) flagged `publish_daemon._wait_for_ci`'s `mergeStateStatus ==
+CLEAN` early-return as safe on `SolutionSmith-debug/its` only because that repo's required-checks protection
+makes `CLEAN` mean "CI passed" — and flagged `its-sys-admin/evergreen-its`'s protection state as
+**unverified** (the 404-vs-403 API trap). **Now confirmed live**, verified 2026-08-10: required checks
+`test`/`portal`/`secrets`, strict up-to-date branches. The specific fail-open PM-5 warned about (a §50
+privileged-actuation PR squash-merging without CI ever gating it) is therefore **not currently exposed** on
+either repo. The underlying code defect — `_wait_for_ci` gates on `mergeStateStatus` alone rather than
+`statusCheckRollup` directly — is unfixed and remains latent for any FUTURE repo this daemon points at with
+weaker protection. **Tag:** `host-migration`, `external-code-actuation`, `op-stds-50`.
+
+## Cloudflare D1 `/query` intermittently 403s (code 7403) then succeeds on retry [OPEN 2026-08-10]
+
+Observed 3× this session against account `a1d033090d474174c43fd3d0e6f7a0ab` — a `/query` call fails 403
+`code 7403`, then an immediate identical retry succeeds. `wrangler d1 list` against the same account is
+unaffected. Not yet diagnosed (token-scope propagation delay vs. a genuine rate/consistency edge on
+Cloudflare's side). No code currently retries this class in the D1-facing paths that would hit it live.
+**Trigger:** if it starts producing operator-visible failures rather than only appearing in interactive/CLI
+use. **Tag:** `cloudflare`, `d1`, `host-migration`.
+
+## Two-repo sync diverged twice in one day despite #712's merge-commit design [OPEN 2026-08-10]
+
+`#712`'s merge-commit reconcile was intended to make dev→production sync a permanent fast-forward. It
+diverged again the same day this session ran — both repos now carry independent, unmerged development
+lines (dev: `#727`–`#735` manifest-import chain; production: `#11`–`#21` plus its own copy of the manifest
+chain via reconcile PR `#15`). This is a **process gap, not a code defect** — no automated mechanism keeps
+two independently-pushable repos in sync when both accept direct commits. **Fix candidates:** a scheduled
+sync convention (who reconciles, how often), or a decision that the production Mac stops originating feature
+commits entirely (docs/config-only). Seth-owned. **Tag:** `host-migration`, `process`, `seth-owned`.
+
+## `~/its-archive` worktree holds uncommitted keepers + now-obsolete SPA work [OPEN 2026-08-10]
+
+Worktree `~/its-archive` (branch `feat/archive-pr7-spa-button`) carries 4 uncommitted Python/TS keeper diffs
+predating #18's landed SPA implementation — `shared/smartsheet_client.py` (`_token()` +
+`ITS_SMARTSHEET_TOKEN_KEY`), `shared/box_client.py` (`ITS_BOX_KEYCHAIN_SUFFIX`),
+`scripts/migrations/sheet_ids_regen.py` (token-accessor fix), `safety_portal/worker/index.ts` (hostname-gated
+dev CSP relaxation) — plus its own `JobArchivePanel.tsx`/`ConfirmTypedModal.tsx`, now **obsolete**, superseded
+by #18's merged versions. Also holds untracked drill-local sandbox `sheet_ids.py`-family files that must
+**never** be committed. **Fix:** cherry-pick the 4 keepers (if still needed — verify against current main
+first, since #18/#20 may have already carried equivalent fixes), discard the obsolete SPA files, remove the
+worktree. **Tag:** `field_ops`, `archive-on-closure`, `worktree-hygiene`.
+
