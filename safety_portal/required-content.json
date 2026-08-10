@@ -41,6 +41,30 @@
       "required_static_text": ["ALWAYS lock/tag-out unsafe equipment"],
       "required_signature_inputs_min": 1
     },
+    "equipment-training-waiver": {
+      "comment": [
+        "[OPERATOR-REQUESTED 2026-08-10, Seth] New parent for manufacturer equipment-training",
+        "acknowledgements (GAYK/DOYLE Ram at v1). This is a NEW entry for a NEW parent — the normal",
+        "path, per the daily-report / material-incident precedent — NOT a change to an existing",
+        "strict entry, which stays Tier-3-only.",
+        "This form's whole purpose is the signed acceptance of liability, so the floor pins the two",
+        "legally operative sentences byte-exact: the GAYK hold-harmless clause and the signer's",
+        "acknowledgement. Without them a future edit could keep the ten training topics and the",
+        "signature block while quietly dropping the indemnity the document exists to record — and",
+        "every structural check would still pass. required_section_types mirrors toolbox-talk (the",
+        "sibling content + sign-in archetype): content_blocks so the topic list cannot be amputated,",
+        "signature_table so the acknowledgement cannot degrade into an unsigned handout.",
+        "The substrings are deliberately PARTIAL rather than whole paragraphs — long enough to be",
+        "unmistakable, short enough that fixing a typo elsewhere in the sentence does not force a",
+        "Tier-3 legal-floor change."
+      ],
+      "required_section_types": ["content_blocks", "signature_table"],
+      "required_signature_inputs_min": 1,
+      "required_static_text": [
+        "shall be held harmless from any and all liability arising from the use or operation of the equipment",
+        "I have read, understand and agree to the matters covered in this document."
+      ]
+    },
     "toolbox-talk": {
       "required_section_types": ["content_blocks", "signature_table"],
       "required_signature_inputs_min": 1

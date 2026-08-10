@@ -21,14 +21,16 @@ originals differ only in whitespace.
 | `weekly_Safe_Work_Observation_Template.pdf` | HSS&E Work Observation | sectioned assessment |
 | `VISITOR-SIGN-IN.pdf` | Visitor Sign-In | rows (not Evergreen-branded — header added in Phase 4) |
 | `360_Excavator_Inspection_and_Daily_Checklist.pdf` | Equipment Pre-Inspection (360 Excavator) | **two**-state checklist (Okay/Defective — the source offers no N/A box); source is a 7-day week grid, see the definition's `comment` |
-| `GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` | Equipment Pre-Inspection (GAYK/DOYLE Piledriver) | tri-state checklist — **page 1 only**; page 2 is weekly maintenance, not yet modeled |
+| `GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` | **page 1** → Equipment Pre-Inspection (GAYK/DOYLE Piledriver); **page 2** → checklist library, migration `0062` | tri-state checklist + inspection-library template |
 | `GAYK_DOYLE_Startup_Loading_Securing_Loads.pdf` | *(not a form)* — checklist library, migration `0061` | inspection-library templates |
-| `GAYK_NA_Ram_Training_Program_Waiver_and_Checklist.pdf` | *(not a form)* — corroborating provenance | operator-training waiver + topic list |
+| `GAYK_NA_Ram_Training_Program_Waiver_and_Checklist.pdf` | Equipment Training Waiver (GAYK/DOYLE Ram) | content + sign-in |
 
-The last four were operator-supplied on 2026-08-10. Note that two of them back **checklist-library
-templates and provenance**, not form definitions: a definition's `source_pdf` is a hard CI gate
+The last four were operator-supplied on 2026-08-10. Note that one of them
+(`GAYK_DOYLE_Startup_Loading_Securing_Loads.pdf`) backs **checklist-library templates**, not a form
+definition, and another (`GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf`) backs **both** — a
+form from page 1 and a library template from page 2. A definition's `source_pdf` is a hard CI gate
 (`tests/test_form_definitions.py::test_definition_source_pdf_exists`), but the converse does not
-hold — a PDF may live here purely as the cited source for seeded checklist content.
+hold: a PDF may live here purely as the cited source for seeded checklist content.
 
 The three form archetypes Phase 4's `_runtime/` must handle: **rows + signatures**,
 **tri-state checklist**, and **sectioned assessment** (plus a per-form `pdf_override.ts`
