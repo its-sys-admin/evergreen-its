@@ -29,6 +29,7 @@ function makeDef(): FormDefinition {
       { type: "form_link", label: "Create a JHA", parent_form_code: "jha" },
       { type: "job_requirements", key: "job_requirements", title: "Job-specific requirements" },
       { type: "expected_materials", key: "expected_materials_receipt", title: "Expected materials" },
+      { type: "additional_photos", key: "additional_photos", title: "Additional site photos" },
     ],
   };
 }
@@ -75,7 +76,36 @@ describe("FormEditor — read-only sections have no Remove/Move controls (Slice 
       expect(queryByLabelText(`Move section ${i} down`)).toBeNull();
       expect(queryByLabelText(`Remove section ${i}`)).toBeNull();
     }
-    expect(getAllByText("definition-managed")).toHaveLength(4);
+    expect(getAllByText("definition-managed")).toHaveLength(5);
+  });
+
+  // The teeth for the bug this file exists to prevent. `sectionEditor` returns undefined for an
+  // unhandled type and the project does not set `noImplicitReturns`, so a missing case renders a
+  // BLANK section body instead of failing the build — which is how `additional_photos` shipped
+  // unhandled in FormEditor.tsx and editorValidation.ts while editorModel.ts already knew it.
+  //
+  // Driven off READ_ONLY_SECTION_TYPES rather than a hand-written list, so a type added to the
+  // set without a matching case fails HERE.
+  it("EVERY definition-managed type renders the read-only explanation (not a blank body)", () => {
+    const sample: Record<string, Record<string, unknown>> = {
+      guidance: { type: "guidance", heading: "A. Morning", blocks: [{ type: "p", text: "x" }] },
+      form_link: { type: "form_link", label: "Create a JHA", parent_form_code: "jha" },
+      job_requirements: { type: "job_requirements", key: "job_requirements", title: "R" },
+      expected_materials: { type: "expected_materials", key: "expected_materials_receipt", title: "M" },
+      additional_photos: { type: "additional_photos", key: "additional_photos", title: "P" },
+    };
+    for (const type of READ_ONLY_SECTION_TYPES) {
+      const def = makeDef();
+      const section = sample[type];
+      expect(section, `no fixture for read-only type "${type}"`).toBeTruthy();
+      def.sections = [section as unknown as FormDefinition["sections"][number]];
+      const { getAllByText, unmount } = renderEditor(def);
+      expect(
+        getAllByText(/maintained in the form definition/i).length,
+        `"${type}" rendered no read-only explanation — a missing case in FormEditor.sectionEditor`,
+      ).toBe(1);
+      unmount();
+    }
   });
 
   it("a definition of ONLY ordinary sections keeps all controls (no regression)", () => {
