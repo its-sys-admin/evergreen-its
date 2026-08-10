@@ -306,10 +306,18 @@ function SectionEditor({ section, onChange }: { section: Section; onChange: (s: 
     // guidance / form_link (SOP daily form, slice D1) are authored in the form
     // DEFINITION via the git publish pipeline — the builder shows them read-only so an
     // Edit of a form that carries them (daily-report-v2) never crashes the section list.
+    //
+    // `additional_photos` was MISSING here and in editorValidation.ts, while editorModel.ts
+    // already listed it in BOTH of its registries — so that section rendered with no body at
+    // all (the switch fell through to undefined) rather than saying why it cannot be edited.
+    // tsc cannot catch it: this function's return type admits undefined and the project does
+    // not set `noImplicitReturns`, so a missing case is silent. The readonly fixture test now
+    // covers EVERY member of READ_ONLY_SECTION_TYPES instead of a sample.
     case "guidance":
     case "form_link":
     case "job_requirements":
     case "expected_materials":
+    case "additional_photos":
       return (
         <p className="muted">
           This section is maintained in the form definition (publish pipeline) and is not
