@@ -259,7 +259,12 @@ NODES: tuple[MapNode, ...] = (
         blurb="The portal-as-writer mirror: pulls dirty portal-origin jobs and field capture "
               "from D1 and writes them UP into both Active-Jobs sheets, then drives the "
               "standing-tracker passes. Note: this band has no send lane at all.",
-        error_scripts=("field_ops.fieldops_sync",),
+        # `job_archive` is joined HERE rather than given its own node: the archive has no plist,
+        # no heartbeat and no identity of its own — it is a pass INSIDE this daemon, so its faults
+        # are this daemon's faults. Without the join its six `archive_*` ITS_Errors codes rendered
+        # as plain text with no `/system?focus=` link, because `NODE_BY_ERROR_SCRIPT` held no entry
+        # for the undotted `job_archive` identity (`field_ops/job_archive.py` SCRIPT_NAME).
+        error_scripts=("field_ops.fieldops_sync", "job_archive"),
         launchd_label="org.solutionsmith.its.fieldops-sync", heartbeat_stem="fieldops_sync",
         config_gate="field_ops.fieldops_sync.sync_enabled",
         extra_gates=(
@@ -267,6 +272,10 @@ NODES: tuple[MapNode, ...] = (
             "field_ops.fieldops_sync.equipment_enabled",
             "field_ops.fieldops_sync.materials_enabled",
             "field_ops.fieldops_sync.incidents_enabled",
+            # The Track 6 archive pass. Missing until 2026-08-10, which left it the ONLY pass with
+            # no "pass gate" row and no `/config?f=` deep link on the node rail — a phantom pass an
+            # operator could not find a switch for.
+            "field_ops.fieldops_sync.archive_enabled",
         ),
         watchdog_checks=("C",), script_path="field_ops/fieldops_sync.py",
         runbook="docs/runbooks/fieldops_sync.md", send_half="generation", marker="fieldops_sync",
