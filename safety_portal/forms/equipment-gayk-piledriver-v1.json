@@ -1,0 +1,100 @@
+{
+  "form_code": "equipment-gayk-piledriver-v1",
+  "parent_form_code": "equipment-preinspection",
+  "form_name": "Equipment Pre-Inspection — GAYK/DOYLE Piledriver",
+  "variant_label": "GAYK/DOYLE Piledriver",
+  "version": 1,
+  "archetype": "grouped_checklist",
+  "source_pdf": "GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf",
+  "comment": [
+    "[SOURCE] Transcribed from PAGE 1 of the source PDF, 'Daily Checklist for GAYK/DOYLE Piledrivers'",
+    "(GAYK North America, doc 240916). All 13 source bullets are present, in source order. PAGE 2 of",
+    "the same PDF is a separate 'Weekly Checklist and Maintenance' ('Must be done in addition to the",
+    "daily checklist') and is deliberately NOT part of this pre-operation form — a weekly maintenance",
+    "duty is not a pre-op inspection. It is queued as a follow-up (see docs/tech_debt.md).",
+    "Corroborating provenance for the duty list: GAYK_NA_Ram_Training_Program_Waiver_and_Checklist.pdf",
+    "topic 1, 'Pre-Start-Up Walk Around and Fluid Levels'.",
+    "[SCALE] The source uses bare completion checkboxes with NO named response states, so there is no",
+    "source vocabulary to transcribe. This form therefore adopts the equipment-preinspection parent's",
+    "established ['OK','NO','N/A'] scale (identical to equipment-telehandler-v1) rather than inventing",
+    "a done/not-done scale: an inspection whose only expressible answer is 'I did it' cannot record a",
+    "DEFECT, which is the point of a pre-op inspection. 'NO' therefore means 'checked, problem found'.",
+    "[ADDED FIELDS — machine identity] The source page has no header block at all; it identifies the",
+    "machine nowhere and the operator only at the bottom ('Print: ___ Sign: ___ Date: ___'). A fleet",
+    "inspection record that cannot say WHICH piledriver was inspected is not auditable, so a single",
+    "'Unit No.' header field is added, matching the parent convention (equipment-skid-steer-v1 'UNIT',",
+    "equipment-telehandler-v1 'unit_no'). Make/model is not added — it is fixed by the variant itself.",
+    "The source's Print/Sign move to the Sign-off section; its Date rides the work_date envelope.",
+    "[PER-ITEM COMMENTS] FIVE source bullets carry a prose write-in line — 'Note any damage:', 'Note",
+    "level and condition:' (twice), 'Note level:' and 'Note fault codes:' — and exactly those five set",
+    "comment:true. The remaining seven set no comment, so the group default (comment_per_item:false)",
+    "applies. A SIXTH bullet has a write-in that is a NUMBER, not prose ('Hours: ___'), and is captured",
+    "as kind:'numeric' instead — the skid-steer precedent for 'HOURS ON MACHINE'. The final bullet",
+    "('Please note any issues that occurred while operating machine') is a full-width free-text block on",
+    "the source, so it is a freeform SECTION, not an item.",
+    "[LEGAL FLOOR] The closing lock/tag-out static_text is NOT on the source PDF. It is the",
+    "equipment-preinspection PARENT requirement (safety_portal/required-content.json:",
+    "'ALWAYS lock/tag-out unsafe equipment' plus required_signature_inputs_min 1), carried",
+    "byte-identically from equipment-skid-steer-v1 and equipment-telehandler-v1.",
+    "[TRANSCRIPTION NORMALIZATIONS] Two punctuation fixes only, per forms/README.md ('obvious source",
+    "typos are noted but the digital label is corrected'): source 'condition fill if required' gains a",
+    "comma; source '227ft-lbs' gains the missing space. No torque value, fluid spec or instruction was",
+    "altered — 150Nm/111 ft-lbs, 308Nm/227 ft-lbs, 'clean clear diesel (no red diesel!)', 'GAYK",
+    "approved coolant' and the Kajo hammer-paste pump schedule are verbatim."
+  ],
+  "branding": { "logo": true, "title": "Daily Checklist for GAYK/DOYLE Piledrivers" },
+  "sections": [
+    {
+      "type": "header",
+      "fields": [
+        { "key": "unit_no", "label": "Unit No.", "input": "text" },
+        { "key": "work_date", "label": "Date", "input": "date", "required": true }
+      ]
+    },
+    {
+      "type": "checklist",
+      "key": "inspection",
+      "groups": [
+        {
+          "key": "daily_checks",
+          "label": "DAILY CHECKS",
+          "scale": ["OK", "NO", "N/A"],
+          "comment_per_item": false,
+          "items": [
+            { "key": "walk_around", "label": "Walk around machine checking for obstructions in or around and damage to machine — note any damage", "comment": true },
+            { "key": "engine_oil", "label": "Check engine oil for level and condition — note level and condition", "comment": true },
+            { "key": "coolant", "label": "Check coolant level and condition, fill if required with GAYK approved coolant — note level", "comment": true },
+            { "key": "fuel", "label": "Check fuel level and fill if required with clean clear diesel (no red diesel!)" },
+            { "key": "hydraulic_oil", "label": "Check hydraulic oil for level and condition — note level and condition", "comment": true },
+            { "key": "hammer_collar_bolts", "label": "Check hammer collar bolts and tighten to 150Nm/111 ft-lbs. if necessary" },
+            { "key": "head_guide_bolts", "label": "Check head guide bolts and tighten to 308Nm/227 ft-lbs. if necessary" },
+            { "key": "lights_beacon", "label": "Check operation of work lights and beacon light" },
+            { "key": "hour_meter", "label": "Turn key to on position and check hour meter and note the hours for maintenance — Hours", "kind": "numeric" },
+            { "key": "hammer_paste", "label": "Start machine, raise mast and compress the head to add Kajo hammer paste — two pumps in the AM, two pumps after lunch" },
+            { "key": "estop", "label": "Check operation of E-stop" },
+            { "key": "faults", "label": "Check for faults — note fault codes", "comment": true }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "freeform",
+      "key": "operating_issues",
+      "label": "Please note any issues that occurred while operating machine",
+      "input": "textarea"
+    },
+    {
+      "type": "header",
+      "title": "Sign-off",
+      "fields": [
+        { "key": "operator_name", "label": "Print", "input": "text", "required": true },
+        { "key": "operator_signature", "label": "Sign", "input": "signature" }
+      ]
+    },
+    {
+      "type": "static_text",
+      "text": "Report any problems found to your supervisor/employer. ALWAYS lock/tag-out unsafe equipment.",
+      "emphasis": "legal"
+    }
+  ]
+}

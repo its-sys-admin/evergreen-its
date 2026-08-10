@@ -2871,3 +2871,63 @@ uninformative and rely on CI.
 dedicated `diagnose` pass.
 
 Surfaced: 2026-08-10 session close.
+---
+
+## [OPEN 2026-08-10, low] GAYK/DOYLE **weekly** maintenance checklist (source page 2) is not modeled anywhere
+
+`safety_portal/reference_forms/GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` is a two-page
+document. Page 1 ("Daily Checklist for GAYK/DOYLE Piledrivers") shipped as the pre-op inspection form
+`equipment-gayk-piledriver-v1` (#44). **Page 2 ("Weekly Checklist and Maintenance") did not** — it opens
+"Must be done in addition to the daily checklist" and is a periodic MAINTENANCE duty (grease all zerk
+fittings with Kajo MOS 2, mast/hammer guide tightness ≤75Nm/55 ft-lbs, hammer-carriage and mast in/out
+tube adjustment, oil-cooler and radiator debris, mast-chain deflection ≤25mm/1", hose and hydraulic
+connection condition), not a pre-operation inspection, so folding it into the daily pre-op form would
+have made operators attest weekly greasing every single day.
+
+**Why deferred:** out of the requested scope for #44 (pre-op inspection forms + the transport
+checklists), and the landing surface is a real choice the operator should make, not one to assume.
+
+**Fix:** most likely a third `generic_inspection` library template alongside the two `0061` seeds — the
+checklist engine already supports a weekly cadence via `0040_checklist_recurrences`, which suits a
+"must be done in addition to the daily" duty better than a second form variant. The alternative is an
+`equipment-preinspection` variant, which would misfile a maintenance record as an inspection.
+
+**Tag:** `safety-portal`, `forms`, `checklists`, `field-ops`, `low`.
+
+**Revisit when:** the operator confirms whether GAYK weekly maintenance should be a recurring checklist
+or a form, or the first GAYK pile driver goes into service on a live job.
+
+Surfaced: 2026-08-10 (#44 adversarial review — the definition's own `comment` promised this entry).
+
+---
+
+## [OPEN 2026-08-10, low] A `count` checklist item's recorded NUMBER never reaches the filed progress record
+
+`checklist_items.item_type = 'count'` stores the operator's entered quantity in
+`checklist_item_states.value_num`, but the checklist→progress completion emit
+(`worker/fieldops_checklist.ts`, the `checklist-completion-v1` synthesized submission) files each item
+as `{label, status, note}` only. `value_num` and `target_count` are both dropped, so the filed PDF reads
+"done" with no quantity — a reviewer cannot tell whether the operator recorded 4 chains or 1, nor that a
+shortfall was acknowledged.
+
+**Pre-existing, not introduced by #44:** the `0028` daily default already ships two count items ("Site
+photos taken & uploaded", target 50; "Construction Manager check-ins", target 2) with the same gap.
+`0061`'s "Hooks and binder chains … 4 places, 2 on each side" makes it more visible, because there the
+NUMBER is the safety-relevant datum rather than a productivity tally.
+
+**Not urgent:** the emit ships dark — `CHECKLIST_PROGRESS_LOGGING_ENABLED` is a Worker var (read
+`wrangler.jsonc`/the live deploy for its current value, never this file). The audit trail is intact
+either way: a below-target close writes its own `checklist_item_complete_below_target` action with a
+mandatory note.
+
+**Fix:** cheapest is to carry the count into the existing note field at emit time
+(`recorded {value_num} of {target_count}`), which needs no form-definition change. The fuller fix bumps
+`checklist-completion-v1` to v2 with a `qty` column on the items repeating table — that carries a
+catalog.json entry and a `publishValidation` pass, so it is a slice, not a patch.
+
+**Tag:** `safety-portal`, `checklists`, `progress-reporting`, `low`.
+
+**Revisit when:** `CHECKLIST_PROGRESS_LOGGING_ENABLED` is turned on, or a reviewer asks what a filed
+checklist's count items actually recorded.
+
+Surfaced: 2026-08-10 (#44 adversarial review).

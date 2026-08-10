@@ -1,0 +1,102 @@
+{
+  "form_code": "equipment-excavator-360-v1",
+  "parent_form_code": "equipment-preinspection",
+  "form_name": "Equipment Pre-Inspection — 360 Excavator",
+  "variant_label": "360 Excavator",
+  "version": 1,
+  "archetype": "grouped_checklist",
+  "source_pdf": "360_Excavator_Inspection_and_Daily_Checklist.pdf",
+  "comment": [
+    "[SOURCE-DEVIATION 2026-08-10 — week grid becomes a per-day submission] The source PDF is a WEEKLY",
+    "paper sheet: 16 check rows x 7 day columns (Monday..Sunday), each column a Defective/Okay pair,",
+    "with a single 'Week Commencing' date in the header block. That 2-D matrix has NO representation in",
+    "this system and cannot be added: a checklist group (forms/meta-schema.json) is",
+    "additionalProperties:false over {key,label,scale,comment_per_item,items}, and a checklist item",
+    "files exactly ONE {response, comment} pair in BOTH renderers (safety_reports/form_pdf.py and",
+    "safety_portal/src/forms/FormRenderer.tsx). The faithful digital equivalent is ONE submission per",
+    "operating day keyed to the work_date envelope field; the WEEK is reconstituted downstream by",
+    "weekly_generate -> form_pdf.merge_pdfs (Sat->Fri ascending), which is exactly what the paper grid's",
+    "seven columns were. The rejected alternatives, for the record: 7 items per check (bucket_mon,",
+    "bucket_tue, ...) would 7x the item count and destroy the source's semantics; an 8-column",
+    "repeating_table would make every check-item LABEL an operator-editable text box, so nothing pins",
+    "'Engine Oil Level/Leaks' to row 1 and the sheet stops being a fixed inspection artifact.",
+    "The source's 'Week Commencing' header field is deliberately NOT carried over. It exists on paper",
+    "only to say which Monday-to-Sunday sheet you are holding, and it actively CONFLICTS here: ITS",
+    "buckets and compiles on a SATURDAY-to-Friday week (safety_week / weekly_generate), so an",
+    "operator-typed Monday date would sit on a signed page beside a packet whose week starts two days",
+    "earlier, and the two can never agree. work_date already determines the week unambiguously. No",
+    "check item was added, dropped, reordered or reworded.",
+    "[SCALE] 'Okay'/'Defective' is the source's own two-state vocabulary (the paper form's tick and",
+    "cross columns), not the ['OK','NO','N/A'] used by the telehandler variant or the",
+    "['OK','NOT OK','N/A'] used by the skid-steer variant — those two already disagree with each other,",
+    "and each was transcribed from its own source. The source offers no N/A box, so none is invented;",
+    "items are optional, and an inapplicable check is left unanswered exactly as it is left blank on",
+    "paper.",
+    "[LEGAL FLOOR] The closing lock/tag-out static_text is NOT on the source PDF. It is the",
+    "equipment-preinspection PARENT requirement (safety_portal/required-content.json:",
+    "'ALWAYS lock/tag-out unsafe equipment' plus required_signature_inputs_min 1), carried",
+    "byte-identically from equipment-skid-steer-v1 and equipment-telehandler-v1."
+  ],
+  "branding": { "logo": true, "title": "360 Excavator Inspection and Daily Checklist" },
+  "sections": [
+    {
+      "type": "header",
+      "fields": [
+        { "key": "make_model", "label": "Make and Model", "input": "text" },
+        { "key": "plant_serial_no", "label": "Plant or Serial No.", "input": "text" },
+        { "key": "machine_hours", "label": "Machine Hours", "input": "number" },
+        { "key": "site_location", "label": "Site Location", "input": "text" },
+        { "key": "work_date", "label": "Date", "input": "date", "required": true }
+      ]
+    },
+    {
+      "type": "static_text",
+      "text": "All checks must be carried out in line with Manufacturer's Operators Manual.",
+      "emphasis": "heading"
+    },
+    {
+      "type": "checklist",
+      "key": "inspection",
+      "groups": [
+        {
+          "key": "daily_checks",
+          "label": "DAILY CHECKS",
+          "scale": ["Okay", "Defective"],
+          "comment_per_item": false,
+          "items": [
+            { "key": "engine_oil", "label": "Engine Oil Level/Leaks" },
+            { "key": "fuel_level", "label": "Fuel Level/Leaks" },
+            { "key": "coolant_level", "label": "Coolant Level/Leaks" },
+            { "key": "hydraulic_oil", "label": "Hydraulic Oil Level/Leaks" },
+            { "key": "quick_hitch", "label": "Inspect Quick Hitch/Bucket Link & Pins" },
+            { "key": "slew_operation", "label": "Check Operation of Slew" },
+            { "key": "track_condition", "label": "Track Condition & Tension" },
+            { "key": "boom_dipper_blade", "label": "Boom, Dipper Arm & Dozer Blade" },
+            { "key": "cab_condition", "label": "Cab Condition" },
+            { "key": "isolation_lever", "label": "Isolation Lever" },
+            { "key": "gauges_instrumentation", "label": "Gauges and Instrumentation" },
+            { "key": "lights_beacons", "label": "Lights and Beacons" },
+            { "key": "mirrors_windows_wipers", "label": "Mirrors, Windows & Wipers" },
+            { "key": "seat_belts", "label": "Inspect Seat Belts" },
+            { "key": "operators_manual", "label": "Operators Manual" },
+            { "key": "rated_capacity_plate", "label": "Rated Capacity & Plate Readable" }
+          ]
+        }
+      ]
+    },
+    { "type": "freeform", "key": "comments", "label": "Comments", "input": "textarea" },
+    {
+      "type": "header",
+      "title": "Sign-off",
+      "fields": [
+        { "key": "operator_name", "label": "Operator Name", "input": "text", "required": true },
+        { "key": "operator_signature", "label": "Signature", "input": "signature" }
+      ]
+    },
+    {
+      "type": "static_text",
+      "text": "Report any problems found to your supervisor/employer. ALWAYS lock/tag-out unsafe equipment.",
+      "emphasis": "legal"
+    }
+  ]
+}
