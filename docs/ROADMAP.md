@@ -161,7 +161,8 @@ WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · 
 > **REMAINING:** the attended sandbox drill (Box half) · `production_shares_manifest.json` needs
 > `WORKSPACE_ARCHIVE` with a byte-exact name (Safety Portal uses two EN DASHes, the others one EM
 > dash) — **and an operator decision on WHO is shared on it**, because a cross-workspace move
-> changes who can READ the relocated contents (§46) · docs (ADR-0005, the `project_closure.md`
+> changes who can READ the relocated contents (§46) · docs (ADR-0006 — see the numbering note
+> below, 0005 is taken — the `project_closure.md`
 > rewrite, the troubleshooting-tree node, the system-map node **with its brief** —
 > `tests/test_system_map.py` enforces that) · the **§51 doctrine rider**.
 >
@@ -219,7 +220,10 @@ from a fixed workspace constant, and the review sheets never move.
 
 Prior art: `docs/runbooks/project_closure.md` (the §43 runbook this rewrites) ·
 `docs/reports/2026-07-23_project_closure_policy_proposal.md` · its#682 · `docs/tech_debt.md`
-"Archive-on-closure". Design record lands as `docs/adr/0005-job-archive-workflow.md`.
+"Archive-on-closure". Design record lands as `docs/adr/0006-job-archive-workflow.md` — **0005 was claimed the same
+day** by `0005-materials-manifest-import.md` (the manifest-import lane), so the Track 6 ADR takes
+the next free number. Check `ls docs/adr/` before writing it; two lanes landing on one day is how
+the collision happened in the first place.
 
 <!-- NUMBERING NOTE (reconcile 2026-08-07): this Track was scoped as "Track 6" on the
      deployment repo while Track 6 above was already in flight on the development repo —
