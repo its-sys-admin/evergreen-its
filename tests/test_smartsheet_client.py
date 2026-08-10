@@ -889,6 +889,87 @@ def test_ensure_picklist_options_non_picklist_column_raises(mocker):
         smartsheet_client.ensure_picklist_options(42, "Notes", ["x"])
 
 
+# ---- ensure_columns: conditional additive back-fill ---------------------
+
+
+def _spec(title: str, typ: str = "TEXT_NUMBER") -> dict:
+    return {"title": title, "type": typ}
+
+
+def test_ensure_columns_noop_and_zero_api_calls_when_all_present(mocker):
+    """The steady-state path: nothing missing → no add, and NO API call at all.
+
+    This is what makes it safe to call per cycle from a daemon. If this ever regresses into a
+    write, every job on every cycle starts issuing a column mutation.
+    """
+    client = _install_add_columns(mocker)
+    mocker.patch(
+        "shared.smartsheet_client._column_map", return_value={"A": 1, "B": 2},
+    )
+    assert smartsheet_client.ensure_columns(42, [_spec("A"), _spec("B")]) == []
+    client.Sheets.add_columns.assert_not_called()
+
+
+def test_ensure_columns_adds_only_the_missing_titles_appended_in_order(mocker):
+    client = _install_add_columns(mocker)
+    # Three existing columns → the two new ones append at indices 3 and 4, in specs order.
+    mocker.patch(
+        "shared.smartsheet_client._column_map", return_value={"A": 1, "B": 2, "C": 3},
+    )
+    added = smartsheet_client.ensure_columns(
+        42, [_spec("A"), _spec("Part Number"), _spec("Expected Ship Date", "DATE")],
+    )
+    assert added == ["Part Number", "Expected Ship Date"]
+    bodies = client.Sheets.add_columns.call_args.args[1]
+    assert [b.title for b in bodies] == ["Part Number", "Expected Ship Date"]
+    assert [b.index for b in bodies] == [3, 4]  # APPENDED, never inserted
+    assert [b.type for b in bodies] == ["TEXT_NUMBER", "DATE"]
+
+
+def test_ensure_columns_rechecks_the_map_before_writing(mocker):
+    """The pre-write re-read is the duplicate-title guard.
+
+    Smartsheet permits duplicate titles, so adding one that a concurrent process already created
+    would silently produce two columns of the same name rather than erroring.
+    """
+    client = _install_add_columns(mocker)
+    # First read (stale cache) misses it; the forced re-read sees the racer's column.
+    mocker.patch(
+        "shared.smartsheet_client._column_map",
+        side_effect=[{"A": 1}, {"A": 1, "Part Number": 9}],
+    )
+    assert smartsheet_client.ensure_columns(42, [_spec("Part Number")]) == []
+    client.Sheets.add_columns.assert_not_called()
+
+
+def test_ensure_columns_invalidates_cache_so_the_next_lookup_resolves(mocker):
+    client = _install_add_columns(mocker)
+    mocker.patch("shared.smartsheet_client._column_map", return_value={"A": 1})
+    inval = mocker.patch("shared.smartsheet_client.invalidate_column_cache")
+    smartsheet_client.ensure_columns(42, [_spec("New")])
+    client.Sheets.add_columns.assert_called_once()
+    # Called before the add (staleness guard) AND after it (so _resolve_cells sees the new column).
+    assert inval.call_count >= 2
+
+
+def test_ensure_columns_refuses_a_primary_spec(mocker):
+    """A sheet's primary column is fixed at create; silently stripping the flag would add a
+    duplicate ordinary column with the primary's name."""
+    _install_add_columns(mocker)
+    mocker.patch("shared.smartsheet_client._column_map", return_value={})
+    with pytest.raises(ValueError, match="primary"):
+        smartsheet_client.ensure_columns(42, [{"title": "Line", "type": "TEXT_NUMBER", "primary": True}])
+
+
+def test_ensure_columns_strips_primary_key_from_body(mocker):
+    # A non-primary spec that merely carries `primary: False` must not forward the key to the API.
+    client = _install_add_columns(mocker)
+    mocker.patch("shared.smartsheet_client._column_map", return_value={})
+    smartsheet_client.ensure_columns(42, [{"title": "X", "type": "TEXT_NUMBER", "primary": False}])
+    body = client.Sheets.add_columns.call_args.args[1][0]
+    assert not getattr(body, "primary", False)
+
+
 # ---- create_picklist_column: additive column create ---------------------
 
 
@@ -1676,6 +1757,10 @@ _TRANSLATE_IDEMPOTENCY = {
     "add_row_by_id": {False},
     "update_column_options": {False},
     "create_picklist_column": {False},
+    # Conditional column back-fill. A WRITE: the add is guarded by a presence check, but once
+    # issued it is a schema mutation that may have committed before an ambiguous 5xx — and
+    # Smartsheet permits duplicate titles, so a "self-healing" retry could add the column twice.
+    "ensure_columns": {False},
     "create_sheet_in_folder": {False},
     "delete_sheet": {False},
     "move_sheet_to_folder": {False},
