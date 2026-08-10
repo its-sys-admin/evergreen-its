@@ -1870,6 +1870,27 @@ Surfaced: 2026-06-09 12-dimension forensic audit (M2).
 
 Surfaced: 2026-06-09 12-dimension forensic audit (M7).
 
+> **Confirmed live 2026-08-10 — the risk also reaches DOCS-ONLY edits, contradicting
+> `docs/HOUSE_REFLEXES.md` §3's "Docs-only edits are fine on the live tree" carve-out.** Two
+> independent sessions hit this the same day. (1) Landing PR #23 (the manifest-activation session
+> log): `_reset_to_main` switched the live tree off a just-created feature branch back to `main`
+> between `git checkout -b` and `git commit`, so the commit landed on local `main` while the pushed
+> branch stayed at the branch point (`gh pr create` → "No commits between main and…"). Recovered via
+> a refspec push (`git push origin <sha>:refs/heads/<branch>`) + `git reset --keep origin/main` (the
+> `--hard` form is hook-blocked); cost one `publish_daemon.unstrand_failed` WARN/ERROR row in
+> `ITS_Errors`, no CRITICAL, no publish request in flight. (2) A concurrent Track-6 session hit it
+> twice independently — a commit landing on local `main` the same way, and separately an in-progress
+> uncommitted `ROADMAP.md` edit vanishing off disk mid-session when the daemon reverted the tree
+> (recovered via `git branch -f`; nothing lost because the edit was already safe in a pushed commit).
+> See auto-memory `live-tree-not-safe-for-docs-edits.md` for that session's account and
+> memory-archive §G82 for this one. **The fix scope in this entry's own "Fix" line already covers
+> the general case** ("no exclusive lock… could discard an operator's uncommitted work") — this
+> confirms it live rather than changing it. **`docs/HOUSE_REFLEXES.md` §3 needs a wording
+> correction** (propose-only — it is execution-standards doctrine and the operator should confirm
+> the wording, not this entry): the carve-out should read that docs-only *edits* are fine on the
+> live tree, but docs-only *commits* are not, whenever `publish_daemon` is loaded — the daemon's git
+> use is indiscriminate to file type. See memory-archive §G82 for the proposed diff text.
+
 ## [OPEN 2026-06-09] ITS_Daemon_Health sheet observability drift
 
 The operator-visibility surface has drifted significantly from the live daemon topology:
