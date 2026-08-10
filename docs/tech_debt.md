@@ -2873,34 +2873,6 @@ dedicated `diagnose` pass.
 Surfaced: 2026-08-10 session close.
 ---
 
-## [OPEN 2026-08-10, low] GAYK/DOYLE **weekly** maintenance checklist (source page 2) is not modeled anywhere
-
-`safety_portal/reference_forms/GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` is a two-page
-document. Page 1 ("Daily Checklist for GAYK/DOYLE Piledrivers") shipped as the pre-op inspection form
-`equipment-gayk-piledriver-v1` (#44). **Page 2 ("Weekly Checklist and Maintenance") did not** — it opens
-"Must be done in addition to the daily checklist" and is a periodic MAINTENANCE duty (grease all zerk
-fittings with Kajo MOS 2, mast/hammer guide tightness ≤75Nm/55 ft-lbs, hammer-carriage and mast in/out
-tube adjustment, oil-cooler and radiator debris, mast-chain deflection ≤25mm/1", hose and hydraulic
-connection condition), not a pre-operation inspection, so folding it into the daily pre-op form would
-have made operators attest weekly greasing every single day.
-
-**Why deferred:** out of the requested scope for #44 (pre-op inspection forms + the transport
-checklists), and the landing surface is a real choice the operator should make, not one to assume.
-
-**Fix:** most likely a third `generic_inspection` library template alongside the two `0061` seeds — the
-checklist engine already supports a weekly cadence via `0040_checklist_recurrences`, which suits a
-"must be done in addition to the daily" duty better than a second form variant. The alternative is an
-`equipment-preinspection` variant, which would misfile a maintenance record as an inspection.
-
-**Tag:** `safety-portal`, `forms`, `checklists`, `field-ops`, `low`.
-
-**Revisit when:** the operator confirms whether GAYK weekly maintenance should be a recurring checklist
-or a form, or the first GAYK pile driver goes into service on a live job.
-
-Surfaced: 2026-08-10 (#44 adversarial review — the definition's own `comment` promised this entry).
-
----
-
 ## [OPEN 2026-08-10, low] A `count` checklist item's recorded NUMBER never reaches the filed progress record
 
 `checklist_items.item_type = 'count'` stores the operator's entered quantity in

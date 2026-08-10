@@ -2249,3 +2249,30 @@ equivalent of `test_capability_gating.py`. Surfaced by `ops-stds-enforcer` (W2).
 **Revisit when:** the Worker gains any new outbound-capable code path, or at the deploy hardening pass.
 
 Surfaced: 2026-06-05 Safety Portal Phase 5 PR 2 (transport queue).
+
+---
+
+## [RESOLVED 2026-08-10] GAYK/DOYLE **weekly** maintenance checklist (source page 2) is not modeled anywhere
+
+**Opened and closed the same day.** Raised by the #44 adversarial review (the
+`equipment-gayk-piledriver-v1` definition asserted a tech-debt pointer that did not yet exist), then
+built in #45 on operator request in the same session.
+
+**Was:** `reference_forms/GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` is a two-page
+document. Page 1 shipped as the pre-op form `equipment-gayk-piledriver-v1` (#44); page 2 ("Weekly
+Checklist and Maintenance" — "Must be done in addition to the daily checklist") did not, and the
+landing surface was a real choice rather than an assumption: a maintenance duty is not a
+pre-operation inspection, so folding it into the daily form would have made operators attest weekly
+greasing every shift, while filing it AS an inspection would misclassify a maintenance record.
+
+**Resolution:** migration `0062_gayk_weekly_maintenance_checklist.sql` seeds it as a third
+`generic_inspection` library template, "GAYK/DOYLE Piledriver Weekly Maintenance Check", carrying all
+9 source duties. The source's compound first bullet is split into grease (seq 10) and track tension
+(seq 20) so a skipped track check cannot ride in on a completed greasing round; every other item is
+one source bullet. Torque and clearance figures (75Nm/55 ft-lbs, 25mm/1") are pinned by
+`safety_portal/test/fieldops-checklist-seed.test.ts`, along with a double re-apply idempotency proof.
+
+**Deliberately NOT done:** no `checklist_recurrences` row is seeded. That table (`0040`) requires a
+NOT NULL `assignee_personnel_id` AND `job_id` — live tenant data a migration cannot know — so the
+weekly cadence is defined per job/person in the Inspections UI once a machine is on a job. Seeding
+one would have invented an assignment.

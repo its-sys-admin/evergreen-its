@@ -18,19 +18,20 @@ is a separate proposal pending planning-project ratification — see
 
 The §42 code-reader rationale lives in `field_ops/fieldops_sync.py`
 (`_archive_closed_job_trackers`) and `safety_portal/worker/fieldops_job_write.ts` (the lifecycle
-route). Companions: [safety_portal_job_management.md](safety_portal_job_management.md) (add/retire
-jobs), [hours_log_sync.md](hours_log_sync.md) (Fault F — the archive-move repair),
+route). Companions: [job_archive.md](job_archive.md) (**the archive / un-archive action and every
+one of its faults** — Task B below is only the pointer),
+[safety_portal_job_management.md](safety_portal_job_management.md) (add/retire jobs),
 [fieldops_sync.md](fieldops_sync.md) (the mirror daemon).
 
 ## Purpose
 
 One page answering: *"a project is finished — what do I do, and what does the system actually do?"*
 
-The honest summary: **closing a job today is mostly a passive act.** Flipping a job off `Active`
-makes it drop out of dropdowns, compiles, and intake — but almost everything the job ever produced
-**stays exactly where it is**. Exactly one automated archival exists: a job explicitly set to
-**Archived** has its four standing progress tracker sheets moved into `ITS — Archive / Closed
-Projects`. Nothing else moves, anywhere.
+The honest summary: **closing a job is mostly a passive act, and archiving one is not.** Flipping a
+job off `Active` makes it drop out of dropdowns, compiles and intake — but everything the job ever
+produced **stays exactly where it is**. Moving documents is a *separate*, explicitly confirmed
+action (Task B → [job_archive.md](job_archive.md)), and the only thing in ITS that relocates a job's
+folders.
 
 ## Where a job's lifecycle is set (this matters)
 
@@ -86,33 +87,48 @@ What actually happens:
 What does **not** happen: no sheet is moved or archived, no Box folder changes, no flat-log or
 review rows change. See "What closure leaves in place" below.
 
-### Task B — Archiving a job is temporarily UNAVAILABLE
+### Task B — Archiving a job: its own deliberate action, documented separately
 
-**There is no way to archive a job right now, and that is deliberate.** If you need one archived,
-note it and raise it with Seth — do not try to force it from the sheet side.
+Archiving is **no longer** a dropdown value. It is a separate, confirmed action with its own
+button, its own runbook, and its own failure modes: **[job_archive.md](job_archive.md)** — read
+that before archiving anything, and use it for every archive fault.
 
-What changed and why:
+The short version:
 
-- The portal's lifecycle selector no longer offers **Archived**, and the server refuses the value
-  even if an old browser tab still shows it.
-- Until 2026-08-03, choosing Archived silently relocated four tracker sheets on the next daemon
-  cycle — with **no confirmation prompt**, **no retry if a move failed**, and a screen that then
-  displayed the job as "Inactive". A single dropdown change moved live records with essentially no
-  feedback. It had never actually run against real data; it was one click away from doing so.
-- Archiving is being rebuilt as its own deliberate action, with a confirmation step that names
-  exactly what moves, automatic retry when a step fails, and a way to reverse it.
+- The lifecycle selector does not offer **Archived**, and the server refuses the value even if an
+  old browser tab still shows it (409 `use_archive_route`). Sheet-created (legacy) jobs are
+  unaffected — typing `Archived` into `ITS_Active_Jobs` for one of those triggers no automation,
+  and never did.
+- Archive lives on the job's **Archive** card in the portal, behind a typed confirmation that names
+  exactly what moves. It relocates **six containers** — four Smartsheet folders (Safety, Progress,
+  Purchase Orders, Subcontracts) and two Box ones — into `ITS — Archive / <Job>/` and
+  `ITS Archive / <Job>/`. It is reversible with **Un-archive**.
+- Pressing Archive **records intent**; the office Mac performs the move on its next cycle and
+  reports back. That is why the card says "Archiving…" instead of claiming it is done.
+- **A stopped archive does not resume by itself.** "Partly archived" and "Nothing moved" are
+  terminal — they wait for the operator's **Try again**. This is the single most important thing to
+  know, and it is worked in [job_archive.md](job_archive.md).
 
-**Use Task A (Inactive) for a job that is finished.** Inactive is what makes a job stop appearing
-in dropdowns, compiles, and intake — the day-to-day effect you actually want. Nothing is lost by
-waiting: no job's records have ever been archived, so nothing is sitting in a half-done state.
+Until 2026-08-03 archiving was a dropdown value that silently relocated four tracker sheets on the
+next daemon cycle — no confirmation, no retry, and a screen that then displayed the job as
+"Inactive". It never ran against real data; that path is disarmed and preserved in place.
 
-Sheet-created (legacy) jobs are unaffected: typing `Archived` into `ITS_Active_Jobs` for one of
-those never triggered any automation and still doesn't.
+**Task A (Inactive) is still the right move for a job that is merely finished.** Inactive is what
+makes a job stop appearing in dropdowns, compiles and intake — the day-to-day effect you usually
+want. Archive additionally *relocates documents*, which changes who can read them.
 
 ### Task C — What closure leaves in place (deliberate + known gaps)
 
-Nothing below is touched by Inactive **or** Archived. Retention-in-place is the current de-facto
-policy; which parts should change is exactly what the closure-policy proposal is for.
+Nothing below is touched by **Inactive**. Retention-in-place is the current de-facto policy for a
+closed job; which parts should change is exactly what the closure-policy proposal is for.
+
+> **Archiving is the exception, and this table predates it.** The Archive action relocates the
+> job's four Smartsheet per-job folders and its two Box folders — which carries the week sheets,
+> the standing trackers and the procurement documents inside them. The rows below still describe
+> where those surfaces live for a job that has **not** been archived; for what an archive moves and
+> what it deliberately leaves (the flat logs, the review rows, the `ITS_Active_Jobs` row, `ITS
+> DATA`, `ITS Photos`, every portal record), see [job_archive.md](job_archive.md). Re-deriving this
+> table for the archived case is the pending closure-policy rewrite, not a Tier-2 concern.
 
 | Surface | Where it stays |
 |---|---|
@@ -142,16 +158,16 @@ Developer-Operator, the known footgun (HOUSE_REFLEXES §7):
 
 - **Inactive took**: the job is gone from the portal submission dropdown; the next weekly compile
   produces no new WSR/WPR row for it; its `ITS_Active_Jobs` rows read `Inactive`.
-- **Archived took**: additionally, each tracker sheet the job had now appears under
-  `ITS — Archive / Closed Projects`, and `ITS_Errors` has no
-  `fieldops_archive_on_closure_failed` WARN for the job. (Remember the selector display quirk —
-  validate by effects, not the dropdown.)
+- **Archived took**: the job's Archive card reads "Archived. All 6 folders are filed under
+  `ITS — Archive / <Job>`", those folders are visible in the Archive workspace and in Box's
+  `ITS Archive`, and `ITS_Errors` has no `job_archive` rows for the job. Anything short of six
+  is [job_archive.md](job_archive.md) Symptom 2 — it does **not** resume on its own.
 
 ## Escalate to Seth (Tier 3) when
 
-- Any tracker failed to move and the Fault-F manual drag doesn't resolve it, or the WARN recurs —
-  the move method, the archive hook, workspace/folder IDs, and Archive-workspace permissions are
-  all high-class (code / config identity).
+- An archive or un-archive fault is not resolved by the documented re-press — the workspace
+  permissions, the Box archive root, the token identity and the move code are all high-class. The
+  boundary is stated in observable terms in [job_archive.md](job_archive.md).
 - You need a job **removed** (Task D) — destructive, three-system, Developer-Operator only.
 - Anything that would *extend* archival beyond the four trackers (week sheets, Box, procurement,
   D1 export) — that is a doctrine-level policy change (§51), not an operational tweak.

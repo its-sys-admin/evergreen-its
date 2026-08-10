@@ -1,0 +1,121 @@
+{
+  "form_code": "equipment-training-waiver-gayk-ram-v1",
+  "parent_form_code": "equipment-training-waiver",
+  "form_name": "Equipment Training Waiver — GAYK/DOYLE Ram",
+  "variant_label": null,
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "GAYK_NA_Ram_Training_Program_Waiver_and_Checklist.pdf",
+  "comment": [
+    "[SOURCE] Transcribed from 'GAYK/DOYLE Ram Training Program Waiver of Liability & Checklist' (GAYK",
+    "North America, doc 240916). The liability paragraph and the acknowledgement line are VERBATIM —",
+    "they are the legally operative text and are pinned byte-exact by required-content.json. All ten",
+    "topics keep their source numbering, titles and descriptions.",
+    "[WHY THIS IS NOT AN equipment-preinspection VARIANT] It is a signed ACKNOWLEDGEMENT that training",
+    "was delivered and liability accepted — not a machine condition check. It carries no pass/fail",
+    "scale, produces no defect record, and is signed once per training delivery rather than once per",
+    "shift. Filing it under the inspection parent would put a legal waiver into the Equipment Check",
+    "Sheets Box category (intake.PORTAL_FORM_CATEGORY) and into daily-inspection reporting. It gets its",
+    "own parent, the Visitor Sign-In / Toolbox Talk precedent for a form whose output is signatures",
+    "rather than findings.",
+    "[NULL VARIANT, MANUFACTURER-SCOPED IDENTITY] This shipped first as a variant ('GAYK/DOYLE Ram')",
+    "to future-proof for a second manufacturer, and tests/test_form_catalog.py",
+    "::test_single_form_parent_is_null_variant correctly rejected it: registry.ts formCatalog()",
+    "branches BINARY on variant_label, so a lone form carrying one renders a degenerate one-option 3rd",
+    "picklist the PM must click through on every single submission — a real daily cost paid for a",
+    "hypothetical second machine. So variant_label is null. The IDENTITY still carries '-gayk-ram'",
+    "(unlike jha / visitor-sign-in, where identity == parent) precisely so the future case is cheap:",
+    "adding a second manufacturer means a new sibling definition plus setting a variant_label on both",
+    "catalog rows in the same edit — never renaming an identity, which would strand filed submissions.",
+    "[SIGN-OFF SHAPE] The source prints ONE signature block (Signature / Printed Name and Title /",
+    "Company / Date). It is modeled as a signature_table with min_rows 1 + allow_add, NOT a header:",
+    "min_rows 1 keeps the source's single-signer default, while allow_add lets one training delivery",
+    "to a crew record every attendee — each with their own printed name, title and company beside their",
+    "own signature, which is what a per-person liability acceptance requires. This is the",
+    "toolbox-talk-*-v1 sign-in precedent. The source's 'Date' rides the work_date envelope.",
+    "[TOPIC CONTENT] The ten topics are content_blocks (static, non-editable), not checklist items:",
+    "the source is a record that GAYK PROVIDED this information, not a list the signer ticks off. There",
+    "are no checkboxes on the source page. The header sentence 'GAYK has provided the information",
+    "regarding the following topics: Operation and Maintenance' is preserved as the section title's",
+    "lead block so the topics are never read as duties owed by the signer."
+  ],
+  "branding": {
+    "logo": true,
+    "title": "GAYK/DOYLE Ram Training Program — Waiver of Liability & Checklist"
+  },
+  "sections": [
+    {
+      "type": "static_text",
+      "text": "As is true of all construction equipment, operating the Machine involves inherent risk of personal injury, including death, and property damage. Although GAYK endeavors to demonstrate precautions for mitigating these risks, they cannot be eliminated entirely. The sole responsibility for any injuries or damages suffered are accepted by the customer, and the customer agrees that GAYK N.A. LLC, and its representatives, shall be held harmless from any and all liability arising from the use or operation of the equipment.",
+      "emphasis": "legal"
+    },
+    {
+      "type": "content_blocks",
+      "key": "topics",
+      "title": "Topics covered — Operation and Maintenance",
+      "source_pdf": "GAYK_NA_Ram_Training_Program_Waiver_and_Checklist.pdf",
+      "blocks": [
+        {
+          "body": "GAYK has provided the information regarding the following topics: Operation and Maintenance"
+        },
+        {
+          "heading": "1. Pre-Start-Up Walk Around and Fluid Levels",
+          "body": "Checking vital fluids (including engine oil, hydraulic oil and fuel levels) and inspection of the Machine prior to operation."
+        },
+        {
+          "heading": "2. Rotation",
+          "body": "Rotating the Machine on its chassis before attempting to raise the mast"
+        },
+        {
+          "heading": "3. Electrical Components",
+          "body": "Discussion of the operation of the electrical components, including the ignition switch, work lights (if any), and safety light (orange beacon)"
+        },
+        {
+          "heading": "4. Ignition & Cycling",
+          "body": "Starting the Machine and cycling from idle to operational rpm"
+        },
+        {
+          "heading": "5. Controls",
+          "body": "Discussion of Machine controls"
+        },
+        {
+          "heading": "6. Driving",
+          "body": "Discussion of how to drive the Machine, including steering, maneuvering, visibility, and Machine stability"
+        },
+        {
+          "heading": "7. Mast Operation",
+          "body": "Raising and lowering the mast and centering the leveling \"bubble\""
+        },
+        {
+          "heading": "8. Hammer Operation",
+          "body": "Operating the hammer and turning on the pile driver"
+        },
+        {
+          "heading": "9. Shut-Down",
+          "body": "Discussion of proper shut-down method"
+        },
+        {
+          "heading": "10. Grease Points",
+          "body": "Demonstrating the correct grease points on the Machine and hammer and discussing frequency of required greasing"
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "text": "I have read, understand and agree to the matters covered in this document.",
+      "emphasis": "legal"
+    },
+    {
+      "type": "signature_table",
+      "key": "acknowledgement",
+      "title": "Acknowledgement",
+      "min_rows": 1,
+      "allow_add": true,
+      "columns": [
+        { "key": "printed_name_and_title", "label": "Printed Name and Title", "input": "text" },
+        { "key": "company", "label": "Company", "input": "text" },
+        { "key": "signature", "label": "Signature", "input": "signature" }
+      ]
+    }
+  ]
+}

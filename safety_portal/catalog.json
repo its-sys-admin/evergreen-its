@@ -80,6 +80,28 @@
       ]
     },
     {
+      "parent_form_code": "equipment-training-waiver",
+      "category": "safety",
+      "name": "Equipment Training Waiver",
+      "display_order": 12,
+      "forms": [
+        {
+          "identity": "equipment-training-waiver-gayk-ram",
+          "variant_label": null,
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "equipment-training-waiver-gayk-ram-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "equipment-training-waiver-gayk-ram-v1"
+            }
+          ],
+          "display_order": 1
+        }
+      ]
+    },
+    {
       "parent_form_code": "hsse-work-observation",
       "category": "safety",
       "name": "HSS&E Work Observation",

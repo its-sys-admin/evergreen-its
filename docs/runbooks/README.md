@@ -20,6 +20,7 @@ docs — the convention has no separate `runbook` type).
 <!-- BEGIN AUTO-INDEX -->
 | Date | Type | Status | Workstream | Title | PRs |
 |------|------|--------|------------|-------|-----|
+| 2026-08-10 | operations | active | field_ops | [Runbook — Job archive / un-archive (`job_archive`) (a press that never moves, a partial, a refused restore) (Successor-Remediation, Op Stds §43)](job_archive.md) | _–_ |
 | 2026-08-07 | operations | active | field_ops | [Runbook — Materials-manifest importer (`manifest_poll`) (an uploaded BOM or shipping log stuck / refused / dark) (Successor-Remediation, Op Stds §43)](material_manifest_import.md) | _–_ |
 | 2026-07-23 | operations | active | _–_ | [Runbook — Close or archive a project (what actually happens today) (Successor-Remediation, Op Stds §43)](project_closure.md) | _–_ |
 | 2026-07-23 | operations | active | infrastructure | [Runbook — Tenant wipe / stand-up / finish lifecycle (Successor-Remediation, Op Stds §43)](tenant_standup.md) | _–_ |
