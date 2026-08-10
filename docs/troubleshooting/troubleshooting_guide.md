@@ -666,7 +666,7 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **Resolution class:** Escalate to Seth (co-resolve)
 
-**Signals:** archive_container_failed on unarchive, already holds that name in the live tree, no merge primitive, never drilled live (issue #42)
+**Signals:** archive_container_failed on unarchive, already holds that name in the live tree, no merge primitive, this collision branch has never fired for real (issue #42)
 
 **Checks (in order):**
 - The job was written to while archived, so an ordinary find-or-create re-grew its live folder. Neither Smartsheet nor Box can merge two folders, so the pass refuses loudly rather than fusing them — the refusal is correct.
@@ -674,7 +674,7 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 - The Try again button on the red card raises an ARCHIVE request, not a resumed restore — recoverable (the job returns to fully archived) but read the confirmation modal.
 
 **Resolutions (in order):**
-- Reconciling two folders is hand work in two external systems with no undo; escalate. The un-archive direction has never run against live data (issue
+- Reconciling two folders is hand work in two external systems with no undo; escalate. Both directions were drilled live 2026-08-10 (issue
 
 **See also:** runbook `docs/runbooks/job_archive.md`
 

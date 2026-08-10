@@ -71,9 +71,11 @@ read the row's full Description first and confirm with Seth.
 > fixed high-class categories are the **External Send Gate**, **secrets / auth**, **doctrine**, and
 > **code changes**.
 
-> **The un-archive direction has never been run against live data** (issue #42; the archive
-> direction was drilled live on 2026-08-10). Under the both-rule an un-archive fault is therefore
-> **novel** — work Symptom 6 with Seth, not alone.
+> **Both directions have now been drilled live** (2026-08-10): archive → un-archive → archive on a
+> real job, every container relocated, every folder id preserved through all three moves. What has
+> *not* been exercised is the **live-folder collision refusal** in Symptom 6 — no restore has yet
+> met a live folder that re-grew the job's name. Treat that one case as novel and co-resolve it
+> with Seth; the ordinary directions are documented and Tier-2-eligible.
 
 ---
 
@@ -255,8 +257,9 @@ and it requires deciding which sheets are canonical. Not Tier-2.
 
 **Two more un-archive facts worth knowing before you touch one:**
 
-- **The restore direction has never run against live data** (issue #42). Under the both-rule that
-  makes any un-archive fault novel → co-resolve with Seth.
+- **The restore direction HAS been drilled live** (2026-08-10, issue #42) — archive → un-archive →
+  archive, all containers, folder ids preserved throughout. The one branch still unexercised is the
+  live-folder collision below; that specific case is novel → co-resolve with Seth.
 - **"Try again" after a failed un-archive presses *Archive*, not un-archive.** The button on the
   red card always raises an archive request, and the confirmation modal it opens says so — read it.
   The result is recoverable, not harmful: the job goes back to fully archived, and the **Un-archive**
@@ -292,9 +295,13 @@ A sibling, **`fieldops_archive_progress_skipped`** (WARN), means the operator ch
 naming a folder id.
 
 Two creators raced and Smartsheet allowed both (it does not enforce unique folder names). The
-archive used the first one; the other is an **empty orphan**. Harmless. Deleting an empty,
-explicitly-named orphan folder in the Archive workspace is low-class housekeeping — confirm it is
-genuinely empty first, and if it is not, leave it and escalate.
+archive used the first one; the other is an **empty orphan**.
+
+**Nothing to do.** It is harmless: the archive resolves its destination by find-or-create, so a
+later archive of the same job reuses the folder it already picked and never touches the orphan.
+ITS deliberately has no delete primitive for archive containers — the relocation code is
+move-only by design, so a destructive "clean it up" path cannot be written. If the folder is
+*not* empty, that is a different problem: leave it alone and escalate.
 
 ## What "healthy" looks like
 
@@ -323,8 +330,9 @@ State it in what you *saw*, not what you think it is:
 - **`archive_preflight_not_admin` / `archive_preflight_unreadable`** — workspace sharing and the
   token identity are §46 / auth territory.
 - **`fieldops_archive_fetch_auth_failed`** — a rejected token. Secrets / auth, always.
-- **Any un-archive fault at all** — the direction has never run live (issue #42), so it is novel by
-  definition. This includes the live-folder collision in Symptom 6.
+- **The live-folder collision in Symptom 6** — a restore refusing because the live tree re-grew the
+  job's name. Both directions are drilled (2026-08-10, issue #42), but this branch has never fired
+  against real data, and its repair means deciding which of two same-named trees is canonical.
 - **`archive_folder_key_missing` or `archive_direction_unknown`** — both are "this should be
   impossible" signals from the code, not operating conditions.
 - **The same container fails twice through "Try again"** with no cause named above.
@@ -334,5 +342,5 @@ State it in what you *saw*, not what you think it is:
 
 ## Owner
 
-`@solutionsmith`. Update this runbook when the un-archive direction is first drilled live
-(issue #42), or when the set of relocated containers changes.
+`@solutionsmith`. Update this runbook when the live-folder collision (Symptom 6) is first seen for
+real, or when the set of relocated containers changes.

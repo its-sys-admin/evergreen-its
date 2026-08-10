@@ -487,13 +487,13 @@ workflows:
             runbook: docs/runbooks/job_archive.md
           - id: unarchive_collision
             symptom: An un-archive refuses — a folder already holds the job's name in the live tree.
-            signals: ["archive_container_failed on unarchive", "already holds that name in the live tree", "no merge primitive", "never drilled live (issue #42)"]
+            signals: ["archive_container_failed on unarchive", "already holds that name in the live tree", "no merge primitive", "this collision branch has never fired for real (issue #42)"]
             checks:
               - The job was written to while archived, so an ordinary find-or-create re-grew its live folder. Neither Smartsheet nor Box can merge two folders, so the pass refuses loudly rather than fusing them — the refusal is correct.
               - Look at both homes (the live <Job> folder and ITS — Archive / <Job> / <Workstream>) and note what is in each. Change nothing.
               - The Try again button on the red card raises an ARCHIVE request, not a resumed restore — recoverable (the job returns to fully archived) but read the confirmation modal.
             resolutions:
-              - Reconciling two folders is hand work in two external systems with no undo; escalate. The un-archive direction has never run against live data (issue #42), so any restore fault is novel by the both-rule.
+              - Reconciling two folders is hand work in two external systems with no undo; escalate. Both directions were drilled live 2026-08-10 (issue #42), but this collision branch has never fired against real data, so it stays novel by the both-rule.
             class: seth_coresolve
             runbook: docs/runbooks/job_archive.md
 
