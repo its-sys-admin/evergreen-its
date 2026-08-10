@@ -1052,46 +1052,24 @@ def _safe_review_queue_add(
     severity: Severity = Severity.WARN,
     security_flag: bool = False,
 ) -> None:
-    """Write a fence's Review-Queue ticket WITHOUT ever raising.
+    """Bind this daemon's constants onto `review_queue.safe_add`.
 
-    A fence does two things: STOP the item (its caller's one-shot flag) and TELL the
-    operator (this ticket). `review_queue.add` propagates `SmartsheetError` by contract
-    (`shared/review_queue.py` — "callers should log CRITICAL if the queue write is itself
-    a failure-mode signal"), and every fence wrote its ticket BEFORE its flag. So a
-    Smartsheet blip at fence time skipped the flag, the row re-served next cycle, and a
-    PERMANENT one-shot fence degraded into unbounded per-cycle re-ticketing — 2026-08-10:
-    FOUR PENDING rows for one RFQ across two cycles, and the first ticket had actually
-    COMMITTED (Smartsheet's documented NON-IDEMPOTENT unknown-commit case), so the
-    "retry" duplicated a row that was already there.
-
-    Never propagating keeps every caller's flag write reachable. A lost ticket escalates
-    to CRITICAL rather than passing quietly: the item IS fenced, so an operator without a
-    ticket would never learn it exists — precisely what the out-of-band push surface is
-    for. (Same never-raise property as `safety_reports.generate_core._safe_review_queue`,
-    which earned it the same way: 189 duplicate rows for one job in one day.)
+    The never-raise rationale lives on `safe_add` — read it there. This wrapper exists
+    only so the fence sites below stay short; it adds no behaviour.
     """
-    try:
-        review_queue.add(
-            workstream=WORKSTREAM,
-            summary=summary,
-            payload=payload,
-            sla_tier=review_queue.SlaTier.RFQ_DRAFT,
-            reason=reason,
-            severity=severity,
-            source_file=source_file,
-            security_flag=security_flag,
-        )
-    except Exception as exc:  # noqa: BLE001 — a lost ticket must never cost the flag
-        error_log.log(
-            Severity.CRITICAL, SCRIPT_NAME,
-            f"Review-Queue ticket FAILED for {source_file} — the item is still fenced "
-            f"(one-shot flag set, it will NOT retry) but has NO operator ticket. The row "
-            f"may or may not have committed (Smartsheet writes are non-idempotent): check "
-            f"ITS_Review_Queue for {source_file} before re-ticketing by hand. "
-            f"Intended summary: {summary!r}. Cause: {type(exc).__name__}: {exc!r}",
-            error_code="rfq_fence_ticket_failed",
-            correlation_id=correlation_id,
-        )
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
+        workstream=WORKSTREAM,
+        summary=summary,
+        payload=payload,
+        sla_tier=review_queue.SlaTier.RFQ_DRAFT,
+        reason=reason,
+        severity=severity,
+        source_file=source_file,
+        security_flag=security_flag,
+        correlation_id=correlation_id,
+        error_code="rfq_fence_ticket_failed",
+    )
 
 
 def _handle_rfq_hmac_failure(

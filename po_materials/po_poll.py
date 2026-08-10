@@ -579,9 +579,15 @@ def _poll_inside_lock(drafts_on: bool, vendors_on: bool, status_on: bool) -> PoP
         counters["draft_errors"] + counters["attachment_errors"]
         + counters["vendor_errors"] + counters["status_errors"]
     )
+    # `skipped_flagged` counts items ALREADY one-shot-flagged — permanently wedged out
+    # of the queue until an operator fixes the cause and clears the entry. Omitting it
+    # made Last Cycle Status flip back to OK on the very next cycle, so the daemon read
+    # healthy while an item sat fenced indefinitely (2026-08-10, rfq_poll). A standing
+    # fence is a standing WARN by design: ITS_Daemon_Health is a visibility surface, not
+    # a push surface, so this pages nobody — and it self-clears when the flag is cleared.
     total_flagged = (
         counters["rejected"] + counters["fenced"] + counters["attachments_refused"]
-        + counters["vendors_reviewed"]
+        + counters["vendors_reviewed"] + counters["skipped_flagged"]
     )
     if bearer_rejected:
         cycle_status: HeartbeatStatus = "ERROR"
@@ -598,6 +604,8 @@ def _poll_inside_lock(drafts_on: bool, vendors_on: bool, status_on: bool) -> PoP
     else:
         error_summary = (
             f"errors={total_errors} flagged={total_flagged}"
+            + (f" standing={counters['skipped_flagged']}"
+               if counters["skipped_flagged"] else "")
             + (" bearer_rejected" if bearer_rejected else "")
         )
     try:
@@ -986,7 +994,8 @@ def _handle_po_hmac_failure(
     on the FIRST sighting; the flag set suppresses per-cycle re-flag spam."""
     # Tripwire (Invariant 2, Layer 5) — record the suspicious pattern.
     anomaly_logger.check({"po_hmac_failure": po_id, "po_number": po_number})
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"po: HMAC verification FAILED for PO {po_number or po_id} — rejected, "
@@ -1034,7 +1043,8 @@ def _fence_po(
     The row is never filed and never mark-filed; it stays queued in D1. Remediation:
     fix the cause, then delete the po_id entry from `po_poll_flagged.json` (the
     daemon retries it the next cycle)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=f"po: PO {po_number or po_id} refused before filing — {detail}",
         payload={"po_id": po_id, "po_number": po_number, "detail": detail},
@@ -1290,7 +1300,8 @@ def _service_one_attachment(
             # MALICIOUS → CRITICAL NAMING THE ACCOUNT + security-flagged Review-Queue
             # row, refused before filing (the photo_screen/intake posture). The PO
             # itself stays filed — only the attachment is refused.
-            review_queue.add(
+            review_queue.safe_add(
+                script_name=SCRIPT_NAME,
                 workstream=WORKSTREAM,
                 summary=(
                     f"po: MALICIOUS attachment {filename!r} on PO {po_number} "
@@ -1316,7 +1327,8 @@ def _service_one_attachment(
             )
         else:  # suspicious
             security = po_attach_screen.is_structural_active_content(result)
-            review_queue.add(
+            review_queue.safe_add(
+                script_name=SCRIPT_NAME,
                 workstream=WORKSTREAM,
                 summary=(
                     f"po: attachment {filename!r} on PO {po_number} refused as "
@@ -1414,7 +1426,8 @@ def _handle_attachment_integrity_failure(
     Review-Queue row + CRITICAL only on the FIRST sighting; the flag set suppresses
     per-cycle re-flag spam."""
     anomaly_logger.check({"po_attachment_integrity": att_id, "po_number": po_number})
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"po: attachment INTEGRITY FAILURE (att {att_id}, PO {po_number or att_id}, "
@@ -1615,7 +1628,8 @@ def _vendor_up_sync_pass(creds: _PoCreds, counters: dict[str, int]) -> None:
             # leave the vendor dirty (the Worker keeps serving it; the ticket is
             # the de-dup — same posture as fieldops' permanent job fence).
             counters["vendors_reviewed"] += 1
-            review_queue.add(
+            review_queue.safe_add(
+                script_name=SCRIPT_NAME,
                 workstream=WORKSTREAM,
                 summary=(
                     f"po: vendor up-sync PERMANENT failure for {vendor_key!r} "

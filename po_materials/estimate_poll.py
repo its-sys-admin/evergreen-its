@@ -718,7 +718,16 @@ def _poll_inside_lock() -> EstimatePollStats:
         )
 
     _write_heartbeat()
-    total_flagged = counters["refused"] + counters["integrity_failures"]
+    # `skipped_flagged` counts items ALREADY one-shot-flagged — permanently wedged out
+    # of the queue until an operator fixes the cause and clears the entry. Omitting it
+    # made Last Cycle Status flip back to OK on the very next cycle, so the daemon read
+    # healthy while an item sat fenced indefinitely (2026-08-10, rfq_poll). A standing
+    # fence is a standing WARN by design: ITS_Daemon_Health is a visibility surface, not
+    # a push surface, so this pages nobody — and it self-clears when the flag is cleared.
+    total_flagged = (
+        counters["refused"] + counters["integrity_failures"]
+        + counters["skipped_flagged"]
+    )
     if bearer_rejected:
         cycle_status: HeartbeatStatus = "ERROR"
     elif counters["errors"] > 0:
@@ -734,6 +743,8 @@ def _poll_inside_lock() -> EstimatePollStats:
     else:
         error_summary = (
             f"errors={counters['errors']} flagged={total_flagged}"
+            + (f" standing={counters['skipped_flagged']}"
+               if counters["skipped_flagged"] else "")
             + (" bearer_rejected" if bearer_rejected else "")
         )
     try:
@@ -1306,7 +1317,8 @@ def _anomaly_gate(
     anomalies = anomaly_logger.check(_strings_only(payload))
     if not anomalies:
         return True
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"estimate: tier-{tier} extraction for {est_uuid} tripped the anomaly "
@@ -1731,7 +1743,8 @@ def _handle_integrity_failure(
     D1 for forensics). One-shot: anomaly-log + security Review-Queue row + CRITICAL
     only on the FIRST sighting; the flag set suppresses per-cycle re-flag spam."""
     anomaly_logger.check({"estimate_integrity": est_id, "est_uuid": est_uuid})
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"estimate: INTEGRITY FAILURE (est {est_id}, uuid {est_uuid or est_id}, "
@@ -1773,7 +1786,8 @@ def _refuse_screened(
     the security flag; plainer inconsistencies stay ordinary review items."""
     detail = f"{result.layer}:{result.detail}"
     if result.disposition == "malicious":
-        review_queue.add(
+        review_queue.safe_add(
+            script_name=SCRIPT_NAME,
             workstream=WORKSTREAM,
             summary=(
                 f"estimate: MALICIOUS upload {filename!r} (uuid {est_uuid}, job "
@@ -1800,7 +1814,8 @@ def _refuse_screened(
         )
     else:  # suspicious
         security = po_attach_screen.is_structural_active_content(result)
-        review_queue.add(
+        review_queue.safe_add(
+            script_name=SCRIPT_NAME,
             workstream=WORKSTREAM,
             summary=(
                 f"estimate: upload {filename!r} (uuid {est_uuid}, job {job_no}) "
@@ -1844,7 +1859,8 @@ def _refuse_wrong_doc_type(
     Estimate_Log 'refused' + a POLICY_EDGE Review-Queue WARN row + one-shot flag.
     Never silently dropped, never into the PO path."""
     detail = f"wrong_doc_type:{doc_type}"
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream=WORKSTREAM,
         summary=(
             f"estimate: {filename!r} (uuid {est_uuid}, job {job_no}) classified as "
