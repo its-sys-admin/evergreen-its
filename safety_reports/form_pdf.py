@@ -1547,9 +1547,16 @@ def _blank_checklist_section(section: dict, st: dict, namer: _FieldNamer) -> lis
             head.append(_p("Comments", st["colhead"]))
         rows: list[list[Any]] = [head]
         for it in g["items"]:
-            # Per-item override: an explicit "comment": false suppresses the comment
-            # field for that one item even in a comment_per_item group.
-            item_comment = want_comment and it.get("comment", True)
+            # Per-item override, mirroring the SPA's `it.comment ?? group.comment_per_item
+            # ?? false` (FormRenderer.tsx GroupView). The default MUST be the group flag, not
+            # True: `want_comment` above is ALSO set by any single item carrying
+            # "comment": true, so in a comment_per_item:false group a True default hands a
+            # comment box to every OTHER item — boxes the on-screen form never shows, on a
+            # blank form operators print and fill by hand. (Exposed by
+            # equipment-gayk-piledriver-v1, the first mixed-shape group: 5 of 12 items opt in.
+            # No-op for every comment_per_item:true group shipped before it, where the group
+            # flag IS True; an explicit "comment": false still suppresses.)
+            item_comment = want_comment and it.get("comment", bool(g.get("comment_per_item")))
             row: list[Any] = [
                 _p(it["label"], st["cell"]),
                 _blank_checklist_item_response(it, g, namer, st),

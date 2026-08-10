@@ -15,6 +15,19 @@
 --   prints it, even though its text refers to loading — it is checked before the machine is driven
 --   onto the trailer, so it belongs to the earlier checklist.
 --
+-- TRANSCRIPTION NORMALIZATIONS (the only two places an item label departs from doc 240917):
+--   • seq 10 reads "completes its cycle of building pressure"; the source reads "continues its cycle
+--     of building pressure". Transcribed as "completes" because the very next source sentence —
+--     "Once the high-pressure pump shuts off then you can start the pile driver" — shows completion
+--     is what is meant, and "continues" reads as an instruction to keep waiting indefinitely.
+--     Worth confirming with GAYK on the next revision.
+--   • seq 40 appends "(no red diesel)". That clause is NOT on doc 240917; it is carried from the
+--     sibling GAYK daily checklist, doc 240916 ("clean clear diesel (no red diesel!)"), committed
+--     alongside as reference_forms/GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf. Same
+--     machine, same fuel rule, and the consequence of red diesel in this tank is the reason the
+--     warning is highlighted on 240917 — but it is a cross-document borrow, so it is flagged here
+--     rather than left to look like verbatim 240917 text. ("clear clean" word order IS 240917's.)
+--
 -- WHY TEMPLATE 2 IS SHORT (2 items): the source's LOADING and SECURING sections are two sentences of
 -- instruction plus photographs. Everything else a rigger does (tensioning, re-checking after the
 -- first miles) is real practice but is NOT in this document, and this file is not the place to invent
@@ -72,8 +85,14 @@ FROM checklist_templates t WHERE t.kind = 'generic_inspection' AND t.title = 'GA
 
 -- ── Template 2 — Loading & Securing Check. [source doc 240917, sections "LOADING INSTRUCTIONS" and
 -- "SECURING THE LOADS"] The securing item is a `count` (not manual_attest) because the source states
--- a hard number — 4 places, 2 per side — and the engine enforces value_num >= target_count, so a
--- short-chained load cannot be attested complete. ──────────────────────────────────────────────────
+-- a hard number — 4 places, 2 per side — and a count makes the shortfall EXPLICIT rather than
+-- invisible: a plain completion below target is refused (`below_target`, item stays open, value
+-- recorded), and the only way to close it short is the deliberate acknowledge_below_target path,
+-- which REQUIRES a non-empty explanatory note and audits under its own action,
+-- `checklist_item_complete_below_target` (worker/fieldops_checklist.ts, the R1 branch — a
+-- below-target count must not permanently wedge a checklist). So a short-chained load cannot be
+-- closed SILENTLY. It is deliberately NOT a hard block: hard-blocking is a Worker change (a per-item
+-- opt-out of the R1 path), not a seed change, and would re-introduce the wedge R1 exists to fix. ────
 INSERT INTO checklist_templates (kind, job_id, title, active)
 SELECT 'generic_inspection', NULL, 'GAYK/DOYLE Piledriver Loading & Securing Check', 1
 WHERE NOT EXISTS (SELECT 1 FROM checklist_templates WHERE kind = 'generic_inspection' AND title = 'GAYK/DOYLE Piledriver Loading & Securing Check');

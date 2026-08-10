@@ -20,7 +20,7 @@ originals differ only in whitespace.
 | `Skid_Steer__Daily_Pre-Inspection_Checklist.pdf` | Equipment Pre-Inspection (Skid Steer) | tri-state checklist |
 | `weekly_Safe_Work_Observation_Template.pdf` | HSS&E Work Observation | sectioned assessment |
 | `VISITOR-SIGN-IN.pdf` | Visitor Sign-In | rows (not Evergreen-branded — header added in Phase 4) |
-| `360_Excavator_Inspection_and_Daily_Checklist.pdf` | Equipment Pre-Inspection (360 Excavator) | tri-state checklist — source is a 7-day week grid; see the definition's `comment` |
+| `360_Excavator_Inspection_and_Daily_Checklist.pdf` | Equipment Pre-Inspection (360 Excavator) | **two**-state checklist (Okay/Defective — the source offers no N/A box); source is a 7-day week grid, see the definition's `comment` |
 | `GAYK_DOYLE_Piledriver_Daily_and_Weekly_Checklists.pdf` | Equipment Pre-Inspection (GAYK/DOYLE Piledriver) | tri-state checklist — **page 1 only**; page 2 is weekly maintenance, not yet modeled |
 | `GAYK_DOYLE_Startup_Loading_Securing_Loads.pdf` | *(not a form)* — checklist library, migration `0061` | inspection-library templates |
 | `GAYK_NA_Ram_Training_Program_Waiver_and_Checklist.pdf` | *(not a form)* — corroborating provenance | operator-training waiver + topic list |

@@ -20,9 +20,12 @@
     "bucket_tue, ...) would 7x the item count and destroy the source's semantics; an 8-column",
     "repeating_table would make every check-item LABEL an operator-editable text box, so nothing pins",
     "'Engine Oil Level/Leaks' to row 1 and the sheet stops being a fixed inspection artifact.",
-    "The source's own 'Week Commencing' field is PRESERVED in the header (optional) so each day's",
-    "digital record still ties back to the paper week it replaces. No check item was added, dropped,",
-    "reordered or reworded.",
+    "The source's 'Week Commencing' header field is deliberately NOT carried over. It exists on paper",
+    "only to say which Monday-to-Sunday sheet you are holding, and it actively CONFLICTS here: ITS",
+    "buckets and compiles on a SATURDAY-to-Friday week (safety_week / weekly_generate), so an",
+    "operator-typed Monday date would sit on a signed page beside a packet whose week starts two days",
+    "earlier, and the two can never agree. work_date already determines the week unambiguously. No",
+    "check item was added, dropped, reordered or reworded.",
     "[SCALE] 'Okay'/'Defective' is the source's own two-state vocabulary (the paper form's tick and",
     "cross columns), not the ['OK','NO','N/A'] used by the telehandler variant or the",
     "['OK','NOT OK','N/A'] used by the skid-steer variant — those two already disagree with each other,",
@@ -42,7 +45,6 @@
         { "key": "make_model", "label": "Make and Model", "input": "text" },
         { "key": "plant_serial_no", "label": "Plant or Serial No.", "input": "text" },
         { "key": "machine_hours", "label": "Machine Hours", "input": "number" },
-        { "key": "week_commencing", "label": "Week Commencing", "input": "date" },
         { "key": "site_location", "label": "Site Location", "input": "text" },
         { "key": "work_date", "label": "Date", "input": "date", "required": true }
       ]

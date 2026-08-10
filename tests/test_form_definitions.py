@@ -6,6 +6,7 @@ TS display runtime + the Python PDF renderer) consume, so they MUST conform to
 """
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from pathlib import Path
@@ -124,6 +125,48 @@ def test_equipment_gayk_piledriver_item_count() -> None:
     assert total == 12, f"expected 12 piledriver items, got {total}"
     assert any(
         s["type"] == "freeform" and s["key"] == "operating_issues" for s in d["sections"]
+    )
+
+
+def test_blank_checklist_comment_boxes_match_the_spa_rule() -> None:
+    """The blank fillable must give a comment box to exactly the items the SPA does.
+
+    The SPA rule is `it.comment ?? group.comment_per_item ?? false` (FormRenderer.tsx
+    GroupView). The blank renderer builds its Comments COLUMN when the group flag is
+    set OR any single item opts in — so in a `comment_per_item: false` group its
+    per-item default must be the group flag, not True, or every non-opted-in item
+    gets a hand-fill box the on-screen form never shows.
+
+    Exercised by equipment-gayk-piledriver-v1, the first mixed-shape group (5 of 12
+    items opt in); asserted over every shipped definition so a future one cannot
+    reintroduce the drift.
+    """
+    from safety_reports import form_pdf
+
+    for path in DEF_PATHS:
+        d = _load(path)
+        for section in d["sections"]:
+            if section.get("type") != "checklist":
+                continue
+            for group in section["groups"]:
+                group_flag = bool(group.get("comment_per_item"))
+                want_column = group_flag or any(i.get("comment") for i in group["items"])
+                for item in group["items"]:
+                    spa = item.get("comment", group.get("comment_per_item", False))
+                    pdf = want_column and item.get(
+                        "comment", bool(group.get("comment_per_item"))
+                    )
+                    assert bool(spa) == bool(pdf), (
+                        f"{d['form_code']} group {group['key']} item {item['key']}: "
+                        f"SPA shows comment={bool(spa)} but the blank PDF shows "
+                        f"comment={bool(pdf)} — the two renderers must not drift"
+                    )
+    # Pin the implementation the rule above mirrors, so a future edit of form_pdf
+    # cannot silently restore the True default while this test still passes.
+    src = inspect.getsource(form_pdf._blank_checklist_section)
+    assert 'it.get("comment", bool(g.get("comment_per_item")))' in src, (
+        "form_pdf._blank_checklist_section no longer defaults a checklist item's "
+        "comment box to the GROUP flag — it will drift from the SPA again"
     )
 
 

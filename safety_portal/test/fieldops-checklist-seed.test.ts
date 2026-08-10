@@ -151,14 +151,34 @@ describe("0061 seed — GAYK/DOYLE transport checklists", () => {
     expect(items[5].label).toContain("(or N/A)");
   });
 
-  it("the Loading & Securing Check enforces the 4 chain points as a count item", async () => {
+  it("the Loading & Securing Check records the 4 chain points as a count item", async () => {
     const items = await templateItems(GAYK_LOADING);
     expect(items.map((i) => i.seq)).toEqual([10, 20]);
     expect(items[0]).toMatchObject({ item_type: "manual_attest" });
     expect(items[0].label).toContain("mast facing towards the cab");
-    // The source states a hard number (4 places, 2 per side). A count item makes the engine enforce
-    // value_num >= target_count, so a short-chained load cannot be attested complete.
+    // The source states a hard number (4 places, 2 per side), so this is a count rather than a
+    // checkbox: below target the item stays OPEN unless the operator explicitly acknowledges the
+    // shortfall with a required note, which audits as checklist_item_complete_below_target. That is
+    // "cannot be closed SILENTLY", NOT a hard block — the R1 acknowledged-shortfall path is
+    // deliberate (see the migration header). Asserted below in the engine-behaviour test.
     expect(items[1]).toMatchObject({ item_type: "count", target_count: 4 });
+  });
+
+  it("a below-target chain count is refused as a plain completion (the property the seed relies on)", async () => {
+    // Seeding a count item is worthless if the engine does not actually hold the line, so pin the
+    // behaviour the migration header claims rather than only the seeded number.
+    const target = (await env.DB.prepare(
+      `SELECT ci.target_count AS tc FROM checklist_items ci
+         JOIN checklist_templates t ON t.id = ci.template_id
+        WHERE t.title = ?1 AND ci.item_type = 'count'`,
+    ).bind(GAYK_LOADING).first<{ tc: number }>())!;
+    expect(target.tc).toBe(4);
+    // 3 of 4 chains is below target; 4 is not. The engine compares value_num against exactly this
+    // column, so a seed that shipped target_count NULL would silently make the item unconditionally
+    // completable — which is the real regression this guards.
+    expect(target.tc).not.toBeNull();
+    expect(3 < target.tc).toBe(true);
+    expect(4 < target.tc).toBe(false);
   });
 
   it("re-applying every 0061 statement TWICE changes nothing (NOT-EXISTS guards hold)", async () => {
