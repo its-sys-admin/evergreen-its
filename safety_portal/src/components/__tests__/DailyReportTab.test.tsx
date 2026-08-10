@@ -54,6 +54,7 @@ import {
 import type { ExpectedMaterialRow } from "../../lib/fieldops_expected_materials";
 import { ApiError } from "../../lib/errorCopy";
 import { pacificToday } from "../myTasksShared";
+import { formCatalog } from "../../forms/registry";
 import { DailyReportTab } from "../DailyReportTab";
 import { useAuth } from "../../lib/auth";
 
@@ -344,7 +345,10 @@ describe("DailyReportTab — filed banner + amend + submit", () => {
       expect(api.submitForm).toHaveBeenCalledWith(
         expect.objectContaining({
           job_id: "JOB-A",
-          form_code: "daily-report-v6", // the catalog current (v6 since DR-photo-pool Slice 1)
+          // Resolved from the catalog, not named. A hard-coded version turns every future cut
+          // into an unrelated-looking test failure — v7 broke this line, and v6 broke whatever
+          // it said before.
+          form_code: formCatalog().find((p) => p.parent_form_code === "daily-report")!.form_code!,
           work_date: TODAY,
           amends_uuid: null,
           submission_uuid: expect.any(String),
@@ -678,6 +682,58 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   };
   beforeEach(() => sessionStorage.clear());
 
+  // ── v7 day snapshot ────────────────────────────────────────────────────────────────────
+  it("files the day's expected-materials SNAPSHOT with the submission (the v7 inversion)", async () => {
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({
+      expected_materials: [{ ...PENDING, part_number: "7000153", qty_received_total: null }],
+      shipments: [], receipt_events: [],
+    });
+    const { getByLabelText, container } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Q.PEAK DUO"));
+    // The row RENDERING and the snapshot being seeded into form state are two separate commits;
+    // clicking straight after the text appears races the seeding effect (passes solo, fails under
+    // full-suite timing). Flush pending effects first.
+    await act(async () => {});
+    fireEvent.click(getByLabelText("Submit daily report"));
+    await waitFor(() => expect(api.submitForm).toHaveBeenCalled());
+    const sent = vi.mocked(api.submitForm).mock.calls[0][0] as { values: Record<string, unknown> };
+    expect(sent.values.expected_materials_receipt).toEqual([
+      {
+        material: "Q.PEAK DUO",
+        part_number: "7000153",
+        expected: "40 panels",
+        status: "Expected",
+        received: "",
+      },
+    ]);
+  });
+
+  it("the snapshot is NOT seeded when the materials load fails (files nothing, not an empty list)", async () => {
+    // An empty array would assert "this job had no expected materials", which is a different and
+    // false claim from "we could not read them".
+    vi.mocked(fetchExpectedMaterials).mockRejectedValue(new Error("nope"));
+    const { getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
+    await waitFor(() => expect(getByLabelText("Submit daily report")).not.toBeNull());
+    fireEvent.click(getByLabelText("Submit daily report"));
+    await waitFor(() => expect(api.submitForm).toHaveBeenCalled());
+    const sent = vi.mocked(api.submitForm).mock.calls[0][0] as { values: Record<string, unknown> };
+    expect("expected_materials_receipt" in sent.values).toBe(false);
+  });
+
+  it("seeding the snapshot does NOT dirty the form (no draft is persisted from it alone)", async () => {
+    // setValues, never editValues: editValues sets dirtyRef, which gates draft persistence. A
+    // snapshot-only seed writing a draft would resurrect a report the manager never typed.
+    //
+    // Asserted through UNMOUNT, which is what flushes the debounced draft write — checking
+    // sessionStorage while still mounted proves nothing, because the timer has not fired yet.
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    const view = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
+    await waitFor(() => expect(view.container.textContent ?? "").toContain("Q.PEAK DUO"));
+    view.unmount();
+    const drafts = Object.keys(sessionStorage).filter((k) => k.startsWith("its-daily-draft:"));
+    expect(drafts).toEqual([]);
+  });
+
   it("fetches the job's expected materials and renders the pending row inside the form", async () => {
     vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
@@ -704,14 +760,19 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
     expect(vals).toContain("Q.PEAK DUO");
     expect(vals).toContain("Received OK");
     expect(vals).toContain("qty 40 panels");
-    // …and it files with the submission (the section itself contributes NO values key).
+    // …and it files with the submission.
     fireEvent.click(getByLabelText("Submit daily report"));
     await waitFor(() => expect(api.submitForm).toHaveBeenCalled());
     const payload = vi.mocked(api.submitForm).mock.calls[0][0] as { values: Record<string, unknown> };
     expect(payload.values.deliveries_received).toEqual([
       { item_material: "Q.PEAK DUO", condition: "Received OK", notes: "qty 40 panels" },
     ]);
-    expect("expected_materials_receipt" in payload.values).toBe(false);
+    // v7 INVERTS the v5/v6 contract: the section now DOES file the day's snapshot. Until v7 this
+    // asserted the key's ABSENCE, on the reasoning that reprinting a mutable list would snapshot
+    // state the submission never carried. That is backwards for a document of record — the report
+    // is signed against a delivery state that every later mark rewrites, so NOT capturing it was
+    // the data loss. Deliberately rewritten, not worked around.
+    expect(Array.isArray(payload.values.expected_materials_receipt)).toBe(true);
     // The append is draft-persisted like typed work (deep-link navigation loses nothing) —
     // asserted against the pre-submit write (submit clears the draft).
   });

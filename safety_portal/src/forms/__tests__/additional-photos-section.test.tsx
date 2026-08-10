@@ -49,7 +49,7 @@ import {
   type DailyPoolPhotoRow,
 } from "../../lib/fieldops_daily_photos";
 import { FormRenderer, initialValues, type FormLinkAdapter } from "../FormRenderer";
-import { getDefinition } from "../registry";
+import { formCatalog, getDefinition } from "../registry";
 import type { FormDefinition, PhotoValue } from "../types";
 
 afterEach(cleanup);
@@ -60,7 +60,13 @@ beforeEach(() => {
   vi.mocked(encodePhoto).mockReset();
 });
 
-const DEF = getDefinition("daily-report-v6") as FormDefinition;
+// Resolve the CURRENT daily report from the catalog rather than naming a version. The eager
+// registry window is "current + immediately-previous" (vite-plugin-eager-forms), so a
+// hard-coded code silently becomes null two cuts later — which is exactly what v7 did to the
+// v5 references here. These tests are about renderer behaviour, not a historical version.
+const DEF = getDefinition(
+  formCatalog().find((p) => p.parent_form_code === "daily-report")!.form_code!,
+) as FormDefinition;
 
 function poolRow(over: Partial<DailyPoolPhotoRow> & { id: number }): DailyPoolPhotoRow {
   return { status: "pending", created_at: 1_700_000_000, screened_at: null, claimed: 0, ...over };

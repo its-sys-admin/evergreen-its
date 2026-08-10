@@ -19,15 +19,26 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FormRenderer, initialValues, type ExpectedMaterialsAdapter } from "../FormRenderer";
-import { getDefinition } from "../registry";
+import {
+  FormRenderer,
+  initialValues,
+  seedExpectedMaterialsSnapshot,
+  type ExpectedMaterialsAdapter,
+} from "../FormRenderer";
+import { formCatalog, getDefinition } from "../registry";
 import { DAILY_STATUS_FAMILIES } from "../../lib/fieldops_daily_form";
 import type { ExpectedMaterialRow } from "../../lib/fieldops_expected_materials";
 import type { FormDefinition } from "../types";
 
 afterEach(cleanup);
 
-const DEF = getDefinition("daily-report-v5") as FormDefinition;
+// Resolve the CURRENT daily report from the catalog rather than naming a version. The eager
+// registry window is "current + immediately-previous" (vite-plugin-eager-forms), so a
+// hard-coded code silently becomes null two cuts later — which is exactly what v7 did to the
+// v5 references here. These tests are about renderer behaviour, not a historical version.
+const DEF = getDefinition(
+  formCatalog().find((p) => p.parent_form_code === "daily-report")!.form_code!,
+) as FormDefinition;
 
 const ROWS: ExpectedMaterialRow[] = [
   {
@@ -72,7 +83,7 @@ describe("daily-report-v5 carries the receipt mount", () => {
     expect(DEF.sections[idx + 1]).toMatchObject({ type: "repeating_table", key: "deliveries_received" });
   });
 
-  it("contributes NO initialValues key (the section files no values of its own)", () => {
+  it("contributes NO initialValues key (the HOST seeds it when the rows load)", () => {
     expect("expected_materials_receipt" in initialValues(DEF)).toBe(false);
   });
 
@@ -188,5 +199,51 @@ describe("row states + receipt actions", () => {
     );
     expect(filedLabel).toHaveBeenCalledWith("material-incident");
     expect(container.textContent ?? "").toContain("Material incident report: Filed ✓ 2:14 PM by Mo Manager");
+  });
+});
+
+describe("seedExpectedMaterialsSnapshot (the v7 day snapshot)", () => {
+  const BASE: ExpectedMaterialRow = {
+    id: 1, material_id: null, material_name: null, description: "Ground screws",
+    qty: null, unit: null, expected_date: null, status: "expected",
+    received_at: null, received_by_name: null, qty_received: null, note: null, seq: 1,
+    line_uuid: "u-1", part_number: null, category: null, expected_ship_date: null,
+    receipt_status: null, qty_received_total: null,
+  };
+
+  it("prefers the catalog name, falls back to the free-text description", () => {
+    expect(seedExpectedMaterialsSnapshot([{ ...BASE, material_name: "Q.PEAK DUO" }])[0].material)
+      .toBe("Q.PEAK DUO");
+    expect(seedExpectedMaterialsSnapshot([BASE])[0].material).toBe("Ground screws");
+  });
+
+  it("the 0059 receipt_status rollup WINS over the coarse legacy status", () => {
+    // receipt_status is the real three-way delivery state; status is the coarse projection.
+    const row = { ...BASE, status: "received" as const, receipt_status: "partial" as const };
+    expect(seedExpectedMaterialsSnapshot([row])[0].status).toBe("Partially delivered");
+  });
+
+  it("falls back to the coarse status, and `incident` is reported (it is sticky and orthogonal)", () => {
+    expect(seedExpectedMaterialsSnapshot([{ ...BASE, status: "incident" }])[0].status)
+      .toBe("Problem reported");
+    expect(seedExpectedMaterialsSnapshot([{ ...BASE, status: "received" }])[0].status)
+      .toBe("Received");
+    expect(seedExpectedMaterialsSnapshot([BASE])[0].status).toBe("Expected");
+  });
+
+  it("renders qty with its unit, and a null running total as blank (NOT '0')", () => {
+    // null means nothing has been quantified, which is deliberately distinct from a recorded 0.
+    const row = { ...BASE, qty: 120, unit: "panels", qty_received_total: null };
+    expect(seedExpectedMaterialsSnapshot([row])[0].expected).toBe("120 panels");
+    expect(seedExpectedMaterialsSnapshot([row])[0].received).toBe("");
+    expect(seedExpectedMaterialsSnapshot([{ ...row, qty_received_total: 0 }])[0].received).toBe("0");
+  });
+
+  it("carries only display strings — no ids, so a filed PDF never depends on a live join", () => {
+    const entry = seedExpectedMaterialsSnapshot([{ ...BASE, part_number: "7000153" }])[0];
+    expect(Object.keys(entry).sort()).toEqual(
+      ["expected", "material", "part_number", "received", "status"],
+    );
+    expect(Object.values(entry).every((v) => typeof v === "string")).toBe(true);
   });
 });
