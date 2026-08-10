@@ -158,22 +158,55 @@ def test_launchd_missing_and_orphan_fail(monkeypatch):
     assert "ghost" in outcome.details
 
 
-def test_launchd_dark_unloaded_send_daemon_excluded_from_expected():
-    """po-send is a dark-unloaded SEND daemon (operator decision 2026-07-12) — shipped as
-    a plist but NOT required loaded at cutover (send-gate defense-in-depth)."""
-    assert "org.solutionsmith.its.po-send" in vc.DARK_UNLOADED_LABELS
-    assert "org.solutionsmith.its.po-send" not in vc._expected_labels()
+def test_launchd_dark_unloaded_labels_are_excluded_from_expected(monkeypatch):
+    """Whatever is in DARK_UNLOADED_LABELS is excluded from the must-be-loaded set.
+
+    Asserted as a PROPERTY of the mechanism rather than against a specific label. The set
+    is empty today (every send lane is deliberately activated — see the constant's
+    comment), and a membership assertion would have to be rewritten every time the
+    operator activates or re-darkens a lane. This phrasing survives that and still fails
+    if `_expected_labels` stops subtracting the set.
+    """
+    synthetic = "org.solutionsmith.its.dark-example"
+    monkeypatch.setattr(vc, "DARK_UNLOADED_LABELS", frozenset({synthetic}))
+    assert synthetic not in vc._expected_labels()
 
 
-def test_launchd_dark_send_daemon_loaded_is_send_gate_violation(monkeypatch):
-    """If po-send IS loaded at cutover, VC-02 FAILS — a dark external-send path running
-    is a high-class External-Send-Gate event, distinct from a plain orphan."""
-    loaded = vc._expected_labels() | {"org.solutionsmith.its.po-send"}
-    monkeypatch.setattr(vc, "_launchctl_list", lambda: _fake_launchctl(loaded))
+def test_launchd_dark_send_daemon_loaded_is_send_gate_violation(monkeypatch, tmp_path):
+    """A dark-unloaded send daemon that IS loaded fails VC-02 as a send-gate violation,
+    distinctly from a plain orphan.
+
+    Driven off a SYNTHETIC label rather than po-send: po-send is now legitimately loaded,
+    so using it here would assert a violation against a state the operator chose. The
+    control's teeth are what matter, and they are proven by construction — a shipped plist
+    that is in DARK_UNLOADED_LABELS and loaded must still be reported as a violation.
+    """
+    label = "org.solutionsmith.its.dark-example"
+    (tmp_path / f"{label}.plist").write_text("<plist/>")
+    monkeypatch.setattr(vc, "LAUNCHD_PLIST_DIR", tmp_path)
+    monkeypatch.setattr(vc, "DARK_UNLOADED_LABELS", frozenset({label}))
+    monkeypatch.setattr(vc, "_launchctl_list", lambda: _fake_launchctl({label}))
     outcome = vc._check_launchd(OPTS)
     assert not outcome.passed
     assert "send-gate violation" in outcome.details
-    assert "po-send" in outcome.details
+    assert "dark-example" in outcome.details
+
+
+def test_launchd_dark_unloaded_set_is_empty_and_send_lanes_are_expected_loaded():
+    """Every send lane is currently activated, so none is dark-unloaded and all three are
+    REQUIRED loaded. This is the assertion that would have caught the stale constant: it
+    fails the moment the set and the shipped plists disagree about the send posture.
+
+    Re-darkening a lane is a deliberate change to both this test and the constant.
+    """
+    assert vc.DARK_UNLOADED_LABELS == frozenset()
+    expected = vc._expected_labels()
+    for label in (
+        "org.solutionsmith.its.po-send",
+        "org.solutionsmith.its.rfq-send",
+        "org.solutionsmith.its.subcontract-send",
+    ):
+        assert label in expected, f"{label} ships a plist and is no longer dark"
 
 
 # ---- VC-03 config ---------------------------------------------------------
@@ -288,6 +321,29 @@ def test_operator_email_mirror_value_fails_unless_allowed(monkeypatch):
     assert vc._check_config(vc.Options(allow_sandbox=True)).passed
 
 
+def test_every_estimate_extraction_tier_gate_is_enrolled():
+    """All FOUR extraction-ladder tier gates are enrolled, not three.
+
+    `tier1_xlsx_enabled` was missed when PR-B enrolled its siblings, and the miss was
+    invisible because the row happened to exist anyway — VC-03 asserts row PRESENCE, so an
+    unenrolled key is simply never looked at. Enumerated against `estimate_poll`'s own
+    constants rather than string literals, so a rename cannot leave this test passing
+    against a key that no longer exists.
+    """
+    from po_materials import estimate_poll
+
+    by_key = {r.key: r for r in vc.CONFIG_ROWS}
+    for gate in (
+        estimate_poll.CFG_TIER1_ENABLED,
+        estimate_poll.CFG_TIER1_XLSX_ENABLED,
+        estimate_poll.CFG_TIER2_ENABLED,
+        estimate_poll.CFG_OCR_ENABLED,
+    ):
+        assert gate in by_key, f"{gate} must be enrolled in CONFIG_ROWS"
+        assert by_key[gate].workstream == "po_materials"
+        assert by_key[gate].requirement == "non_empty", f"{gate} must be non_empty, not forced-true"
+
+
 def test_subcontract_gate_rows_enrolled_present_not_forced_true():
     """Subcontracts scoped fully-in (2026-07-12). The three subcontract_poll gate rows are
     asserted SEEDED PRESENT (non_empty — the dark-ship reflex), never forced 'true' (that
@@ -317,14 +373,17 @@ def test_subcontract_send_rows_enrolled_after_sc_s4():
     assert by_key["subcontracts.subcontract_send.scheduled_send_local"].requirement == "non_empty"
 
 
-def test_rfq_send_dark_unloaded_and_rows_enrolled_after_r3():
-    """The ADR-0004 R3 RFQ SEND half is BUILT (ships dark): its plist is a dark-unloaded
-    send daemon (excluded from the expected-loaded set, like po-send), and its config rows
-    are enrolled — from_mailbox sandbox-scanned; the gate + window asserted SEEDED PRESENT
-    (non_empty, NOT forced 'true' — flipping the RFQ send gate is a FIXED high-class
-    External-Send-Gate decision, never demanded 'true' by VC-03)."""
-    assert "org.solutionsmith.its.rfq-send" in vc.DARK_UNLOADED_LABELS
-    assert "org.solutionsmith.its.rfq-send" not in vc._expected_labels()
+def test_rfq_send_rows_enrolled_after_r3():
+    """The ADR-0004 R3 RFQ SEND half is BUILT and its config rows are enrolled —
+    from_mailbox sandbox-scanned; the gate + window asserted SEEDED PRESENT (non_empty,
+    NOT forced 'true' — flipping the RFQ send gate is a FIXED high-class External-Send-Gate
+    decision, never demanded 'true' by VC-03).
+
+    The dark-unloaded half of this test was removed 2026-08-10: rfq-send has since been
+    activated by the operator (gate true + plist loaded), so asserting it is dark asserted
+    a state that no longer holds. The row enrollment — the durable half — is unchanged, and
+    `non_empty` is exactly why activation did not require touching VC-03.
+    """
     by_key = {r.key: r for r in vc.CONFIG_ROWS}
     assert "po_materials.rfq_send.from_mailbox" in by_key
     assert by_key["po_materials.rfq_send.from_mailbox"].sandbox_scan is True

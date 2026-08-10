@@ -134,14 +134,16 @@ through Phase C go/no-go BEFORE this list starts),
 > `scripts/migrations/README.md`.
 >
 > **Bridge step (required before VC-02/CL-30):** finish's `dark` posture leaves ALL FIVE
-> send-dispatch plists unloaded, but the must-load set (CL-03/VC-02) expects the three
-> ESTABLISHED send lanes loaded — after `finish`, load exactly `weekly-send`,
-> `progress-send`, and `subcontract-send` per-plist (`./install.sh load
-> org.solutionsmith.its.<label>` each; a §44 operator action — these lanes are already
-> production-approved send paths). `po-send` + `rfq-send` STAY unloaded
-> (`DARK_UNLOADED_LABELS`). Skipping this step fails CL-03, CL-24, CL-28 and CL-30
-> verbatim-by-design; `--posture full` is NOT the bridge (it would load po/rfq-send too —
-> VC-02 FAIL the other direction).
+> send-dispatch plists unloaded, but the must-load set (CL-03/VC-02) expects every
+> production-approved send lane loaded — after `finish`, load each per-plist
+> (`./install.sh load org.solutionsmith.its.<label>`; a §44 operator action). As of
+> 2026-08-10 that is ALL FIVE — `weekly-send`, `progress-send`, `subcontract-send`,
+> `po-send` and `rfq-send` — because `DARK_UNLOADED_LABELS` is now EMPTY; the last two
+> were activated by the operator and are no longer dark. Derive the set from
+> `_expected_labels()` rather than from this list. Skipping this step fails CL-03, CL-24,
+> CL-28 and CL-30 verbatim-by-design. (Historically `--posture full` was NOT the bridge
+> because it also loaded po/rfq-send; with the set empty that distinction no longer bites,
+> but keep using the per-plist loads so the action stays explicit and auditable.)
 
 - [ ] **CL-11 — F22 approver authority = workspace membership (all three
   send-bearing workspaces).** The authorized-approver set is each workspace's
@@ -327,16 +329,19 @@ Order: intake → mirrors/trackers → compile → **send paths last**.
   ITS_Config is the single source of the gate's live value; changing a send gate is a
   FIXED External-Send-Gate action (Seth). Runbook: `docs/runbooks/subcontract_send.md`.
   **Do NOT gate Aug-7 done on this item.**
-- [ ] **CL-38b — RFQ SEND half (ADR-0004 R3-R4) — BUILT, dark-unloaded plist class, NOT a
-  blocker.** The
+- [ ] **CL-38b — RFQ SEND half (ADR-0004 R3-R4) — BUILT and since ACTIVATED; a must-load
+  lane, NOT a blocker.** The
   outbound-RFQ send lane (`rfq_send.py`/`rfq_send_poll.py`, plist `org.solutionsmith.its.rfq-send`)
   is built and its config rows are seeded present (`seed_rfq_send_config.py`: `from_mailbox`
   sandbox-scanned, `polling_enabled`/`scheduled_send_local`/`poll_interval_seconds` seeded —
-  VC-03 asserts presence, NEVER forced `true`). `rfq-send` is a **dark-unloaded** SEND daemon
-  (`DARK_UNLOADED_LABELS`, VC-02) — it stays UNLOADED like `po-send`. **Go-live is a FIXED
-  high-capability-class External-Send-Gate operator action (Seth): repoint the `from_mailbox`
-  to production, build + flip `SHEET_RFQ_PENDING_REVIEW`, flip
-  `po_materials.rfq_send.polling_enabled` true, AND `install.sh load org.solutionsmith.its.rfq-send`
+  VC-03 asserts presence, NEVER forced `true`). `rfq-send` WAS a **dark-unloaded** SEND daemon;
+  the operator activated it (gate flipped + plist loaded), and it was removed from
+  `DARK_UNLOADED_LABELS` on 2026-08-10 alongside `po-send` so VC-02 stopped reporting a
+  months-old deliberate decision as a send-gate violation. It is now in the must-load set.
+  ITS_Config is the single source of the gate's live value — read it there, never here.
+  **Re-darkening this lane, or first-enabling any FUTURE send lane, is a FIXED
+  high-capability-class External-Send-Gate operator action (Seth): add the label back to
+  `DARK_UNLOADED_LABELS`, flip `po_materials.rfq_send.polling_enabled`, and unload the plist
   together.** Uses the existing `ITS_PORTAL_RFQ_TOKEN` bearer — no new secret. **Do NOT gate
   Aug-7 done on this item.**
 
