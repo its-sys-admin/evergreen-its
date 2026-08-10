@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from field_ops import fieldops_sync
+from progress_reports import material_receipts
 from shared import active_jobs_writer, sheet_ids, smartsheet_client
 from shared.portal_client import FieldopsEquipmentSnapshot, FieldopsMaterialListSnapshot
 
@@ -181,6 +182,26 @@ def _patch(mocker):
         ),
         "inc_row_cap": mocker.patch(
             "field_ops.fieldops_sync.material_incidents.check_row_cap", return_value=None
+        ),
+        # PR4 material-receipts pass seams — receipts_enabled defaults OFF for the same reason as
+        # incidents: EVERY pre-existing test stays byte-identical because the pass is skipped. The
+        # receipt tests below flip it on. APPEND-ONLY LEDGER — no roster, no retire, no
+        # mark-mirrored seam.
+        "receipts_enabled": mocker.patch(
+            "field_ops.fieldops_sync._receipts_enabled", return_value=False
+        ),
+        "receipts_list": mocker.patch(
+            "field_ops.fieldops_sync.portal_client.get_fieldops_material_receipts", return_value=[]
+        ),
+        "ensure_rcp_sheet": mocker.patch(
+            "field_ops.fieldops_sync.material_receipts.ensure_material_receipts_sheet",
+            return_value=777,
+        ),
+        "upsert_rcp": mocker.patch(
+            "field_ops.fieldops_sync.material_receipts.upsert_receipt_row", return_value=1
+        ),
+        "rcp_row_cap": mocker.patch(
+            "field_ops.fieldops_sync.material_receipts.check_row_cap", return_value=None
         ),
         # §51 archive-on-closure seams — default to "an Hours Log exists" so the archived-job
         # tests exercise the move; the guard/idempotency tests below flip these to None.
@@ -1298,6 +1319,260 @@ def test_incident_fetch_401_is_critical_and_cycle_completes(_patch):
         for c in _patch["log"].call_args_list
     )
     _patch["hb"].assert_called_once()  # cycle still completes
+
+
+# ---- PR4 material-receipts pass — APPEND-ONLY delivery ledger ----
+
+
+def _rcp_row(
+    event_uuid: str = "evt-10", job_id: str = "JOB-1", **over: Any
+) -> dict[str, Any]:
+    e: dict[str, Any] = {
+        "event_uuid": event_uuid,
+        "job_id": job_id,
+        "project_name": "Job One",
+        "kind": "partial",
+        "qty": 40.0,
+        "note": "2 pallets on this load",
+        "event_date": "2026-08-06",
+        "line_uuid": "u-10",
+        "material_description": "Q.PEAK panels",
+        "unit": "ea",
+        "part_number": "7000153",
+        "line_qty_expected": 120.0,
+        "line_status": "partial",
+        "line_qty_received": 40.0,
+        "bol_number": "BOL-8891",
+        "received_by_display": "Mo Manager",
+    }
+    e.update(over)
+    return e
+
+
+def test_receipt_pass_off_by_default(_patch):
+    # receipts_enabled defaults False (fixture) → the pass never touches the Worker or the sheets.
+    # This is ALSO the guard test: forcing `_receipts_enabled` True red-lights here
+    # (get_fieldops_material_receipts would be called). Prove-the-control-bites.
+    _patch["receipts_list"].return_value = [_rcp_row()]
+    stats = fieldops_sync._sync_inside_lock()
+    _patch["receipts_list"].assert_not_called()
+    _patch["ensure_rcp_sheet"].assert_not_called()
+    assert stats.receipts_upserted == 0
+    assert stats.receipts_reviewed == 0 and stats.receipts_errors == 0
+
+
+def test_receipt_pass_upserts_no_retire_no_mark_mirrored(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [
+        _rcp_row("evt-10"), _rcp_row("evt-11", kind="delivered"),
+    ]
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_upserted == 2
+    assert stats.receipts_errors == 0 and stats.receipts_reviewed == 0
+    _patch["ensure_rcp_sheet"].assert_called_once_with("Job One")  # one sheet for the one job
+    assert _patch["upsert_rcp"].call_count == 2                    # one upsert per event
+    _patch["rcp_row_cap"].assert_called_once()                     # row-cap watchdog runs once
+    # APPEND-ONLY — no retire / no mark-mirrored symbol exists to call.
+    assert not hasattr(fieldops_sync.material_receipts, "retire_removed")
+    assert _patch["hb_row"].call_args.kwargs["status"] == "OK"
+    assert _patch["hb_row"].call_args.kwargs["items_processed"] == 2
+
+
+def test_receipt_fields_mapped_including_derived_pair(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row("evt-10")]
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_rcp"].call_args.kwargs
+    assert kw["event_uuid"] == "evt-10"
+    assert kw["material"] == "Q.PEAK panels"
+    assert kw["kind"] == "Partial"                  # display-cased from the D1 lower-case value
+    assert kw["qty"] == "40"                        # _fmt_qty trims the trailing .0
+    assert kw["unit"] == "ea"
+    assert kw["part_number"] == "7000153"
+    assert kw["line_uuid"] == "u-10"
+    assert kw["bol"] == "BOL-8891"                  # LEFT-JOINed from the named shipment
+    assert kw["note"] == "2 pallets on this load"
+    assert kw["received_by"] == "Mo Manager"        # DISPLAY name, never a username
+    assert kw["event_date"] == "2026-08-06"         # already naive YYYY-MM-DD; no epoch conversion
+    # The DERIVED pair — the two fields that legitimately change after the event is written.
+    assert kw["line_status"] == "partial"
+    assert kw["line_qty_received"] == "40"
+    assert kw["line_qty_expected"] == "120"
+
+
+def test_receipt_kind_display_casing_covers_all_three_d1_values(_patch):
+    # The D1 CHECK constraint allows exactly these three; each must reach Smartsheet as prose.
+    assert fieldops_sync._fmt_receipt_kind("delivered") == "Delivered"
+    assert fieldops_sync._fmt_receipt_kind("partial") == "Partial"
+    assert fieldops_sync._fmt_receipt_kind("not_delivered") == "Not delivered"
+
+
+def test_receipt_kind_unknown_value_passes_through_not_blanked(_patch):
+    # If the CHECK constraint ever grows a fourth kind, the unmapped value must land in the cell
+    # where an operator can see the drift — silently blanking it would hide a schema change.
+    assert fieldops_sync._fmt_receipt_kind("returned") == "returned"
+    assert fieldops_sync._fmt_receipt_kind(None) == ""
+
+
+def test_receipt_not_delivered_carries_blank_qty(_patch):
+    # qty is NULL in D1 for a not-delivered mark (enforced at the Worker write route) → blank cell.
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [
+        _rcp_row("evt-10", kind="not_delivered", qty=None, note="Truck never showed")
+    ]
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_rcp"].call_args.kwargs
+    assert kw["kind"] == "Not delivered"
+    assert kw["qty"] == ""
+    assert kw["note"] == "Truck never showed"
+
+
+def test_receipt_unlinked_maps_blank_line_fields(_patch):
+    # An event whose line was since deleted (LEFT JOIN yields NULLs) → blanks, still mirrors.
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [
+        _rcp_row("evt-10", line_uuid=None, line_status=None,
+                 line_qty_expected=None, line_qty_received=None)
+    ]
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_rcp"].call_args.kwargs
+    assert kw["line_uuid"] == "" and kw["line_status"] == ""
+    assert kw["line_qty_expected"] == "" and kw["line_qty_received"] == ""
+
+
+def test_receipt_malformed_row_is_skipped_loudly(_patch):
+    # A row that cannot be keyed or foldered is skipped — but never silently.
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [
+        _rcp_row("evt-10"), _rcp_row("", job_id="JOB-2"),
+    ]
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_upserted == 1  # only the well-formed one
+    assert any(
+        c.kwargs.get("error_code") == "fieldops_receipt_row_malformed"
+        for c in _patch["log"].call_args_list
+    )
+
+
+def test_receipt_permanent_failure_routes_review(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row("evt-10")]
+    _patch["upsert_rcp"].side_effect = smartsheet_client.SmartsheetValidationError("HTTP 400")
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_reviewed == 1 and stats.receipts_upserted == 0
+    _patch["review"].assert_called_once()
+    assert _patch["review"].call_args.kwargs["workstream"] == "progress_reports"
+    assert _patch["hb_row"].call_args.kwargs["status"] == "WARN"
+
+
+def test_receipt_per_event_fence_one_bad_does_not_block_others(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row("evt-10"), _rcp_row("evt-11")]
+    _patch["upsert_rcp"].side_effect = [smartsheet_client.SmartsheetError("boom"), 5]
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_errors == 1 and stats.receipts_upserted == 1  # the other still mirrored
+    _patch["rcp_row_cap"].assert_called_once()  # row-cap still runs
+
+
+def test_receipt_ensure_sheet_permanent_failure_routes_review(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row("evt-10")]
+    _patch["ensure_rcp_sheet"].side_effect = smartsheet_client.SmartsheetValidationError("HTTP 400")
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_reviewed == 1 and stats.receipts_upserted == 0
+    _patch["upsert_rcp"].assert_not_called()
+    assert _patch["review"].call_args.kwargs["workstream"] == "progress_reports"
+
+
+def test_receipt_fetch_failure_cycle_completes(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].side_effect = fieldops_sync.portal_client.PortalTransportError("x")
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_errors == 1 and stats.receipts_upserted == 0
+    _patch["ensure_rcp_sheet"].assert_not_called()
+    # the receipt failure NEVER aborts the cycle — heartbeat + marker still run.
+    _patch["hb"].assert_called_once()
+    _patch["marker"].assert_called_once()
+
+
+def test_receipt_fetch_401_is_critical_and_cycle_completes(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].side_effect = fieldops_sync.portal_client.PortalAuthError("401")
+    stats = fieldops_sync._sync_inside_lock()
+    assert stats.receipts_errors == 1
+    assert any(
+        c.kwargs.get("error_code") == "fieldops_receipts_fetch_auth_failed"
+        and c.args[0] == fieldops_sync.Severity.CRITICAL
+        for c in _patch["log"].call_args_list
+    )
+    _patch["hb"].assert_called_once()  # cycle still completes
+
+
+def test_receipt_grouper_is_not_the_incident_grouper(_patch):
+    # The receipts grouper keys on `event_uuid`; the incident one keys on `submission_uuid`. Reusing
+    # the incident grouper here would drop EVERY receipt (no row carries a submission_uuid) and
+    # report it as malformed data rather than the wiring bug it would be.
+    grouped = fieldops_sync._group_receipts_by_job([_rcp_row("evt-10")])
+    assert grouped == {"JOB-1": ("Job One", [_rcp_row("evt-10")])}
+    # Fed the same rows, the incident grouper finds nothing keyable — proving they are not swappable.
+    assert fieldops_sync._group_incidents_by_job([_rcp_row("evt-10")]) == {}
+
+
+# ---- the receipts gate (the five-surface dark-ship contract) ----
+
+
+def test_the_receipts_gate_ships_off():
+    assert fieldops_sync.DEFAULT_RECEIPTS_ENABLED is False
+
+
+def test_the_receipts_gate_is_declared_for_startup_observability():
+    # #336: a key resolved at runtime but undeclared is invisible in the startup log and absent
+    # from the config dictionary the operator reads. BOTH keys this pass resolves are declared —
+    # the gate, and the row-cap threshold check_row_cap reads mid-cycle under progress_reports.
+    declared = {(k.setting, k.workstream) for k in fieldops_sync.REQUIRED_CONFIG}
+    assert (fieldops_sync.CFG_RECEIPTS_ENABLED, fieldops_sync.WORKSTREAM) in declared
+    assert (material_receipts.CFG_ROW_CAP_WARN, "progress_reports") in declared
+
+
+def test_the_receipts_gate_row_is_seeded_even_though_it_ships_false():
+    """A boolean gate read with default=False treats a MISSING row identically to `false`.
+
+    So a capability that "ships dark" with no row at all leaves the operator hunting for a switch
+    that does not exist — activation must be a visible cell-flip. (HOUSE_REFLEXES §5.)
+    """
+    import sys
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parents[1] / "scripts" / "migrations"
+    if str(migrations) not in sys.path:
+        sys.path.insert(0, str(migrations))
+    import seed_daemon_gate_config as seeder  # noqa: PLC0415
+
+    row = next(r for r in seeder.CONFIG_ROWS if r["Setting"] == fieldops_sync.CFG_RECEIPTS_ENABLED)
+    assert row["Workstream"] == fieldops_sync.WORKSTREAM
+    assert row["Value"] == "false"
+
+
+def test_the_receipts_gate_is_operator_editable_and_cutover_verified():
+    from operator_dashboard.act import registry  # noqa: PLC0415
+
+    # Without this the gate exists but the operator cannot flip it from the dashboard — the surface
+    # the five-item handoff list omitted.
+    assert (fieldops_sync.CFG_RECEIPTS_ENABLED, fieldops_sync.WORKSTREAM) in registry.REGISTRY
+
+    import sys
+    from pathlib import Path
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import verify_cutover as vc  # noqa: PLC0415
+
+    row = next(r for r in vc.CONFIG_ROWS
+               if r.key == fieldops_sync.CFG_RECEIPTS_ENABLED
+               and r.workstream == fieldops_sync.WORKSTREAM)
+    # non_empty, never forced true — demanding "true" would force the mirror ON at cutover, which
+    # is an operator decision, not a cutover precondition.
+    assert row.requirement == "non_empty"
 
 
 def test_incident_malformed_row_is_skipped_never_silent(_patch):
