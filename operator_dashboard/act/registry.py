@@ -106,6 +106,10 @@ _ENTRIES: list[ConfigEntry] = [
     _e("field_ops.fieldops_sync.equipment_enabled", "field_ops", _GATES, v_bool),
     _e("field_ops.fieldops_sync.materials_enabled", "field_ops", _GATES, v_bool),
     _e("field_ops.fieldops_sync.incidents_enabled", "field_ops", _GATES, v_bool),
+    _e("field_ops.fieldops_sync.receipts_enabled", "field_ops", _GATES, v_bool,
+       note="Material Receipts delivery-ledger mirror: every delivered / partial / not-delivered "
+            "mark up into the per-job Material Receipts sheet. Append-only, so the ledger "
+            "re-projects in full each cycle and pausing loses nothing"),
     _e("field_ops.fieldops_sync.archive_enabled", "field_ops", _GATES, v_bool,
        note="Track 6 job-archive pass: drains the portal's archive queue and relocates a closed "
             "job's six Smartsheet+Box containers. Turning this ON is what makes the portal's "

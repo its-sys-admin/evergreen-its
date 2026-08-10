@@ -146,6 +146,19 @@ DEFAULT_MATERIALS_ENABLED = False
 CFG_INCIDENTS_ENABLED = "field_ops.fieldops_sync.incidents_enabled"
 DEFAULT_INCIDENTS_ENABLED = False
 
+# PR4 material RECEIPTS — the delivery-mark ledger (`material_receipt_events`, migration 0059) mirrored
+# UP into the per-job Material Receipts sheet. Its own gate for the same reason each mirror has one:
+# the passes are independent endpoints and an operator must be able to pause exactly one without
+# darkening the others. APPEND-ONLY like incidents — no watermark, no mark-mirrored, no retire (a
+# signed-for delivery is an immutable historical fact), so re-projection is the whole retry story.
+#
+# The gate ROW is seeded (at false) by `scripts/migrations/seed_daemon_gate_config.py` in the same
+# change that adds this code, because a boolean gate read with `default=False` treats a MISSING row
+# identically to `false` — so a capability that "ships dark" with no row at all leaves the operator
+# hunting for a switch that does not exist (HOUSE_REFLEXES §5).
+CFG_RECEIPTS_ENABLED = "field_ops.fieldops_sync.receipts_enabled"
+DEFAULT_RECEIPTS_ENABLED = False
+
 # Track 6 job archive — the pass that drains `/archive-pending` and relocates a closed job's six
 # containers across Smartsheet and Box. Its own gate, shipped OFF, and the reason it needs one is
 # not caution about the code: turning this on is what makes an operator-visible Archive button in
@@ -161,11 +174,12 @@ DEFAULT_ARCHIVE_ENABLED = False
 _PACIFIC = ZoneInfo("America/Los_Angeles")  # tracker cells are the operator's wall-clock
 
 # #336 — every ITS_Config key this daemon resolves at RUNTIME, declared once for the
-# startup observability pass (resolve_and_log). THREE workstreams: the five field_ops
+# startup observability pass (resolve_and_log). THREE workstreams: the seven field_ops
 # gates, the SHARED safety_reports Worker base-URL (read under safety_reports), and the
-# four progress_reports row-cap thresholds the hours/equipment/material/incidents passes
-# read mid-cycle via
-# progress_reports.{hours_log,equipment_status,material_list,material_incidents}.check_row_cap.
+# five progress_reports row-cap thresholds the hours/equipment/material/incidents/receipts
+# passes read mid-cycle via
+# progress_reports.{hours_log,equipment_status,material_list,material_incidents,material_receipts}
+# .check_row_cap.
 # The declared-but-not-runtime-read *.poll_interval_seconds key is deliberately EXCLUDED.
 REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(CFG_SYNC_ENABLED, WORKSTREAM, DEFAULT_SYNC_ENABLED, "bool"),
@@ -173,6 +187,7 @@ REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(CFG_EQUIPMENT_ENABLED, WORKSTREAM, DEFAULT_EQUIPMENT_ENABLED, "bool"),
     ConfigKey(CFG_MATERIALS_ENABLED, WORKSTREAM, DEFAULT_MATERIALS_ENABLED, "bool"),
     ConfigKey(CFG_INCIDENTS_ENABLED, WORKSTREAM, DEFAULT_INCIDENTS_ENABLED, "bool"),
+    ConfigKey(CFG_RECEIPTS_ENABLED, WORKSTREAM, DEFAULT_RECEIPTS_ENABLED, "bool"),
     ConfigKey(CFG_ARCHIVE_ENABLED, WORKSTREAM, DEFAULT_ARCHIVE_ENABLED, "bool"),
     ConfigKey(
         CFG_WORKER_BASE_URL, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
@@ -193,6 +208,10 @@ REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(
         material_incidents.CFG_ROW_CAP_WARN, "progress_reports",
         material_incidents.DEFAULT_ROW_CAP_WARN, "int",
+    ),
+    ConfigKey(
+        material_receipts.CFG_ROW_CAP_WARN, "progress_reports",
+        material_receipts.DEFAULT_ROW_CAP_WARN, "int",
     ),
 ]
 
@@ -267,6 +286,11 @@ class SyncStats:
     incidents_upserted: int = 0   # incident rows inserted/updated in place this cycle
     incidents_reviewed: int = 0   # incidents/jobs routed to the Review Queue (permanent failure)
     incidents_errors: int = 0     # transient incident failures (left for next cycle) + skipped
+    # PR4 material-receipts pass (0 when receipts_enabled is off — the shipped default). APPEND-ONLY
+    # ledger: no `retired` counter (a signed-for delivery is immutable and never removed).
+    receipts_upserted: int = 0    # receipt-event rows inserted/updated in place this cycle
+    receipts_reviewed: int = 0    # events/jobs routed to the Review Queue (permanent failure)
+    receipts_errors: int = 0      # transient receipt failures (left for next cycle) + skipped
 
 
 # ---- Config readers (replicated per preservation, mirror portal_poll) ----------
@@ -319,6 +343,10 @@ def _materials_enabled() -> bool:
 
 def _incidents_enabled() -> bool:
     return _read_bool_setting(CFG_INCIDENTS_ENABLED, DEFAULT_INCIDENTS_ENABLED)
+
+
+def _receipts_enabled() -> bool:
+    return _read_bool_setting(CFG_RECEIPTS_ENABLED, DEFAULT_RECEIPTS_ENABLED)
 
 
 def _archive_enabled() -> bool:
@@ -630,6 +658,15 @@ def _sync_inside_lock() -> SyncStats:
     if _incidents_enabled():
         incidents = _mirror_material_incidents_pass(base_url, bearer)
 
+    # PR4 material-receipts pass — same, INDEPENDENT endpoint (/material-receipts). Gated OFF by
+    # default; APPEND-ONLY ledger (immutable delivery marks): no reconcile roster, no retire, no
+    # mark-mirrored. Runs LAST of the mirrors; its own per-job/per-event fences mean a receipt
+    # failure NEVER aborts the passes above nor the heartbeat below — consistent with the decouple
+    # fix (no re-introduced job-fetch dependency).
+    receipts = {"upserted": 0, "reviewed": 0, "errors": 0}
+    if _receipts_enabled():
+        receipts = _mirror_material_receipts_pass(base_url, bearer)
+
     # Track 6 archive pass — its OWN queue (/archive-pending), not the job-dirty list, so a failed
     # relocation genuinely retries instead of being silenced by an unrelated mirror success. Gated
     # OFF by default. Runs LAST, after every mirror: relocating a closed job's folders is the least
@@ -642,11 +679,11 @@ def _sync_inside_lock() -> SyncStats:
     _write_heartbeat()
     total_errors = (
         counters["errors"] + hours["errors"] + equip["errors"] + materials["errors"]
-        + incidents["errors"] + archive["errors"]
+        + incidents["errors"] + receipts["errors"] + archive["errors"]
     )
     total_reviewed = (
         counters["reviewed"] + hours["reviewed"] + equip["reviewed"] + materials["reviewed"]
-        + incidents["reviewed"]
+        + incidents["reviewed"] + receipts["reviewed"]
     )
     if total_errors > 0:
         cycle_status: HeartbeatStatus = "DEGRADED"
@@ -662,7 +699,7 @@ def _sync_inside_lock() -> SyncStats:
             status=cycle_status,
             items_processed=(
                 counters["mirrored"] + hours["mirrored"] + equip["upserted"]
-                + materials["upserted"] + incidents["upserted"]
+                + materials["upserted"] + incidents["upserted"] + receipts["upserted"]
                 + archive["complete"] + archive["partial"]
             ),
             error_summary=(
@@ -691,6 +728,8 @@ def _sync_inside_lock() -> SyncStats:
             f"reviewed={materials['reviewed']} errors={materials['errors']}; "
             f"incidents upserted={incidents['upserted']} reviewed={incidents['reviewed']} "
             f"errors={incidents['errors']}; "
+            f"receipts upserted={receipts['upserted']} reviewed={receipts['reviewed']} "
+            f"errors={receipts['errors']}; "
             f"archive complete={archive['complete']} partial={archive['partial']} "
             f"failed={archive['failed']} capped={archive['capped']} errors={archive['errors']}"
         ),
@@ -715,6 +754,9 @@ def _sync_inside_lock() -> SyncStats:
         incidents_upserted=incidents["upserted"],
         incidents_reviewed=incidents["reviewed"],
         incidents_errors=incidents["errors"],
+        receipts_upserted=receipts["upserted"],
+        receipts_reviewed=receipts["reviewed"],
+        receipts_errors=receipts["errors"],
     )
 
 
@@ -2056,6 +2098,228 @@ def _route_incident_to_review(
         error_code="fieldops_incident_permanent",
         correlation_id=correlation_id,
     )
+
+
+# ---- PR4 material RECEIPTS mirror (the delivery ledger's §51 up-sync) ----------
+
+
+# D1 stores the mark lower-cased and CHECK-constrained to exactly these three
+# (`0059_material_tracking.sql`); the Smartsheet column is prose the office reads.
+_RECEIPT_KIND_DISPLAY: dict[str, str] = {
+    "delivered": "Delivered",
+    "partial": "Partial",
+    "not_delivered": "Not delivered",
+}
+
+
+def _fmt_receipt_kind(raw: Any) -> str:
+    """Map the D1 receipt `kind` to its display casing; pass an UNKNOWN value through verbatim.
+
+    Pass-through rather than blank-on-unknown is deliberate. The D1 CHECK constraint makes an
+    unrecognized kind impossible today, so seeing one means the constraint changed and this map
+    drifted — and the honest response to that is to put the unmapped value in the cell where an
+    operator sees it, not to silently empty the column and make the drift invisible. The column is
+    TEXT_NUMBER, so an unmapped value cannot fail a picklist validation on the way in.
+    """
+    key = str(raw or "").strip()
+    return _RECEIPT_KIND_DISPLAY.get(key, key)
+
+
+def _group_receipts_by_job(
+    rows: list[dict[str, Any]],
+) -> dict[str, tuple[str, list[dict[str, Any]]]]:
+    """Group receipt events by job_id → (project_name, [rows]). Skips a row missing its
+    event_uuid / job_id / project_name (a data anomaly that can't be keyed / foldered) — never
+    silent.
+
+    Deliberately NOT `_group_incidents_by_job`: that one keys on `submission_uuid`, and a receipt
+    event is keyed by `event_uuid`. Reusing it would silently drop every receipt (no row carries a
+    submission_uuid), which the malformed-row WARN would then report as a data problem rather than
+    the wiring bug it actually is. Like incidents and unlike the material-list grouper there is no
+    reconcile roster, so project_name MUST ride each row (the Worker's active-job JOIN supplies it).
+    """
+    by_job: dict[str, tuple[str, list[dict[str, Any]]]] = {}
+    for e in rows:
+        event_uuid = str(e.get("event_uuid") or "").strip()
+        job_id = str(e.get("job_id") or "").strip()
+        project = str(e.get("project_name") or "").strip()
+        if not event_uuid or not job_id or not project:
+            error_log.log(
+                Severity.WARN, SCRIPT_NAME,
+                f"material receipt skipped — missing event_uuid/job_id/project_name "
+                f"(event_uuid={e.get('event_uuid')!r} job_id={e.get('job_id')!r})",
+                error_code="fieldops_receipt_row_malformed",
+            )
+            continue
+        by_job.setdefault(job_id, (project, []))[1].append(e)
+    return by_job
+
+
+def _reconcile_job_receipts(
+    job_id: str, project_name: str, rows: list[dict[str, Any]],
+    correlation_id: str, out: dict[str, int],
+) -> None:
+    """Reconcile a job that HAS receipt events: find-or-create its Material Receipts sheet,
+    change-only upsert each event (append-only — never retire), run the row-cap watchdog."""
+    try:
+        sheet_id = material_receipts.ensure_material_receipts_sheet(project_name)
+    except (
+        picklist_validation.PicklistViolationError,
+        smartsheet_client.SmartsheetValidationError,
+    ) as exc:
+        out["reviewed"] += 1
+        _route_receipt_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
+        return
+    except Exception as exc:  # noqa: BLE001 — per-job fence; one bad job never kills the pass
+        out["errors"] += 1
+        error_log.log(
+            Severity.ERROR, SCRIPT_NAME,
+            f"transient failure ensuring Material Receipts sheet for {project_name!r} "
+            f"(job {job_id}); ledger re-projects next cycle: {type(exc).__name__}: {exc!r}",
+            error_code="fieldops_receipts_sheet_transient",
+            correlation_id=correlation_id,
+        )
+        return
+
+    for e in rows:
+        event_uuid = str(e.get("event_uuid") or "").strip()
+        try:
+            material_receipts.upsert_receipt_row(
+                sheet_id,
+                event_uuid=event_uuid,
+                material=str(e.get("material_description") or "").strip(),
+                kind=_fmt_receipt_kind(e.get("kind")),
+                # NULL for not_delivered (enforced at the Worker write route), so this lands blank
+                # on its own. Deliberately NOT force-blanked on kind here: that would mask a qty
+                # that should not exist rather than showing the operator the anomaly.
+                qty=_fmt_qty(e.get("qty")),
+                unit=str(e.get("unit") or "").strip(),
+                part_number=str(e.get("part_number") or "").strip(),
+                line_uuid=str(e.get("line_uuid") or "").strip(),
+                # The DERIVED pair — the only two fields that legitimately change after the event
+                # is written, and therefore the whole reason this re-projects every cycle.
+                line_status=str(e.get("line_status") or "").strip(),
+                line_qty_expected=_fmt_qty(e.get("line_qty_expected")),
+                line_qty_received=_fmt_qty(e.get("line_qty_received")),
+                bol=str(e.get("bol_number") or "").strip(),
+                note=str(e.get("note") or "").strip(),
+                received_by=str(e.get("received_by_display") or "").strip(),
+                # Already a naive 'YYYY-MM-DD' Pacific work day in D1 — no epoch conversion.
+                event_date=str(e.get("event_date") or "").strip(),
+            )
+            out["upserted"] += 1
+        except (
+            picklist_validation.PicklistViolationError,
+            smartsheet_client.SmartsheetValidationError,
+        ) as exc:
+            out["reviewed"] += 1
+            _route_receipt_to_review(
+                job_id, project_name, exc, correlation_id,
+                phase="upsert", event_uuid=event_uuid,
+            )
+        except Exception as exc:  # noqa: BLE001 — per-event fence
+            out["errors"] += 1
+            error_log.log(
+                Severity.ERROR, SCRIPT_NAME,
+                f"transient failure upserting receipt {event_uuid!r} for {project_name!r} "
+                f"(ledger re-projects next cycle): {type(exc).__name__}: {exc!r}",
+                error_code="fieldops_receipt_upsert_transient",
+                correlation_id=correlation_id,
+            )
+
+    # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here). It matters
+    # MORE here than for incidents: a job with many lines delivered across many truckloads writes an
+    # event per load, so this ledger is the fastest-growing of the per-job trackers.
+    material_receipts.check_row_cap(
+        sheet_id, material_receipts.material_receipts_sheet_name(project_name)
+    )
+
+
+def _route_receipt_to_review(
+    job_id: str, project_name: str, exc: Exception, correlation_id: str,
+    *, phase: str, event_uuid: str | None = None,
+) -> None:
+    """Route a PERMANENTLY-failed receipt mirror to ITS_Review_Queue (workstream
+    progress_reports)."""
+    review_queue.add(
+        workstream="progress_reports",
+        summary=(
+            f"field-ops Material Receipts up-sync: PERMANENT failure ({phase}) for job {job_id!r} "
+            f"({project_name!r}, {type(exc).__name__})"
+            + (f" receipt {event_uuid!r}" if event_uuid else "")
+            + " — re-projects next cycle, needs operator fix"
+        ),
+        payload={
+            "job_id": job_id,
+            "project_name": project_name,
+            "phase": phase,
+            "event_uuid": event_uuid,
+            "error": f"{type(exc).__name__}: {exc!r}",
+        },
+        sla_tier=review_queue.SlaTier.SAFETY_INTAKE,
+        reason=review_queue.ReviewReason.POLICY_EDGE,
+        severity=Severity.WARN,
+        source_file=event_uuid or job_id,
+    )
+    error_log.log(
+        Severity.WARN, SCRIPT_NAME,
+        f"receipt mirror routed to Review Queue (permanent, {phase}) job={job_id!r} "
+        f"receipt={event_uuid!r}: {type(exc).__name__}: {exc!r}",
+        error_code="fieldops_receipt_permanent",
+        correlation_id=correlation_id,
+    )
+
+
+def _mirror_material_receipts_pass(base_url: str, bearer: str) -> dict[str, int]:
+    """Re-project the CURRENT delivery-mark ledger UP into per-job Material Receipts sheets.
+
+    Returns {upserted, reviewed, errors}. Never raises — the caller runs it after the job + hours +
+    equipment + material + incident mirrors, so a receipt failure must never abort the cycle. Per-job
+    (sheet) + per-event fences; a permanent failure routes to the Review Queue; a transient one is
+    simply left for the next cycle (the ledger re-projects every cycle, so nothing is "lost" — there
+    is NO watermark, NO mark-mirrored).
+
+    APPEND-ONLY LEDGER (the deliberate contrast with the material-list snapshot): each mark is an
+    immutable historical assertion that something did or did not arrive on a date, so there is NO
+    reconcile roster and NO retire — a job with zero receipts simply produces no rows and is never
+    visited (no sheet is created for it). The count-drops-to-zero / #468 zero-drop class is
+    structurally impossible: there is no retire path to wrongly zero.
+
+    Re-projection is not redundant work: two of the sixteen fields (`line_status`,
+    `line_qty_received`) are DERIVED and change as later events land against the same line, so a
+    write-once mirror would go stale. `upsert_receipt_row` is change-only, so a cycle where nothing
+    moved costs reads and no writes.
+
+    No throttle: per-cycle change-only re-projection is simple-correct at current scale. A throttle
+    is a FUTURE optimization if read-load bites — do NOT build it now.
+    """
+    out = {"upserted": 0, "reviewed": 0, "errors": 0}
+    try:
+        receipts = portal_client.get_fieldops_material_receipts(base_url, bearer)
+    except portal_client.PortalAuthError as exc:
+        # 401 on the SAME bearer that just drained the earlier passes — surface (bad/rotated token)
+        # but do not crash: the earlier passes may have succeeded before a mid-cycle rotation.
+        out["errors"] += 1
+        error_log.log(
+            Severity.CRITICAL, SCRIPT_NAME,
+            f"material-receipts fetch UNAUTHORIZED (401) — field-ops bearer rejected; delivery "
+            f"ledger skipped this cycle: {exc!r}",
+            error_code="fieldops_receipts_fetch_auth_failed",
+        )
+        return out
+    except portal_client.PortalTransportError as exc:
+        out["errors"] += 1
+        error_log.log(
+            Severity.ERROR, SCRIPT_NAME,
+            f"material-receipts fetch failed (ledger re-projects next cycle): {exc!r}",
+            error_code="fieldops_receipts_fetch_failed",
+        )
+        return out
+
+    for job_id, (project_name, rows) in _group_receipts_by_job(receipts).items():
+        correlation_id = uuid.uuid4().hex[:12]
+        _reconcile_job_receipts(job_id, project_name, rows, correlation_id, out)
+    return out
 
 
 if __name__ == "__main__":
