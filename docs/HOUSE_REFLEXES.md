@@ -147,6 +147,11 @@ that. Loaded via `@import` from `CLAUDE.md`'s START-HERE block.
   not just its rowId, before an `update_rows` flip. (Bit the 2026-07-06 M3 activation: `materials_enabled`
   was flipped on a verbal one-way-up call, then reverted when the response revealed the in-cell "rider must
   be merged first" guardrail — `incidents_enabled`, which has no such block, stayed on.)
+- **Flip a daemon's `ITS_Config` polling gate only AFTER its matching Cloudflare Worker secret/route is
+  deployed.** Flipping the gate first produces a benign-but-noisy `bearer_rejected`/401 CRITICAL storm on
+  every cycle until the deploy catches up — and the storm looks like a real auth incident, so someone burns
+  a chase on it. Root-caused on a subcontract-lane `bearer_rejected` during the 2026-07-14 error-chase;
+  apply the ordering to every config-actuator / Worker-secret pairing.
 - **Never `Path.write_text/write_bytes` under `~/its/state/`** — route every state write through
   `shared/state_io.py` (`atomic_write_json/text`, `with_path_lock` on a sidecar `.lock`). Enforced at CI
   (`test_state_write_discipline.py`).
