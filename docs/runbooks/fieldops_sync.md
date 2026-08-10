@@ -32,6 +32,11 @@ dirty job in both sheets keyed on `Portal Job Key`, and commits per-sheet via
 > **documented + low-capability-class** fault. Anything touching **secrets/auth, doctrine (§50
 > enable), the External Send Gate, or code** is FIXED high-class → escalate to Seth.
 
+> **The Track 6 archive pass runs inside this daemon, but has its own runbook.** Every
+> `job_archive` / `fieldops_archive_*` symptom — a press that never moves, a `partial` that does
+> **not** auto-retry, an unset Box archive root, the ADMIN pre-flight skip, a refused un-archive —
+> is worked in **[job_archive.md](job_archive.md)**, not here.
+
 ## Symptom A — a portal job is missing from a sheet, in one sheet only, or `sync_state` stuck `pending`
 
 **What it means.** The daemon hasn't successfully mirrored that job to one (or both) sheets. The

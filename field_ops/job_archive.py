@@ -417,7 +417,7 @@ def unarchive_smartsheet_container(
             f"that name in the live tree, and neither system can merge two folders. The job was "
             f"almost certainly written to while archived, which re-grows the live folder through "
             f"the ordinary find-or-create paths. Reconcile the two by hand — see "
-            f"docs/runbooks/project_closure.md."
+            f"docs/runbooks/job_archive.md."
         )
 
     # Rename BEFORE the move (see the docstring). Idempotent, so a retry after a crash is safe.
@@ -547,8 +547,9 @@ def _log_container_failure(
     error_log.log(
         Severity.WARN, SCRIPT_NAME,
         f"archive container FAILED for job_id={job_id!r}: {slot.system}/{slot.label} "
-        f"({slot.key}): {type(exc).__name__}: {exc!r}. The job stays on the archive queue and "
-        f"retries next cycle; see docs/runbooks/project_closure.md.",
+        f"({slot.key}): {type(exc).__name__}: {exc!r}. The other containers are attempted "
+        f"independently; a partial or failed result is TERMINAL for the daemon and resumes only "
+        f"when the operator presses Try again — see docs/runbooks/job_archive.md.",
         error_code="archive_container_failed",
         correlation_id=correlation_id,
     )
@@ -714,7 +715,7 @@ def run_archive_pass(
         f"archive pass skipped for job_id={str(job.get('job_id') or '')!r}: archive_direction is "
         f"{direction!r}, which is neither 'archive' nor 'unarchive'. Refusing to guess — running "
         f"the wrong direction reports success while nothing moves. The row stays on the queue; see "
-        f"docs/runbooks/project_closure.md.",
+        f"docs/runbooks/job_archive.md.",
         error_code="archive_direction_unknown",
         correlation_id=correlation_id or uuid.uuid4().hex[:12],
     )

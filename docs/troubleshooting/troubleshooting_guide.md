@@ -597,6 +597,87 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/material_manifest_import.md`
 
+### The archive pass relocates a closed job's six containers (and brings them back)
+
+| What happens | |
+|---|---|
+| Daemon | `fieldops-sync` |
+| Worker route | `GET /api/internal/fieldops/archive-pending` |
+| Config gates | `field_ops.fieldops_sync.archive_enabled`, `field_ops.box.archive_root_folder_id` |
+
+**Healthy signals:**
+- Pressing Archive in the portal records intent only; within a cycle or two the card reads "Archived. All 6 folders are filed under ITS — Archive / <Job>".
+- Four Smartsheet folders (Safety, Progress, Purchase Orders, Subcontracts) and two Box folders (Safety, Progress) are relocated — a move, never a delete; ids, permalinks and history are preserved.
+- The cycle summary reads `archive complete=N partial=0 failed=0 capped=0 errors=0`; no `job_archive` rows in ITS_Errors.
+
+#### An Archive press never moves anything; the portal still says "Archiving… Waiting for the office Mac to pick this up."
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** archive pass gate off, designed-dark, no ITS_Errors row at all, stale fieldops_sync heartbeat
+
+**Checks (in order):**
+- Is field_ops.fieldops_sync.archive_enabled on, AND field_ops.fieldops_sync.sync_enabled (the whole daemon) too? A dark pass runs silently by design — no log, no error.
+- Is the fieldops_sync heartbeat fresh in ITS_Daemon_Health, and is system.state ACTIVE (not PAUSED/MAINTENANCE)?
+- Reload the page before believing it — the Archive card stops self-refreshing after about ten minutes while still saying it updates itself.
+
+**Resolutions (in order):**
+- Nothing is lost and no re-press is needed — the job stays queued and is picked up on the first cycle after the cause is fixed.
+- Reloading the launchd job is low-class; turning a gate ON is a capability activation — confirm with Seth.
+
+**See also:** runbook `docs/runbooks/job_archive.md`
+
+#### An archive stopped at "Partly archived — N of 6 folders moved" or "Nothing moved", and does not resume.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** archive_state partial, archive_state failed, archive_container_failed, DEGRADED cycle, N archive(s) STOPPED, will not resume without a re-press
+
+**Checks (in order):**
+- partial/failed are TERMINAL for the daemon (the queue serves only requested/in_progress) — NOTHING resumes it until a human presses "Try again".
+- Read ITS_Errors Script `job_archive`, code `archive_container_failed` — it names the job, the SYSTEM and the container. The panel alone cannot tell Smartsheet's "Safety"/"Progress" from Box's.
+- Two Box containers stuck (4 of 6) points at a Box root config row; all six stuck points at something common (permissions, a system-wide outage).
+
+**Resolutions (in order):**
+- For a plain transient, press Try again in the portal — it re-raises the request and resets the attempt counter. All six are re-attempted; the already-moved ones report "nothing to move", so only the stuck ones actually do work.
+- Never drag the folders by hand — a folder moved out of band is invisible to the pass and to every find-or-create path, which splits the job across two folders.
+- The same container failing twice through "Try again", or a named cause (Box root, ADMIN shortfall), escalates.
+
+**See also:** runbook `docs/runbooks/job_archive.md`
+
+#### No job archives at all, or exactly the two Box folders fail while the four Smartsheet ones succeed.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** archive_preflight_not_admin, archive_preflight_unreadable, fieldops_archive_fetch_auth_failed, Box root unset, 4 of 6 moved
+
+**Checks (in order):**
+- archive_preflight_not_admin (Script `job_archive`) — the ITS Smartsheet identity lacks ADMIN on one of the five workspaces, so the pass skips loudly and moves NOTHING. Every queued job stays queued; no re-press needed once the share is fixed.
+- Box-only failures — read field_ops.box.archive_root_folder_id (and the two source roots, safety_reports/progress_reports .box.portal_root_folder_id). An unset root REFUSES rather than reporting an empty tree as archived.
+- fieldops_archive_fetch_auth_failed (CRITICAL) — the field-ops bearer was rejected; nothing was relocated and nothing is lost.
+
+**Resolutions (in order):**
+- Report which workspace and access level the pre-flight named; workspace sharing is approval authority (§46) and token identity is auth — both escalate.
+- A Box root id comes from build_box_roots.py and a WRONG one files documents into the wrong tree without failing — setting it is Seth's. Afterwards press "Try again"; already-moved containers report "nothing to move".
+
+**See also:** runbook `docs/runbooks/job_archive.md`
+
+#### An un-archive refuses — a folder already holds the job's name in the live tree.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** archive_container_failed on unarchive, already holds that name in the live tree, no merge primitive, never drilled live (issue #42)
+
+**Checks (in order):**
+- The job was written to while archived, so an ordinary find-or-create re-grew its live folder. Neither Smartsheet nor Box can merge two folders, so the pass refuses loudly rather than fusing them — the refusal is correct.
+- Look at both homes (the live <Job> folder and ITS — Archive / <Job> / <Workstream>) and note what is in each. Change nothing.
+- The Try again button on the red card raises an ARCHIVE request, not a resumed restore — recoverable (the job returns to fully archived) but read the confirmation modal.
+
+**Resolutions (in order):**
+- Reconciling two folders is hand work in two external systems with no undo; escalate. The un-archive direction has never run against live data (issue
+
+**See also:** runbook `docs/runbooks/job_archive.md`
+
 ## Purchase order — build, config, pull/render/file, send
 
 The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
