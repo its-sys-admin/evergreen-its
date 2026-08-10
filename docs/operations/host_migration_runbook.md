@@ -71,10 +71,12 @@ tenant cutover lands on the same machine (no second migration).
    `~/Library/LaunchAgents/` would come alive at the next login. Therefore
    **Phase A does not install plists at all** — it only renders + lints via
    `scripts/launchd/install.sh dry-run <name>` and verifies no `__…__`
-   placeholder survives. The actual `load` of the **18 must-load plists** (all 20
-   shipped, minus the two dark-unloaded SEND daemons `po-send` + `rfq-send` —
-   `scripts/verify_cutover.py` `DARK_UNLOADED_LABELS`) happens in **Phase B**,
-   AFTER the dev box is verified empty.
+   placeholder survives. The actual `load` of the **must-load plists** (every
+   shipped plist minus whatever `scripts/verify_cutover.py` `DARK_UNLOADED_LABELS`
+   holds — that set is EMPTY as of 2026-08-10, every send lane having been
+   activated, so all shipped plists load) happens in **Phase B**, AFTER the dev box
+   is verified empty. Derive the count from `_expected_labels()`; do not carry a
+   number in prose.
    > **Program-doc amendment (explicit):** the program doc's Phase-A line
    > "plists installed UNLOADED" is **amended by this runbook** — there is no
    > such mode. Phase A = dry-run render/lint only; Phase B = load.
@@ -315,9 +317,9 @@ dead heartbeat. The order below is non-negotiable; do not parallelize.
    `ITS_BOX_CLIENT_ID` / `ITS_BOX_CLIENT_SECRET` / `ITS_BOX_REFRESH_TOKEN`).
    From this moment, **never run Box-consuming code on the dev box again** —
    the first refresh on the new host invalidates the dev box's token lineage.
-6. **New host — bring the repo current, then load the must-load daemons (all
-   shipped plists EXCEPT the two dark-unloaded SEND daemons, `po-send` and
-   `rfq-send` — `scripts/verify_cutover.py` `DARK_UNLOADED_LABELS`):**
+6. **New host — bring the repo current, then load the must-load daemons (every
+   shipped plist EXCEPT any label in `scripts/verify_cutover.py`
+   `DARK_UNLOADED_LABELS` — EMPTY as of 2026-08-10, so all shipped plists load):**
 
    ```bash
    git -C ~/its pull origin main   # never load from a stale checkout
@@ -336,19 +338,20 @@ dead heartbeat. The order below is non-negotiable; do not parallelize.
                                     #  UNLOADED — send-gate.
    ```
 
-   > **Do not skip only `po-send`.** `DARK_UNLOADED_LABELS` holds **two** labels.
-   > A loop that skips just `po-send` LOADS `rfq-send` — a live external-send
-   > daemon, which VC-02 reports as `dark_loaded` and which is the exact FIXED
-   > high-capability-class External-Send-Gate event the posture exists to prevent.
+   > **Derive the skip-list from `DARK_UNLOADED_LABELS`, never from a name written
+   > here.** The set is **EMPTY as of 2026-08-10** — `po-send` and `rfq-send` were
+   > activated by the operator and removed from it — so nothing is skipped today.
+   > A hand-written skip-list is precisely how VC-02 came to report a months-old
+   > deliberate activation as a `dark_loaded` send-gate violation. If a label is ever
+   > added back, a loop that skips only *some* of the set would LOAD a daemon meant to
+   > be dark — the exact FIXED high-capability-class External-Send-Gate event the
+   > posture exists to prevent.
    >
    > **If the fleet was (re)built by `scripts/migrations/standup.py finish`:** its
    > default `--posture dark` leaves ALL FIVE send-dispatch plists unloaded
    > (`SEND_DISPATCH_LABELS` — po-send, rfq-send, subcontract-send, weekly-send,
-   > progress-send). VC-02 expects the three ESTABLISHED lanes loaded, so the
-   > bridge step is to load exactly `weekly-send`, `progress-send` and
-   > `subcontract-send` per-plist. See `docs/operations/cutover_checklist.md`
-   > ("Bridge step"). `--posture full` is NOT the bridge — it also loads po-send +
-   > rfq-send, failing VC-02 the other way.
+   > progress-send). VC-02 now expects all five loaded, so the bridge step is to load
+   > each per-plist. See `docs/operations/cutover_checklist.md` ("Bridge step").
 
 7. **Verification gates (all must pass before declaring the flip done):**
 

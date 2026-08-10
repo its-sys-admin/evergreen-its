@@ -33,10 +33,11 @@ id     slug            what it proves
 VC-01  keychain        all required Keychain secrets present (18: 11 non-Box + Box
                        triplet + ``ITS_PORTAL_PO_TOKEN`` + the config-actuator /
                        subcontract-poll daemon bearers + the operator-dashboard PIN)
-VC-02  launchd         every shipped ``org.solutionsmith.its.*`` plist loaded EXCEPT the
-                       dark-unloaded send daemons (``po-send`` + ``rfq-send`` — send-gate),
-                       which must NOT be loaded (no missing, no orphans, no dark send
-                       daemon running)
+VC-02  launchd         every shipped ``org.solutionsmith.its.*`` plist loaded EXCEPT any
+                       label in ``DARK_UNLOADED_LABELS``, which must NOT be loaded (no
+                       missing, no orphans, no dark send daemon running). That set is
+                       EMPTY as of 2026-08-10 — every send lane has been activated; see
+                       the constant for the rationale
 VC-03  config          load-bearing ITS_Config rows present + non-default
                        (worker_base_url, from_mailbox rows, scheduled_send_local,
                        the polling/sync/intake gates, ``system.operator_email``,
@@ -171,16 +172,25 @@ LABEL_PREFIX = "org.solutionsmith.its."
 # launchd-UNLOADED at cutover so a dark external-send path is not even running
 # (send-gate defense-in-depth; operator decision 2026-07-12). VC-02 therefore does NOT
 # require them loaded, and FAILS if one IS loaded — a send daemon live at cutover is a
-# FIXED high-class External-Send-Gate event (Seth). (subcontract-send shipped as a
-# MUST-LOAD established lane — deliberately NOT in this set; SC-S4 landed 2026-07-15.)
+# FIXED high-class External-Send-Gate event (Seth).
 # First-enabling a send path = remove its label here + load its plist.
-DARK_UNLOADED_LABELS = frozenset({
-    "org.solutionsmith.its.po-send",
-    # RFQ send (ADR-0004 R3) ships DARK like po-send: a plist that exists but is NOT
-    # required loaded at cutover. Go-live (flip po_materials.rfq_send.polling_enabled true +
-    # load the plist) is a FIXED high-class External-Send-Gate operator action (Seth).
-    "org.solutionsmith.its.rfq-send",
-})
+#
+# CURRENTLY EMPTY, and that is a STATEMENT, not an oversight. Every send lane has now
+# been deliberately activated by the operator — po-send, rfq-send and subcontract-send
+# all read `polling_enabled = true` in ITS_Config AND are loaded in launchd. po-send and
+# rfq-send sat in this set until 2026-08-10 while both halves of their activation had
+# already happened, so VC-02 reported a "send-gate violation" describing a state the
+# operator had chosen months earlier. A check that cries wolf about a deliberate decision
+# is how a check stops being read — the same failure that let the Track 6 archive sit
+# inert behind an unrun VC-03.
+#
+# The MECHANISM is retained in full: the moment a send daemon is meant to be dark again
+# (a new lane shipping pre-go-live, or one deliberately re-darkened), add its label back
+# here and VC-02 fails if it is loaded. Emptying the set narrows what VC-02 asserts today;
+# it does not remove the assertion. The External Send Gate itself is unaffected — that is
+# Invariant 1's two-process split plus human approval, enforced by
+# tests/test_capability_gating.py, not by this frozenset.
+DARK_UNLOADED_LABELS: frozenset[str] = frozenset()
 
 # The mirror-tenant marker. Any load-bearing config value still containing this
 # after cutover means a daemon is pointed at the sandbox (§53 sandbox-masks-
@@ -460,6 +470,12 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     ConfigRow("po_materials.estimate_extract.tier1_enabled", "po_materials", "non_empty"),
     ConfigRow("po_materials.estimate_extract.tier2_enabled", "po_materials", "non_empty"),
     ConfigRow("po_materials.estimate_extract.ocr_enabled", "po_materials", "non_empty"),
+    # The VENDOR-SPREADSHEET twin of tier1_enabled (PR-B), missed when that PR enrolled
+    # its three siblings. It is a real gate — `estimate_poll` declares it in
+    # REQUIRED_CONFIG and branches on it — so its absence would silently return every
+    # vendor .xlsx quote to hand-keying with no cutover assertion to catch it. Enrolled
+    # `non_empty` like its siblings: presence is asserted, the value stays the operator's.
+    ConfigRow("po_materials.estimate_extract.tier1_xlsx_enabled", "po_materials", "non_empty"),
     # Outbound-RFQ generation daemon (ADR-0004 Lane 2, R2). Both rfq_poll rows are
     # `non_empty` (never forced true — the gate ships dark; the row's PRESENCE is
     # what VC-03 asserts, the dark-gate reflex).
