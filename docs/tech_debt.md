@@ -2332,6 +2332,14 @@ introspection calls hitting this repo's actual (dirty, worktree-adjacent) local 
 checkout, or a missing local env var CI sets. Until diagnosed, treat local runs of this file as
 uninformative and rely on CI.
 
+> **DIAGNOSED 2026-08-10 (overnight reconcile session).** Not git/gh introspection: it is the
+> `tests/conftest.py:531` live-state guard (forensic class #8/#294) firing on the PRODUCTION host.
+> The publish-daemon tests reach `shared/sustained_failure.py:462` → `state_io.with_path_lock` →
+> `Path.open` on `~/its/state/publish_daemon_config_read_failures.json.lock`, and the guard refuses
+> any unit-test write under the live `~/its/state`. CI is green because its checkout is not at
+> `~/its`. The real fix is the guard's own instruction: monkeypatch the counter's path constant to
+> `tmp_path` in those tests (or mark them integration). Small, mechanical, 29 tests.
+
 **Tag:** `testing`, `publish_daemon`, `ci-divergence`, `low`.
 
 **Revisit when:** next `scripts/publish_daemon.py` change needs local test confidence, or bandwidth for a
@@ -2429,6 +2437,20 @@ either repo).
 
 Surfaced: 2026-08-10 session close (PR4 completion session).
 
+> **STAND-UP EXECUTED 2026-08-10/11 (overnight reconcile session, production host).** Migration
+> `0063` was applied (01:48Z) and the Worker deployed (01:49Z) by a concurrent session, correctly
+> ordered; live bundle verified serving `daily-report-v7` (asset `index-BjeYMj5T.js` matches local
+> dist). The Material List back-fill then **failed live** — `ensure_columns` sent per-column
+> indices and Smartsheet 1135 rejects the whole add (the audit's predicted no-live-smoke class) —
+> fixed in #59 and verified: Kiwi 14→17 columns, success WARN logged, the every-cycle WARN storm
+> (1,937 + 98 rows) dead. Both missing config rows seeded (`receipts_enabled`,
+> `material_receipts.row_cap_warn_threshold`). `receipts_enabled` flipped true after the
+> Description read; first live fire of the receipts mirror observed. **Still owed (needs a human
+> with a phone/browser):** the two-tap arm→expiry→confirm feel, a real v7 daily-report PDF from
+> Box, an old v5/v6 PDF still showing its note line, a bound photo upload + the cross-job 422 —
+> see `docs/handoffs/2026-08-11_morning-operator-checklist.md`. The manifest parser eval stays
+> WAIVED — the corpus is not on this host (memory: estimate-corpus-lives-on-dev-mac).
+
 ## [OPEN 2026-08-10, low] Two Worker-test-suite CI timing flakes exceed the 5000ms default timeout under load
 
 `fieldops-manifests.test.ts` "refuses a commit that would push the job past the line cap" timed out at
@@ -2472,3 +2494,117 @@ as intentional.
 `DailyReportTab.tsx` materials-section touch.
 
 Surfaced: 2026-08-10 session close (PR4 completion session).
+
+## [OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
+
+The 2026-08-10 end-to-end audit (adversarially verified, re-confirmed against post-PR4 HEAD the same
+night) found nine correctness defects across the manifest import lane and the expected-materials
+Worker routes. The manifest lane is **activated** (gate true since 2026-08-07) with zero documents
+processed, so nothing has hit these yet — but the first real BOM will:
+
+- **A1 — the validate screen's Quantity column mapping is inert.** `ManifestValidatePage.tsx:234-239`
+  calls `colFor` for six concepts, never `qty`; line resolution reads `cell(r, qtyCol)` (:259), and
+  `qtyCol` is set only by the load seed or a select rendered when `qty_candidates > 1` (:556-570).
+  Remapping Quantity in the Columns table changes nothing; with no qty inferred every line commits
+  `qty: null`. The test fixture pins `mapping.qty == qty_default`, so the two states never diverge
+  under test — self-confirming, on the most important field in a BOM.
+- **A2 — `mode:'merge'` is a no-op.** Validated (`fieldops_manifests.ts:818`), stored (:906-909),
+  never branched on: the commit's only write is `INSERT INTO job_expected_materials` (:875); zero
+  `UPDATE job_expected_materials` in the file; `merge_options_json` (0060:72) has NO writer. Choosing
+  "Merge onto the matching line" duplicates every already-listed part into a §51 mirror that never
+  deletes. Zero tests exercise merge.
+- **A3 — the dry run under-counts and a mid-import cap trip strands the manifest.** `/plan` uses
+  merge arithmetic (:788) while `/commit` enforces `MAX_JOB_LINES` per page against a re-read
+  (:850-855); a late-page 409 leaves `status='committing'` (:906), which `/discard` refuses
+  (:952-953) — no discard path — while the SPA says "nothing partial was left"
+  (`ManifestValidatePage.tsx:339`), false by construction. (Tree node `manifest_commit_refused`
+  now warns operators of exactly this.)
+- **A4 — ambiguity resolution is browser-only.** `unresolvedAmbiguous` is client state (:289-292);
+  the Worker never requires `/plan` ran and validates `source_row_index` only against numeric bounds
+  (:258-266), not its own parsed grid — asserted provenance lands in the audit trail.
+- **A5 — a permanent Worker 400 is classified transient and wedges forever.** `manifest_poll.py:844-848`
+  treats any `PortalTransportError` (any non-200) as transient; the Mac-side parse enforces none of
+  the Worker's row/cell bounds, so an oversized document re-serves every cycle: ~720 ERROR rows/day,
+  no CRITICAL (the sustained-failure counter watches only the pending fetch).
+- **B6 — quantities diverge once a line is flagged.** The receipt projection is guarded
+  `AND status <> 'incident'` (`fieldops_expected_materials.ts:581`) while the ledger INSERT (:544-560)
+  is not; flag-incident clobbers ledger-derived `qty_received` with a client value (:666-672); the
+  projection binds `note` with no COALESCE (:579). The two §51 sheets (Material List vs Receipts)
+  then disagree permanently. The route's own comment (:569-572) asserts the drift is impossible.
+- **B7 — `'incident'` is terminal.** Every status UPDATE is guarded `status='expected'` or
+  `status <> 'incident'` (:378/:575/:668) — no route can leave incident, yet
+  `material_incidents.py:22-26` documents Line Status flipping to `received` on a later delivery.
+  Needs a product decision (a resolve route) or a docs correction.
+- **B8 — a shipping log has no dispose path.** `manifest_parse` detects `PROFILE_SHIPPING_LOG`
+  (:125/:373) but nothing manifest-side writes `material_shipments`; the `source` CHECK's `'import'`
+  value (0059:97) has no writer; the validate screen never reads `profile`. A shipping log can only
+  commit as per-truckload duplicate LINES — the row inflation ADR-0005 decision 4 forbids.
+- **B9 — line soft-delete does not cascade to its loads** (:437-441): orphaned `material_shipments`
+  rows are fetched, count against the LIMIT, render nowhere.
+
+**Fix (ordered):** A1 first (one SPA file, blocks trusting any import), then A3+A5 (small, stop the
+strand/wedge classes), then A2 (either implement merge or refuse it server-side + hide the option —
+a silent duplicator is worse than a visible refusal), then A4, then the B-group (B6/B7 need one
+product decision each). Every Worker-touching fix is trust-boundary → adversarial review
+(`portal-worker-security-reviewer`) is definition-of-done.
+
+**Tag:** `field-ops`, `materials`, `manifest`, `correctness`, `high`.
+
+**Revisit when:** BEFORE the first real vendor manifest is imported — treat these as the
+precondition the waived parser eval was standing in for.
+
+Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).
+
+## [OPEN 2026-08-10, medium] fieldops_sync mirror resilience — unfenced Review-Queue writes, mis-classed permanent faults, unwatched DEGRADED
+
+Four resilience gaps in the five §51 mirror passes, all audit-confirmed at HEAD 2c9b8ef:
+
+- **D14 — `review_queue.add` is unfenced at six sites** (`fieldops_sync.py:996/:1212/:1487/:1802/
+  :2110/:2280`; zero `safe_add` in the file). PR #41 built `review_queue.safe_add` and converted 18
+  sites across five daemons for exactly this defect — a Review-Queue write failure aborts the whole
+  sync cycle after the failing pass, skipping the later mirrors, the heartbeat, and the watchdog
+  marker. The conversion never reached fieldops_sync.
+- **D15 — permanent Smartsheet faults classified transient.** The permanent tuples
+  (:1658/:1708/:1744/:1780/:2038/:2079/:2202/:2247) list only `PicklistViolationError` +
+  `SmartsheetValidationError`; `SmartsheetPermissionError` and `SmartsheetNotFoundError` are
+  siblings, so a §46 share change or a deleted tracker sheet logs "transient — re-projects next
+  cycle" forever, with no ticket and no CRITICAL.
+- **D16 — no sustained-failure enrolment on secondary fetches** (materials :1620, incidents :1895,
+  receipts :2351 log plain ERROR); the DEGRADED heartbeat status is watched by nothing (zero
+  `DEGRADED` hits in the post-#57 watchdog), and the marker still writes, so Check C stays green
+  through a persistent secondary failure.
+- **D17 — `find_*_row` issues one full-sheet GET per item per cycle** (`material_receipts.py:259`,
+  `material_list.py:339`, `material_incidents.py:242`), and every `check_row_cap` call site omits
+  the `row_count=` its signature offers (:1729/:2099/:2269 → a second full read). Tolerable at
+  today's volume; not at the receipts ledger's design volume (15k rows).
+
+**Fix:** D14 is small and precedented (swap to `safe_add`, six sites — the #41 pattern verbatim);
+D15 is a two-line tuple widening per site; D16 = enroll the secondary fetches in
+`SustainedFailureCounter` + a watchdog view of DEGRADED; D17 = thread the roster's row count
+through. D14+D15 fit one PR.
+
+**Tag:** `field-ops`, `resilience`, `section51`, `medium`.
+
+**Revisit when:** the next fieldops_sync touch, or the first time a Review-Queue outage takes the
+heartbeat with it.
+
+Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).
+
+## [OPEN 2026-08-10, medium] Two designed-but-unbuilt halves of materials tracking: the §51 shipments mirror and the manifest byte-pool prune
+
+- **`material_shipments` never reaches Smartsheet.** Zero references in `progress_reports/`,
+  `field_ops/`, `shared/` — the scheduled-loads level exists only in D1 and the portal. Deliberate
+  at 0059 time (row-count reasoning, 0059:78-81) but tracked nowhere until now; the office cannot
+  see loads/BOLs outside the portal.
+- **`worker/prune.ts` has no manifest stage.** A `committed` manifest keeps its full grid and up to
+  ~24 MB of base64 previews permanently; a never-drained `pending` upload keeps ~25 MB of chunks;
+  and `prune.ts:361` then refuses to prune the JOB that holds them. The structural twin
+  (`estimate_artifacts`, prune.ts:468-491) has exactly the backstop this pool lacks — the
+  CLAUDE.md step-10 miss on the PR that shipped 0060.
+
+**Tag:** `field-ops`, `materials`, `design-follow-on`, `medium`.
+
+**Revisit when:** shipments-visibility is requested by the office, or D1 storage review; the prune
+stage belongs in the next prune.ts touch.
+
+Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).

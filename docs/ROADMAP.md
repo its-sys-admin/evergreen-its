@@ -74,8 +74,15 @@ period-split + archive-on-closure; find-or-create + capacity margin-check; never
   arrives across many loads, so a mark must be an event, not a flag) and **`material_shipments`**
   (the scheduled loads, with ship/delivery dates + BOL). The three-way mark
   (Delivered / Partially delivered / Not delivered) and a per-job **Materials tracking** page ship
-  with it; §43 runbook `docs/runbooks/job_materials.md`. **Still open:** the §51 mirror exposure of
-  the new columns + a receipts-ledger sheet, and manifest (BOM / shipping-log) import.
+  with it; §43 runbook `docs/runbooks/job_materials.md`. **The three follow-ons all SHIPPED
+  (reconciled 2026-08-10):** the §51 mirror exposure of the new columns (#40 + the errorCode-1135
+  back-fill fix #59, verified live on the Kiwi sheet), the receipts-ledger sheet (#38, the
+  `_mirror_material_receipts_pass`), and manifest (BOM / shipping-log) import (dev-repo #729-#734
+  + the validate screen; ACTIVATED 2026-08-07). **Still open from the 2026-08-10 audit:** the §51
+  `material_shipments` mirror (no Python-side writer), the manifest byte-pool prune stage, the
+  manifest `mode:'merge'` no-op + validate-screen qty-picker defect cluster (see
+  `docs/tech_debt.md` "Materials-manifest + expected-materials correctness cluster"), and the
+  daily-report Confirm-receipt two-tap asymmetry (deliberate, tracked).
   _(Original wording, for the design record: "the mission specs a `material_list`
   (line_uuid/smartsheet_row_id/unplanned) that does NOT exist — recommend EXTEND the landed table
   (§14) with those 3 columns rather than adding a new table.")_

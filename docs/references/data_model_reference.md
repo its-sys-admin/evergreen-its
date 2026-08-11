@@ -147,11 +147,13 @@ Not every sheet is pre-wired. Some are created at runtime by find-or-create help
   create branch runs the §51 A1 margin-check (advisory) and a bounded 5×~2s readiness probe to absorb
   Smartsheet's create→read 404 (errorCode 1006) propagation window.
 
-<!-- src: CLAUDE.md (progress_reports row); shared/defaults.py comment | verified 2026-07-14 -->
+<!-- src: CLAUDE.md (progress_reports row); shared/defaults.py comment | verified 2026-08-10 -->
 - **Per-job progress standing trackers** — `Hours Log`, `Material List`, `Equipment Status`,
-  `Material Incidents` — are runtime find-or-create per-job sheets in the Progress Reporting
-  workspace, driven by the `field_ops.fieldops_sync` mirror passes (one-way-up, §51). Sheets stay
-  **weekly** (match-period-to-cadence).
+  `Material Incidents`, `Material Receipts` (#38, the append-only §51 delivery-receipt ledger;
+  its `Line Status` / `Line Qty Received` columns are DERIVED rollups that legitimately change) —
+  are runtime find-or-create per-job sheets in the Progress Reporting workspace, driven by the
+  `field_ops.fieldops_sync` mirror passes (one-way-up, §51). Sheets stay **weekly**
+  (match-period-to-cadence).
 
 ### Key column schemas
 

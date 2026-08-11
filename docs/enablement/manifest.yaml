@@ -132,14 +132,14 @@ docs:
     title: "ITS Daemon Reference"
     version: v1
     source: docs/references/daemon_reference.md
-    sha256: 8ebecd72881b3bc7c39039c800bc7f62cf528acbf6a3163a920d1e1da7b5c63c
+    sha256: fd310d36ac6d059204ebb80caa3218767d114ee45cc00c48349c3e66b98c9da6
     audience: operator
 
   - key: data_model_reference
     title: "ITS Data Model Reference"
     version: v1
     source: docs/references/data_model_reference.md
-    sha256: 5b1375ee94b0192d0c45c4f36d663a60be31bee41aa1e7ef5d4c4ed5d246cbe3
+    sha256: d97c201b7eb918b9b7e810f060eb95918a221001b275df099b94d0aa184294ce
     audience: operator
 
   - key: integration_reference

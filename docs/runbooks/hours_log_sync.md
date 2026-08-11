@@ -100,43 +100,34 @@ CLOSED job's tracker to the Archive workspace.) The WARN threshold is
 `progress_reports.hours_log.row_cap_warn_threshold` (ITS_Config, default 15000) — nudging it is a
 low-class tweak; a recurring need to split at high volume is expected, not a fault.
 
-## Fault F — a closed job's Hours Log didn't move to Closed Projects (archive-on-closure)
+## Fault F — a closed job's Hours Log didn't move into the archive tree
 
-**Symptom.** A job was closed (its `lifecycle` went to `archived`) but its `<Job> — Hours Log` sheet
-is still sitting in the per-job folder under `ITS — Progress Reporting`, not in the **Closed
-Projects** folder of the `ITS — Archive` workspace. There may be an `ITS_Errors` WARN
-`Script=field_ops.fieldops_sync`, `Error=fieldops_archive_on_closure_failed`.
+> **Rewritten 2026-08-10.** This fault used to describe a four-sheet `lifecycle=archived` hook
+> inside the mirror pass. That hook is **DISARMED — it has no caller** (the call site in
+> `field_ops/fieldops_sync.py` says so in code; the function is preserved for the design record
+> and now lists FIVE trackers). The LIVE archive path is the Track-6 **job_archive pass**: the
+> operator archives the job from the portal's Archive panel, the request lands in the daemon's
+> own `/archive-pending` queue (gate `field_ops.fieldops_sync.archive_enabled`), and the whole
+> per-job FOLDER — carrying all five tracker sheets, Hours Log included — relocates into
+> `ITS — Archive / <Job> / <Workstream>/`. Not into a flat "Closed Projects" folder.
 
-**What it is (design).** When `fieldops_sync` mirrors a job whose `lifecycle=archived` (§51
-archive-on-closure), it MOVES the job's standing tracker sheets — ALL FOUR: the `<Job> — Hours Log`,
-the `<Job> — Equipment` (P7 Slice 2), the `<Job> — Material List` (P7 M2), AND the `<Job> — Material
-Incidents` (P7 M3 Slice 2) — into the Archive workspace's Closed Projects folder. Each tracker
-is resolved + moved INDEPENDENTLY (one failing never blocks the others). It is a pure **relocation**
-(never a delete: the sheet, rows, and history are preserved) and it is **best-effort** — a move
-failure WARNs and never fails or un-does the mirror itself. Note the move runs AFTER the job's
-watermarks advance, so a failed move does **not** auto-retry (the job is already `mark-synced` → no
-longer dirty). It is idempotent: once a sheet is moved out of the source folder it is no longer found
-there, so a re-seen archived job (re-dirtied by a later edit) is a no-op.
+**Symptom.** A job was archived from the portal but its `<Job> — Hours Log` (or any tracker
+sheet) is still in the live per-job folder under `ITS — Progress Reporting`.
 
-**Check (read-only).** (1) Is the job actually `archived` in `ITS_Active_Jobs`? A still-active job is
-correctly NOT archived. (2) `ITS_Errors` `Error=fieldops_archive_on_closure_failed` — the WARN names
-the `job_id` / `project_name` and the underlying error (e.g. a transient Smartsheet 5xx, or a
-permission error on the Archive workspace / Closed Projects folder). (3) Is the sheet ALREADY in
-Closed Projects? If so this is a stale observation — the move succeeded.
+**Check (read-only).** The archive pass has its own §43 runbook and tree node — follow
+[job_archive.md](job_archive.md) (symptoms: never-started vs stopped-partial, watchdog Check X,
+the `archive_*` error codes). Quick triage: (1) does the portal's Archive panel show the job
+archived or stopped? (2) is `field_ops.fieldops_sync.archive_enabled` on (read ITS_Config)?
+(3) `ITS_Errors` `archive_*` rows name the failing container.
 
-**Repair (Tier-2, low-class).** The archive move does **not** auto-retry once the job is
-`mark-synced` (a successful mirror clears the job from the dirty set, so "wait a cycle" will NOT
-re-attempt an archive-only failure). The **guaranteed fix is a one-off manual move**: drag `<Job> —
-Hours Log` into `ITS — Archive / Closed Projects` in the Smartsheet UI (low-class, harmless — the
-daemon then finds nothing to move). Re-running `fieldops_sync` only re-attempts the move if the job
-is independently re-dirtied (e.g. edited in the portal). If the WARN keeps recurring after a
-re-dirty, hand Claude the `job_id`: *"the fieldops_sync archive-on-closure move keeps failing for
-`<job>` — its Hours Log isn't reaching Closed Projects; diagnose."*
+**Repair (Tier-2).** Per [job_archive.md](job_archive.md) — a partial archive is resumable ("Try
+again" from the panel re-issues only the unfinished containers). Do NOT hand-drag individual
+tracker sheets into the archive workspace: the live design moves the FOLDER, and a hand-moved
+sheet leaves a half-empty folder the resume probe then has to reconcile.
 
-**Escalate-to-Seth boundary.** Anything touching the **move method itself** (`move_sheet_to_folder`),
-the archive hook, the workspace/folder IDs, or the Archive-workspace **permissions/sharing** is a
-**code / secrets change → high-class → escalate**. Repeated failures after the cause looks fixed, or a
-novel symptom, escalate.
+**Escalate-to-Seth boundary.** Anything touching the move primitives, the workspace/folder IDs,
+or Archive-workspace **permissions/sharing** (a cross-workspace move changes who can READ, §46)
+is high-class → escalate.
 
 > The whole-job view — what Inactive vs Archived actually do, and what closure leaves in place —
 > is in [project_closure.md](project_closure.md).

@@ -96,6 +96,7 @@ outside the sentinel block.
 <!-- BEGIN AUTO-INDEX -->
 | Date | Type | Status | Workstream | Title | PRs |
 |------|------|--------|------------|-------|-----|
+| 2026-08-10 | session_log | active | field_ops | [Session log — 2026-08-10/11 overnight · Materials stand-up on the production host, the 1135 live failure, and the unification pass](2026-08-10_overnight-materials-standup-and-reconcile.md) | _–_ |
 | 2026-08-03 | session_log | active | field_ops | [Session log — 2026-08-02 → 08-03 · Repo reconcile, a real local dev environment, and Track 6 (job-archive workflow) PR-0 through PR-5](2026-08-03_track6-job-archive-workflow-pr0-through-pr5.md) | #712, #713, #715, #716, #717, #718, #719, #720, #721, #722 |
 | 2026-07-14 | session_log | active | _–_ | [2026-07-14 — Debt-Zero + Security-Scrub](2026-07-14_debt-zero-and-security-scrub.md) | _–_ |
 | 2026-07-12 | session_log | active | subcontracts | [Subcontract generator COMPLETE — SC-S3c (backend) + SC-S5 (UI) + SC-S3b Exhibit A](2026-07-12_subcontract-generator-complete-s3c-s5-exhibit-a.md) | #536, #537, #538 |
