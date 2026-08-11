@@ -4034,3 +4034,40 @@ def test_deferred_checks_still_appear_in_the_sweep_record(
     assert len(deferred) == len(watchdog.DAILY_ONLY_CHECKS)
     assert {r["check"] for r in deferred} == {c.__name__ for c in watchdog.DAILY_ONLY_CHECKS}
     assert all(r["severity"] == "INFO" for r in deferred)
+
+
+def test_check_x_reads_the_worker_url_under_the_owning_workstream(monkeypatch):
+    """`_resolve_fieldops_creds` must read the Worker base URL under `safety_reports`.
+
+    `get_setting` matches on (Setting, Workstream) BOTH, and the Worker base-URL row is owned by
+    safety_reports — portal_poll's copy, shared rather than duplicated, which is why
+    `fieldops_sync` exports a SECOND constant naming that workstream. Reading it under
+    `field_ops` raises SmartsheetNotFoundError, which the resolver turns into "creds unresolved",
+    which makes Check X report INFO and skip forever: a detector that never detects.
+
+    Every other Check X test monkeypatches `_resolve_fieldops_creds` wholesale, so this bug is
+    structurally unreachable by them. This one patches `get_setting` and asserts the workstream
+    it was actually called with.
+    """
+    from field_ops import fieldops_sync  # noqa: PLC0415
+
+    seen: dict[str, str] = {}
+
+    def _fake_get_setting(key, *, workstream):
+        seen["key"], seen["workstream"] = key, workstream
+        if workstream != fieldops_sync.CFG_WORKER_BASE_URL_WORKSTREAM:
+            raise watchdog.smartsheet_client.SmartsheetNotFoundError(
+                f"ITS_Config has no row for Setting={key!r} Workstream={workstream!r}"
+            )
+        return "https://worker.test"
+
+    monkeypatch.setattr(watchdog.smartsheet_client, "get_setting", _fake_get_setting)
+    monkeypatch.setattr(watchdog.keychain, "get_secret", lambda _n: "tok")
+
+    creds = watchdog._resolve_fieldops_creds()
+
+    assert seen["key"] == fieldops_sync.CFG_WORKER_BASE_URL
+    assert seen["workstream"] == "safety_reports", (
+        "read under the wrong workstream — the row does not exist there, so Check X skips forever"
+    )
+    assert creds == ("https://worker.test", "tok")

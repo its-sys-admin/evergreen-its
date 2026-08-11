@@ -2971,8 +2971,16 @@ def _resolve_fieldops_creds() -> tuple[str, str] | None:
     missing-creds page for its own cycle; duplicating it from the watchdog is alert noise.
     """
     try:
+        # The WORKSTREAM here is `safety_reports`, NOT `field_ops`, and the distinction is the
+        # whole reason `fieldops_sync` exports a second constant for it. `get_setting` matches on
+        # (Setting, Workstream) BOTH, and the Worker base-URL row is owned by safety_reports —
+        # portal_poll's copy, shared rather than duplicated. Reading it under `field_ops` raises
+        # SmartsheetNotFoundError, which the except below turns into "creds unresolved", which
+        # makes Check X report INFO and skip FOREVER — a detector that never detects. Verified
+        # against live ITS_Config: `field_ops` → NotFound, `safety_reports` → the real URL.
         raw = smartsheet_client.get_setting(
-            fieldops_sync.CFG_WORKER_BASE_URL, workstream=fieldops_sync.WORKSTREAM
+            fieldops_sync.CFG_WORKER_BASE_URL,
+            workstream=fieldops_sync.CFG_WORKER_BASE_URL_WORKSTREAM,
         )
     except smartsheet_client.SmartsheetError:
         return None

@@ -859,3 +859,36 @@ def test_upload_bytes_or_new_version_conflict_but_file_vanished_reraises(mocker)
     mocker.patch.object(box_client, "_find_child_file", return_value=None)
     with pytest.raises(BoxConflictError):
         box_client.upload_bytes_or_new_version("F", "x.pdf", b"abc")
+
+
+def test_a_lazy_collection_that_raises_on_iteration_is_still_translated(monkeypatch):
+    """`list_folder` must translate an auth failure that fires during ITERATION, not construction.
+
+    `Folder.get_items` performs ZERO HTTP — it returns a lazy collection, and the request fires
+    when the caller iterates. Passing the bound method to `_call` guarded only the construction,
+    so a rejected refresh token escaped as a RAW `BoxOAuthException`: never mapped to
+    `BoxRefreshTokenRejectedError`, so the retry could not match it, and Check P's liveness probe
+    reported "skipped" on a dead credential and fell back to "marker fresh".
+
+    Every pre-existing test here mocks `get_items` with a plain list, which evaluates eagerly and
+    hides the entire hazard. This one returns a generator that raises on first iteration — the
+    shape the real SDK has.
+    """
+    from boxsdk.exception import BoxOAuthException  # noqa: PLC0415
+
+    def _raising_collection(*_a, **_k):
+        def _gen():
+            raise BoxOAuthException(status=400, message="Refresh token has expired")
+            yield  # pragma: no cover — unreachable, makes this a generator
+        return _gen()
+
+    fake_folder = SimpleNamespace(get_items=_raising_collection)
+    fake_client = SimpleNamespace(folder=lambda _id: fake_folder)
+    monkeypatch.setattr(box_client, "get_client", lambda: fake_client)
+    monkeypatch.setattr(box_client, "_reset_client", lambda: None)
+
+    with pytest.raises(box_client.BoxError) as exc:
+        box_client.list_folder("0", limit=1)
+    assert not isinstance(exc.value, BoxOAuthException), (
+        "a raw BoxOAuthException escaped the typed hierarchy — the retry can never match it"
+    )

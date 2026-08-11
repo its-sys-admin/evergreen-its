@@ -652,7 +652,18 @@ def list_folder(folder_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
     (`'file'` or `'folder'`). Use `folder_id="0"` for the root folder.
     """
     client = get_client()
-    items = _call(client.folder(folder_id).get_items, limit=limit)
+    # MATERIALIZE INSIDE `_call`. `get_items` issues ZERO HTTP — it returns a lazy
+    # `LimitOffsetBasedObjectCollection`, and the request fires on ITERATION. Passing the bound
+    # method to `_call` guarded only the CONSTRUCTION: the real call happened one frame OUTSIDE
+    # the translation/retry wrapper, so a rejected token escaped as a raw `BoxOAuthException`,
+    # was never mapped to `BoxRefreshTokenRejectedError`, and the retry could not match it —
+    # Check P's liveness probe then reported "skipped" on a dead credential and fell back to
+    # "marker fresh". That is the #26 bug reproduced by the #26 fix.
+    #
+    # `lambda: list(...)` drags the iteration inside the guarded frame. This also restores the
+    # 429/503 retry loop for this read, which had the same escape. Tests must mock `get_items`
+    # with a GENERATOR that raises on iteration — a plain list evaluates eagerly and hides it.
+    items = _call(lambda: list(client.folder(folder_id).get_items(limit=limit)))
     return [{"id": item.id, "name": item.name, "type": item.type} for item in items]
 
 
@@ -827,7 +838,9 @@ def search(
     kwargs: dict[str, Any] = {"limit": limit}
     if type is not None:
         kwargs["result_type"] = type
-    results = _call(client.search().query, query, **kwargs)
+    # Materialized inside `_call` for the same reason as `list_folder` above — `search().query`
+    # is lazy too, so the HTTP fired outside the guarded frame and a rejected token escaped raw.
+    results = _call(lambda: list(client.search().query(query, **kwargs)))
     return [{"id": item.id, "name": item.name, "type": item.type} for item in results]
 
 
