@@ -1,0 +1,66 @@
+{
+  "form_code": "toolbox-talk-excavation-crossing-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Excavation Safety — OSHA Rules About Walking or Driving Over Excavations",
+  "variant_label": "Excavation Safety — OSHA Rules About Walking or Driving Over Excavations",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Excavation_Crossing_Over_Excavations.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Excavation Safety — OSHA Rules About Walking or Driving Over Excavations",
+      "source_pdf": "OSHA_TBT_Excavation_Crossing_Over_Excavations.pdf",
+      "blocks": [
+        {
+          "heading": "OSHA Rules About Walking or Driving Across Open Excavations",
+          "body": "[Reference 1926 Subpart P]\n\nYou can probably imagine the various types of accidents that could potentially occur if someone were to cross over the top of an open trench while walking or operating equipment. The possibilities range from stepping into the trench and injuring an ankle, knee, or leg, to being crushed by a piece of equipment that tipped over or fell into the excavation. To minimize the occurrence of such accidents, Federal OSHA addresses the hazard of crossing over excavations in their standards."
+        },
+        {
+          "body": "Federal OSHA standard 1926.651(l) states that “Walkways shall be provided where employees or equipment are required or permitted to cross over excavations. Guardrails which comply with 1926.502(b) shall be provided where walkways are six (6) feet or more above lower levels.” Unfortunately, this specific OSHA regulation does not give us much guidance on what constitutes a proper walkway. But there is further guidance available in the OSHA Technical Manual, Section V: Chapter 2, where OSHA provides the following information:"
+        },
+        {
+          "body": "Surface crossing of trenches should be discouraged; however, if trenches must be crossed, such crossings are permitted only under the following conditions:\n- Vehicle / equipment crossings must be designed by and installed under the supervision of a registered professional engineer.\n- Walkways or bridges must be provided for foot traffic. These structures shall:\n- have a safety factor of 4;\n- have a minimum clear width of 20 inches;\n- be fitted with standard rails if located six (6) feet or more above the bottom of the trench; and,\n- extend a minimum of 24 inches past the surface edge of the trench on each end."
+        },
+        {
+          "body": "Standard guardrails are constructed of wood or metal and are 42 inches tall, plus or minus three inches, when measured from the walking surface to the top of the rail. They must also have at least one horizontal mid-rail located approximately halfway between the top rail and the walking surface, or vertical balusters spaced not more than 19 inches apart. Guardrails must also be designed and built to withstand at least 200 pounds of force applies to the top rail when applied in any direction. Last but not least, a four (4) inch tall toe-board must be installed along any open sides where a person can pass below, to help prevent them being struck by falling objects."
+        },
+        {
+          "body": "So as you can see, the decision of whether we will install a structure to facilitate crossing over an excavation should only be made by our Competent Person; do not cross over an excavation without their expressed consent, and only then if the construction and installation of the walkway and guardrails is overseen by the Competent Person or, in the case of vehicle or equipment bridges, overseen by a registered professional engineer."
+        },
+        {
+          "body": "Does anyone have a question or comment pertaining to rules for crossing over the top of an excavation? Then please take a moment to make sure you print your name and provide your signature on our OSHA Safety Training Certification form to get credit for attending this toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2018. Not to be sold, altered, or displayed for profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

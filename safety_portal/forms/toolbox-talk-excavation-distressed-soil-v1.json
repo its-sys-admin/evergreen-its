@@ -1,0 +1,70 @@
+{
+  "form_code": "toolbox-talk-excavation-distressed-soil-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Excavation Safety — Signs of Distress in Soil Around Excavations",
+  "variant_label": "Excavation Safety — Signs of Distress in Soil Around Excavations",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Excavation_Signs_of_Distressed_Soil.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Excavation Safety — Signs of Distress in Soil Around Excavations",
+      "source_pdf": "OSHA_TBT_Excavation_Signs_of_Distressed_Soil.pdf",
+      "blocks": [
+        {
+          "heading": "Watch for Tell-tale Signs of Distressed Soil Around Excavations",
+          "body": "[Reference 1926 Subpart P]\n\nOne of the many duties of the Competent Person for an excavation site includes checking the soil in and around the excavations for signs of distress. Signs of distress in soil mean that conditions are ripe for the soil to cave-in, and that is obviously bad news for everyone working in or near the excavation. When signs of distress are found, the Competent Person will determine whether or not it is necessary to alter the protective system that is being used to safeguard workers in the excavation. For example, an excavation with sloped or stepped sides may need to be recut to make the sides less steep.\n\nUnfortunately, the Competent Person for an excavation site cannot be everywhere all of the time. And that is why we are now going to review just a few of the more simple signs of soil distress, so we can all be on the lookout."
+        },
+        {
+          "body": "The first sign to keep an eye out for are tension cracks forming on top of the ground along the sides of an excavation. They typically form back away from the edge of an excavation at a distance equal to approximately one-half to three quarters of the depth of the excavation (see handout for an illustration). Tension cracks can eventually lead to the soil along the face and edge of the excavation either sliding, sloughing, or toppling into the excavation."
+        },
+        {
+          "body": "Another sign of distress in soil is when a portion of the face on one or more sides of an excavation begins to bulge outwards. Bulging is often accompanied by the soil along the top edge of an excavation appearing to sink or slump to a level lower than the surrounding soil; this is a condition referred to as subsidence (see handout for an illustration). Both bulging and subsidence can lead to a catastrophic cave-in of the soil along the affected side of an excavation."
+        },
+        {
+          "body": "One more sign of distressed soil to watch out for is “heaving” (see handout for illustration). This condition occurs when the soil at the floor of the excavation appears to rise up, and is attributed to soil at the bottom of an excavation being pushed up by the weight of heavier amounts of soil on the sides and top. It is important to note that this condition can occur even when there is a trench box or shoring installed in an excavation, and can possibly lead to loose soil entering into the protected area. So this condition must be addressed by the Competent Person when found."
+        },
+        {
+          "body": "While these are not the only signs of distress in soil that indicate a potential safety hazard, they are some of the more common ones to keep an eye out for. And if you notice one or more of them while working in or near an excavation, alert your Competent Person so he or she can take a look and evaluate if any corrective measures will be necessary or not."
+        },
+        {
+          "heading": "SIGNS OF DISTRESSED SOIL IN OR NEAR EXCAVATIONS",
+          "body": "Tension cracks usually form on the top of the ground parallel to the sides of an excavation. They typically form at a horizontal distance of 1/2 (.5) to 3/4 (.75) times the depth of the trench, measured from the vertical face of the trench.\n\nTension cracks can eventually lead to sliding of the soil into the excavation, as illustrated in this drawing. Tension cracks can also lead to sloughing or unravelling (crumbling or running) of the soil down the face of the excavation.\n\nTension cracks can also lead to toppling of the soil. Toppling occurs when the trench's vertical face breaks off along the tension crack line and topples into the excavation. Any of these conditions can result in the worker being trapped inside the excavation.\n\nAn unsupported excavation can also create an unbalanced stress in the soil, which, in turn, causes subsidence (sinking) at the surface and bulging of the vertical face of the trench. If left unsupported, this condition can cause the face of the excavation to collapse and trap workers in the excavation.\n\nBottom heaving or squeezing is caused by the downward pressure created by the weight of adjoining soil. This pressure causes a bulge in the bottom of the cut, as illustrated in the drawing above. Heaving and squeezing can occur even when shoring or shielding has been properly installed."
+        },
+        {
+          "body": "Does anyone have a question or comment pertaining to the signs of distressed soil in or near an excavation? Has anyone ever noticed any of these before? Please take a moment and your print your name and provide your signature on our OSHA Safety Training Certification form so you will get credit for attending today’s toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2018. Not to be sold, altered, or displayed for profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

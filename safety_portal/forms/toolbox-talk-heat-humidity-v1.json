@@ -1,0 +1,66 @@
+{
+  "form_code": "toolbox-talk-heat-humidity-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — Why Humidity Makes Heat More Dangerous",
+  "variant_label": "Heat Illness Prevention — Why Humidity Makes Heat More Dangerous",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Why_Humidity_Makes_Heat_Dangerous.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — Why Humidity Makes Heat More Dangerous",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Why_Humidity_Makes_Heat_Dangerous.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention – Why Humidity Makes Heat More Dangerous",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nIt’s not just the temperature that makes heat dangerous - it’s how your body reacts to it. You might think a 95-degree day in Houston is easier to handle than a 106-degree day in Phoenix, but that’s not always the case. The difference? Humidity."
+        },
+        {
+          "body": "The National Weather Service (NWS) heat index combines air temperature and relative humidity to estimate how hot it actually feels. This is crucial for understanding heat illness risks, as humidity can make conditions far more dangerous than the thermometer alone suggests."
+        },
+        {
+          "body": "Take Phoenix, AZ, and Houston, TX, for example. Phoenix, a dry desert climate, sees average July highs of around 106°F, while Houston’s temperatures are lower, averaging about 95°F. However, Houston’s high humidity levels push the heat index to dangerous extremes—often making it feel like 120°F or more. In contrast, Phoenix’s dry air keeps the \"feels-like\" temperature much closer to the actual air temperature."
+        },
+        {
+          "body": "Why does humidity make it feel hotter? Sweating is the body’s natural cooling system. It releases moisture onto the skin’s surface, where it absorbs body heat and evaporates, carrying that heat away. This process, called evaporative cooling, works best in dry conditions, where sweat evaporates quickly. But in humid environments, the air is already saturated with moisture, slowing evaporation and trapping heat in the body. As a result, the body struggles to cool itself, which increases the risk of heat illness."
+        },
+        {
+          "body": "Even in high humidity, there are ways to improve comfort and reduce the risk of heat illness:\n\n- Wear Lightweight, Breathable Clothing – Choose loose-fitting, light-colored clothing made of moisture-wicking fabrics like cotton or performance blends that allow sweat to evaporate more easily.\n- Use Ventilation and Fans – Air movement helps speed up evaporation. If possible, work in areas with good airflow or use portable fans to keep air circulating.\n- Take Frequent Breaks in the Shade or Air Conditioning – Giving your body a chance to cool down can help prevent heat stress from building up.\n- Adjust Work Schedules When Possible – If feasible, schedule the most physically demanding tasks for cooler parts of the day, such as early morning or late afternoon."
+        },
+        {
+          "body": "By understanding how humidity affects the body and taking proactive steps to stay cool, you can reduce your risk of heat-related illnesses and stay safer on the job, regardless where you live and work. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

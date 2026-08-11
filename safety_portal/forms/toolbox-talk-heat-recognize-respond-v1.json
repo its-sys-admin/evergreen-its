@@ -1,0 +1,66 @@
+{
+  "form_code": "toolbox-talk-heat-recognize-respond-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — Recognizing & Responding to Heat Illnesses",
+  "variant_label": "Heat Illness Prevention — Recognizing & Responding to Heat Illnesses",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Recognizing_and_Responding.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — Recognizing & Responding to Heat Illnesses",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Recognizing_and_Responding.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention: Recognizing & Responding to Heat Illnesses",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\nWhen the heat index climbs upwards, it’s critical to stay vigilant for signs of heat illness, not just for yourself, but for your co-workers as well. Recognizing the symptoms early and responding appropriately can significantly reduce the risk of more serious health consequences. Here's a brief overview of the signs of heat illness to watch for, in no particular order:"
+        },
+        {
+          "body": "- Nausea: The body’s stress response to overheating can trigger nausea or an upset stomach. This is often an early warning sign that the body is struggling to cope with the heat.\n- Heavy Sweating: Sweating is the body’s natural cooling mechanism. However, excessive sweating causes the body to lose water and essential electrolytes, which can lead to dehydration and further strain the body’s cooling systems.\n- Lack of Sweating: In severe cases of heat stroke, the body may stop sweating altogether, even though the core body temperature remains dangerously high. This is a critical sign of heat stroke and requires immediate medical attention.\n- Dizziness: Dehydration or overheating can overwhelm the body’s cooling mechanisms, causing a drop in blood pressure, and leading to dizziness or lightheadedness.\n- Confusion: Heat stress can affect brain function, leading to confusion, disorientation, or difficulty concentrating. These are all early signs of potential heat stroke, and demands immediate medical attention.\n- Unconsciousness: In the most severe cases, the body’s response to extreme heat can lead to unconsciousness. This is a medical emergency, as the brain may not be receiving enough oxygen due to heat stress. Immediate intervention is crucial to prevent further complications or death."
+        },
+        {
+          "body": "If you or a co-worker begins to show signs of heat illness, it’s important to act quickly. Here are some steps to follow to help prevent further escalation:"
+        },
+        {
+          "body": "- Move to a Cooler Area: The first step is to remove the person from the hot environment. Ideally, get them to a shaded area or, if possible, to an air-conditioned room. The cooler environment will help the body recover and reduce the strain on the circulatory system.\n- Hydrate: Dehydration is a major contributor to heat illness. Drink cool water, sports drinks, or an electrolyte solution to replenish lost fluids. These drinks help restore not just water, but also the electrolytes lost through sweating, which are essential for regulating body temperature and muscle function. Avoid drinks that contain caffeine or alcohol, as they can increase dehydration. Also, if the person is unconscious, do not attempt to give them fluids as they may choke.\n- Cool the Body: Use cool water, ice packs, or fans to bring down the body’s temperature. Focus on areas such as the head, neck, armpits, and groin, as these areas have a higher concentration of blood vessels close to the skin, making it easier to cool the body. Removing excess clothing can also help, but avoid heat-reflective suits and heavy protective gear, as they can trap heat and moisture.\n- Heat Stroke Demands Immediate Action: Heat stroke is a medical emergency, and it’s crucial to call for help right away. If the person is no longer sweating, appears confused, or is unconscious, call in-house responders and dial 911 immediately. It’s better to act quickly and be safe than to wait and risk further complications. Even if you’re unsure whether the person is suffering from heat stroke, always err on the side of caution."
+        },
+        {
+          "body": "The body’s response to extreme heat can escalate rapidly, so quick intervention is key. The faster you act, the less damage will be done to the body’s organs and systems. Acting quickly can also reduce the severity of the illness and speed up recovery. By staying alert to the signs of heat illness and taking prompt action, you’re not only helping to save a life, but also ensuring a safer work environment for everyone."
+        },
+        {
+          "body": "Please remember to sign-in so you get credit for attending this toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

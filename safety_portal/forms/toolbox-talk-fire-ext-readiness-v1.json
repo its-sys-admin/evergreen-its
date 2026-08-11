@@ -1,0 +1,64 @@
+{
+  "form_code": "toolbox-talk-fire-ext-readiness-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Portable Fire Extinguishers — Making Sure They Are Ready",
+  "variant_label": "Portable Fire Extinguishers — Making Sure They Are Ready",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Extinguishers_Making_Sure_They_Are_Ready.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Portable Fire Extinguishers — Making Sure They Are Ready",
+      "source_pdf": "OSHA_TBT_Fire_Extinguishers_Making_Sure_They_Are_Ready.pdf",
+      "blocks": [
+        {
+          "heading": "Portable Fire Extinguishers – Make Sure They Remain Ready for Use",
+          "body": "[Reference 1910.157 / 1926.150]\n\nIt does us no good to be trained on how to use a portable fire extinguisher if it is not ready and available for use when needed. So here are a few of the steps we can all take to help ensure we maintain all of our portable fire extinguishers ready for instant use:"
+        },
+        {
+          "body": "- Do not store pallets, tool boxes, trash cans, or any other equipment or materials in front of a portable fire extinguisher. You must always maintain a clear and unobstructed path to portable fire extinguishers at all times.\n- Never use a portable extinguisher as a coat rack, nor should you hang equipment or devices such as extension cords or air hoses over an extinguisher. Although it may sound like an easy way to store these items, it will only serve to slow someone down if they need to quickly gain access to the extinguisher to put out a fire.\n- Once a year our extinguishers receive a thorough maintenance inspection and then get tagged by an outside inspection company. Make sure the inspection tags remain attached to extinguishers, and report any untagged extinguisher to your supervisor so we can make certain it has been inspected.\n- We must also conduct a visual inspection of each extinguisher at least once a month. So help out on occasion, and check extinguishers in your area for damage or deterioration. Also make sure the needle on pressure-activated extinguishers is pointing into the green “FULL” portion of the dial, and report any that are not so we can get them recharged.\n- Once someone uses an extinguisher to fight a fire, it must be turned in for inspection and recharging. In fact, turn it in even if you only pull out the retainer pin but do not actually discharge the extinguisher. That is because you may have inadvertently broken the seal that maintains pressure inside the extinguisher, which could cause it to lose pressure and not function as intended in the future."
+        },
+        {
+          "body": "So anytime you see a portable fire extinguisher that is inaccessible, not fully charged, or just looks like it may have been damaged in some way, please rectify the problem or let your supervisor know right away so we can take care of the problem. And the same thing applies if you ever notice that an extinguisher is not hanging in its designated place."
+        },
+        {
+          "body": "Does anybody have a question or comment about these tips for making certain our portable fire extinguishers remain ready for use? Please be sure to sign-in on the training certification form so you get credit for attending this training session."
+        },
+        {
+          "heading": "PORTABLE FIRE EXTINGUISHERS",
+          "body": "Always keep them accessible and ready to go!\n\nDO NOT hang equipment or articles of clothing over an extinguisher!\n\nMAKE SURE the needle points into the green “Full” portion of the gauge."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

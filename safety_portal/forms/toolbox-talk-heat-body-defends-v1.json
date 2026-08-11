@@ -1,0 +1,69 @@
+{
+  "form_code": "toolbox-talk-heat-body-defends-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — How Your Body Defends Against Overheating",
+  "variant_label": "Heat Illness Prevention — How Your Body Defends Against Overheating",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Body_Defends_Against_Overheating.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — How Your Body Defends Against Overheating",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Body_Defends_Against_Overheating.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention - How Your Body Defends Against Overheating",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nNo matter the outside temperature, the human body is designed to maintain a core temperature of around 98.6°F—the ideal range for proper organ and cell function. When internal temperature rises due to strenuous activity or extreme heat, organ function is impaired, leading to potential damage and eventual shutdown. To combat this, the body relies on two primary cooling mechanisms: increased blood circulation and sweating."
+        },
+        {
+          "heading": "Increased Blood Flow to the Skin",
+          "body": "When body temperature rises, the heart works harder to pump blood away from vital organs and toward dilated blood vessels near the skin’s surface—a process called vasodilation. This allows excess heat to escape through the skin, particularly in areas rich in blood vessels like the face, hands, and feet. Ever notice someone’s face turning red when they overheat? That’s vasodilation in action."
+        },
+        {
+          "heading": "Sweating and Evaporative Cooling",
+          "body": "Sweating is the body's built-in air conditioning system. When sweat glands produce perspiration, this liquid—made up of water, electrolytes, and metabolic waste—spreads across the skin. As it evaporates, it absorbs heat from the body, cooling it down.\n\nHowever, evaporative cooling is only effective when sweat can actually evaporate. In dry, well-ventilated conditions, sweat evaporates quickly, carrying heat away. But in humid environments, where the air is already saturated with moisture, sweat lingers on the skin instead of evaporating efficiently. As a result, the body struggles to cool itself, increasing the risk of heat-related illness."
+        },
+        {
+          "heading": "When Cooling Mechanisms Fail",
+          "body": "When extreme heat, high humidity, or prolonged exertion overwhelm these natural defenses, core temperature can rise dangerously. Heat exhaustion and heat stroke become real risks when the body can no longer regulate its temperature effectively."
+        },
+        {
+          "body": "To stay safe in hot conditions:\n- Stay hydrated to replenish lost fluids\n- Wear breathable, moisture-wicking clothing\n- Take breaks in the shade or air-conditioned areas\n- Use fans or cooling towels to aid heat dissipation\n- Act fast when you recognize the signs of heat illness in yourself or someone else"
+        },
+        {
+          "body": "Your body is built to handle the heat—but only to a point. Knowing how these cooling mechanisms work and what can compromise them is key to preventing heat-related illnesses and staying safe on the job. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

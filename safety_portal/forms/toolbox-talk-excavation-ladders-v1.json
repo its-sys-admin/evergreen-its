@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-excavation-ladders-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Excavation Safety — Using a Portable Ladder to Get In and Out of Excavations",
+  "variant_label": "Excavation Safety — Using a Portable Ladder to Get In and Out of Excavations",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Excavation_Ladders_In_and_Out.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Excavation Safety — Using a Portable Ladder to Get In and Out of Excavations",
+      "source_pdf": "OSHA_TBT_Excavation_Ladders_In_and_Out.pdf",
+      "blocks": [
+        {
+          "heading": "Using a Portable Ladder to Get In and Out of Excavations Safely",
+          "body": "[Reference 1926 Subpart P / Subpart X]\n\nGetting into and out of excavations presents potential hazards that can cause a worker to fall and injure himself or others working below. So OSHA excavation standards require that a stairway, ladder, ramp or other safe means of egress shall be located in trench excavations that are 4 feet or more in depth so as to require no more than 25 feet of lateral travel for employees. In most cases, portable ladders are utilized to meet this particular OSHA requirement. So let’s review some of the more pertinent OSHA requirements for the proper selection and set-up of a portable ladder:"
+        },
+        {
+          "body": "- Utilize the right type of ladder – typically an extension ladder of sufficient length and weight capacity. Leaning a portable step ladder that has been folded closed against the side of a trench is a practice that is prohibited by most portable step ladder manufacturers, and must be avoided unless the manufacturer states their step ladder is designed to do that.\n- Check to ensure the ladder is rated to support the maximum weight imposed by the worker, plus the weight of all of his or her tools and materials they may be toting up or down the ladder. Portable ladder manufacturers typically apply a sticker on one of the ladder side rails stating the maximum rating.\n- Inspect the ladder before use to make certain it is free from hazards and damage, including missing or non-functioning parts, cracks, bends, warping, and slippery surfaces.\n- Lean the ladder at an angle, where possible, so that the distance measured from the toe of the trench to the bottom of the ladder is approximately one fourth the climbing distance of the ladder (see handout for further explanation).\n- Make sure the top of the ladder extends at least three feet above the top of the ground or other surface. This provides the ladder user something to hold onto when mounting or dismounting the ladder, thereby lessening the chances of losing their balance and falling.\n- Check to ensure the base of the ladder is sitting on a level surface so the ladder does not lean to one side or the other. Also make sure the ladder will not sink into the soil or slip out from the trench wall as the worker climbs the ladder. It may be necessary to set the base of the ladder on top of a board or similar object of sufficient size and strength for support. You may also need to secure the ladder into place with a stake, rope, or other retaining device.\n- When a ladder, or ladders, is used to exit a trench excavation more than 4 feet deep, it must be placed so that each employee working in the trench excavation does not have to travel more than 25 feet laterally to get to the nearest ladder. If a worker has to walk down the trench to get around an object and then walk back up the other side, you must include the total distance travelled when determining if they fall within the 25 foot travel limit."
+        },
+        {
+          "body": "Does anyone have any questions about the requirements we just discussed for the safe use of a portable ladder to enter and exit a trench excavation? Thank you for your participation, and please be sure to sign your name to the training certification form so you get credit for attending today’s training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2018. Not to be sold, altered, or displayed for profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "form_code": "toolbox-talk-flammable-liquid-categories-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Fire Prevention — OSHA's Categories of Flammable Liquids",
+  "variant_label": "Fire Prevention — OSHA's Categories of Flammable Liquids",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Prevention_Flammable_Liquid_Categories.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Fire Prevention — OSHA's Categories of Flammable Liquids",
+      "source_pdf": "OSHA_TBT_Fire_Prevention_Flammable_Liquid_Categories.pdf",
+      "blocks": [
+        {
+          "heading": "Fire Prevention – Understanding Categories of Flammable Liquids",
+          "body": "[Reference 1910.106 / 1926.152]\n\nIt is always a good idea to have a portable fire extinguisher nearby at work in case a small fire breaks out. However, we would all be better off if we could prevent the fire from starting in the first place! One of the keys to preventing fires when handling and storing flammable liquids is to understand the differences in the various categories of flammable liquids, as specified by OSHA. In the updated OSHA regulations, flammable liquids are listed as either Category 1, 2, 3, or 4. Do you know the difference between these categories? [Solicit trainees to tell what they think the differences are]. It is important to understand the difference, because although all categories of flammable liquid can burn in the right circumstances, some are apt to ignite much easier than others and therefore require stricter precautions to be taken during their storage and use."
+        },
+        {
+          "body": "First of all, realize that is not actually liquid that burns, but rather vapors. And the temperature at which a particular liquid evaporates to generate enough vapors to form an ignitable mixture with air near the surface of the liquid is known as the liquid’s “Flash Point”. So the lower the flash point of a liquid is, the more apt it is to catch on fire, while the higher the flashpoint of a liquid, the harder it is to catch on fire. One other factor related to categorization of these liquids is their “Boiling Point”, as those with a lower boiling point vaporize at a lower temperature than those with a higher boiling point."
+        },
+        {
+          "body": "Now back to answering my original question. The difference between the four categories of flammable liquids is that those with the lowest flash points and boiling points are designated as Category 1 flammables, and those with the progressively higher flash points are designated as Categories 2, 3, or 4 [see handout for definitions for each category]. So, all other things being equal, a Category 1 flammable liquid would be much easier to ignite than a Category 4 liquid."
+        },
+        {
+          "body": "This difference in the hazards associated with the various categories of flammable liquids is evident when we look at the container labels and Safety Data Sheets for these liquids. Flammable liquids designated as categories 1 and 2 will display the signal word “Danger” on their labels, but Category 3 and 4 flammable liquids will display the signal word “Warning”. This is also why labels and SDS’s generally require us to take much more stringent precautions when handling or storing a Category 1 flammable liquid than when using a liquid from one of the higher categories."
+        },
+        {
+          "body": "So please, pay close attention to the category of flammable liquids you are using at work (and home), and follow all precautionary statements for the safe storage and use of those products that are listed on their Safety Data Sheets and container labels. Doing so will help prevent fires, and injuries, from occurring due to mishandling or misuse."
+        },
+        {
+          "heading": "OSHA CATEGORIES OF FLAMMABLE LIQUIDS*",
+          "body": "Flammable liquids are divided into four categories** as follows:\n- Category 1 includes liquids having flash points below 73.4 °F and having a boiling point at or below 95 °F.\n- Category 2 includes liquids having flash points below 73.4 °F and having a boiling point above 95 °F.\n- Category 3 includes liquids having flash points at or above 73.4 °F and at or below 140 °F (60 °C). When a Category 3 liquid with a flash point at or above 100 °F is heated for use to within 30 °F of its flash point, it shall be handled in accordance with the requirements for a Category 3 liquid with a flash point below 100 °F.\n- Category 4 includes liquids having flash points above 140 °F and at or below 199.4 °F. When a Category 4 flammable liquid is heated for use to within 30 °F of its flash point, it shall be handled in accordance with the requirements for a Category 3 liquid with a flash point at or above 100 °F. When liquid with a flash point greater than 199.4 °F is heated for use to within 30 °F of its flash point, it shall be handled in accordance with the requirements for a Category 4 flammable liquid.\n- Flash Point – the temperature at which a liquid gives off enough vapors in sufficient concentration to form an ignitable mixture with air near the surface of the liquid.\n- Boiling Point – the temperature above which a liquid begins to form bubbles (boils), usually at standard atmospheric pressure.\n\n* Based on updated OSHA regulation 1910.106, 1926.152, and 1910.1200 (GHS).\n** Do NOT confuse OSHA Hazard Categories with the Hazard Classifications used in the NFPA and HMIS systems"
+        },
+        {
+          "body": "Does anybody have a question or comment about the difference between the various categories of flammable liquids? Please be sure to sign your name to the training certification form so you get credit for attending this training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

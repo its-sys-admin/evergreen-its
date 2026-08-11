@@ -1,0 +1,75 @@
+{
+  "form_code": "toolbox-talk-mental-health-construction-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Mental Health Crises and Suicide Prevention in Construction",
+  "variant_label": "Mental Health Crises and Suicide Prevention in Construction",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Mental_Health_Suicide_Prevention_Construction.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Mental Health Crises and Suicide Prevention in Construction",
+      "source_pdf": "OSHA_TBT_Mental_Health_Suicide_Prevention_Construction.pdf",
+      "blocks": [
+        {
+          "heading": "Mental Health Crises and Suicide Prevention in Construction",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nToday I want to talk about something we don’t usually bring up on the job: your mental health. Most people think the biggest dangers employees face at work are falls, electrocutions, or chemical exposures. But the truth is, the construction industry loses five times more workers to suicide every year than to job-site accidents. It’s something we can’t keep ignoring."
+        },
+        {
+          "body": "Why does this occur? Because in many cases, construction work can be tough. Long hours, physical pain, tight deadlines, layoffs, and that old “tough it out” mindset can wear on anybody. And when you add personal pressures—things like family or relationship stress, financial struggles, losing someone close, or being away from home for long stretches—it becomes a lot to carry. That mix can take a toll on even the strongest people."
+        },
+        {
+          "body": "Here’s something important to understand: Struggling doesn’t mean you’re weak. It means you’re human. Asking for help is actually one of the strongest things you can do."
+        },
+        {
+          "body": "So, if you’ve been feeling withdrawn, overwhelmed, hopeless, exhausted, or short-tempered… or if things just feel heavier than usual… don’t brush it off. Pay attention to that. And if you notice a coworker acting that way, don’t ignore it either. Sometimes one simple conversation can make a huge difference."
+        },
+        {
+          "body": "There are people you can talk to. That might be a doctor or a mental health professional. It might be a minister or pastor. It might be HR or your company’s Employee Assistance Program. Or it might just be a friend or coworker you trust. If you’re not sure where to start, look at the handout we’re passing out today — it lists several options you can use if you ever need them."
+        },
+        {
+          "body": "You can also reach a trained counselor anytime by calling or texting 988, or by chatting online at 988lifeline.org. It’s available 24/7, completely confidential, and you don’t have to have the perfect words. You can start simply by saying “hello,” and they will take it from there."
+        },
+        {
+          "body": "Before we wrap up, I want you to hear this clearly: your mind, and your life, matter. Speak up. Reach out. Help is here."
+        },
+        {
+          "body": "Take a look at the handout after this talk. And if you ever need someone to talk to, remember there are real people ready to listen, anytime."
+        },
+        {
+          "body": "Please remember to put your name and signature on the sign-in sheet."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}
