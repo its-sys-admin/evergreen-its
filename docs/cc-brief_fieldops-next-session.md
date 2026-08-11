@@ -1,5 +1,12 @@
 # Field-Ops Portal — Next-Session Handoff Brief
 
+> ⚠️ **SUPERSEDED — HISTORICAL RECORD ONLY (marked 2026-08-10).** Every "do this next" below has
+> since been built, and not always as specified here — notably the "P3 Materials" plan specs a
+> `material_receipts` **D1 table** that was never built as such: the shipped design is migration
+> `0059`'s `material_receipt_events` append-only ledger + `material_shipments` (design record in
+> `docs/ROADMAP.md` Track 2 M2) and the §51 receipts mirror (#38). Do not build from this file.
+> Current truth: CLAUDE.md "What's stubbed vs. real" + `docs/ROADMAP.md`.
+
 **Repo/worktree:** `~/its-fieldops` (branch off `main`, currently `5cc4336`) · Worker+D1+React SPA expansion of the Evergreen Safety Portal
 **As of:** 2026-06-28 — Write-UI phase complete (PRs #319–#322 four-part verified). P2.2 reads (#308–#310) + P2.3 writes (#312–#317, six slices; #318 = docs PR) landed. P2.4 SoR mirror is **PARKED/BLOCKED**.
 

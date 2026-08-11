@@ -3,7 +3,7 @@ type: runbook
 workstream: field_ops
 capability: job materials tracking (per-job Materials page, migration 0059)
 audience: Successor-Operator
-status: skeleton
+status: active
 ---
 
 # Runbook — per-job Materials tracking
@@ -60,7 +60,7 @@ Two states sit on **different axes** and must not be confused:
 | A manager has no **Delivered / Partially delivered / Not delivered** buttons | Marking needs `cap.materials.receive` **and** a manager/admin role. A submitter holds the capability but not the role — by design, the same gate the daily report uses | Check the account's role in **Accounts**. If they should be marking deliveries, they need the manager role — not a new capability |
 | "You're not assigned to that job" (403 `forbidden_job`) | Non-admins only reach the job they are **placed on** (`personnel.current_job`) | Place them on the job via **Personnel** / the job's crew. This is the designed scope, not a fault |
 | The *Materials tracking →* button is missing from the job page or the daily report | The account lacks `cap.materials.receive` | Confirm the role in **Accounts**. All three roles normally hold it |
-| The page says "Nothing is on this job's materials list yet" | No expected lines have been authored for the job | Not a fault. The office (admin) adds them on this page — or, once manifest import ships, loads them from the BOM |
+| The page says "Nothing is on this job's materials list yet" | No expected lines have been authored for the job | Not a fault. The office (admin) adds them on this page — or uploads the vendor's BOM through **Import a manifest** and commits the accepted lines from the validate screen (`material_manifest_import.md`) |
 | "Could not load this job's materials" | Transient read failure — the page says so and offers **Retry** rather than showing an empty list | Tap **Retry**. If persistent, check whether the job's detail page loads at all, then escalate |
 | A line shows the **wrong running total** | The total is the SUM of every event's quantity. A mark recorded without a quantity contributes nothing to it; a duplicate mark contributes twice | Open the line's history — every event shows its quantity, note, date and who recorded it. If a genuine duplicate is there, record a correcting event; the ledger cannot be edited in place. Escalate if the total must be corrected at source |
 | A line still shows **Problem reported** after the goods arrived | Working as designed — the incident flag is sticky and a delivery mark does not clear it | Not a fault. The delivery IS recorded (check the history). Clearing a flag is not a Tier-2 action — escalate if the flag is genuinely wrong |
