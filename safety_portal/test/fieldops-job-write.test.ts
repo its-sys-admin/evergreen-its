@@ -529,6 +529,66 @@ describe("Safety CC optional-on-create + delivery-contacts read route", () => {
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>()).toMatchObject({ n: 0 });
   });
 
+  it("CLIENTS: find-or-create — a second job for the SAME client name REUSES the row", async () => {
+    // The defect this closes: live D1 accumulated FOUR rows named "KSI" because new_client
+    // INSERTed unconditionally, and client_id is CREATE-ONLY so each job was stuck on whichever
+    // duplicate it happened to mint.
+    const a = await createOk(admin, { project_name: "MH405", new_client: { name: "Qcells" } });
+    const b = await createOk(admin, { project_name: "OG593", new_client: { name: "Qcells" } });
+    const rows = await env.DB.prepare("SELECT id, name FROM clients WHERE name='Qcells'").all();
+    expect(rows.results).toHaveLength(1); // ONE row, not two
+    const ja = await jobRow(a);
+    const jb = await jobRow(b);
+    expect(ja.client_id).toBe(jb.client_id); // both jobs on the same client
+  });
+
+  it("CLIENTS: the name match is case-insensitive", async () => {
+    await createOk(admin, { project_name: "J1", new_client: { name: "KSI" } });
+    await createOk(admin, { project_name: "J2", new_client: { name: "ksi" } });
+    await createOk(admin, { project_name: "J3", new_client: { name: "  Ksi  " } }); // trimmed too
+    const rows = await env.DB.prepare("SELECT id FROM clients WHERE name LIKE 'ksi'").all();
+    expect(rows.results).toHaveLength(1);
+  });
+
+  it("CLIENTS: reusing a client NEVER overwrites its existing contact details", async () => {
+    // Silently rewriting a customer's contact block as a side effect of adding a job would be a
+    // worse failure than ignoring the extra fields.
+    await createOk(admin, {
+      project_name: "First",
+      new_client: { name: "Acme", contact: "Dana", phone: "555-0100", email: "dana@acme.com" },
+    });
+    await createOk(admin, {
+      project_name: "Second",
+      new_client: { name: "Acme", contact: "Imposter", phone: "555-9999", email: "evil@x.com" },
+    });
+    const cl = await env.DB.prepare("SELECT contact, phone, email FROM clients WHERE name='Acme'").first<any>();
+    expect(cl).toMatchObject({ contact: "Dana", phone: "555-0100", email: "dana@acme.com" });
+  });
+
+  it("CLIENTS: a genuinely NEW name still creates a row", async () => {
+    await createOk(admin, { project_name: "J1", new_client: { name: "Qcells" } });
+    await createOk(admin, { project_name: "J2", new_client: { name: "KSI" } });
+    const rows = await env.DB.prepare("SELECT name FROM clients ORDER BY name").all();
+    expect((rows.results as any[]).map((r) => r.name)).toEqual(["KSI", "Qcells"]);
+  });
+
+  it("CLIENTS: GET /api/fieldops/clients serves id + name + job count, and is capability-gated", async () => {
+    await createOk(admin, { project_name: "J1", new_client: { name: "Qcells" } });
+    await createOk(admin, { project_name: "J2", new_client: { name: "Qcells" } });
+    await createOk(admin, { project_name: "J3", new_client: { name: "KSI" } });
+
+    // prove-the-control-bites: no session, then a session without the cap.
+    expect((await call("/api/fieldops/clients")).status).toBe(401);
+    expect((await call("/api/fieldops/clients", { headers: { Cookie: submitter } })).status).toBe(403);
+
+    const body = (await (
+      await call("/api/fieldops/clients", { headers: { Cookie: admin } })
+    ).json()) as { clients: { id: number; name: string; jobs: number }[] };
+    expect(body.clients.map((c) => [c.name, c.jobs])).toEqual([["KSI", 1], ["Qcells", 2]]);
+    // Least privilege: contact details are NOT served to a picker that only needs a name.
+    for (const c of body.clients) expect(Object.keys(c).sort()).toEqual(["id", "jobs", "name"]);
+  });
+
   it("(ii) create with ≥1 valid safety_cc → 201 + the row stores the CC", async () => {
     const id = await createOk(admin, { project_name: "HasCC", safety_cc: ["cc1@x.com", "cc2@x.com"] });
     const row = await jobRow(id);

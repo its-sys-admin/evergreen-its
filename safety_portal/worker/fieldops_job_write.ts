@@ -210,6 +210,38 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
     (c) => c.json({ delivery_contacts: deliveryContactsConfig.contacts }),
   );
 
+  // GET /api/fieldops/clients — the client list feeding the job-create form's client PICKER.
+  // Gated on cap.jobtracker.manage (the job creator's own capability), read-only, no audit row.
+  //
+  // WHY THIS EXISTS: the create route has always accepted an existing `client_id`, but nothing
+  // ever served the ids, so the SPA could only send `new_client` — which is how four rows named
+  // "KSI" appeared. This is the missing half.
+  //
+  // Returns one row per client with its `jobs` count. The count is NOT decoration: names in this
+  // table are not unique (that is the very defect being cleaned up), so when the UI has to collapse
+  // duplicates it needs a deterministic, explainable rule for which id survives — most-used wins,
+  // lowest id breaks the tie. Serving the count keeps that rule in the UI where it is visible,
+  // instead of hiding a silent pick behind a DISTINCT here.
+  //
+  // Bound: id, name, and the count only — no contact/phone/email, which the picker does not need
+  // (least privilege; those are customer contact details, and a job creator picking a name has no
+  // reason to receive them).
+  app.get(
+    "/api/fieldops/clients",
+    gates.requireSession,
+    gates.requireCapability("cap.jobtracker.manage"),
+    async (c) => {
+      const { results } = await c.env.DB
+        .prepare(
+          "SELECT c.id, c.name, COUNT(j.job_id) AS jobs FROM clients c " +
+            "LEFT JOIN jobs j ON j.client_id = c.id " +
+            "GROUP BY c.id, c.name ORDER BY c.name COLLATE NOCASE, c.id",
+        )
+        .all<{ id: number; name: string; jobs: number }>();
+      return c.json({ clients: results });
+    },
+  );
+
   // POST /api/fieldops/job — create a portal-origin job with full routing SoR (+ optional client).
   app.post(
     "/api/fieldops/job",
@@ -268,11 +300,36 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
         if ((contact !== null && contact.length > MAX_NAME) || (phone !== null && phone.length > MAX_PHONE) || (email !== null && email.length > MAX_EMAIL)) {
           return c.json({ error: "invalid_client_field" }, 400);
         }
-        const inserted = await c.env.DB
-          .prepare("INSERT INTO clients (name, contact, phone, email) VALUES (?1,?2,?3,?4) RETURNING id")
-          .bind(name, contact, phone, email)
+        // FIND-OR-CREATE (Op Stds v21 §45), 2026-08-11. This used to INSERT unconditionally, and
+        // the SPA create form had only a free-text client box — so every job created for an
+        // existing customer minted a NEW row. Live D1 accumulated FOUR rows all named "KSI",
+        // with three different jobs pointing at three of them. That is not cosmetic: `client_id`
+        // is CREATE-ONLY (no edit route sets it), so a job bound to a duplicate can only be
+        // repointed by a direct D1 write.
+        //
+        // Matched case-insensitively on the trimmed name, because "KSI" and "ksi" are the same
+        // customer to the operator typing them. NOCASE is ASCII-only in SQLite, which is correct
+        // here and deliberately not papered over: a non-ASCII duplicate differing only by case
+        // would still create a second row, and that is a far rarer, far more visible case than
+        // the one this fixes.
+        //
+        // The contact/phone/email on an inline new_client are only applied when the row is
+        // actually created — an existing client's details are NEVER overwritten by a job create.
+        // Silently rewriting a customer's contact block as a side effect of adding a job is a
+        // worse failure than ignoring the extra fields, and the client edit surface owns that.
+        const existing = await c.env.DB
+          .prepare("SELECT id FROM clients WHERE name = ?1 COLLATE NOCASE")
+          .bind(name)
           .first<{ id: number }>();
-        clientId = inserted!.id;
+        if (existing) {
+          clientId = existing.id;
+        } else {
+          const inserted = await c.env.DB
+            .prepare("INSERT INTO clients (name, contact, phone, email) VALUES (?1,?2,?3,?4) RETURNING id")
+            .bind(name, contact, phone, email)
+            .first<{ id: number }>();
+          clientId = inserted!.id;
+        }
       } else if (clientId !== null) {
         const client = await c.env.DB.prepare("SELECT id FROM clients WHERE id = ?1").bind(clientId).first();
         if (!client) return c.json({ error: "unknown_client" }, 422);
