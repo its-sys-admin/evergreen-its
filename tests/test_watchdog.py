@@ -409,7 +409,25 @@ def _write_box_freshness_marker(path: Path, *, days_ago: int) -> None:
     path.write_text(json.dumps({"last_refresh_utc": last, "refresh_count": 1}))
 
 
-def test_check_box_token_freshness_fresh_is_info(monkeypatch, tmp_path):
+@pytest.fixture
+def box_probe(monkeypatch):
+    """Control Check P's LIVE Box read.
+
+    Defaults to a successful probe. Every Check-P test must go through this — without it
+    the check would make a real authenticated Box call (and hit Keychain) under pytest.
+    """
+    def _set(items=None, exc=None):
+        def _fake(folder_id, *, limit=100):
+            if exc is not None:
+                raise exc
+            return items or []
+        monkeypatch.setattr("watchdog.box_client.list_folder", _fake)
+
+    _set()
+    return _set
+
+
+def test_check_box_token_freshness_fresh_is_info(monkeypatch, tmp_path, box_probe):
     marker = tmp_path / "box_oauth_last_refresh.json"
     _write_box_freshness_marker(marker, days_ago=3)
     monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
@@ -417,7 +435,7 @@ def test_check_box_token_freshness_fresh_is_info(monkeypatch, tmp_path):
     assert result.severity is Severity.INFO
 
 
-def test_check_box_token_freshness_warns_at_50d(monkeypatch, tmp_path):
+def test_check_box_token_freshness_warns_at_50d(monkeypatch, tmp_path, box_probe):
     marker = tmp_path / "box_oauth_last_refresh.json"
     _write_box_freshness_marker(marker, days_ago=52)
     monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
@@ -425,30 +443,131 @@ def test_check_box_token_freshness_warns_at_50d(monkeypatch, tmp_path):
     assert result.severity is Severity.WARN
 
 
-def test_check_box_token_freshness_critical_at_58d(monkeypatch, tmp_path):
-    marker = tmp_path / "box_oauth_last_refresh.json"
-    _write_box_freshness_marker(marker, days_ago=59)
-    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
-    result = watchdog._check_box_token_freshness()
-    assert result.severity is Severity.CRITICAL
-
-
-def test_check_box_token_freshness_absent_marker_warns(monkeypatch, tmp_path):
+def test_check_box_token_freshness_absent_marker_warns(monkeypatch, tmp_path, box_probe):
     monkeypatch.setattr(
         "watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", tmp_path / "missing.json"
     )
     result = watchdog._check_box_token_freshness()
     assert result.severity is Severity.WARN
-    assert "absent" in result.summary
+    assert "ABSENT" in result.summary
 
 
-def test_check_box_token_freshness_unreadable_marker_warns(monkeypatch, tmp_path):
+def test_check_box_token_freshness_unreadable_marker_warns(monkeypatch, tmp_path, box_probe):
     marker = tmp_path / "box_oauth_last_refresh.json"
     marker.write_text("not valid json {{{")
     monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
     result = watchdog._check_box_token_freshness()
     assert result.severity is Severity.WARN
-    assert "unreadable" in result.summary
+    assert "UNREADABLE" in result.summary
+
+
+# ---- Check P: the LIVENESS probe (#26) ----------------------------------
+#
+# THE BUG THIS CLOSES. Check P read the marker and nothing else, so it logged
+# "Box OAuth refresh token fresh (idle 2d)" every hour straight through a window in
+# which live Box calls were failing with invalid_grant (2026-08-10). The first test
+# below is the direct regression: a FRESH marker plus a DEAD token must be CRITICAL,
+# and it is exactly the combination the old implementation called INFO.
+
+
+def test_dead_token_is_critical_even_when_the_marker_looks_fresh(
+    monkeypatch, tmp_path, box_probe
+):
+    """#26 regression: marker freshness must never outvote a live rejection."""
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=2)  # the exact "idle 2d" of the incident
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=watchdog.box_client.BoxRefreshTokenRejectedError("invalid_grant"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.CRITICAL
+    assert "DEAD" in result.summary
+    # The marker must be reported as NOT-evidence, never as reassurance.
+    assert "not evidence of health" in result.summary.lower()
+
+
+def test_live_read_ok_downgrades_a_stale_marker_from_critical_to_warn(
+    monkeypatch, tmp_path, box_probe
+):
+    """A successful authenticated read is positive proof the 60d wall was not hit.
+
+    The old check called 59d-idle CRITICAL unconditionally. With ground truth available,
+    paging "re-auth NOW" for a credential that demonstrably works would send a Tier-2
+    operator into an unnecessary high-class escalation.
+    """
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=59)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.WARN
+    assert "AUTHENTICATES NOW" in result.summary
+
+
+def test_probe_transport_failure_falls_back_to_the_marker_and_says_so(
+    monkeypatch, tmp_path, box_probe
+):
+    """Our own inability to reach Box must never be reported as a dead token."""
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=watchdog.box_client.BoxRateLimitError("429"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.INFO  # the marker verdict, unchanged
+    assert "SKIPPED" in result.summary  # never mistakable for "probe passed"
+
+
+def test_missing_credentials_warn_but_do_not_claim_an_expired_token(
+    monkeypatch, tmp_path, box_probe
+):
+    """A generic auth failure is NOT evidence the refresh token aged out."""
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=watchdog.box_client.BoxAuthError("credentials missing from Keychain"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.WARN
+    assert "NOT an expired refresh token" in result.summary
+
+
+def test_probe_never_crashes_the_sweep_on_an_unexpected_exception(
+    monkeypatch, tmp_path, box_probe
+):
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=RuntimeError("boxsdk exploded in a novel way"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.INFO
+    assert "SKIPPED" in result.summary
+
+
+def test_probe_reads_root_with_a_bounded_page(monkeypatch, tmp_path, box_probe):
+    """Pins the probe's shape: root folder (always exists for a valid credential, so a
+    Box reorg cannot masquerade as a token failure) and a single-item page."""
+    seen: dict = {}
+
+    def _fake(folder_id, *, limit=100):
+        seen["folder_id"] = folder_id
+        seen["limit"] = limit
+        return []
+
+    monkeypatch.setattr("watchdog.box_client.list_folder", _fake)
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+
+    watchdog._check_box_token_freshness()
+
+    assert seen == {"folder_id": "0", "limit": 1}
 
 
 # ---- Group B: _check_stale_review_queue ---------------------------------
@@ -3588,7 +3707,9 @@ def test_daily_only_checks_are_all_registered_in_checks():
 def test_daily_tier_holds_exactly_the_harmful_at_hourly_letters():
     """Pins the tier split. Changing it is a deliberate act, not a drive-by edit."""
     letters = {watchdog.CHECK_LETTERS[c.__name__] for c in watchdog.DAILY_ONLY_CHECKS}
-    assert letters == {"D", "G", "I", "L", "O", "U", "W"}
+    # P joined 2026-08-10 (#26): its liveness probe spends a single-use Box refresh token
+    # per run, so hourly would worsen the rotation race the same issue's retry absorbs.
+    assert letters == {"D", "G", "I", "L", "O", "P", "U", "W"}
 
 
 def test_hourly_tier_keeps_the_outage_detectors():

@@ -1697,51 +1697,159 @@ def _check_portal_poll_pending_backlog() -> CheckResult:
 BOX_TOKEN_FRESHNESS_WARN_DAYS = 50
 BOX_TOKEN_FRESHNESS_CRITICAL_DAYS = 58
 
+# Box folder the liveness probe reads, and how many items it asks for. "0" is the
+# authenticated user's ROOT — it always exists for any valid credential, needs no ITS
+# topology to be in place, and cannot 404 for a reason unrelated to auth (which a probe
+# against a named ITS folder could, turning a Box reorg into a false token alarm).
+# limit=1 keeps it to a single bounded page.
+BOX_LIVENESS_PROBE_FOLDER = "0"
+BOX_LIVENESS_PROBE_LIMIT = 1
 
-def _check_box_token_freshness() -> CheckResult:
-    """Check P: Box OAuth refresh token must be exercised inside the 60-day window.
 
-    Reads the freshness marker box_client._store_tokens writes on every persist.
-    Marker absent → WARN ("unknown"): expected briefly right after A3 ships (until
-    the first refresh writes it); a persistent absence means Box has never authed.
+def _probe_box_liveness() -> tuple[str, str]:
+    """Make ONE real authenticated Box read. Returns (verdict, note).
+
+    Verdicts: "alive" | "rejected" (the refresh token itself was refused) | "misconfig"
+    (credentials missing / scope refused — needs a human, but is NOT evidence the refresh
+    token is dead) | "skipped" (transport / rate-limit — never invent an outage).
+
+    §42 — WHY THIS EXISTS. Check P used to read the marker file and nothing else, so it
+    logged "Box OAuth refresh token fresh (idle 2d)" hourly straight through a window in
+    which live Box calls were failing with `invalid_grant` (2026-08-10, issue #26). A
+    staleness proxy cannot observe liveness: the marker says when ITS last SUCCEEDED, not
+    whether the credential works NOW. Since a dead Box token kills every Box path in ITS
+    (safety filing, weekly compile, PO attachments, the archive), "fresh" was the most
+    expensive possible false signal.
+
+    §42 — WHY THE DAILY TIER, NOT HOURLY. This probe is not free and not side-effect-free.
+    The watchdog is a launchd one-shot, so it starts with no access token every run and
+    the probe therefore SPENDS a single-use refresh token to get one. Running it hourly
+    would add 24 extra token exchanges a day, each one a fresh opportunity to collide with
+    portal_poll (60 s) / fieldops_sync / po_poll (90 s) — i.e. it would materially worsen
+    the very rotation race that issue #26's retry exists to absorb. Once a day is enough:
+    the condition being detected (a dead credential) is not transient and does not repair
+    itself. Hence Check P sits in DAILY_ONLY_CHECKS.
+
+    The probe rides `box_client.list_folder`, so it inherits that module's ONE automatic
+    retry on a consumed token — meaning a "rejected" verdict here already survived a
+    fresh-token retry and is a genuine credential failure, not a lost race.
+    """
+    try:
+        box_client.list_folder(
+            BOX_LIVENESS_PROBE_FOLDER, limit=BOX_LIVENESS_PROBE_LIMIT
+        )
+    except box_client.BoxRefreshTokenRejectedError as exc:
+        return "rejected", repr(exc)
+    except box_client.BoxAuthError as exc:
+        # Missing Keychain credentials, or a 401/403 on the read itself. Deterministic
+        # and human-fixable, but NOT proof the refresh token aged out — kept distinct so
+        # the message never sends an operator into an unnecessary re-auth.
+        return "misconfig", repr(exc)
+    except box_client.BoxError as exc:
+        # Rate limit / network / anything else transient. Our own inability to reach Box
+        # must never be reported as a dead token.
+        return "skipped", repr(exc)
+    except Exception as exc:  # noqa: BLE001 — a probe must never crash the sweep
+        return "skipped", repr(exc)
+    return "alive", "authenticated Box read succeeded"
+
+
+def _box_marker_verdict() -> tuple[Severity, str]:
+    """The marker-AGE half of Check P: (severity, human summary).
+
+    Kept as its own function because the marker answers a genuinely different question
+    from the liveness probe — it is the EARLY WARNING (idle days trending toward the 60-day
+    wall) whereas the probe is the PRESENT-TENSE verdict. The marker still earns its place
+    after the probe landed: it is the only signal available when the probe is skipped, and
+    it is what catches an approaching idle expiry *before* the credential actually dies.
     """
     marker = box_client.BOX_TOKEN_REFRESH_MARKER
     if not marker.exists():
-        return CheckResult(
+        return (
             Severity.WARN,
-            "Box OAuth refresh marker absent — token freshness unknown. Expected "
-            "briefly right after enabling A3 (until the first refresh writes it); a "
-            "persistent absence means Box has never authed — run "
-            "scripts/setup_box_oauth.py.",
+            "refresh marker ABSENT (no rotation ever recorded on this host)",
         )
     try:
         data = json.loads(marker.read_text())
         last_refresh = datetime.fromisoformat(data["last_refresh_utc"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return CheckResult(
-            Severity.WARN,
-            f"Box OAuth refresh marker unreadable ({exc!r}) — token freshness unknown.",
-        )
+        return Severity.WARN, f"refresh marker UNREADABLE ({exc!r})"
     if last_refresh.tzinfo is None:
         last_refresh = last_refresh.replace(tzinfo=UTC)
     idle_days = (datetime.now(UTC) - last_refresh).days
     if idle_days >= BOX_TOKEN_FRESHNESS_CRITICAL_DAYS:
-        return CheckResult(
+        return (
             Severity.CRITICAL,
-            f"Box OAuth refresh token idle {idle_days}d "
-            f"(>= {BOX_TOKEN_FRESHNESS_CRITICAL_DAYS}) — expires at 60d. Re-run "
-            f"scripts/setup_box_oauth.py NOW or all Box operations will fail "
-            f"(escalate to Seth — secrets/auth, a fixed high-capability-class category).",
+            f"marker idle {idle_days}d (>= {BOX_TOKEN_FRESHNESS_CRITICAL_DAYS}; "
+            f"unusable at 60d)",
         )
     if idle_days >= BOX_TOKEN_FRESHNESS_WARN_DAYS:
+        return (
+            Severity.WARN,
+            f"marker idle {idle_days}d (>= {BOX_TOKEN_FRESHNESS_WARN_DAYS}, "
+            f"approaching the 60d wall)",
+        )
+    return Severity.INFO, f"marker fresh (idle {idle_days}d)"
+
+
+def _check_box_token_freshness() -> CheckResult:
+    """Check P: Box credential health — marker age AND a real authenticated read.
+
+    Two independent signals, reported so the operator can tell which one fired:
+
+      * probe REJECTED           → CRITICAL. The credential is dead RIGHT NOW; every Box
+                                   path in ITS is down. Decisive regardless of the marker.
+      * probe alive, marker bad  → WARN. The token works, so this is NOT an expiry — it is
+                                   the marker write failing or a host that has been dark.
+                                   Never CRITICAL: a successful authenticated read is
+                                   positive proof the 60-day wall has not been hit.
+      * probe alive, marker fine → INFO. Both healthy.
+      * probe skipped            → the marker verdict alone, explicitly labelled as such so
+                                   "no probe data" is never mistaken for "probe passed".
+    """
+    marker_sev, marker_note = _box_marker_verdict()
+    verdict, probe_note = _probe_box_liveness()
+
+    if verdict == "rejected":
+        return CheckResult(
+            Severity.CRITICAL,
+            "Box credential DEAD: a live authenticated Box read was REJECTED "
+            "(invalid_grant, and it already survived one automatic retry on a "
+            f"freshly-read token). Marker says: {marker_note} — note the marker is NOT "
+            "evidence of health here. EVERY Box path in ITS is down (safety filing, "
+            "weekly compile, PO attachments, job archive) until re-auth: run "
+            "scripts/setup_box_oauth.py (escalate to Seth — secrets/auth is a fixed "
+            "high-capability class).",
+            details=probe_note,
+        )
+    if verdict == "misconfig":
         return CheckResult(
             Severity.WARN,
-            f"Box OAuth refresh token idle {idle_days}d "
-            f"(>= {BOX_TOKEN_FRESHNESS_WARN_DAYS}) — approaching the 60d expiry; "
-            f"confirm the Box-writing daemons are running.",
+            "Box liveness probe could not authenticate — credentials missing from "
+            "Keychain, or the read was refused on scope (NOT an expired refresh token; "
+            f"see details). Marker says: {marker_note}.",
+            details=probe_note,
+        )
+    if verdict == "skipped":
+        return CheckResult(
+            marker_sev,
+            f"Box liveness probe SKIPPED (transient — Box unreachable or rate-limited); "
+            f"no present-tense verdict this run. Falling back to marker age only: "
+            f"{marker_note}.",
+            details=probe_note,
+        )
+    # verdict == "alive"
+    if marker_sev is not Severity.INFO:
+        return CheckResult(
+            Severity.WARN,
+            f"Box token AUTHENTICATES NOW (live read OK) but {marker_note}. Not an "
+            "expiry — the live read proves the credential is valid. Suspect the marker "
+            "write in box_client._store_tokens failing, or a host that was dark and has "
+            "only just resumed.",
         )
     return CheckResult(
-        Severity.INFO, f"Box OAuth refresh token fresh (idle {idle_days}d)."
+        Severity.INFO,
+        f"Box credential healthy: live authenticated read OK, {marker_note}.",
     )
 
 
@@ -2847,9 +2955,12 @@ CHECKS: list[Callable[..., CheckResult]] = [
     # nothing, 2026-07-13 incident; CRITICAL only when even the storm floor
     # finds nothing deletable) — paged + MAINTENANCE-deferred by _run_check.
     _check_row_cap_rotation,
-    # Check P (A3): Box OAuth refresh-token freshness. Read-only marker read;
-    # returns a CheckResult, so its WARN/CRITICAL is paged + MAINTENANCE-deferred
-    # by _run_check. (Check O is the A5 row-cap rotation above.)
+    # Check P (A3): Box credential health — marker age AND a real authenticated Box read
+    # (#26: the marker-only version reported "fresh (idle 2d)" straight through a live
+    # invalid_grant). Returns a CheckResult, so its WARN/CRITICAL is paged +
+    # MAINTENANCE-deferred by _run_check. DAILY tier — the probe spends a single-use
+    # refresh token per run, so hourly would worsen the rotation race (see
+    # _probe_box_liveness). (Check O is the A5 row-cap rotation above.)
     _check_box_token_freshness,
     # Check Q / R (A4): portal_poll resilience. Q re-raises a sustained pending-fetch outage
     # (CRITICAL second-opinion to portal_poll's inline page); R WARNs on a stuck unfiled
@@ -2961,6 +3072,13 @@ CHECK_LETTERS: dict[str, str] = {
 #   O  _check_row_cap_rotation        in the 15k-16k WARN band it writes one ITS_Errors row per
 #                                     sweep — into the very sheet whose row count it is warning
 #                                     about. A positive feedback loop.
+#   P  _check_box_token_freshness     its liveness probe (#26) is a real Box call from a launchd
+#                                     one-shot, so every run SPENDS a single-use refresh token to
+#                                     get an access token. Hourly = 24 extra exchanges/day, each a
+#                                     fresh chance to collide with portal_poll (60 s) /
+#                                     fieldops_sync / po_poll (90 s) — it would WORSEN the very
+#                                     rotation race #26's retry absorbs. A dead credential is not
+#                                     transient and does not self-repair; daily detection is enough.
 #   U  _check_approver_drift          absorbs the change into its baseline every run, so the drift
 #                                     WARN's visibility window shrinks 24h -> 1h on a
 #                                     security-relevant signal (who may approve a send).
@@ -2987,6 +3105,7 @@ DAILY_ONLY_CHECKS: frozenset[Callable[..., CheckResult]] = frozenset(
         _check_progress_generate_catchup,
         _check_token_write_capability,
         _check_row_cap_rotation,
+        _check_box_token_freshness,
         _check_approver_drift,
         _check_log_dir_rotation,
     }

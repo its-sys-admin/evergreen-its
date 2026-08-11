@@ -31,9 +31,24 @@ asserts this explicitly.
 Ship-and-leave window: refresh tokens are valid for 60 days from last use.
 ITS in steady-state runs daily workstreams → token is exchanged daily →
 no concern. If ITS goes dark for >60 days, the refresh token expires and
-the operator must re-run `setup_box_oauth.py`. A watchdog freshness check
-(planned for R2 Watchdog Session 2 or later) will WARN at 50 days idle
-and CRITICAL at 58.
+the operator must re-run `setup_box_oauth.py`. **Watchdog Check P
+(`scripts/watchdog._check_box_token_freshness`) covers this today** — it reads
+the `BOX_TOKEN_REFRESH_MARKER` age (WARN at 50 days idle / CRITICAL at 58) AND
+makes a real authenticated Box read, so a token that is dead RIGHT NOW is caught
+even while the marker still looks recent. (The marker-only version of that check
+reported "fresh (idle 2d)" straight through a live `invalid_grant` on 2026-08-10;
+issue #26.)
+
+**Single-use refresh tokens + concurrent processes = a losable race.** Box
+invalidates a refresh token the instant it is exchanged. `_store_tokens`'s lock
+serializes the PERSIST, not the HTTP exchange (boxsdk owns that), so two ITS
+processes can both read token R from Keychain and both try to spend it. The
+loser is rejected with `invalid_grant` — for which Box uses the SAME wording it
+uses for a genuinely aged-out token, making a transient race look like a 60-day
+expiry. `_retry_once_on_rejected_refresh_token` absorbs that: it drops the cached
+client (so the next `get_client()` re-reads Keychain, where the WINNER has by then
+persisted the newer token) and retries the operation exactly once. See
+`BoxRefreshTokenRejectedError`.
 
 Capabilities exposed:
     get_client(), upload_file(), upload_bytes(), download_file(), list_folder(),
@@ -51,7 +66,11 @@ fallback, cap `MAX_RETRIES=3`. Same pattern as resend_client.
 """
 from __future__ import annotations
 
+import functools
+import json
+import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -106,6 +125,29 @@ class BoxError(Exception):
 
 class BoxAuthError(BoxError):
     """Token rejected or insufficient scope (HTTP 401/403)."""
+
+
+class BoxRefreshTokenRejectedError(BoxAuthError):
+    """Box rejected the REFRESH token itself (`invalid_grant`).
+
+    §42: this is deliberately a distinct type rather than a message flavour, because
+    exactly one recovery is safe to automate for it and it must not be applied to the
+    other auth failures. `invalid_grant` has TWO causes that Box reports with identical
+    wording ("Refresh token has expired"):
+
+      1. **CONSUMED** — another ITS process exchanged the token moments ago. Refresh
+         tokens are single-use, and the `_store_tokens` lock covers the persist, not the
+         exchange, so this race is reachable whenever two Box-touching processes overlap
+         (portal_poll 60 s, fieldops_sync / po_poll 90 s). Self-healing: the winner has
+         already persisted a NEWER valid token to Keychain.
+      2. **AGED OUT** — nothing exchanged the token for 60 days. Fatal until a human
+         re-runs `scripts/setup_box_oauth.py`.
+
+    Nothing in the response distinguishes them, so this module NEVER reports a rejection
+    as "expired" on its own authority. `_rejection_message` states both possibilities and
+    quotes the freshness marker, which is the only local evidence that separates them: a
+    marker stamped minutes ago means (1); a marker ~60 days old or absent means (2).
+    """
 
 
 class BoxNotFoundError(BoxError):
@@ -241,6 +283,168 @@ def get_client() -> Client:
     return _client
 
 
+def _reset_client() -> None:
+    """Drop the cached client so the next `get_client()` re-reads Keychain.
+
+    §42 — this is the load-bearing half of the `invalid_grant` retry, and the reason a
+    naive "just call the operation again" retry would NOT have worked. `get_client()` is
+    a process-wide lazy singleton, and the `boxsdk.OAuth2` object it builds holds the
+    refresh token it read at construction time **in memory**. After a lost rotation race
+    the newer valid token is in Keychain, but the cached OAuth2 still holds the consumed
+    one — so re-running the same operation against the cached client re-spends the dead
+    token and fails identically. Clearing the singleton is what makes the retry read the
+    winner's token.
+
+    Note this also invalidates every boxsdk resource object already bound to the old
+    session (`client.folder(...)` etc.), which is why the retry seam is the PUBLIC
+    function (each of which re-derives its resource from a fresh `get_client()`) and not
+    `_call` — `_call` receives an ALREADY-BOUND operation and could only ever re-run it
+    against the stale session.
+    """
+    global _client
+    _client = None
+
+
+def _is_invalid_grant(exc: BoxOAuthException) -> bool:
+    """True when a boxsdk auth failure is specifically an `invalid_grant` rejection.
+
+    boxsdk's `_oauth_exception` sets `code = json['code'] or json['error']`, so a Box
+    OAuth error body `{"error":"invalid_grant", ...}` arrives as `code='invalid_grant'`
+    — a structured field, checked first. The message fallback covers a non-JSON or
+    shape-changed error body, where boxsdk keeps the raw text.
+    """
+    if getattr(exc, "code", None) == "invalid_grant":
+        return True
+    return "invalid_grant" in f"{getattr(exc, 'message', '') or ''}".lower()
+
+
+def _last_refresh_note() -> str:
+    """Operator-facing evidence for a rejection: when the token last rotated HERE.
+
+    Best-effort and never raises — this only ever decorates an error message, and an
+    unreadable marker must not mask the auth failure being reported.
+    """
+    try:
+        if not BOX_TOKEN_REFRESH_MARKER.exists():
+            return "no local rotation on record (marker absent)"
+        raw = json.loads(BOX_TOKEN_REFRESH_MARKER.read_text())
+        stamped = datetime.fromisoformat(raw["last_refresh_utc"])
+        if stamped.tzinfo is None:
+            stamped = stamped.replace(tzinfo=UTC)
+        age = datetime.now(UTC) - stamped
+        if age.total_seconds() < 3600:
+            human = f"{age.total_seconds() / 60:.0f} min ago"
+        elif age.days < 1:
+            human = f"{age.total_seconds() / 3600:.1f} h ago"
+        else:
+            human = f"{age.days}d ago"
+        return f"last local rotation {stamped.isoformat()} ({human})"
+    except Exception:  # noqa: BLE001 — decoration only; never mask the auth failure
+        return "local rotation time unreadable"
+
+
+def _rejection_message(exc: BoxOAuthException) -> str:
+    """The operator-facing text for an `invalid_grant`. Deliberately NOT 'expired'.
+
+    Box returns the same `error_description` ("Refresh token has expired") whether the
+    token was CONSUMED by a concurrent ITS process seconds ago or genuinely AGED OUT
+    after 60 idle days. Asserting either one would be a guess, and guessing "expired"
+    is the expensive direction: it points a Tier-2 operator at a full re-auth (a fixed
+    high-capability-class escalation to Seth) for what is usually a self-healing race.
+    So state both, and hand over the one piece of local evidence that separates them.
+    """
+    return (
+        f"Box REJECTED the refresh token (invalid_grant): {exc}. Box uses identical "
+        "wording for a token CONSUMED by a concurrent ITS process (single-use tokens; "
+        "common and self-healing) and one genuinely AGED OUT after 60 idle days — the "
+        f"response cannot tell them apart. Local evidence: {_last_refresh_note()}. "
+        "A recent rotation means a lost race (ITS retries once automatically); a ~60-day-"
+        "old or absent one means re-auth via scripts/setup_box_oauth.py is required "
+        "(escalate to Seth — secrets/auth is a fixed high-capability class)."
+    )
+
+
+def _oauth_error(exc: BoxOAuthException) -> BoxAuthError:
+    """Translate a boxsdk auth-layer failure onto the typed hierarchy.
+
+    The ONE place `BoxOAuthException` becomes ours, so the `invalid_grant` discrimination
+    (and its retry eligibility) cannot be forgotten at one of the three raise sites.
+    """
+    if _is_invalid_grant(exc):
+        return BoxRefreshTokenRejectedError(_rejection_message(exc))
+    return BoxAuthError(f"OAuth exchange failed: {exc}")
+
+
+# Re-entrancy guard for the retry decorator. Thread-local because ITS runs several
+# Box-touching daemons and nothing forbids a threaded caller; the flag must not leak
+# across threads and suppress a genuine retry.
+_retry_guard = threading.local()
+
+def _retry_once_on_rejected_refresh_token[F: Callable[..., Any]](fn: F) -> F:
+    """Retry a Box operation ONCE after an `invalid_grant`, on a freshly-read token.
+
+    §42 — why this exists and why it is shaped this way.
+
+    The failure it absorbs (issue #26, observed live 2026-08-10, three times in one day,
+    self-healing on retry every time): refresh tokens are single-use and the persist lock
+    does not cover the exchange, so two overlapping ITS processes can both spend token R.
+    The loser is rejected. By the time it is rejected, the WINNER has already persisted a
+    newer valid token to Keychain — which is precisely why one retry is sufficient and why
+    `_reset_client()` (not a bare re-call) is the operative step: the retry must go back to
+    Keychain rather than reuse the cached OAuth2's in-memory copy of the dead token.
+
+    Applied ONLY to the public functions that call `get_client()` directly. Composite
+    helpers (`get_folder_by_path`, `find_child_folder`, `canonical_job_path`) reach Box
+    exclusively through those, so they inherit the behaviour without stacking a second
+    retry layer.
+
+    ONE retry, enforced two ways: a second rejection re-raises (a genuinely dead token
+    must not be retried into a loop against Box's auth endpoint), and the thread-local
+    re-entrancy guard makes a nested decorated call pass straight through — without it,
+    `get_or_create_folder` → `list_folder` would give a single lost race 2 retries, and a
+    deeper chain 2ⁿ, turning one rejection into a burst of token exchanges that would
+    WORSEN the very race being fixed.
+
+    Retrying the whole operation is safe: `invalid_grant` is raised during the token
+    exchange, i.e. BEFORE the wrapped API request is accepted by Box (the exchange either
+    precedes the first request of the process, or follows a 401 that Box already refused),
+    so no partial side effect can exist at this point. Bodies are re-entrant by
+    construction — `upload_bytes` builds its `BytesIO` inside the call, not outside.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if getattr(_retry_guard, "active", False):
+            # Nested inside an already-guarded call: the OUTERMOST frame owns the single
+            # retry. See the 2ⁿ note above.
+            return fn(*args, **kwargs)
+        _retry_guard.active = True
+        try:
+            try:
+                return fn(*args, **kwargs)
+            except BoxRefreshTokenRejectedError:
+                _reset_client()
+                result = fn(*args, **kwargs)
+        finally:
+            _retry_guard.active = False
+        # Reached only when the retry SUCCEEDED, which retroactively proves the first
+        # rejection was a CONSUMED token and not an aged-out one — the one moment the
+        # ambiguity in `_rejection_message` is actually resolvable. Record it (never
+        # silent) so a rising race rate is visible instead of being absorbed invisibly.
+        from .error_log import Severity, log
+        log(
+            Severity.WARN,
+            "shared.box_client",
+            f"Box refresh token was CONSUMED by a concurrent ITS process during "
+            f"{fn.__name__}() — NOT expired. Re-read the rotated token from Keychain and "
+            f"the retry SUCCEEDED. Self-healed; no action needed. Repeated occurrences "
+            f"mean Box-touching daemons are overlapping more often.",
+            error_code="box_refresh_token_consumed_retry",
+        )
+        return result
+
+    return wrapper  # type: ignore[return-value]
+
+
 # ---- Retry / error translation -------------------------------------------
 
 
@@ -289,9 +493,13 @@ def _call(operation, *args, **kwargs):  # type: ignore[no-untyped-def]
         try:
             return operation(*args, **kwargs)
         except BoxOAuthException as e:
-            # Auth-layer failure — token exchange itself failed. Don't
-            # retry; the refresh token is bad.
-            raise BoxAuthError(f"OAuth exchange failed: {e}") from e
+            # Auth-layer failure — the token exchange itself failed. NOT retried here:
+            # the operation is already BOUND to the stale client's session, so re-running
+            # it would re-spend the same dead token. An `invalid_grant` becomes a
+            # BoxRefreshTokenRejectedError, which the public function's
+            # `_retry_once_on_rejected_refresh_token` wrapper retries after dropping the
+            # cached client — the only layer where a fresh Keychain read is possible.
+            raise _oauth_error(e) from e
         except BoxAPIException as e:
             if e.status not in (429, 503):
                 raise _translate(e) from e
@@ -311,6 +519,7 @@ def _call(operation, *args, **kwargs):  # type: ignore[no-untyped-def]
 # ---- Public API ----------------------------------------------------------
 
 
+@_retry_once_on_rejected_refresh_token
 def upload_file(
     folder_id: str,
     file_path: str,
@@ -342,6 +551,7 @@ def upload_file(
     return {"id": uploaded.id, "name": uploaded.name, "size": uploaded.size}
 
 
+@_retry_once_on_rejected_refresh_token
 def upload_bytes(folder_id: str, name: str, content: bytes) -> dict[str, Any]:
     """Upload in-memory bytes as a Box file. Returns minimal file metadata.
 
@@ -366,7 +576,7 @@ def upload_bytes(folder_id: str, name: str, content: bytes) -> dict[str, Any]:
     try:
         uploaded = client.folder(folder_id).upload_stream(io.BytesIO(content), name)
     except BoxOAuthException as exc:
-        raise BoxAuthError(f"OAuth exchange failed: {exc}") from exc
+        raise _oauth_error(exc) from exc
     except BoxAPIException as exc:
         raise _translate(exc) from exc
     except Exception as exc:  # noqa: BLE001 — honor the module's "every failure → BoxError" contract
@@ -388,6 +598,7 @@ def _find_child_file(parent_folder_id: str, name: str) -> str | None:
     return None
 
 
+@_retry_once_on_rejected_refresh_token
 def upload_bytes_or_new_version(folder_id: str, name: str, content: bytes) -> dict[str, Any]:
     """Upload bytes as `name`; if a same-named file already exists, upload a NEW
     Box VERSION of it instead of failing.
@@ -418,7 +629,7 @@ def upload_bytes_or_new_version(folder_id: str, name: str, content: bytes) -> di
         try:
             updated = client.file(existing_id).update_contents_with_stream(io.BytesIO(content))
         except BoxOAuthException as exc:
-            raise BoxAuthError(f"OAuth exchange failed: {exc}") from exc
+            raise _oauth_error(exc) from exc
         except BoxAPIException as exc:
             raise _translate(exc) from exc
         except Exception as exc:  # noqa: BLE001 — honor "every failure → BoxError"
@@ -426,12 +637,14 @@ def upload_bytes_or_new_version(folder_id: str, name: str, content: bytes) -> di
         return {"id": str(updated.id), "name": updated.name, "size": updated.size}
 
 
+@_retry_once_on_rejected_refresh_token
 def download_file(file_id: str) -> bytes:
     """Return the raw bytes of a Box file."""
     client = get_client()
     return _call(client.file(file_id).content)
 
 
+@_retry_once_on_rejected_refresh_token
 def list_folder(folder_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
     """List items (files + folders) in a Box folder.
 
@@ -503,6 +716,7 @@ def find_child_folder(parent_folder_id: str, name: str) -> str | None:
     return None
 
 
+@_retry_once_on_rejected_refresh_token
 def get_or_create_folder(parent_folder_id: str, name: str) -> str:
     """Find a direct child folder named `name` under `parent_folder_id`; create
     it if absent. Idempotent find-or-create. Returns the child folder ID.
@@ -534,6 +748,7 @@ def get_or_create_folder(parent_folder_id: str, name: str) -> str:
         raise
 
 
+@_retry_once_on_rejected_refresh_token
 def move_folder(
     folder_id: str, new_parent_folder_id: str, *, new_name: str | None = None
 ) -> dict[str, Any]:
@@ -591,6 +806,7 @@ def move_folder(
     }
 
 
+@_retry_once_on_rejected_refresh_token
 def search(
     query: str,
     *,
@@ -615,6 +831,7 @@ def search(
     return [{"id": item.id, "name": item.name, "type": item.type} for item in results]
 
 
+@_retry_once_on_rejected_refresh_token
 def get_file_metadata(file_id: str) -> dict[str, Any]:
     """Return basic file metadata (`id`, `name`, `size`, `modified_at`)."""
     client = get_client()

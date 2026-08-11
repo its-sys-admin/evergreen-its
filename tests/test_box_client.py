@@ -281,17 +281,136 @@ def test_box_api_error_translated_by_status(mocker, status, expected):
 def test_box_oauth_exception_surfaces_as_box_auth_error(mocker):
     """Auth-layer failures (token exchange itself) MUST surface as
     BoxAuthError regardless of HTTP status — they indicate the refresh
-    token is bad and re-running setup_box_oauth.py is the recovery."""
+    token is bad and re-running setup_box_oauth.py is the recovery.
+
+    Uses a NON-`invalid_grant` body deliberately: `invalid_grant` now has its own
+    subtype + retry (see the section below), and this test guards the GENERIC path.
+    """
     _, _, instance = _install_mocked_sdk(mocker)
 
     # BoxOAuthException requires status + message kwargs.
     instance.file.return_value.content.side_effect = BoxOAuthException(
         status=400,
-        message="invalid_grant",
+        message="invalid_client",
     )
 
     with pytest.raises(BoxAuthError, match="OAuth exchange failed"):
         box_client.download_file("123")
+
+
+# ---- invalid_grant: the consumed-token race (#26) -------------------------
+#
+# THE INCIDENT (2026-08-10, three times in one day, self-healing on retry every time).
+# Box refresh tokens are single-use and `_store_tokens`'s lock serializes the PERSIST,
+# not the HTTP exchange — so two overlapping ITS processes can both spend token R. The
+# loser is rejected with `invalid_grant`, for which Box uses the SAME wording as a
+# genuinely aged-out 60-day token. That made a transient race look like the one failure
+# whose documented remedy is a full re-auth (a fixed high-capability-class escalation).
+#
+# The PREMISE this rests on, verified in code before it was written: a retry only helps
+# if it re-reads Keychain. `get_client()` is a process-wide lazy singleton whose OAuth2
+# holds the refresh token IN MEMORY, so a bare re-call re-spends the dead token. The
+# first test below is the one that proves the fix is real rather than decorative — it
+# fails if `_reset_client()` is removed even though the retry itself still happens.
+
+
+def _invalid_grant() -> BoxOAuthException:
+    """Box's real shape: code='invalid_grant', message=the expiry-flavoured description."""
+    return BoxOAuthException(
+        status=400, message="Refresh token has expired", code="invalid_grant"
+    )
+
+
+def test_invalid_grant_retries_once_after_rereading_the_rotated_token(mocker):
+    """The winner's newer token is in Keychain; the retry must go back and get it."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    reads: list[str] = []
+
+    def _secret(name):
+        reads.append(name)
+        # The rotated value the WINNING process persisted, visible only on a re-read.
+        return f"{name}-v{reads.count(name)}"
+
+    mocker.patch("shared.box_client.keychain.get_secret", side_effect=_secret)
+    mocker.patch("shared.error_log.log")
+    instance.file.return_value.content.side_effect = [_invalid_grant(), b"OK-bytes"]
+
+    assert box_client.download_file("123") == b"OK-bytes"
+    # Two Keychain reads of the refresh token => the client really was rebuilt.
+    assert reads.count(box_client.KC_REFRESH_TOKEN) == 2
+
+
+def test_invalid_grant_retry_is_exactly_once(mocker):
+    """A genuinely dead token must not be looped against Box's auth endpoint."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    instance.file.return_value.content.side_effect = [
+        _invalid_grant(), _invalid_grant(), b"never reached",
+    ]
+
+    with pytest.raises(box_client.BoxRefreshTokenRejectedError):
+        box_client.download_file("123")
+    assert instance.file.return_value.content.call_count == 2
+
+
+def test_rejection_message_never_claims_the_token_expired(mocker):
+    """Operator-facing wording contract: Box cannot tell CONSUMED from AGED-OUT, so
+    neither may we. Asserting 'expired' points a Tier-2 operator at an unnecessary
+    re-auth — a fixed high-capability-class escalation — for a self-healing race."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    instance.file.return_value.content.side_effect = _invalid_grant()
+
+    with pytest.raises(box_client.BoxRefreshTokenRejectedError) as exc:
+        box_client.download_file("123")
+
+    msg = str(exc.value)
+    assert "CONSUMED" in msg and "AGED OUT" in msg
+    assert "rejected the refresh token" in msg.lower()
+    # It may QUOTE Box's own description, but must not assert expiry in its own voice.
+    assert "token has expired." not in msg.replace("Refresh token has expired", "")
+
+
+def test_successful_retry_records_the_race_and_names_it_not_expired(mocker):
+    """Never-silent: a self-healed race is the one moment the ambiguity IS resolved,
+    so it gets recorded — a rising rate of these is a real signal."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    logged = mocker.patch("shared.error_log.log")
+    instance.file.return_value.content.side_effect = [_invalid_grant(), b"OK-bytes"]
+
+    box_client.download_file("123")
+
+    call = next(
+        c for c in logged.call_args_list
+        if c.kwargs.get("error_code") == "box_refresh_token_consumed_retry"
+    )
+    assert "CONSUMED" in call.args[2] and "NOT expired" in call.args[2]
+
+
+def test_nested_decorated_calls_retry_once_in_total(mocker):
+    """Re-entrancy guard. `get_or_create_folder` calls `list_folder`; both are wrapped.
+    Without the guard one lost race becomes 2 retries here (and 2**n on a deeper chain),
+    turning a single rejection into a burst of token exchanges — worsening the very race
+    being fixed."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    instance.folder.return_value.get_items.side_effect = [
+        _invalid_grant(), _invalid_grant(), []
+    ]
+
+    with pytest.raises(box_client.BoxRefreshTokenRejectedError):
+        box_client.get_or_create_folder("0", "Whatever")
+    assert instance.folder.return_value.get_items.call_count == 2
+
+
+def test_a_non_invalid_grant_oauth_failure_is_not_retried(mocker):
+    """Only the consumed-token race is retryable; a bad client secret is not."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    instance.file.return_value.content.side_effect = BoxOAuthException(
+        status=400, message="The client credentials are invalid", code="invalid_client"
+    )
+
+    with pytest.raises(BoxAuthError) as exc:
+        box_client.download_file("123")
+    assert not isinstance(exc.value, box_client.BoxRefreshTokenRejectedError)
+    assert instance.file.return_value.content.call_count == 1
 
 
 # ---- Retry behavior on 429/503 -------------------------------------------

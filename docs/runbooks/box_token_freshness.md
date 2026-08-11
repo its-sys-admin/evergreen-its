@@ -22,42 +22,72 @@ code or touch secrets. The §42 code-reader rationale lives in
 
 ## Purpose
 
-What to do when the watchdog reports the **Box OAuth refresh token is going
-stale** (A3 — **Check P**), or when `box_oauth_refresh_lock_timeout` /
+What to do when the watchdog reports the **Box credential is unhealthy** (A3 —
+**Check P**), or when `box_oauth_refresh_lock_timeout` /
 `keychain_write_lock_timeout` WARNs appear. Box rotates the refresh token on every
 exchange and it **expires 60 days from last use**; once expired, **every** Box
-operation (filing PDFs, week folders, photo uploads) fails until the token is
-re-seeded. Check P turns the silent erosion into a LOUD signal: **WARN at 50 days
-idle** (10-day buffer) and **CRITICAL at 58 days** (2-day buffer). Re-seeding the
-token (`scripts/setup_box_oauth.py`) is a **secrets / auth** operation — a **FIXED
-high-capability-class category** that **always escalates to the Developer-Operator
-(Seth)**. The Successor-Operator's job is to **recognize, confirm, and escalate** —
-NOT to touch the token.
+operation (filing PDFs, week folders, photo uploads, the job archive) fails until the
+token is re-seeded. Re-seeding the token (`scripts/setup_box_oauth.py`) is a
+**secrets / auth** operation — a **FIXED high-capability-class category** that
+**always escalates to the Developer-Operator (Seth)**. The Successor-Operator's job is
+to **recognize, confirm, and escalate** — NOT to touch the token.
+
+**Check P reports TWO independent signals, and which one fired changes what you do.**
+
+| Signal | What it is | What it means |
+|---|---|---|
+| **Live read** | An authenticated Box call made by the check itself, once a day | The **present-tense** verdict. A rejection means Box is down for ITS *right now*. |
+| **Marker age** | How long since this host last rotated the token | The **early warning**, ahead of the 60-day wall. WARN at 50 days idle, CRITICAL at 58. |
+
+The live read was added 2026-08-10 (issue #26) because the marker alone cannot see a
+dead credential: Check P logged `Box OAuth refresh token fresh (idle 2d)` **every hour
+straight through a window in which live Box calls were failing**. The marker records
+when ITS last *succeeded*, not whether the credential works now. Treat any message
+still shaped like `Box OAuth refresh token fresh (idle Nd)` as pre-#26 output.
+
+**Check P runs once a day, not hourly.** The live read spends a single-use refresh
+token each time; running it hourly would add 24 token exchanges a day and increase the
+rotation collisions described below. A dead credential does not repair itself, so daily
+detection loses nothing.
 
 ## Procedure
 
 ### Symptom
 
-- A **watchdog WARN/CRITICAL** (Check P) whose message contains
-  `Box OAuth refresh token idle <N>d` (or `Box OAuth refresh marker absent`).
-- In **ITS_Errors**: a `Script = scripts.watchdog` row at WARN/CRITICAL naming the
-  Box token idle days.
+- A **watchdog WARN/CRITICAL** (Check P) beginning `Box credential DEAD:`,
+  `Box token AUTHENTICATES NOW but …`, `Box liveness probe …`, or naming a
+  `marker idle <N>d` / `marker ABSENT`.
+- In **ITS_Errors**: a `Script = scripts.watchdog` row at WARN/CRITICAL carrying that
+  message.
 - Box-writing daemons may also be failing outright: `BoxAuthError` mentioning
   `setup_box_oauth.py`, and filing/compile rows routing to the Review Queue.
-- Possibly `box_oauth_refresh_lock_timeout` or `keychain_write_lock_timeout` **WARN**
-  rows in ITS_Errors (lock contention — see below).
+- Possibly `box_oauth_refresh_lock_timeout`, `keychain_write_lock_timeout`, or
+  `box_refresh_token_consumed_retry` **WARN** rows in ITS_Errors (see below — none of
+  these is an outage).
 
 ### What the Successor-Operator checks
 
-1. **Which signal is it?**
-   - **`idle >= 58d` CRITICAL** → the token is days from death. Urgent — escalate now.
-   - **`idle >= 50d` WARN** → 10-day runway. Confirm the Box-writing daemons are
-     actually running (Check C / ITS_Daemon_Health rows advancing). If a daemon is
-     simply down, the token isn't being exercised — restarting it (a low-class
-     daemon repair) makes the next refresh stamp the marker and clears Check P.
-   - **`marker absent` WARN** right after A3 shipped is expected until the first
-     refresh writes the marker; a **persistent** absence means Box has never authed
-     on this host → escalate (needs `setup_box_oauth.py`).
+1. **Which signal is it?** Read the first few words of the Check P message.
+   - **`Box credential DEAD` CRITICAL** → a live authenticated read was REJECTED, and
+     it already survived one automatic retry on a freshly-read token. Every Box path in
+     ITS is down **now**. **Escalate immediately** — this needs `setup_box_oauth.py`.
+     Note the marker age is explicitly *not* evidence of health here; ignore it.
+   - **`Box token AUTHENTICATES NOW but marker idle …` WARN** → the credential
+     **works** — this is not an expiry and does **not** need a re-auth. The marker is
+     stale because either the marker write is failing or the host was dark. Confirm the
+     Box-writing daemons are running (Check C / ITS_Daemon_Health rows advancing);
+     restarting a stopped one (a low-class daemon repair) makes the next refresh stamp
+     the marker and clears the WARN.
+   - **`Box liveness probe SKIPPED` (severity = the marker's)** → Box was unreachable or
+     rate-limited this run, so there is **no** present-tense verdict. This is not
+     evidence of a problem. Act on the marker half only, and expect the next daily run
+     to give a real verdict.
+   - **`Box liveness probe could not authenticate` WARN** → credentials missing from
+     Keychain, or the read was refused on scope. Needs a human, but is **not** an
+     expired refresh token — do not report it as one.
+   - **`marker ABSENT` WARN** with a healthy live read means the marker has simply never
+     been written on this host; a **persistent** absence *with* a failing read means Box
+     has never authed here → escalate (needs `setup_box_oauth.py`).
 2. **Recent host outage?** A multi-day host-down window is the usual cause of idle
    growth. Note the window for Seth's context.
 3. **Lock-timeout WARNs (`*_lock_timeout`)?** These are **fail-open** by design — the
@@ -66,6 +96,14 @@ NOT to touch the token.
    OS releases the flock when the holding process exits), so there is nothing to
    "clear." Recurring timeouts mean two daemons genuinely overlapped on a write
    (rare) — note it for Seth; do not delete state files.
+4. **`box_refresh_token_consumed_retry` WARNs?** **Nothing is broken — this is the
+   system reporting a self-repair.** Box refresh tokens are single-use, so two ITS
+   daemons whose cycles overlap can both try to spend the same one; the loser is
+   rejected, ITS re-reads the newer token the winner just saved, and retries once —
+   which succeeds. The row exists so the rate is visible, not because anyone must act.
+   **Do not read these as a token problem, and do not escalate for a re-auth.** Only
+   mention it to Seth if the rate climbs sharply (many per day), which would mean the
+   Box-touching daemons are overlapping far more than usual.
 
 ### The Claude prompt or UI action
 
@@ -73,11 +111,18 @@ There is **no low-class repair that touches the token**. For the WARN-with-daemo
 case, restarting the stopped Box-writing daemon (launchd) is the only Tier-2 action,
 and only if Check C shows it down. Otherwise confirm + escalate:
 
-> "Claude, watchdog Check P reports the Box OAuth refresh token is idle `<N>` days
-> (WARN/CRITICAL in ITS_Errors). Please confirm it's the freshness check (not a
-> transient), check whether the Box-writing daemons are alive (ITS_Daemon_Health /
-> Check C), summarize any recent host outage, and draft the escalation to Seth — the
-> Box token needs re-seeding via setup_box_oauth.py before it expires at 60 days."
+> "Claude, watchdog Check P fired for Box. Please quote its message verbatim from
+> ITS_Errors and tell me which of the two signals fired — the LIVE authenticated read
+> or the marker age. If the live read was REJECTED, confirm that and draft the
+> escalation to Seth (the Box token needs re-seeding via setup_box_oauth.py). If the
+> live read SUCCEEDED and only the marker is stale, say so plainly — the credential
+> works — then check whether the Box-writing daemons are alive (ITS_Daemon_Health /
+> Check C) and summarize any recent host outage."
+
+Do not paraphrase Check P's verdict when escalating — quote it. "Idle N days" and "the
+live read was rejected" call for completely different responses, and the pre-#26 habit
+of reading marker age as the whole story is exactly what let a dead credential look
+healthy for hours.
 
 ### Escalate-to-Seth condition
 
@@ -87,6 +132,12 @@ escalates; **Seth re-runs `scripts/setup_box_oauth.py`** (browser OAuth flow) to
 fresh refresh token into Keychain. A CRITICAL that recurs after a claimed fix is still
 Seth's — do not loop on it. (Restarting a merely-stopped Box daemon is the one Tier-2
 action; the credential re-seed is Tier-3.)
+
+**What does NOT need escalating:** a `Box token AUTHENTICATES NOW` WARN (the credential
+works), a `probe SKIPPED` run (no verdict was taken), or
+`box_refresh_token_consumed_retry` rows (a race that already healed itself). Escalating
+those spends Seth's attention on a working system — and, before #26, the reverse error
+was routine: a genuinely dead credential reported as "fresh".
 
 Both-rule (Op Stds §44): "recognize + confirm + escalate" (and, at most, restart a
 down daemon) is the Tier-2 action; the token re-seed (secrets) is high-class → Tier 3.

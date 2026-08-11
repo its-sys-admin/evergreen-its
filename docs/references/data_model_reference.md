@@ -413,7 +413,13 @@ OAuth 2.0 User Authentication (`shared/box_client.py`) as a real Box user (opera
 sandbox; a dedicated ITS user at Phase 1.5 cutover). Audit trail and file ownership attribute to that
 user. Refresh tokens **rotate on every exchange** and expire 60 days from last use — the critical
 invariant is that `_store_tokens` persist the new token to Keychain synchronously, or ITS dies in
-~60 days. Watchdog **Check P** WARNs at 50 days idle / CRITICAL at 58.
+~60 days. Because tokens are single-use and the persist lock does not cover the exchange, two
+overlapping ITS processes can both spend one — the loser is rejected with `invalid_grant`, which
+`box_client` absorbs by re-reading Keychain (where the winner's newer token now sits) and retrying
+**once**. Watchdog **Check P** carries two signals: a **live authenticated Box read** (daily — the
+probe itself spends a refresh token, so it is deliberately not hourly) and the freshness **marker
+age**, WARN at 50 days idle / CRITICAL at 58. A live rejection is CRITICAL regardless of marker age;
+a successful live read caps a stale marker at WARN, since it proves the credential is not expired.
 
 ### Project folder topology
 

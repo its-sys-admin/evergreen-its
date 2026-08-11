@@ -11,6 +11,61 @@ Resolved/closed/delivered/superseded entries moved out of the live `docs/tech_de
 
 > See `docs/tech_debt.md` for the live (open) set.
 
+## [RESOLVED 2026-08-10 — #26] `box_client._store_tokens`'s refresh lock covers the Keychain persist, not the token exchange — and watchdog Check P can't see the difference [OPEN 2026-08-10]
+
+Filed as GitHub issue #26 this session; recorded here as the execution-repo debt ledger entry.
+
+`shared/box_client.py:161-197` (`_store_tokens`, the boxsdk `store_tokens` callback) takes a cross-process
+sidecar lock (`state_io.with_path_lock(_BOX_OAUTH_REFRESH_LOCK_ANCHOR)`) around the Keychain persist +
+freshness-marker write. The docstring is explicit about the scope: *"boxsdk owns the token exchange
+itself, so this serializes the persist seam ... not the HTTP exchange."* Box rotates the refresh token on
+every exchange (single-use); two ITS processes that both decide to refresh in the same window can each
+independently call boxsdk's exchange before either persists, so the second exchange can consume a token
+the first has already invalidated server-side — a race the lock cannot prevent because it starts one step
+too late.
+
+Compounding this: **watchdog Check P** (`scripts/watchdog._check_box_token_freshness`) is purely
+time-based — it reads `box_client.BOX_TOKEN_REFRESH_MARKER`'s `last_refresh_utc` and reports `INFO`
+"fresh (idle Nd)" as long as the marker is recent, with **no live auth call**. A host whose Box identity
+has already failed (e.g. `invalid_grant` from exactly the race above) can sit on a marker written before
+the failure and have Check P report "fresh" indefinitely — the check confirms the marker is recent, not
+that Box actually works.
+
+**Fix (not scoped this session):** (a) either serialize the exchange itself (e.g. lock around the whole
+refresh-triggering call site, not just the callback) or accept the race and add exchange-failure
+detection/retry; (b) have Check P make (or piggyback on) a cheap live Box call — even a HEAD/whoami — on
+some cadence, rather than trusting marker age alone.
+
+**Tag:** `field_ops`, `box`, `oauth`, `race-condition`, `watchdog`, `medium`.
+
+**Revisit when:** next Box-auth incident, or a concurrency/multi-daemon-on-Box hardening pass. See issue #26.
+
+Surfaced: 2026-08-10 session close, following the Track 6 archive activation drill.
+
+**RESOLVED (#26).** Both halves of the proposed fix landed, taking option (b) on each:
+
+- **(a) the race** — the exchange was NOT serialized. Widening the lock to cover boxsdk's HTTP exchange
+  would mean holding a cross-process lock across a network round-trip on every daemon's first Box call,
+  and it still could not make a single-use token safe against a process that read it before the lock was
+  taken. Instead callers became tolerant of a lost race: `_retry_once_on_rejected_refresh_token` wraps
+  every public `box_client` fn that calls `get_client()` directly, and on `invalid_grant` it calls
+  `_reset_client()` (dropping the process-wide singleton, so the retry RE-READS Keychain rather than
+  re-spending the cached OAuth2's in-memory copy of the dead token) and retries exactly once. A
+  thread-local guard stops nested wrapped calls from compounding one race into 2ⁿ exchanges. Matches the
+  observed recovery: three `invalid_grant`s on 2026-08-10 all self-healed on retry.
+- **(b) Check P** — now makes a real authenticated Box read (`list_folder("0", limit=1)`) alongside the
+  marker read, and reports which signal fired. A live rejection is CRITICAL regardless of marker age; a
+  successful live read caps a stale marker at WARN (it is positive proof the 60-day wall was not hit).
+  The check moved to the **daily** tier: the probe spends a single-use refresh token per run, so an
+  hourly probe would have worsened the very race (a) absorbs.
+
+Operator-facing wording is part of the fix: Box uses identical text for a CONSUMED and an AGED-OUT
+token, so `BoxRefreshTokenRejectedError` states both causes plus the local marker evidence and never
+asserts "expired" — the old wording pointed a Tier-2 operator at a full re-auth (a fixed high-class
+escalation) for what is usually a self-healing race. A retry that succeeds is the one moment the
+ambiguity resolves, and records `box_refresh_token_consumed_retry` (WARN) so a rising race rate stays
+visible. §43 runbook `docs/runbooks/box_token_freshness.md` rewritten around the two-signal split.
+
 ## [RESOLVED 2026-07-12 — #538] Subcontracts — SC-S3b Exhibit A blocked on the `exhibit_trade_templates` config artifact [OPEN 2026-07-11]
 
 ADR-0003 scopes the subcontract package as Subcontract body + **Exhibit A** (Art I/III/IV/VI fixed +
