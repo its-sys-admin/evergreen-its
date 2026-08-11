@@ -2291,37 +2291,6 @@ is addressed — the two fixes are complementary, not redundant.
 
 Surfaced: 2026-08-10 session close, following the Track 6 archive activation drill. See issue #27.
 
-## [OPEN 2026-08-10, medium] `box_client._store_tokens`'s refresh lock covers the Keychain persist, not the token exchange — and watchdog Check P can't see the difference
-
-Filed as GitHub issue #26 this session; recorded here as the execution-repo debt ledger entry.
-
-`shared/box_client.py:161-197` (`_store_tokens`, the boxsdk `store_tokens` callback) takes a cross-process
-sidecar lock (`state_io.with_path_lock(_BOX_OAUTH_REFRESH_LOCK_ANCHOR)`) around the Keychain persist +
-freshness-marker write. The docstring is explicit about the scope: *"boxsdk owns the token exchange
-itself, so this serializes the persist seam ... not the HTTP exchange."* Box rotates the refresh token on
-every exchange (single-use); two ITS processes that both decide to refresh in the same window can each
-independently call boxsdk's exchange before either persists, so the second exchange can consume a token
-the first has already invalidated server-side — a race the lock cannot prevent because it starts one step
-too late.
-
-Compounding this: **watchdog Check P** (`scripts/watchdog._check_box_token_freshness`) is purely
-time-based — it reads `box_client.BOX_TOKEN_REFRESH_MARKER`'s `last_refresh_utc` and reports `INFO`
-"fresh (idle Nd)" as long as the marker is recent, with **no live auth call**. A host whose Box identity
-has already failed (e.g. `invalid_grant` from exactly the race above) can sit on a marker written before
-the failure and have Check P report "fresh" indefinitely — the check confirms the marker is recent, not
-that Box actually works.
-
-**Fix (not scoped this session):** (a) either serialize the exchange itself (e.g. lock around the whole
-refresh-triggering call site, not just the callback) or accept the race and add exchange-failure
-detection/retry; (b) have Check P make (or piggyback on) a cheap live Box call — even a HEAD/whoami — on
-some cadence, rather than trusting marker age alone.
-
-**Tag:** `field_ops`, `box`, `oauth`, `race-condition`, `watchdog`, `medium`.
-
-**Revisit when:** next Box-auth incident, or a concurrency/multi-daemon-on-Box hardening pass. See issue #26.
-
-Surfaced: 2026-08-10 session close, following the Track 6 archive activation drill.
-
 ## [OPEN 2026-08-10, low] `tests/test_state_io.py::test_concurrent_writers_lock_serializes_overlap` is a flaky timing test
 
 Observed both fail and pass on the **identical commit**, back to back, this session — a genuine timing

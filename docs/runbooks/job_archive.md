@@ -79,6 +79,40 @@ read the row's full Description first and confirm with Seth.
 
 ---
 
+## Symptom 0 — a watchdog **Check X** alert: "Job archive(s) not progressing"
+
+**What you see.** A WARN (or, on a stall that persists, CRITICAL) `ITS_Errors` row from Script
+`scripts.watchdog` whose message begins **"Job archive(s) not progressing."** It names each job by
+`job_id`, with its direction, state, attempt count and age.
+
+**Read the message first — it tells you which symptom below you are in.** Check X reports two
+different faults and they have different repairs:
+
+| The message says | What it means | Go to |
+|---|---|---|
+| **`N STOPPED (partial/failed …)`** | The relocation ran and stopped part-way. **Terminal — it will never retry on its own.** | Symptom 2 (`partial`) or Symptom 3 (`failed`) |
+| **`N STUCK in the queue past …`** | The request was raised and nothing ever picked it up. | Symptom 1 — and read the gate clause in the message, it usually names the cause outright |
+
+The message also states the archive pass's gate: either **"LIKELY CAUSE: the archive pass is GATED
+OFF"** (with the exact `ITS_Config` row) or **"The archive pass IS enabled, so the gate is not the
+cause"**. Trust that line — it is read from the same accessor the daemon itself uses, so it cannot
+disagree with what the daemon is doing.
+
+**Why this check exists.** Until 2026-08-10 there was **no** detector for any of this. A job parked
+at `requested` was invisible to every alerting surface, and the portal's own display of that state
+is a *green* banner reading "Waiting for the office Mac to pick this up" — honest, reassuring, and
+it never escalates. `JOB-000030` sat that way for hours and was found only because the operator
+asked why the button had done nothing.
+
+**Cadence.** Check X runs on the watchdog's **daily** tier, so expect up to a day between the stall
+and the alert. Both faults are standing conditions that wait for a human anyway. Severity climbs on
+a capped ladder — WARN each day, CRITICAL on the 3rd consecutive day and then at widening intervals
+— so a long-ignored stall keeps re-notifying without flooding `ITS_Errors` with rows that cannot be
+rotated away.
+
+**Nothing to repair here.** Check X only observes; it never advances or retries an archive. The
+repair is whichever symptom below the message points at.
+
 ## Symptom 1 — "I pressed Archive and nothing is happening"
 
 **What you see.** The job's Archive card sits on **"Archiving… Waiting for the office Mac to pick
@@ -88,6 +122,9 @@ no error anywhere — no `ITS_Errors` row, no Review-Queue row, no alert email.
 **This is the 2026-08-10 incident**, and the silence is the whole point of it: a pass whose gate is
 off does not run, does not log, and cannot report anything. The job is not lost — it is sitting in
 the queue exactly as requested, waiting for something to service it.
+
+**Since 2026-08-10 the silence is bounded:** watchdog **Check X** now raises this within a day (see
+Symptom 0). It does not fix anything — it just means you no longer have to notice on your own.
 
 **What the Successor-Operator checks, in this order:**
 
@@ -260,11 +297,12 @@ and it requires deciding which sheets are canonical. Not Tier-2.
 - **The restore direction HAS been drilled live** (2026-08-10, issue #42) — archive → un-archive →
   archive, all containers, folder ids preserved throughout. The one branch still unexercised is the
   live-folder collision below; that specific case is novel → co-resolve with Seth.
-- **"Try again" after a failed un-archive presses *Archive*, not un-archive.** The button on the
-  red card always raises an archive request, and the confirmation modal it opens says so — read it.
-  The result is recoverable, not harmful: the job goes back to fully archived, and the **Un-archive**
-  button reappears once it reads Archived again. But it is not "resume the restore", and pressing it
-  without reading the modal is how an operator convinces themselves the system is fighting them.
+- **"Try again" resumes the direction that failed** — an un-archive after a failed un-archive, an
+  archive after a failed archive. Read the confirmation modal anyway: it names the direction, and
+  that is the cheapest check that the button is about to do what you expect. (Until PR #55 it always
+  raised an *archive* request regardless of direction, which stranded a failed restore with no
+  correct move — issue #54. An older session log or runbook copy saying "Try again presses Archive"
+  was true when written and no longer is.)
 
 ## Symptom 7 — "the archive queue could not be read"
 
@@ -313,6 +351,8 @@ move-only by design, so a destructive "clean it up" path cannot be written. If t
 - `ITS_Daemon_Health` → `fieldops_sync` is OK, and the cycle summary line reads
   `archive complete=1 partial=0 failed=0 capped=0 errors=0`.
 - No `job_archive` rows in `ITS_Errors`.
+- Watchdog **Check X** reports `Job archives healthy: no archives in flight` (or `N archive(s) in
+  flight, all within 0:30:00` while one is legitimately mid-relocation).
 
 A note on the retry cap: the code stops auto-retrying a job after `MAX_ARCHIVE_ATTEMPTS` (20)
 attempts, but in practice a job never gets near it — a `partial` or `failed` leaves the queue on the

@@ -109,6 +109,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+from field_ops import fieldops_sync
 from po_materials import po_review, rfq_review
 from progress_reports import progress_weekly_generate, wpr_review
 from safety_reports import generate_core, portal_poll, weekly_generate, wsr_review
@@ -1697,51 +1698,159 @@ def _check_portal_poll_pending_backlog() -> CheckResult:
 BOX_TOKEN_FRESHNESS_WARN_DAYS = 50
 BOX_TOKEN_FRESHNESS_CRITICAL_DAYS = 58
 
+# Box folder the liveness probe reads, and how many items it asks for. "0" is the
+# authenticated user's ROOT — it always exists for any valid credential, needs no ITS
+# topology to be in place, and cannot 404 for a reason unrelated to auth (which a probe
+# against a named ITS folder could, turning a Box reorg into a false token alarm).
+# limit=1 keeps it to a single bounded page.
+BOX_LIVENESS_PROBE_FOLDER = "0"
+BOX_LIVENESS_PROBE_LIMIT = 1
 
-def _check_box_token_freshness() -> CheckResult:
-    """Check P: Box OAuth refresh token must be exercised inside the 60-day window.
 
-    Reads the freshness marker box_client._store_tokens writes on every persist.
-    Marker absent → WARN ("unknown"): expected briefly right after A3 ships (until
-    the first refresh writes it); a persistent absence means Box has never authed.
+def _probe_box_liveness() -> tuple[str, str]:
+    """Make ONE real authenticated Box read. Returns (verdict, note).
+
+    Verdicts: "alive" | "rejected" (the refresh token itself was refused) | "misconfig"
+    (credentials missing / scope refused — needs a human, but is NOT evidence the refresh
+    token is dead) | "skipped" (transport / rate-limit — never invent an outage).
+
+    §42 — WHY THIS EXISTS. Check P used to read the marker file and nothing else, so it
+    logged "Box OAuth refresh token fresh (idle 2d)" hourly straight through a window in
+    which live Box calls were failing with `invalid_grant` (2026-08-10, issue #26). A
+    staleness proxy cannot observe liveness: the marker says when ITS last SUCCEEDED, not
+    whether the credential works NOW. Since a dead Box token kills every Box path in ITS
+    (safety filing, weekly compile, PO attachments, the archive), "fresh" was the most
+    expensive possible false signal.
+
+    §42 — WHY THE DAILY TIER, NOT HOURLY. This probe is not free and not side-effect-free.
+    The watchdog is a launchd one-shot, so it starts with no access token every run and
+    the probe therefore SPENDS a single-use refresh token to get one. Running it hourly
+    would add 24 extra token exchanges a day, each one a fresh opportunity to collide with
+    portal_poll (60 s) / fieldops_sync / po_poll (90 s) — i.e. it would materially worsen
+    the very rotation race that issue #26's retry exists to absorb. Once a day is enough:
+    the condition being detected (a dead credential) is not transient and does not repair
+    itself. Hence Check P sits in DAILY_ONLY_CHECKS.
+
+    The probe rides `box_client.list_folder`, so it inherits that module's ONE automatic
+    retry on a consumed token — meaning a "rejected" verdict here already survived a
+    fresh-token retry and is a genuine credential failure, not a lost race.
+    """
+    try:
+        box_client.list_folder(
+            BOX_LIVENESS_PROBE_FOLDER, limit=BOX_LIVENESS_PROBE_LIMIT
+        )
+    except box_client.BoxRefreshTokenRejectedError as exc:
+        return "rejected", repr(exc)
+    except box_client.BoxAuthError as exc:
+        # Missing Keychain credentials, or a 401/403 on the read itself. Deterministic
+        # and human-fixable, but NOT proof the refresh token aged out — kept distinct so
+        # the message never sends an operator into an unnecessary re-auth.
+        return "misconfig", repr(exc)
+    except box_client.BoxError as exc:
+        # Rate limit / network / anything else transient. Our own inability to reach Box
+        # must never be reported as a dead token.
+        return "skipped", repr(exc)
+    except Exception as exc:  # noqa: BLE001 — a probe must never crash the sweep
+        return "skipped", repr(exc)
+    return "alive", "authenticated Box read succeeded"
+
+
+def _box_marker_verdict() -> tuple[Severity, str]:
+    """The marker-AGE half of Check P: (severity, human summary).
+
+    Kept as its own function because the marker answers a genuinely different question
+    from the liveness probe — it is the EARLY WARNING (idle days trending toward the 60-day
+    wall) whereas the probe is the PRESENT-TENSE verdict. The marker still earns its place
+    after the probe landed: it is the only signal available when the probe is skipped, and
+    it is what catches an approaching idle expiry *before* the credential actually dies.
     """
     marker = box_client.BOX_TOKEN_REFRESH_MARKER
     if not marker.exists():
-        return CheckResult(
+        return (
             Severity.WARN,
-            "Box OAuth refresh marker absent — token freshness unknown. Expected "
-            "briefly right after enabling A3 (until the first refresh writes it); a "
-            "persistent absence means Box has never authed — run "
-            "scripts/setup_box_oauth.py.",
+            "refresh marker ABSENT (no rotation ever recorded on this host)",
         )
     try:
         data = json.loads(marker.read_text())
         last_refresh = datetime.fromisoformat(data["last_refresh_utc"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return CheckResult(
-            Severity.WARN,
-            f"Box OAuth refresh marker unreadable ({exc!r}) — token freshness unknown.",
-        )
+        return Severity.WARN, f"refresh marker UNREADABLE ({exc!r})"
     if last_refresh.tzinfo is None:
         last_refresh = last_refresh.replace(tzinfo=UTC)
     idle_days = (datetime.now(UTC) - last_refresh).days
     if idle_days >= BOX_TOKEN_FRESHNESS_CRITICAL_DAYS:
-        return CheckResult(
+        return (
             Severity.CRITICAL,
-            f"Box OAuth refresh token idle {idle_days}d "
-            f"(>= {BOX_TOKEN_FRESHNESS_CRITICAL_DAYS}) — expires at 60d. Re-run "
-            f"scripts/setup_box_oauth.py NOW or all Box operations will fail "
-            f"(escalate to Seth — secrets/auth, a fixed high-capability-class category).",
+            f"marker idle {idle_days}d (>= {BOX_TOKEN_FRESHNESS_CRITICAL_DAYS}; "
+            f"unusable at 60d)",
         )
     if idle_days >= BOX_TOKEN_FRESHNESS_WARN_DAYS:
+        return (
+            Severity.WARN,
+            f"marker idle {idle_days}d (>= {BOX_TOKEN_FRESHNESS_WARN_DAYS}, "
+            f"approaching the 60d wall)",
+        )
+    return Severity.INFO, f"marker fresh (idle {idle_days}d)"
+
+
+def _check_box_token_freshness() -> CheckResult:
+    """Check P: Box credential health — marker age AND a real authenticated read.
+
+    Two independent signals, reported so the operator can tell which one fired:
+
+      * probe REJECTED           → CRITICAL. The credential is dead RIGHT NOW; every Box
+                                   path in ITS is down. Decisive regardless of the marker.
+      * probe alive, marker bad  → WARN. The token works, so this is NOT an expiry — it is
+                                   the marker write failing or a host that has been dark.
+                                   Never CRITICAL: a successful authenticated read is
+                                   positive proof the 60-day wall has not been hit.
+      * probe alive, marker fine → INFO. Both healthy.
+      * probe skipped            → the marker verdict alone, explicitly labelled as such so
+                                   "no probe data" is never mistaken for "probe passed".
+    """
+    marker_sev, marker_note = _box_marker_verdict()
+    verdict, probe_note = _probe_box_liveness()
+
+    if verdict == "rejected":
+        return CheckResult(
+            Severity.CRITICAL,
+            "Box credential DEAD: a live authenticated Box read was REJECTED "
+            "(invalid_grant, and it already survived one automatic retry on a "
+            f"freshly-read token). Marker says: {marker_note} — note the marker is NOT "
+            "evidence of health here. EVERY Box path in ITS is down (safety filing, "
+            "weekly compile, PO attachments, job archive) until re-auth: run "
+            "scripts/setup_box_oauth.py (escalate to Seth — secrets/auth is a fixed "
+            "high-capability class).",
+            details=probe_note,
+        )
+    if verdict == "misconfig":
         return CheckResult(
             Severity.WARN,
-            f"Box OAuth refresh token idle {idle_days}d "
-            f"(>= {BOX_TOKEN_FRESHNESS_WARN_DAYS}) — approaching the 60d expiry; "
-            f"confirm the Box-writing daemons are running.",
+            "Box liveness probe could not authenticate — credentials missing from "
+            "Keychain, or the read was refused on scope (NOT an expired refresh token; "
+            f"see details). Marker says: {marker_note}.",
+            details=probe_note,
+        )
+    if verdict == "skipped":
+        return CheckResult(
+            marker_sev,
+            f"Box liveness probe SKIPPED (transient — Box unreachable or rate-limited); "
+            f"no present-tense verdict this run. Falling back to marker age only: "
+            f"{marker_note}.",
+            details=probe_note,
+        )
+    # verdict == "alive"
+    if marker_sev is not Severity.INFO:
+        return CheckResult(
+            Severity.WARN,
+            f"Box token AUTHENTICATES NOW (live read OK) but {marker_note}. Not an "
+            "expiry — the live read proves the credential is valid. Suspect the marker "
+            "write in box_client._store_tokens failing, or a host that was dark and has "
+            "only just resumed.",
         )
     return CheckResult(
-        Severity.INFO, f"Box OAuth refresh token fresh (idle {idle_days}d)."
+        Severity.INFO,
+        f"Box credential healthy: live authenticated read OK, {marker_note}.",
     )
 
 
@@ -2801,6 +2910,235 @@ def _check_log_dir_rotation(
     )
 
 
+# ---- Check X: stale / stopped job archives (#25) -------------------------
+#
+# THE GAP THIS CLOSES. The Track 6 job archive is deliberately asynchronous — the portal
+# button records INTENT and `fieldops_sync`'s archive pass relocates the six containers
+# later. That design is right, but it makes "the operator pressed Archive and nothing ever
+# happened" a reachable steady state, and until now NO check covered it: `grep archive
+# scripts/watchdog.py` hit only Check W (log rotation, unrelated). On 2026-08-10
+# `JOB-000030` sat at `requested` with `archive_attempts=0` for hours; nothing fired, and it
+# was found only because the operator asked why the button had done nothing. The portal
+# meanwhile renders the in-flight state as a GREEN `banner--ok` reading "Waiting for the
+# office Mac to pick this up" — honest, reassuring, and it never escalates.
+#
+# TWO distinct failure shapes, and the check must cover both:
+#
+#   1. STUCK IN THE QUEUE (`requested` / `in_progress`). The pass will retry these on its own
+#      every ~90 s, so age is the only signal: past ARCHIVE_STUCK_AFTER something is stopping
+#      it. The commonest cause by far is the pass's gate being OFF, which is why the message
+#      reads the gate and says so — that was literally the 2026-08-10 incident.
+#   2. STOPPED (`partial` / `failed`). These are TERMINAL for the daemon: `/archive-pending`
+#      serves only `requested`/`in_progress`, so a stopped archive LEAVES the queue and
+#      resumes only when a human presses "Try again". MAX_ARCHIVE_ATTEMPTS (20) is
+#      unreachable in practice for the same reason. A `partial` is the worse of the two — the
+#      job's folders are split across Smartsheet and Box — and no amount of waiting fixes it.
+#      Age is NOT a qualifier here; terminal is terminal.
+#
+# Reads the dedicated `/archive-health` route (NOT `/archive-pending`, which by construction
+# cannot see shape 2). Read-only: this check observes the archive, it never advances one.
+#
+# DAILY tier. Both shapes are standing conditions that need a human, not transients an hourly
+# sweep would catch sooner in any useful sense, and the route is a cross-network read.
+#
+# Severity rides the CAPPED re-notify ladder (`sustained_failure.is_escalation_cycle`) for the
+# same reason Check W does: an open CRITICAL is never terminal per `shared/errors_rotation`,
+# so firing CRITICAL on every daily sweep while a job sits unarchived would mint permanent,
+# unrotatable ITS_Errors rows against the 20,000-row cap that has locked out before. WARN each
+# run; CRITICAL on the crossing run then at 2x/4x/8x the threshold (days 3, 6, 12, 24, then
+# every 24). Nothing is silent, and a long unattended wedge still re-notifies.
+ARCHIVE_STUCK_AFTER = timedelta(minutes=30)
+ARCHIVE_STALE_CRITICAL_THRESHOLD = 3
+# Cap the per-job detail so one bad day cannot write a multi-KB summary into ITS_Errors.
+ARCHIVE_REPORT_MAX_JOBS = 8
+_ARCHIVE_STALE_RUNS = sustained_failure.SustainedFailureCounter(
+    STATE_DIR / "archive_stale_runs.json",
+    _SCRIPT,
+    "archive_stale_counter_failed",
+)
+
+_ARCHIVE_STOPPED_STATES = ("partial", "failed")
+_ARCHIVE_QUEUED_STATES = ("requested", "in_progress")
+
+
+def _resolve_fieldops_creds() -> tuple[str, str] | None:
+    """Best-effort (base_url, bearer) for the FIELD-OPS token tier — fail-soft None.
+
+    Reuses fieldops_sync's canonical names so there is exactly ONE definition of where the
+    Worker lives and which token reads the archive routes. Deliberately the fieldops bearer
+    and NOT portal_poll's internal token: `/api/internal/fieldops/*` is a separate privilege
+    tier, and the two are not interchangeable. Never raises — fieldops_sync owns the
+    missing-creds page for its own cycle; duplicating it from the watchdog is alert noise.
+    """
+    try:
+        # The WORKSTREAM here is `safety_reports`, NOT `field_ops`, and the distinction is the
+        # whole reason `fieldops_sync` exports a second constant for it. `get_setting` matches on
+        # (Setting, Workstream) BOTH, and the Worker base-URL row is owned by safety_reports —
+        # portal_poll's copy, shared rather than duplicated. Reading it under `field_ops` raises
+        # SmartsheetNotFoundError, which the except below turns into "creds unresolved", which
+        # makes Check X report INFO and skip FOREVER — a detector that never detects. Verified
+        # against live ITS_Config: `field_ops` → NotFound, `safety_reports` → the real URL.
+        raw = smartsheet_client.get_setting(
+            fieldops_sync.CFG_WORKER_BASE_URL,
+            workstream=fieldops_sync.CFG_WORKER_BASE_URL_WORKSTREAM,
+        )
+    except smartsheet_client.SmartsheetError:
+        return None
+    base_url = raw if isinstance(raw, str) and raw else ""
+    try:
+        bearer = keychain.get_secret(fieldops_sync.KC_FIELDOPS_TOKEN)
+    except keychain.KeychainError:
+        return None
+    if not (base_url and bearer):
+        return None
+    return base_url, bearer
+
+
+def _archive_gate_clause() -> str:
+    """Name the archive pass's gate state when it is the likely cause. Never raises.
+
+    Calls fieldops_sync's OWN accessor rather than re-reading ITS_Config here, so the check
+    reports the gate exactly as the DAEMON resolves it — a second implementation could
+    disagree with the daemon and send an operator to flip a switch that was already on.
+    """
+    try:
+        if not fieldops_sync._archive_enabled():
+            return (
+                f" LIKELY CAUSE: the archive pass is GATED OFF — ITS_Config "
+                f"`{fieldops_sync.CFG_ARCHIVE_ENABLED}` (workstream "
+                f"`{fieldops_sync.WORKSTREAM}`) does not read true, so fieldops_sync is not "
+                f"draining the queue at all. This is the 2026-08-10 failure exactly. Flipping "
+                f"it back on is a low-class Tier-2 config edit."
+            )
+    except Exception as exc:  # noqa: BLE001 — a decoration read must not fail the check
+        return f" (archive gate state unreadable: {exc!r})"
+    return (
+        " The archive pass IS enabled, so the gate is not the cause — see "
+        "docs/runbooks/job_archive.md for the per-container diagnosis."
+    )
+
+
+def _describe_archive_row(row: dict[str, Any], now: datetime) -> str:
+    """One job's line: id, direction, state, attempts, age. The fields an operator acts on."""
+    job_id = row.get("job_id") or "<unknown>"
+    direction = row.get("archive_direction") or "<unset>"
+    state = row.get("archive_state") or "<unset>"
+    attempts = row.get("archive_attempts")
+    requested = _archive_requested_at(row)
+    age = "age unknown" if requested is None else f"{(now - requested).total_seconds() / 3600:.1f}h"
+    return f"{job_id} ({direction}/{state}, attempts={attempts}, {age})"
+
+
+def _archive_requested_at(row: dict[str, Any]) -> datetime | None:
+    """Parse `archive_requested_at` (unix seconds) — None when absent or malformed.
+
+    A row whose timestamp we cannot read is NOT dropped by the caller: for the queued shape
+    it is treated as stuck (we cannot prove it is young, and a missing request time on a
+    queued row is itself abnormal), which keeps the check from going quiet on bad data.
+    """
+    raw = row.get("archive_requested_at")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return None
+    try:
+        return datetime.fromtimestamp(float(raw), tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _check_stale_job_archives() -> CheckResult:
+    """Check X: a job archive that stopped, or was never picked up, must not stay silent.
+
+    Escalates on BOTH shapes (see the block comment above): a request aging in the queue past
+    ARCHIVE_STUCK_AFTER, and any job sitting in the terminal `partial`/`failed` states that
+    never resume without a human. Reports job_id, direction, attempts and age for each, and
+    names the pass's gate when that is the likely cause.
+
+    Fail-soft on transport (INFO — our own inability to reach the Worker is not an archive
+    fault); WARN on a rejected bearer, which is a deterministic misconfig that will not
+    self-heal and which would otherwise make this check silently blind.
+    """
+    creds = _resolve_fieldops_creds()
+    if creds is None:
+        return CheckResult(
+            severity=Severity.INFO,
+            summary=(
+                "archive-health creds unresolved (worker_base_url / fieldops token) — "
+                "skipping; fieldops_sync owns the missing-creds page."
+            ),
+        )
+    base_url, bearer = creds
+    try:
+        rows = portal_client.get_fieldops_archive_health(base_url, bearer)
+    except portal_client.PortalAuthError as exc:
+        return CheckResult(
+            severity=Severity.WARN,
+            summary=(
+                "archive-health bearer REJECTED (401) — deterministic misconfig "
+                "(rotated/missing ITS_PORTAL_FIELDOPS_TOKEN?); stalled archives are "
+                "unobserved until it is fixed."
+            ),
+            details=repr(exc),
+        )
+    except portal_client.PortalTransportError as exc:
+        return CheckResult(
+            severity=Severity.INFO,
+            summary="archive-health unreachable (transient) — no archive data this run.",
+            details=repr(exc),
+        )
+
+    now = datetime.now(UTC)
+    stopped = [r for r in rows if r.get("archive_state") in _ARCHIVE_STOPPED_STATES]
+    queued = [r for r in rows if r.get("archive_state") in _ARCHIVE_QUEUED_STATES]
+    # An unparseable request time counts as stuck — see `_archive_requested_at`.
+    stuck = [
+        r for r in queued
+        if (req := _archive_requested_at(r)) is None or (now - req) >= ARCHIVE_STUCK_AFTER
+    ]
+
+    if not stopped and not stuck:
+        _ARCHIVE_STALE_RUNS.reset()
+        healthy = (
+            f"{len(queued)} archive(s) in flight, all within {ARCHIVE_STUCK_AFTER}"
+            if queued else "no archives in flight"
+        )
+        return CheckResult(
+            severity=Severity.INFO, summary=f"Job archives healthy: {healthy}."
+        )
+
+    n = _ARCHIVE_STALE_RUNS.record()
+    escalate = sustained_failure.is_escalation_cycle(n, ARCHIVE_STALE_CRITICAL_THRESHOLD)
+
+    parts: list[str] = []
+    if stopped:
+        parts.append(
+            f"{len(stopped)} STOPPED (partial/failed — TERMINAL for the daemon: these left "
+            f"the queue and will NOT retry on their own; a `partial` has folders split "
+            f"across Smartsheet and Box). Press \"Try again\" in the portal to requeue: "
+            + "; ".join(
+                _describe_archive_row(r, now) for r in stopped[:ARCHIVE_REPORT_MAX_JOBS]
+            )
+        )
+    if stuck:
+        parts.append(
+            f"{len(stuck)} STUCK in the queue past {ARCHIVE_STUCK_AFTER} (a healthy "
+            f"relocation completes in one ~90s cycle): "
+            + "; ".join(
+                _describe_archive_row(r, now) for r in stuck[:ARCHIVE_REPORT_MAX_JOBS]
+            )
+            + _archive_gate_clause()
+        )
+
+    return CheckResult(
+        severity=Severity.CRITICAL if escalate else Severity.WARN,
+        summary="Job archive(s) not progressing. " + " | ".join(parts),
+        details=(
+            f"consecutive daily sweeps with a stalled archive: {n} "
+            f"(CRITICAL on the capped re-notify ladder from "
+            f"{ARCHIVE_STALE_CRITICAL_THRESHOLD}). Runbook: docs/runbooks/job_archive.md"
+        ),
+    )
+
+
 # ---- Entrypoint ---------------------------------------------------------
 
 
@@ -2847,9 +3185,12 @@ CHECKS: list[Callable[..., CheckResult]] = [
     # nothing, 2026-07-13 incident; CRITICAL only when even the storm floor
     # finds nothing deletable) — paged + MAINTENANCE-deferred by _run_check.
     _check_row_cap_rotation,
-    # Check P (A3): Box OAuth refresh-token freshness. Read-only marker read;
-    # returns a CheckResult, so its WARN/CRITICAL is paged + MAINTENANCE-deferred
-    # by _run_check. (Check O is the A5 row-cap rotation above.)
+    # Check P (A3): Box credential health — marker age AND a real authenticated Box read
+    # (#26: the marker-only version reported "fresh (idle 2d)" straight through a live
+    # invalid_grant). Returns a CheckResult, so its WARN/CRITICAL is paged +
+    # MAINTENANCE-deferred by _run_check. DAILY tier — the probe spends a single-use
+    # refresh token per run, so hourly would worsen the rotation race (see
+    # _probe_box_liveness). (Check O is the A5 row-cap rotation above.)
     _check_box_token_freshness,
     # Check Q / R (A4): portal_poll resilience. Q re-raises a sustained pending-fetch outage
     # (CRITICAL second-opinion to portal_poll's inline page); R WARNs on a stuck unfiled
@@ -2887,6 +3228,14 @@ CHECKS: list[Callable[..., CheckResult]] = [
     # WARN, with a sustained failure escalating to CRITICAL via the CAPPED is_escalation_cycle
     # ladder (F2 — days 3/6/12/24 then every 24, so a wedge never mints a NEW unrotatable
     # open-CRITICAL every day — see the _LOG_ROTATION_FAILS note).
+    # Check X (#25): a job archive that stopped (partial/failed — TERMINAL, never auto-retries)
+    # or was never picked up (requested/in_progress aging in the queue). Before this, NO check
+    # covered the archive at all and a job sat at `requested` for hours in silence while the
+    # portal showed a green "waiting" banner. Reads the dedicated /archive-health route, which
+    # unlike /archive-pending can see the terminal states. Read-only; returns a CheckResult, so
+    # _run_check pages + MAINTENANCE-defers it. DAILY tier. (E deferred, F retired 2026-06-05,
+    # H never existed — X is the first free letter after W.)
+    _check_stale_job_archives,
     _check_log_dir_rotation,
     # Check E (Anthropic spend trend) deferred to a follow-on PR (the
     # Check E shipping PR) — requires an Admin API key (sk-ant-admin01-...
@@ -2926,6 +3275,7 @@ CHECK_LETTERS: dict[str, str] = {
     "_check_approver_drift": "U",
     "_check_portal_prune_health": "V",
     "_check_log_dir_rotation": "W",
+    "_check_stale_job_archives": "X",
 }
 
 
@@ -2961,6 +3311,13 @@ CHECK_LETTERS: dict[str, str] = {
 #   O  _check_row_cap_rotation        in the 15k-16k WARN band it writes one ITS_Errors row per
 #                                     sweep — into the very sheet whose row count it is warning
 #                                     about. A positive feedback loop.
+#   P  _check_box_token_freshness     its liveness probe (#26) is a real Box call from a launchd
+#                                     one-shot, so every run SPENDS a single-use refresh token to
+#                                     get an access token. Hourly = 24 extra exchanges/day, each a
+#                                     fresh chance to collide with portal_poll (60 s) /
+#                                     fieldops_sync / po_poll (90 s) — it would WORSEN the very
+#                                     rotation race #26's retry absorbs. A dead credential is not
+#                                     transient and does not self-repair; daily detection is enough.
 #   U  _check_approver_drift          absorbs the change into its baseline every run, so the drift
 #                                     WARN's visibility window shrinks 24h -> 1h on a
 #                                     security-relevant signal (who may approve a send).
@@ -2969,6 +3326,12 @@ CHECK_LETTERS: dict[str, str] = {
 #                                     recent, F1) and that lane NEVER deletes, so hourly would mint
 #                                     ~24 permanent .gz archives per launchd log per day —
 #                                     inverting the very growth bound Check W exists to enforce.
+#   X  _check_stale_job_archives      both shapes it detects are STANDING conditions needing a
+#                                     human (a terminal partial/failed never auto-retries; a
+#                                     stuck request is usually a gate left off), so hourly buys
+#                                     no earlier remedy — it would just repeat the same
+#                                     cross-network read 24x and, past the ladder threshold,
+#                                     re-notify on an hourly rather than daily rung.
 #
 # Keeping W on the daily tier ALSO preserves two cadence-coupled constants for free, so neither
 # needs touching: LOG_DIR_ROTATION_CRITICAL_THRESHOLD (3) keeps meaning three DAYS rather than
@@ -2987,8 +3350,10 @@ DAILY_ONLY_CHECKS: frozenset[Callable[..., CheckResult]] = frozenset(
         _check_progress_generate_catchup,
         _check_token_write_capability,
         _check_row_cap_rotation,
+        _check_box_token_freshness,
         _check_approver_drift,
         _check_log_dir_rotation,
+        _check_stale_job_archives,
     }
 )
 

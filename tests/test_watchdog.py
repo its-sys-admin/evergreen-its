@@ -164,6 +164,7 @@ def test_checks_list_has_all_session_1_2_3_checks():
         # delete). Registered LAST on purpose: the only filesystem-walking + gzipping
         # check, self-limited by its own per-run cap + monotonic deadline, so an overrun
         # can never delay an alerting check ahead of it.
+        watchdog._check_stale_job_archives,  # Check X (#25) — stopped / never-picked-up job archives
         watchdog._check_log_dir_rotation,  # Check W (growth Slice 2) — log-dir archive bound
     ]
 
@@ -409,7 +410,25 @@ def _write_box_freshness_marker(path: Path, *, days_ago: int) -> None:
     path.write_text(json.dumps({"last_refresh_utc": last, "refresh_count": 1}))
 
 
-def test_check_box_token_freshness_fresh_is_info(monkeypatch, tmp_path):
+@pytest.fixture
+def box_probe(monkeypatch):
+    """Control Check P's LIVE Box read.
+
+    Defaults to a successful probe. Every Check-P test must go through this — without it
+    the check would make a real authenticated Box call (and hit Keychain) under pytest.
+    """
+    def _set(items=None, exc=None):
+        def _fake(folder_id, *, limit=100):
+            if exc is not None:
+                raise exc
+            return items or []
+        monkeypatch.setattr("watchdog.box_client.list_folder", _fake)
+
+    _set()
+    return _set
+
+
+def test_check_box_token_freshness_fresh_is_info(monkeypatch, tmp_path, box_probe):
     marker = tmp_path / "box_oauth_last_refresh.json"
     _write_box_freshness_marker(marker, days_ago=3)
     monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
@@ -417,7 +436,7 @@ def test_check_box_token_freshness_fresh_is_info(monkeypatch, tmp_path):
     assert result.severity is Severity.INFO
 
 
-def test_check_box_token_freshness_warns_at_50d(monkeypatch, tmp_path):
+def test_check_box_token_freshness_warns_at_50d(monkeypatch, tmp_path, box_probe):
     marker = tmp_path / "box_oauth_last_refresh.json"
     _write_box_freshness_marker(marker, days_ago=52)
     monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
@@ -425,30 +444,131 @@ def test_check_box_token_freshness_warns_at_50d(monkeypatch, tmp_path):
     assert result.severity is Severity.WARN
 
 
-def test_check_box_token_freshness_critical_at_58d(monkeypatch, tmp_path):
-    marker = tmp_path / "box_oauth_last_refresh.json"
-    _write_box_freshness_marker(marker, days_ago=59)
-    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
-    result = watchdog._check_box_token_freshness()
-    assert result.severity is Severity.CRITICAL
-
-
-def test_check_box_token_freshness_absent_marker_warns(monkeypatch, tmp_path):
+def test_check_box_token_freshness_absent_marker_warns(monkeypatch, tmp_path, box_probe):
     monkeypatch.setattr(
         "watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", tmp_path / "missing.json"
     )
     result = watchdog._check_box_token_freshness()
     assert result.severity is Severity.WARN
-    assert "absent" in result.summary
+    assert "ABSENT" in result.summary
 
 
-def test_check_box_token_freshness_unreadable_marker_warns(monkeypatch, tmp_path):
+def test_check_box_token_freshness_unreadable_marker_warns(monkeypatch, tmp_path, box_probe):
     marker = tmp_path / "box_oauth_last_refresh.json"
     marker.write_text("not valid json {{{")
     monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
     result = watchdog._check_box_token_freshness()
     assert result.severity is Severity.WARN
-    assert "unreadable" in result.summary
+    assert "UNREADABLE" in result.summary
+
+
+# ---- Check P: the LIVENESS probe (#26) ----------------------------------
+#
+# THE BUG THIS CLOSES. Check P read the marker and nothing else, so it logged
+# "Box OAuth refresh token fresh (idle 2d)" every hour straight through a window in
+# which live Box calls were failing with invalid_grant (2026-08-10). The first test
+# below is the direct regression: a FRESH marker plus a DEAD token must be CRITICAL,
+# and it is exactly the combination the old implementation called INFO.
+
+
+def test_dead_token_is_critical_even_when_the_marker_looks_fresh(
+    monkeypatch, tmp_path, box_probe
+):
+    """#26 regression: marker freshness must never outvote a live rejection."""
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=2)  # the exact "idle 2d" of the incident
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=watchdog.box_client.BoxRefreshTokenRejectedError("invalid_grant"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.CRITICAL
+    assert "DEAD" in result.summary
+    # The marker must be reported as NOT-evidence, never as reassurance.
+    assert "not evidence of health" in result.summary.lower()
+
+
+def test_live_read_ok_downgrades_a_stale_marker_from_critical_to_warn(
+    monkeypatch, tmp_path, box_probe
+):
+    """A successful authenticated read is positive proof the 60d wall was not hit.
+
+    The old check called 59d-idle CRITICAL unconditionally. With ground truth available,
+    paging "re-auth NOW" for a credential that demonstrably works would send a Tier-2
+    operator into an unnecessary high-class escalation.
+    """
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=59)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.WARN
+    assert "AUTHENTICATES NOW" in result.summary
+
+
+def test_probe_transport_failure_falls_back_to_the_marker_and_says_so(
+    monkeypatch, tmp_path, box_probe
+):
+    """Our own inability to reach Box must never be reported as a dead token."""
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=watchdog.box_client.BoxRateLimitError("429"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.INFO  # the marker verdict, unchanged
+    assert "SKIPPED" in result.summary  # never mistakable for "probe passed"
+
+
+def test_missing_credentials_warn_but_do_not_claim_an_expired_token(
+    monkeypatch, tmp_path, box_probe
+):
+    """A generic auth failure is NOT evidence the refresh token aged out."""
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=watchdog.box_client.BoxAuthError("credentials missing from Keychain"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.WARN
+    assert "NOT an expired refresh token" in result.summary
+
+
+def test_probe_never_crashes_the_sweep_on_an_unexpected_exception(
+    monkeypatch, tmp_path, box_probe
+):
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+    box_probe(exc=RuntimeError("boxsdk exploded in a novel way"))
+
+    result = watchdog._check_box_token_freshness()
+
+    assert result.severity is Severity.INFO
+    assert "SKIPPED" in result.summary
+
+
+def test_probe_reads_root_with_a_bounded_page(monkeypatch, tmp_path, box_probe):
+    """Pins the probe's shape: root folder (always exists for a valid credential, so a
+    Box reorg cannot masquerade as a token failure) and a single-item page."""
+    seen: dict = {}
+
+    def _fake(folder_id, *, limit=100):
+        seen["folder_id"] = folder_id
+        seen["limit"] = limit
+        return []
+
+    monkeypatch.setattr("watchdog.box_client.list_folder", _fake)
+    marker = tmp_path / "box_oauth_last_refresh.json"
+    _write_box_freshness_marker(marker, days_ago=1)
+    monkeypatch.setattr("watchdog.box_client.BOX_TOKEN_REFRESH_MARKER", marker)
+
+    watchdog._check_box_token_freshness()
+
+    assert seen == {"folder_id": "0", "limit": 1}
 
 
 # ---- Group B: _check_stale_review_queue ---------------------------------
@@ -2640,6 +2760,205 @@ def test_check_u_read_failure_is_info(mock_share_emails, _approver_state):
     assert result.severity is Severity.INFO  # no data → never invents drift
 
 
+# ---- Check X: stale / stopped job archives (#25) --------------------------
+#
+# THE GAP THIS CLOSES. Before Check X, NO watchdog check covered the job archive —
+# `grep archive scripts/watchdog.py` hit only Check W (log rotation). On 2026-08-10
+# JOB-000030 sat at `requested` with attempts=0 for hours while the portal showed a
+# green "Waiting for the office Mac to pick this up" banner, and nothing fired.
+#
+# The two shapes under test are NOT interchangeable, and the second is the one an
+# archive-pending-based check could never have seen: `partial`/`failed` are TERMINAL
+# for the daemon, so a half-relocated job leaves the queue and waits for a human.
+
+
+def _archive_row(**over):
+    """One `/archive-health` row. Defaults: a request raised ~2h ago, still queued."""
+    row = {
+        "job_id": "JOB-000030",
+        "project_name": "Production test",
+        "job_no": "30",
+        "archive_folder_key": "Production test",
+        "archive_direction": "archive",
+        "archive_state": "requested",
+        "archive_attempts": 0,
+        "archive_requested_at": int(datetime.now(UTC).timestamp()) - 7200,
+    }
+    row.update(over)
+    return row
+
+
+@pytest.fixture
+def archive_env(monkeypatch, mocker, tmp_path):
+    """Creds resolved, gate ON, counter isolated. Returns the health-route mock."""
+    monkeypatch.setattr(
+        watchdog, "_resolve_fieldops_creds", lambda: ("https://worker.test", "tok")
+    )
+    monkeypatch.setattr(watchdog.fieldops_sync, "_archive_enabled", lambda: True)
+    monkeypatch.setattr(
+        watchdog,
+        "_ARCHIVE_STALE_RUNS",
+        watchdog.sustained_failure.SustainedFailureCounter(
+            tmp_path / "archive_stale_runs.json", "test", "x"
+        ),
+    )
+    return mocker.patch("watchdog.portal_client.get_fieldops_archive_health")
+
+
+def test_check_x_registered_in_checks():
+    assert watchdog._check_stale_job_archives in watchdog.CHECKS
+    assert watchdog.CHECK_LETTERS["_check_stale_job_archives"] == "X"
+
+
+def test_check_x_is_on_the_daily_tier(archive_env):
+    """The conditions are standing, not transient — hourly buys no earlier remedy."""
+    assert watchdog._check_stale_job_archives in watchdog.DAILY_ONLY_CHECKS
+
+
+def test_a_terminal_partial_escalates_even_though_the_queue_has_dropped_it(archive_env):
+    """THE regression for the blind spot: partial/failed never resume on their own.
+
+    A check reading /archive-pending would see nothing here and report healthy.
+    """
+    archive_env.return_value = [_archive_row(archive_state="partial", archive_attempts=1)]
+
+    result = watchdog._check_stale_job_archives()
+
+    assert result.severity is Severity.WARN
+    assert "STOPPED" in result.summary
+    assert "will NOT retry" in result.summary
+    assert "Try again" in result.summary  # the actual remedy, named
+    assert "JOB-000030" in result.summary
+
+
+def test_a_failed_archive_is_reported_regardless_of_age(archive_env):
+    """Terminal is terminal — a fresh `failed` is no less stuck than an old one."""
+    archive_env.return_value = [
+        _archive_row(
+            archive_state="failed",
+            archive_requested_at=int(datetime.now(UTC).timestamp()) - 5,
+        )
+    ]
+    assert watchdog._check_stale_job_archives().severity is Severity.WARN
+
+
+def test_a_request_aging_in_the_queue_escalates_and_reports_the_facts(archive_env):
+    archive_env.return_value = [_archive_row()]  # 2h old, still `requested`
+
+    result = watchdog._check_stale_job_archives()
+
+    assert result.severity is Severity.WARN
+    assert "STUCK in the queue" in result.summary
+    # job_id, direction, attempts and age all present — what the operator acts on.
+    assert "JOB-000030" in result.summary
+    assert "archive/requested" in result.summary
+    assert "attempts=0" in result.summary
+    assert "2.0h" in result.summary
+
+
+def test_a_freshly_raised_request_is_not_yet_stuck(archive_env):
+    """A healthy relocation completes in one ~90s cycle; don't page on the normal window."""
+    archive_env.return_value = [
+        _archive_row(archive_requested_at=int(datetime.now(UTC).timestamp()) - 60)
+    ]
+    result = watchdog._check_stale_job_archives()
+    assert result.severity is Severity.INFO
+    assert "in flight" in result.summary
+
+
+def test_gate_off_is_named_as_the_likely_cause(archive_env, monkeypatch):
+    """The 2026-08-10 incident exactly: the pass was not draining the queue at all."""
+    monkeypatch.setattr(watchdog.fieldops_sync, "_archive_enabled", lambda: False)
+    archive_env.return_value = [_archive_row()]
+
+    result = watchdog._check_stale_job_archives()
+
+    assert "GATED OFF" in result.summary
+    assert watchdog.fieldops_sync.CFG_ARCHIVE_ENABLED in result.summary
+
+
+def test_gate_on_says_so_rather_than_leaving_the_operator_guessing(archive_env):
+    archive_env.return_value = [_archive_row()]
+    result = watchdog._check_stale_job_archives()
+    assert "IS enabled" in result.summary
+    assert "docs/runbooks/job_archive.md" in result.summary
+
+
+def test_no_stalled_archive_is_info_and_resets_the_streak(archive_env):
+    archive_env.return_value = []
+    result = watchdog._check_stale_job_archives()
+    assert result.severity is Severity.INFO
+    assert "healthy" in result.summary
+
+
+def test_sustained_stall_escalates_on_the_capped_ladder(archive_env):
+    """WARN daily, CRITICAL on the crossing run then 2x/4x/8x — NOT every run.
+
+    An open CRITICAL is never terminal (`shared/errors_rotation`), so a CRITICAL per
+    daily sweep while a job sits unarchived would mint permanent unrotatable rows
+    against the 20k cap that has locked out before.
+    """
+    archive_env.return_value = [_archive_row(archive_state="partial")]
+    sev = [watchdog._check_stale_job_archives().severity for _ in range(7)]
+    # Threshold 3: runs 3 and 6 fire, the rest stay WARN.
+    assert sev == [
+        Severity.WARN, Severity.WARN, Severity.CRITICAL,
+        Severity.WARN, Severity.WARN, Severity.CRITICAL, Severity.WARN,
+    ]
+
+
+def test_a_malformed_request_time_counts_as_stuck_rather_than_silently_healthy(archive_env):
+    """Bad data must not make the detector go quiet — that is the failure it exists for."""
+    archive_env.return_value = [_archive_row(archive_requested_at=None)]
+    result = watchdog._check_stale_job_archives()
+    assert result.severity is Severity.WARN
+    assert "age unknown" in result.summary
+
+
+def test_transport_failure_is_info_not_a_manufactured_outage(archive_env):
+    archive_env.side_effect = watchdog.portal_client.PortalTransportError("boom")
+    result = watchdog._check_stale_job_archives()
+    assert result.severity is Severity.INFO
+    assert "unreachable" in result.summary
+
+
+def test_rejected_bearer_warns_because_the_check_is_now_blind(archive_env):
+    archive_env.side_effect = watchdog.portal_client.PortalAuthError("401")
+    result = watchdog._check_stale_job_archives()
+    assert result.severity is Severity.WARN
+    assert "unobserved" in result.summary
+
+
+def test_unresolved_creds_skip_quietly(monkeypatch, archive_env):
+    monkeypatch.setattr(watchdog, "_resolve_fieldops_creds", lambda: None)
+    result = watchdog._check_stale_job_archives()
+    assert result.severity is Severity.INFO
+
+
+def test_per_job_detail_is_bounded(archive_env):
+    """One bad day must not write a multi-KB summary into the 20k-capped ITS_Errors."""
+    archive_env.return_value = [
+        _archive_row(job_id=f"JOB-{i:06d}", archive_state="failed") for i in range(50)
+    ]
+    result = watchdog._check_stale_job_archives()
+    assert "50 STOPPED" in result.summary  # the COUNT is honest
+    named = sum(1 for i in range(50) if f"JOB-{i:06d}" in result.summary)
+    assert named == watchdog.ARCHIVE_REPORT_MAX_JOBS
+
+
+def test_reads_the_health_route_and_never_the_work_queue(archive_env, mocker):
+    """Check X observes; it must never look like the pass claiming work."""
+    pending = mocker.patch("watchdog.portal_client.get_fieldops_pending_archives")
+    progress = mocker.patch("watchdog.portal_client.post_fieldops_archive_progress")
+    archive_env.return_value = [_archive_row(archive_state="partial")]
+
+    watchdog._check_stale_job_archives()
+
+    archive_env.assert_called_once()
+    pending.assert_not_called()
+    progress.assert_not_called()
+
+
 # ---- Check V: D1 prune heartbeat (GS2) ------------------------------------
 
 
@@ -3528,7 +3847,7 @@ def test_check_letters_cover_every_registered_check():
     assert registered == set(watchdog.CHECK_LETTERS), (
         "CHECK_LETTERS out of sync with CHECKS — reconcile both in the same PR"
     )
-    assert set(watchdog.CHECK_LETTERS.values()) == set("ABCDGIJKLMNOPQRSTUVW")
+    assert set(watchdog.CHECK_LETTERS.values()) == set("ABCDGIJKLMNOPQRSTUVWX")
 
 
 def test_run_check_returns_record_with_raw_severity(mock_log):
@@ -3588,7 +3907,9 @@ def test_daily_only_checks_are_all_registered_in_checks():
 def test_daily_tier_holds_exactly_the_harmful_at_hourly_letters():
     """Pins the tier split. Changing it is a deliberate act, not a drive-by edit."""
     letters = {watchdog.CHECK_LETTERS[c.__name__] for c in watchdog.DAILY_ONLY_CHECKS}
-    assert letters == {"D", "G", "I", "L", "O", "U", "W"}
+    # P joined 2026-08-10 (#26): its liveness probe spends a single-use Box refresh token
+    # per run, so hourly would worsen the rotation race the same issue's retry absorbs.
+    assert letters == {"D", "G", "I", "L", "O", "P", "U", "W", "X"}
 
 
 def test_hourly_tier_keeps_the_outage_detectors():
@@ -3713,3 +4034,40 @@ def test_deferred_checks_still_appear_in_the_sweep_record(
     assert len(deferred) == len(watchdog.DAILY_ONLY_CHECKS)
     assert {r["check"] for r in deferred} == {c.__name__ for c in watchdog.DAILY_ONLY_CHECKS}
     assert all(r["severity"] == "INFO" for r in deferred)
+
+
+def test_check_x_reads_the_worker_url_under_the_owning_workstream(monkeypatch):
+    """`_resolve_fieldops_creds` must read the Worker base URL under `safety_reports`.
+
+    `get_setting` matches on (Setting, Workstream) BOTH, and the Worker base-URL row is owned by
+    safety_reports — portal_poll's copy, shared rather than duplicated, which is why
+    `fieldops_sync` exports a SECOND constant naming that workstream. Reading it under
+    `field_ops` raises SmartsheetNotFoundError, which the resolver turns into "creds unresolved",
+    which makes Check X report INFO and skip forever: a detector that never detects.
+
+    Every other Check X test monkeypatches `_resolve_fieldops_creds` wholesale, so this bug is
+    structurally unreachable by them. This one patches `get_setting` and asserts the workstream
+    it was actually called with.
+    """
+    from field_ops import fieldops_sync  # noqa: PLC0415
+
+    seen: dict[str, str] = {}
+
+    def _fake_get_setting(key, *, workstream):
+        seen["key"], seen["workstream"] = key, workstream
+        if workstream != fieldops_sync.CFG_WORKER_BASE_URL_WORKSTREAM:
+            raise watchdog.smartsheet_client.SmartsheetNotFoundError(
+                f"ITS_Config has no row for Setting={key!r} Workstream={workstream!r}"
+            )
+        return "https://worker.test"
+
+    monkeypatch.setattr(watchdog.smartsheet_client, "get_setting", _fake_get_setting)
+    monkeypatch.setattr(watchdog.keychain, "get_secret", lambda _n: "tok")
+
+    creds = watchdog._resolve_fieldops_creds()
+
+    assert seen["key"] == fieldops_sync.CFG_WORKER_BASE_URL
+    assert seen["workstream"] == "safety_reports", (
+        "read under the wrong workstream — the row does not exist there, so Check X skips forever"
+    )
+    assert creds == ("https://worker.test", "tok")

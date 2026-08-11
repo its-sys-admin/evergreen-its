@@ -2063,6 +2063,48 @@ app.get("/api/internal/fieldops/archive-pending", requireFieldopsToken, async (c
 });
 
 /**
+ * GET /archive-health — the OBSERVABILITY read, for watchdog Check X. Strictly read-only.
+ *
+ * Why this is not just `archive-pending`. That route is the daemon's WORK queue, so it serves
+ * only `requested` / `in_progress` — which makes it structurally blind to exactly the state an
+ * operator most needs to hear about. `partial` and `failed` are TERMINAL for the daemon: a job
+ * that reaches one leaves the queue and resumes only when a human presses "Try again" in the
+ * portal. So a job can sit half-relocated, its folders split across Smartsheet and Box, with no
+ * queue entry, no retry, and (before Check X) no detector. This route deliberately widens the
+ * state filter to include those two, so the watchdog can see a stopped archive standing still.
+ *
+ * It also serves `requested` / `in_progress` — the other half of #25, where a request simply
+ * never gets picked up (the 2026-08-10 incident: `JOB-000030` sat at `requested` with
+ * `archive_attempts=0` for hours because the pass's gate was off, while the portal showed a
+ * green "Waiting for the office Mac to pick this up").
+ *
+ * MUTATION-FREE by construction, and it must stay that way: it is a health probe running on the
+ * watchdog's schedule, not the daemon's, and anything it wrote would be a write nobody asked
+ * for. `archive-pending` remains the ONLY route the archive pass drains.
+ *
+ * Ordered oldest-request-first so a truncated page still shows the worst offenders. The cap is
+ * generous relative to `archive-pending`'s 25 because a row here costs one SELECT, not six
+ * external API sequences — but it is still bounded, and Check X reports the count it received.
+ */
+const FIELDOPS_ARCHIVE_HEALTH_CAP = 200;
+
+app.get("/api/internal/fieldops/archive-health", requireFieldopsToken, async (c) => {
+  const rows = await c.env.DB
+    .prepare(
+      `SELECT job_id, project_name, job_no, archive_folder_key, archive_direction,
+              archive_state, archive_attempts, archive_requested_at
+         FROM jobs
+        WHERE origin='portal'
+          AND archive_state IN ('requested','in_progress','partial','failed')
+        ORDER BY archive_requested_at ASC, job_id ASC
+        LIMIT ?1`,
+    )
+    .bind(FIELDOPS_ARCHIVE_HEALTH_CAP)
+    .all<Record<string, unknown>>();
+  return c.json({ jobs: rows.results ?? [] });
+});
+
+/**
  * POST /job-archive-progress — the pass's commit point. Body:
  *   { updates: [{ job_id, direction, state, containers?, note? }, …] }
  *
