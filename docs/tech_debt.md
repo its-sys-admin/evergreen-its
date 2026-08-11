@@ -16,6 +16,54 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## Manifest-import merge-mode and shipping-log-commit live-fires deferred [OPEN 2026-08-11, medium]
+
+The 2026-08-11 day session finished the manifest lane's real merge (server-enforced ambiguity
+resolution, exec PR #66) and validated it against two real BOM imports (172 rows, zero null
+qty/part) — but two of the lane's other paths were exercised only by the existing test suite, not
+against a live D1 pool + real files:
+
+- **Merge mode itself has not been live-fired.** The operator named a specific first candidate:
+  upload Brimfield 2's manifest to the Test job as a merge against an already-committed import.
+  Nothing this session ran it live.
+- **Shipping-log commit (B8) has not been live-fired.** #66 built the shipping-log→
+  `material_shipments` dispose path; no real shipping-log document has been uploaded and committed
+  through it end-to-end.
+
+**Fix:** both are single-session smokes — pick a real or synthetic shipping-log document and a
+second manifest revision for the Brimfield-2-to-Test merge, run each through the portal, and
+confirm the server-enforced resolution + the shipment rows land as designed.
+
+**Tag:** `field-ops`, `materials`, `manifest`, `live-smoke`.
+
+**Revisit when:** the next materials/manifest touch, or before the next real customer manifest
+expected to hit merge mode.
+
+Surfaced: 2026-08-11 session close.
+
+## §34 disposition-table exception for the manifest-import lane — code shipped, doctrine rider owed [OPEN 2026-08-11, seth-owned]
+
+Exec PR #71 (`b525346`) changed the manifest-import lane's §34 attachment-screening disposition on
+an explicit, same-session operator decision: SUSPICIOUS now proceeds with a warning instead of
+refusing (an ordinary customer BOM had been hitting a PDF-OpenAction/L2 false positive on the first
+real document filed through the lane); MALICIOUS still refuses unconditionally, unchanged. The code
+is live and recorded in the runbook + the PR's own commit message, but §34's canonical doctrine
+text (Op Stds v21) describes a single disposition table with no per-lane exception, and this is the
+first one. This is a doctrine action, not a code action — Seth-owned per the both-rule (novel, and
+doctrine is one of the four fixed high-capability classes).
+
+**Fix:** Seth decides the shape — either a v21.x rider naming manifest-import as a documented §34
+exception (same "does not change the protective claim for MALICIOUS" test as prior riders), or a
+broader clarification that SUSPICIOUS-disposition severity is a per-lane tunable rather than fixed
+globally. Also flagged in the blueprint info-gap doc §3 candidate-doctrine-flags (item 7).
+
+**Tag:** `field-ops`, `materials`, `doctrine`, `section34`, `seth-owned`.
+
+**Revisit when:** Seth reviews the candidate-doctrine-flags queue, or before a second lane needs
+the same exception.
+
+Surfaced: 2026-08-11 session close.
+
 ## Toolbox-talk corpus — hurricanes uncovered, and the housekeeping talk is raw regulation text [OPEN 2026-08-11, low]
 
 The 2026-08-11 expansion took the Toolbox Talk parent from 5 topic variants to 34. Two gaps were
