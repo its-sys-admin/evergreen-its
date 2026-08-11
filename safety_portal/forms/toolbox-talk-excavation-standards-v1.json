@@ -1,0 +1,69 @@
+{
+  "form_code": "toolbox-talk-excavation-standards-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Excavation Safety — Two Key Definitions in the OSHA Excavation Standards",
+  "variant_label": "Excavation Safety — Two Key Definitions in the OSHA Excavation Standards",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Excavation_Standards_Key_Definitions.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Excavation Safety — Two Key Definitions in the OSHA Excavation Standards",
+      "source_pdf": "OSHA_TBT_Excavation_Standards_Key_Definitions.pdf",
+      "blocks": [
+        {
+          "heading": "Clarifying Two Key Definitions in the OSHA Excavation Standards",
+          "body": "[Reference 1926 Subpart P]\n\nMost everyone is familiar with the general meaning of the terms “Excavate” and “Excavation.” You dig a hole in the ground with a shovel or a backhoe, and you have excavated the soil and formed an excavation. However, the type of excavation work regulated by the Occupational Safety and Health Administration, or OSHA, goes well beyond these simple examples. To understand why, let’s dig a little deeper into two key definitions that are listed in the OSHA excavation standards."
+        },
+        {
+          "body": "The first OSHA definition we will cover is “Excavation”, which means “any man-made cut, cavity, trench, or depression in an earth surface, formed by earth removal.” The previous examples of digging with a shovel or backhoe certainly fall within the meaning of this definition. But be aware that there are many other activities that can create an excavation as defined by the OSHA standards. Examples include:\n- Scraping or contouring the ground using powered equipment outfitted with a blade or bucket\n- Plowing in a cable with a blade attached to a tractor or track machine\n- Pushing or driving a stake or post into the ground with a post-driver or other device\n- Drilling a pier or other hole into the soil, either vertically or horizontally, with an auger or bit\n- Removing tree stumps, posts, and other objects buried in the ground by pushing them with a blade or bucket or by pulling with a chain or cable attached to a vehicle or piece of equipment"
+        },
+        {
+          "body": "It is very important to note that depth is not a component of the OSHA definition for an excavation; if you make any man-made cut, cavity, trench, or depression in the surface of the earth by removing soil, regardless of the depth, then you have created an excavation."
+        },
+        {
+          "body": "The second key definition from the OSHA excavation standard we will discuss is \"Trench”, which is also commonly referred to as a “Trench Excavation\". According to OSHA’s definition, a trench is an excavation made below the surface of the ground that is narrow in relation to its length. In addition, the depth of a trench is always greater than the width of the trench when measured from side to side across the bottom. But OSHA’s definition also says the width of a trench does not exceed 15 feet when measured at the bottom; anything wider than 15 feet is still an excavation, just not a trench excavation. Also, if you have an excavation that is wider than 15 feet but then you place or build a form or other structure inside of that excavation which results in the distance measured from the bottom of the form or structure to the side(s) of the excavation being 15 feet or less, that part of the excavation is also considered a trench excavation. (See the handout attached to this toolbox talk for examples of excavations and of trench excavations)."
+        },
+        {
+          "body": "While it may seem nitpicky to separately define the terms excavation and trench excavation, it is necessary to do so. That is because some OSHA excavation standards specifically refer to, and therefore only apply to, a trench or trench excavation, whereas standards referring to “an excavation” would apply to all types of excavations. So pay attention during the next several toolbox talks on excavation safety, and you will recognize how some OSHA rules apply to all excavations, whereas others only apply to trench excavations. And if you have any questions about these definitions on the job site, check with the excavation site’s “Competent Person”, which is one more important term we will define during an upcoming toolbox talk."
+        },
+        {
+          "body": "Can anyone give me another example of an activity which we did not already discuss that is considered to be excavation work? Thank you for your participation, and please be sure to sign your name on the training certification form so you get credit for attending today’s training session."
+        },
+        {
+          "body": "EXCAVATION\nDepth of Excavation\nWidth Greater Than Depth (measured across the bottom), OR Overall Width Greater Than 15 Feet\n\nTRENCH (or TRENCH EXCAVATION)\nDepth of Excavation\nWidth Less Than Depth AND No More Than 15 Feet Wide (measured across the bottom)\n\nTRENCHES (or TRENCH EXCAVATIONS)\nDepth of Excavation\nOverall Width of Excavation Greater Than Depth, BUT Width on Side(s) Reduced to Less Than Depth AND to 15 Feet or Less (measured across the bottom) by Placement of Form or Structure"
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2018. Not to be sold, altered, or displayed for profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

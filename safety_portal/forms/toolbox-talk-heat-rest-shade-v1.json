@@ -1,0 +1,72 @@
+{
+  "form_code": "toolbox-talk-heat-rest-shade-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — The Critical Roles of Rest & Shade",
+  "variant_label": "Heat Illness Prevention — The Critical Roles of Rest & Shade",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Rest_and_Shade.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — The Critical Roles of Rest & Shade",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Rest_and_Shade.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention: The Critical Roles of Rest and Shade",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nWhile proper hydration plays a huge role in preventing heat illness, workers also have two more opportunities to help their bodies recover from heat exposure and lower the risk of heat-related illnesses. Those two key strategies in this regard are seeking shade and taking regular rest breaks."
+        },
+        {
+          "body": "Seeking out shade is a simple yet effective way to help prevent heat illness is by seeking out shade. Direct exposure to sunlight significantly increases the heat load on the body, as the body absorbs radiant heat from the sun, causing core body temperature to rise rapidly."
+        },
+        {
+          "body": "In contrast, shade provides immediate relief by blocking direct exposure to the sun's rays, which reduces the amount of heat the body absorbs. This cooler environment aids the body in dissipating heat more efficiently, conserving energy and fluids, and ultimately lowering the risk of heat illness."
+        },
+        {
+          "body": "Employers can enhance worker safety by providing permanent or temporary shade structures such as canopies, tents, tarps, or large umbrellas over work areas. These structures create cooler work environments and offer shade where workers can rest during breaks or meals. This simple adjustment can make a significant difference in reducing heat-related health risks."
+        },
+        {
+          "body": "Rest breaks are another vital strategy for preventing heat illness, particularly for workers performing physically demanding tasks in high-temperature environments. Breaks provide the body with the opportunity to recover from heat stress by reducing physical exertion, which is a primary cause of internal heat generation. During breaks, the body can lower its heart rate, reduce its need for oxygen and energy, and stabilize its internal temperature. Breaks also give workers the chance to rehydrate, helping to replenish fluids lost through sweating."
+        },
+        {
+          "body": "To ensure workers are properly recovering, breaks should increase in frequency and length when temperatures and humidity levels rise. Experts generally recommend that at-risk workers should be allowed a 10-minute rest break every two hours when the heat index is 90°F or higher, and a 15-minute rest break every hour when the heat index reaches 100°F or more. In extreme conditions, longer or more frequent breaks may be necessary."
+        },
+        {
+          "body": "Note that these are general guidelines, and some state and local regulations may mandate stricter minimum break times for workers exposed to high-heat conditions. Employers should be aware of and comply with these laws to ensure the safety and well-being of their workers."
+        },
+        {
+          "body": "Incorporating shade and regular rest breaks along with proper hydration into the workday is essential for preventing heat illness. These simple strategies give workers a chance to cool down, recover, and rehydrate, helping to avoid heat illnesses while working in hot conditions. By prioritizing water, rest and shade, employers create a safer and more productive environment for their employees. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

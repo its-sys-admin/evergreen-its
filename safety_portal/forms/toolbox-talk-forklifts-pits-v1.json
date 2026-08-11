@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-forklifts-pits-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Material Handling — Working Safely Around Forklifts / PITs",
+  "variant_label": "Material Handling — Working Safely Around Forklifts / PITs",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Material_Handling_Forklifts_and_PITs.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Material Handling — Working Safely Around Forklifts / PITs",
+      "source_pdf": "OSHA_TBT_Material_Handling_Forklifts_and_PITs.pdf",
+      "blocks": [
+        {
+          "heading": "Material Handling and Storage – Working Safely Around Forklifts / PITs",
+          "body": "[Reference: 1910.178 / 192.602]\n\nWorking around forklifts and other powered industrial trucks (PITs) such as motorized pallet jacks and tuggers presents a multitude of potential hazards to your personal safety. Here is a brief overview of some common hazards associated with working around these pieces of equipment, and steps you can take to minimize those hazards to protect yourself and others:"
+        },
+        {
+          "body": "- Struck by the forklift: It is commonly stated that “Pedestrians have the right-of-way” when working near forklifts and other PITs. However, the immense weight of this equipment makes them difficult to stop quickly, even if they are not carrying a load. So, always be on the lookout for forklift traffic in your area, and give them all the room they need to operate safely.\n- Caught between the forklift and a stationary object: Never place yourself between the forklift and any stationary object, such as a workbench, trailer, or a wall. These unsafe acts could result in you being impaled by one of the forks if the lift is being moved forward, or crushed by the counterweight if it is backing up. Always stand to the side of a forklift to avoid being hurt.\n- Poor visibility: Limited visibility of the forklift operator can result in accidents, especially when moving large loads operating in congested areas. So, if you notice a forklift approaching you or an object and it appears the operator may not see adequately, say something quickly so steps can be taken to avoid an accidental strike.\n- Standing under elevated forks: An elevated mast and forks on a forklift can drop in an instant, crushing anyone standing beneath them. So never, for any reason, place any part of your body beneath the forks or load. And keep your hands off the mast, too, to avoid pinch hazards.\n- Electrocution: Contact with overhead power lines or other electrical sources can result in electrocution if the forklift mast becomes energized. So always alert the operator ASAP if you happen to notice any part of the forklift or the load approaching overhead electrical lines. And NEVER approach or touch a forklift that is in contact with an energized line.\n- Hitching a ride on a forklift: One of the ways to get yourself seriously injured or killed is to hop onto a forklift to catch a ride. Riding on the forks or the carriage of a moving forklift can result in your falling off and being run over, or being crushed between the lift and a stationary object. Also, standing directly on the forks or a load to be elevated presents a serious fall hazard, even if you are tied off, and is never allowed for any reason. So, don’t do it – ever!\n- Unqualified operator error: Inexperienced or unauthorized forklift operators may make mistakes that can endanger themselves and others on the worksite. NEVER try to operate a forklift at any time or for any reason if you are not a trained, designated operator."
+        },
+        {
+          "body": "Does anyone have anything to add to today’s discussion on safety hazards to look out for when working around forklifts and other PITs? Please sign the training certification form to ensure you get credit for attending today’s OSHA toolbox training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2023 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}
