@@ -615,6 +615,45 @@ describe("FieldOpsJobTracker — write UI", () => {
     expect((getByLabelText("Job ZIP") as HTMLInputElement).value).toBe("61101");
   });
 
+  // ── 0064: the edit form REJOINS the stored (job_no, site_phase) pair ────────────────────────
+  // The base DETAIL fixture has site_phase 0, so the seeding test above passes even if the rejoin
+  // is deleted. This one uses a non-zero site, so it fails the moment formatJobNumber stops being
+  // applied — the operator would otherwise open the editor on "2026.384", save, and the /contacts
+  // full-overwrite would destroy the site segment in D1.
+  it("0064: the editor seeds the FULL identifier, rejoining job_no + site_phase", async () => {
+    const { getByText, getByLabelText } = await openManagedDetail(["cap.jobtracker.manage"], {
+      ...DETAIL,
+      job_no: "2026.384",
+      site_phase: 1,
+    });
+    fireEvent.click(getByText("Edit job details"));
+    expect((getByLabelText("Evergreen job number") as HTMLInputElement).value).toBe("2026.384.1");
+  });
+
+  it("0064: an unchanged edit round-trips the identifier back whole, site intact", async () => {
+    vi.mocked(api.editContacts).mockResolvedValue({ job_id: "JOB-A" });
+    const { container, getByText } = await openManagedDetail(["cap.jobtracker.manage"], {
+      ...DETAIL,
+      job_no: "2026.384",
+      site_phase: 2,
+    });
+    fireEvent.click(getByText("Edit job details"));
+    fireEvent.submit(container.querySelector('[aria-label="Edit routing and contacts"]')!);
+    await waitFor(() =>
+      expect(api.editContacts).toHaveBeenCalledWith("JOB-A", expect.objectContaining({ job_no: "2026.384.2" })),
+    );
+  });
+
+  it("0064: the EDIT form refuses a malformed identifier inline, like the create form", async () => {
+    vi.mocked(api.editContacts).mockResolvedValue({ job_id: "JOB-A" });
+    const { container, getByText, getByLabelText } = await openManagedDetail(["cap.jobtracker.manage"]);
+    fireEvent.click(getByText("Edit job details"));
+    fireEvent.change(getByLabelText("Evergreen job number"), { target: { value: "2026.384.1.2" } });
+    fireEvent.submit(container.querySelector('[aria-label="Edit routing and contacts"]')!);
+    expect(api.editContacts).not.toHaveBeenCalled();
+    await waitFor(() => expect(container.textContent ?? "").toContain("must look like 2026.384 or 2026.384.1"));
+  });
+
   it("manager can edit routing / contacts on the open job", async () => {
     vi.mocked(api.editContacts).mockResolvedValue({ job_id: "JOB-A" });
     const { container, getByText, getByPlaceholderText } = await openManagedDetail(["cap.jobtracker.manage"]);

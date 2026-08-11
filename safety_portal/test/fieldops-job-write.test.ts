@@ -299,14 +299,34 @@ describe("0057 — job_no + structured address", () => {
     const jobs = ((await (await call("/api/jobs", { headers: { Cookie: admin } })).json()) as any).jobs;
     const mine = jobs.find((x: any) => x.job_id === jobId);
     expect(mine.job_no).toBe("2026.123");
+    expect(mine.site_phase).toBe(0); // 0064 — the builders' Site/phase autofill source
 
     // The detail header serves job_no + the routing block (the editor's seed).
     const detail = (await (
       await call(`/api/fieldops/jobs/${jobId}`, { headers: { Cookie: admin } })
     ).json()) as any;
     expect(detail.job.job_no).toBe("2026.123");
+    expect(detail.job.site_phase).toBe(0);
     expect(detail.job.routing.address_city).toBe("Rockford");
     expect(detail.job.routing.address_state).toBe("IL");
+  });
+
+  // 0064 — the two READ routes must serve a NON-ZERO site, over HTTP, not just store it.
+  // Without this the site is only ever asserted via a direct `SELECT *`: dropping the column
+  // from either route's SELECT left the whole suite green, and because the Job Tracker seeds its
+  // edit form from the detail payload and the /contacts save FULL-OVERWRITES site_phase, a
+  // degraded read would silently destroy the site on the operator's next unrelated edit.
+  it("0064: both read routes serve a non-zero site_phase over HTTP", async () => {
+    const jobId = await createOk(admin, { project_name: "MH405", job_no: "2026.384.1" });
+
+    const jobs = ((await (await call("/api/jobs", { headers: { Cookie: admin } })).json()) as any).jobs;
+    expect(jobs.find((x: any) => x.job_id === jobId).site_phase).toBe(1);
+
+    const detail = (await (
+      await call(`/api/fieldops/jobs/${jobId}`, { headers: { Cookie: admin } })
+    ).json()) as any;
+    expect(detail.job.job_no).toBe("2026.384");
+    expect(detail.job.site_phase).toBe(1);
   });
 
   it("ship-to serves the STORED number + structured city/state/zip (prefix parse stays the fallback)", async () => {
@@ -366,7 +386,7 @@ describe("0057 — job_no + structured address", () => {
     expect(row.site_phase).toBe(0);
   });
 
-  it("0064: a job created WITHOUT a job_no defaults to site_phase 0, never null", async () => {
+  it("0064: a job created WITHOUT a job_no binds site_phase 0, never null", async () => {
     const row = await jobRow(await createOk(admin, { project_name: "NoNumber" }));
     expect(row.job_no).toBe("");
     expect(row.site_phase).toBe(0); // NOT NULL DEFAULT 0 — safe to read without a COALESCE

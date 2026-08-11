@@ -242,7 +242,12 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_region: "That isn't a valid region.",
   vendor_exists: "That vendor already exists.",
   unknown_vendor: "That vendor doesn't exist or is inactive — pick another.",
-  invalid_job_no: "The job number must look like 2026.384, or 2026.384.1 for a specific site.",
+  // SHARED across emitters that accept DIFFERENT shapes: the jobs-SoR write gate takes the full
+  // Evergreen identifier (`2026.384.1`, split on the way in — 0064), while the PO / RFQ /
+  // subcontract / estimate routes take only the two-segment project number. So this copy states
+  // ONLY the part that is true everywhere; the Job Tracker's own inline pre-flight message is
+  // what tells the operator about the site segment, on the one form that accepts it.
+  invalid_job_no: "The job number must look like 2026.384 (year.number).",
   invalid_address_city: "The job city doesn't fit — up to 256 characters.",
   invalid_address_state: "The job state must be the 2-letter abbreviation (e.g. IL).",
   invalid_address_zip: "The job ZIP doesn't fit — up to 16 characters.",

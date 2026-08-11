@@ -743,7 +743,11 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     // same project — the one surface in this fan-out that corrupted rather than refused.
     const jobNoMatch = /^(\d{4}\.\d{3})(?:\.(\d+))?(?![\d.])/.exec((row.project_name ?? "").trim());
     const fallbackJobNo = jobNoMatch ? jobNoMatch[1] : "";
-    const fallbackSitePhase = jobNoMatch && jobNoMatch[2] !== undefined ? parseInt(jobNoMatch[2], 10) : 0;
+    // Bounded by the SAME ceiling parseDraftBody enforces on a typed site_phase (0..9999): an
+    // out-of-range segment in a project NAME resolves to 0 (no site) rather than pre-filling a
+    // value the very next request would reject as invalid_site_phase.
+    const parsedSite = jobNoMatch && jobNoMatch[2] !== undefined ? parseInt(jobNoMatch[2], 10) : 0;
+    const fallbackSitePhase = Number.isSafeInteger(parsedSite) && parsedSite >= 0 && parsedSite <= 9999 ? parsedSite : 0;
     // Both parts come from the SAME source — stored or parsed, never one of each. Mixing a
     // stored job_no with a name-parsed site (or vice versa) would compose a document number
     // for a site the operator never named.
