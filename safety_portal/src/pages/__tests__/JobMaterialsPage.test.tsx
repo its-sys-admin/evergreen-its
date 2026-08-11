@@ -32,9 +32,19 @@ vi.mock("../../lib/fieldops_expected_materials", async (importOriginal) => {
   };
 });
 vi.mock("../../lib/fieldops_materials", () => ({ fetchMaterials: vi.fn() }));
+vi.mock("../../lib/fieldops_manifests", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/fieldops_manifests")>();
+  return {
+    ...actual,
+    fetchManifests: vi.fn(),
+    uploadManifest: vi.fn(),
+    discardManifest: vi.fn(),
+  };
+});
 vi.mock("../../lib/auth", () => ({ useAuth: vi.fn() }));
 
 import * as api from "../../lib/fieldops_expected_materials";
+import * as manifestsApi from "../../lib/fieldops_manifests";
 import { fetchMaterials } from "../../lib/fieldops_materials";
 import { useAuth } from "../../lib/auth";
 import { JobMaterialsPage } from "../JobMaterialsPage";
@@ -84,6 +94,7 @@ beforeEach(() => {
     project_name: "Deep Lake",
   });
   vi.mocked(fetchMaterials).mockResolvedValue({ materials: [], next_cursor: null });
+  vi.mocked(manifestsApi.fetchManifests).mockResolvedValue({ manifests: [] as never });
 });
 afterEach(cleanup);
 
@@ -277,5 +288,41 @@ describe("JobMaterialsPage — never-silent load states", () => {
     await waitFor(() =>
       expect(container.textContent ?? "").toContain("Nothing is on this job's materials list yet"),
     );
+  });
+});
+
+describe("the manifest list's Remove (operator request 2026-08-11)", () => {
+  const REFUSED = {
+    id: 2, manifest_uuid: "u-2", job_id: "JOB-000018", filename: "Bad BOM.pdf",
+    declared_mime: "application/pdf", size_bytes: 1024, status: "refused" as const,
+    detail: "screen:suspicious:L2:pdf_active_content:OpenAction", profile: null,
+    row_count: null, mode: null, committed_through_row: 0, uploaded_by: "office.admin",
+    box_file_id: null, created_at: 1, parsed_at: null, committed_at: null,
+  };
+  const COMMITTED = {
+    ...REFUSED, id: 3, manifest_uuid: "u-3", filename: "Good BOM.pdf",
+    status: "committed" as const, row_count: 12, committed_at: 2,
+  };
+
+  it("a refused upload gets Remove; an imported one keeps its row", async () => {
+    vi.mocked(manifestsApi.fetchManifests).mockResolvedValue({
+      manifests: [REFUSED, COMMITTED] as never,
+    });
+    vi.mocked(manifestsApi.discardManifest).mockResolvedValue({ ok: true, id: 2 });
+    const { container, getByLabelText, queryByLabelText } = mountAs("admin", ALL_CAPS);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Bad BOM.pdf"));
+
+    // A refused upload used to sit in this list forever — now it has a way off it.
+    expect(getByLabelText("Remove Bad BOM.pdf")).toBeTruthy();
+    // An IMPORTED manifest keeps its row: it is the provenance of lines now on the
+    // list, and the Worker refuses its discard anyway.
+    expect(queryByLabelText("Remove Good BOM.pdf")).toBeNull();
+    expect(container.textContent ?? "").toContain("Imported");
+
+    fireEvent.click(getByLabelText("Remove Bad BOM.pdf"));
+    fireEvent.click(getByLabelText("Confirm Remove Bad BOM.pdf"));
+    await waitFor(() => expect(manifestsApi.discardManifest).toHaveBeenCalledWith(2));
+    // The list refreshes so the discarded row (now server-filtered) disappears.
+    await waitFor(() => expect(manifestsApi.fetchManifests).toHaveBeenCalledTimes(2));
   });
 });
