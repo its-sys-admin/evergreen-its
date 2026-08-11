@@ -1,0 +1,64 @@
+{
+  "form_code": "toolbox-talk-fire-ext-selection-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Portable Fire Extinguishers — Proper Selection",
+  "variant_label": "Portable Fire Extinguishers — Proper Selection",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Extinguishers_Proper_Selection.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Portable Fire Extinguishers — Proper Selection",
+      "source_pdf": "OSHA_TBT_Fire_Extinguishers_Proper_Selection.pdf",
+      "blocks": [
+        {
+          "heading": "Portable Fire Extinguishers - Proper Selection",
+          "body": "[Reference 1910.157 / 1926.150]\n\nThere are many different types of materials that can burn, but not all of them can be put out with the same type fire extinguisher. Today we will discuss the five different classes of fire materials and the various types of portable fire extinguishers that should be used to put out fires involving those materials (We suggest you make copies of the handout accompanying this toolbox talk and provide a copy to each trainee so they can follow along with this discussion):"
+        },
+        {
+          "body": "- Class A fire extinguishers should be used to put out fires involving ordinary combustible materials such as cardboard, paper, wood, dried vegetation; basically anything that leaves an ash after it has burned.\n- Class B fire extinguishers should be used to put out fires involving flammable and combustible liquids, such as gasoline, diesel, oil, and oil-based paints, and many solvents.\n- Class C fire extinguishers are suitable for use to extinguish fires that involve appliances, tools, and other equipment that is plugged in or otherwise electrically energized, as well as for fires burning in close proximity to electrically-energized equipment.\n- Class D fire extinguishers are designed for use to extinguish combustible metals, such as magnesium or sodium, and are often designed for a specific type of combustible metal. This does NOT include ordinary carbon steel, only metals that will burn when ignited.\n- Class K fire extinguishers are designed to be used for putting out fires that involve oils and greases used for cooking in kitchens, such as vegetable and animal-based oils and fat."
+        },
+        {
+          "body": "Portable fire extinguishers will generally be labeled with the symbols for the types of fires they are designed to extinguish. For example, a type A extinguisher is suitable for use only on class A materials, and should never be used on a flammable or combustible liquid fire (oil and water don’t mix). However, a type ABC extinguisher is suitable for fires involving all three of those classes of fire hazards.\n\nIf in doubt about the types of extinguishers that are most suitable for your work area, contact your safety manager or supervisor for additional guidance."
+        },
+        {
+          "heading": "Types of Portable Fire Extinguishers",
+          "body": "Class A fire extinguishers should be used to put out fires involving ordinary combustible materials such as cardboard, paper, wood, dried vegetation; basically anything that leaves an ash after it has burned.\n\nClass B fire extinguishers should be used to put out fires involving flammable and combustible liquids, such as gasoline, diesel, oil, and oil-based paints, and many solvents.\n\nClass C fire extinguishers are suitable for use to extinguish fires that involve appliances, tools, or other equipment that is plugged in or otherwise electrically energized, as well as for fires burning in close proximity to electrically-energized equipment.\n\nClass D fire extinguishers are designed for use to extinguish combustible metals, such as magnesium or sodium, and are often designed for the specific type of combustible metal. This does NOT include ordinary carbon steel, only metals that will burn when ignited.\n\nClass K fire extinguishers are designed to be used for putting out fires that involve oils and greases used for cooking in kitchens, such as vegetable and animal-based oils and fat.\n\nPortable fire extinguishers will generally be labeled with the symbol or symbols for the types of fires they are designed to extinguish. For example, a combination BC extinguisher is suitable for extinguishing fires involving flammable/combustible liquids and electrical equipment, whereas a type ABC extinguisher is suitable for fires involving all three of those materials."
+        },
+        {
+          "body": "Does anyone have a question or comment about the various classes of fire materials and the portable extinguishers that are best suited for extinguishing different types of fires? Please be sure to sign-in on the training certification form so you get credit for attending this training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

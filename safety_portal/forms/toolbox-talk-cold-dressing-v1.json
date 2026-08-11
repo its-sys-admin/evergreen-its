@@ -1,0 +1,78 @@
+{
+  "form_code": "toolbox-talk-cold-dressing-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Cold Stress — Dressing for Cold Weather",
+  "variant_label": "Cold Stress — Dressing for Cold Weather",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Cold_Stress_Dressing_for_Cold_Weather.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Cold Stress — Dressing for Cold Weather",
+      "source_pdf": "OSHA_TBT_Cold_Stress_Dressing_for_Cold_Weather.pdf",
+      "blocks": [
+        {
+          "heading": "Cold Stress – Dressing for Cold Weather at Work",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nYour clothing and accessories could make the difference between staying warm and safe at work, or getting so cold you become ill or injured. So, let’s discuss dressing for work during cold weather."
+        },
+        {
+          "body": "Layering is typically the best way to dress when you will be working in cold weather. When you dress in layers of loose-fitting, lightweight clothing, you essentially trap air between each layer to provide insulation. Dressing in layers can also make it easier to remove or add layers of clothing as needed when external temperatures and other conditions change throughout the shift."
+        },
+        {
+          "body": "The Base layer is the layer closest to your skin. Go for moisture-wicking fabrics like wool or cotton, as these will help keep sweat away from your skin. While wearing synthetic fibers like polyester are great for moisture resistance, they can trap sweat against your skin if you are working hard and begin perspiring. And that trapped moisture can cool your body down, which increases the risk of cold stress. So, if possible, opt for natural fibers like wool or cotton for the base layer, which still wick moisture but don’t trap it like synthetics. The Middle layer traps heat close to your body, helping keep you warm. Fleece or down are great options, as they are lightweight, and provide a good amount of insulation. The Outer layer protects you from the elements, like rain, snow, and wind. Make sure it’s waterproof if working in wet conditions, and wind-proof to keep you shielded when exposed to a cold wind."
+        },
+        {
+          "body": "While protecting your body against the elements is important, don’t forget about accessories to protect your head, face, and ears. Even if you are wearing a heavy coat and trousers in cold weather, you still lose a lot of your body heat from your head. Thermal Beanies, also commonly referred to as toboggans, are made from materials like fleece or wool, making them a versatile choice for outdoor jobs by providing warmth. However, do NOT wear one of these beneath a hard-hat or safety helmet as it can interfere with the fit of the hard hat or helmet, unless the manufacturers’ product literature specifically says that is allowed. That being said, there are Hard Hat Liners specifically designed and approved to fit under hard hats. These insulated liners protect against the cold while maintaining compliance with safety standards and manufacturer’s requirements."
+        },
+        {
+          "body": "Another good option for some work situations is a Trapper Hat, which is distinguished by its ear flaps and fur lining. These make it a perfect choice for many workers in extreme cold and windy conditions when protective helmets like hard hats are not required. And, of course, many work jackets and coats have a built-in hood that can be utilized for warmth. Balaclavas are also ideal for working in extreme cold, as many of them cover the head in addition to providing full-face and neck coverage. These are a great option for workers exposed to high winds or freezing temperatures because keeping your nose and mouth covered not only prevents skin chaffing and frostbite, but also warms the air you are breathing, reducing strain on your lungs in extremely cold conditions."
+        },
+        {
+          "body": "Hand protection is also critical when working in cold environments, as your fingers are prone to suffering frostbite. When working in cold but dry environments, gloves with insulated liners, such as wool or fleece, paired with wind-resistant outer layers are ideal. These materials provide warmth while maintaining breathability to prevent sweat buildup. It may be necessary to wear leather over-gloves on top of thinner, less protective gloves when working with sharp or hot objects. In cold and wet environments, it’s crucial to choose gloves with a waterproof outer layer, like neoprene or PVC, combined with thermal insulation such as Thinsulate or synthetic fleece. This combination keeps hands warm and dry while maintaining flexibility and grip. And, when manual dexterity is not essential, and you are only interested in keeping your hands warm, here is an interesting fact; Mittens are actually warmer than most gloves because they allow your fingers to share body heat within a single compartment, reducing heat loss in extremely cold conditions."
+        },
+        {
+          "body": "Foot protection in cold weather is important too. Insulated work shoes or boots, paired with thermal socks, can help keep your feet warm and protected when working in the cold. However, it may be necessary to wear waterproof work shoes or boots when working in wet environments, as cold and wet combined is extremely hard on your feet."
+        },
+        {
+          "body": "But regardless of the type of shoe or boot needed to keep your feet warm and dry, do not overlook applicable safety requirements for protective footwear that may apply at your job. For example, safety toe shoes or boots are necessary, and required, at many jobsites to protect the worker’s toes from being impacted by falling objects, while metatarsal protection is needed to protect feet from rolling objects. And puncture resistant soles are required when walking on or around sharp objects that could puncture your foot. Non-conductive or insulated shoes or boots may also be required for added protection when working near live electrical conductors or exposed electrical equipment on or near the ground or other walking surface. Slip resistant soles are often a necessity to prevent slips and falls on wet or muddy walking surfaces. And because cold weather often involves ice or snow, adding cleats or spikes to your work shoes or boots for extra grip could be a good idea."
+        },
+        {
+          "body": "A word of caution about wearing clothing or accessories made from synthetic materials; If you work around or operate equipment that produces sparks or flames, clothing made of synthetic materials can ignite quickly and melt when burning. This melted molten material can adhere to your skin, resulting in severe burns that are much more difficult to treat compared to injuries from burnt natural fibers like cotton or wool. So, always check the garment’s label for material composition, and avoid synthetic materials such as Polyester, Nylon, Acrylic, Spandex (which is sometimes labelled as Lycra), Polypropylene, and Rayon if you work near potential ignition sources such as flames, sparks, or high heat. The best option when you work near open flames or other ignition sources is to choose flame-resistant clothing and apparel. These garments are treated with chemicals, or made from inherently flame-resistant fibers like Nomex or Kev-lar. The next best choice is to opt for natural fibers like wool or heavy cotton, which don’t ignite too easily, and don’t melt like synthetics."
+        },
+        {
+          "body": "Does anyone have a question about the safety aspects of dressing for Cold Weather? Please sign the training certification form to ensure you get credit for attending today’s OSHA training toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

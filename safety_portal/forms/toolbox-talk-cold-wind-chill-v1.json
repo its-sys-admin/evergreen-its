@@ -1,0 +1,69 @@
+{
+  "form_code": "toolbox-talk-cold-wind-chill-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Cold Stress — Understanding the Effects of Wind Chill",
+  "variant_label": "Cold Stress — Understanding the Effects of Wind Chill",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Cold_Stress_Wind_Chill.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Cold Stress — Understanding the Effects of Wind Chill",
+      "source_pdf": "OSHA_TBT_Cold_Stress_Wind_Chill.pdf",
+      "blocks": [
+        {
+          "heading": "Cold Stress – Understanding the Effects of Wind Chill",
+          "body": "[Reference: (5)(a)(1) of OSH Act, and The National Weather Service]\n\nNow let’s talk about another factor that can compound the effects of cold weather, making it even more dangerous; Wind. When the wind blows, it removes the heat from your body surface and surrounding areas more quickly, making it feel colder than the actual temperature. Simply stated, the stronger the wind blows, the colder it feels to your body."
+        },
+        {
+          "body": "This combined effect of air temperature and wind speed is known as wind chill, and its effects on your body can be significant. Believe it or not, when the wind is blowing hard enough, hypothermia can occur with long-term exposures to temperatures degrees between 30 and 50-degrees Fahrenheit. And if your skin or clothing happen to be wet, the onset of hypothermia becomes even more likely."
+        },
+        {
+          "body": "To help everyone better recognize when wind chill becomes a factor that can lead to dangerous conditions, the National Weather Service, often referred to as the NWS, developed and published a wind chill index chart. A copy of this National Weather Service wind chill index chart, as well as the link to their wind chill index app you can download for use in the field, are available on the NWS website. (Hand out the attached NWS wind chill index chart to students for discussion)."
+        },
+        {
+          "body": "The National Weather Service’s wind chill index chart is presented as a table, with a range of temperatures posted across the top, and a range of wind speeds posted down the left-hand side. To use this table, simply locate the column showing the actual temperature you are exposed to, and the row showing the wind speed to which you are exposed. Then, find where those two variables intersect to see the resulting wind chill index number. Again, the wind chill index number is basically a “feels like” temperature for those conditions. Also, notice at the bottom of the chart there is a color-coded legend showing the amount of time it takes at different wind chill index readings for exposed skin to become frost-bitten."
+        },
+        {
+          "body": "One moderating factor to be aware of when using this chart is that it assumes a ‘no sunlight scenario. That means if the actual exposure occurs on a cloudless day in bright sunshine, the actual wind chill factor might be a little higher than displayed on the chart, due to the warming effects of radiant heat produced by the sun being absorbed by the body."
+        },
+        {
+          "body": "Now let’s look at the chart and discuss some examples of how it works. Let’s say the actual air temperature you are exposed to outdoors is 20 degrees Fahrenheit, and there’s a 10 mile per hour wind blowing. According to the wind chill index chart, it actually feels like its 9 degrees to your body. Now, let’s leave the actual air temperature at 20 degrees Fahrenheit, but increase the wind speed to 40 miles per hour. You see here the wind chill index now drops all the way down to negative 1 degree Fahrenheit. That’s quite a difference! So, as we can see, wind chill is an important factor to be aware of when dressing for, and working in, cold wind weather."
+        },
+        {
+          "body": "Are there any questions about wind chill and its effect on your body? Please sign the training certification form to ensure you get credit for attending today’s OSHA training toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

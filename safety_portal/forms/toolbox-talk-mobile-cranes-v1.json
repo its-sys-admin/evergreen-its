@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-mobile-cranes-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Material Handling — Working Safely Around Mobile Cranes",
+  "variant_label": "Material Handling — Working Safely Around Mobile Cranes",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Material_Handling_Mobile_Cranes.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Material Handling — Working Safely Around Mobile Cranes",
+      "source_pdf": "OSHA_TBT_Material_Handling_Mobile_Cranes.pdf",
+      "blocks": [
+        {
+          "heading": "Material Handling and Storage – Working Safely Around Mobile Cranes",
+          "body": "[Reference: 1910.180 / 1926 Subpart CC]\n\nWorking around mobile cranes presents a multitude of potential hazards to your personal safety. Here is an overview of some common hazards associated with working around mobile cranes, and steps you can take to minimize those hazards to protect yourself and others:"
+        },
+        {
+          "body": "- Struck by the crane: The swinging counterweight of a mobile crane can strike a worker, or crush them between the counterweight and outriggers or a stationary object. So, maintain a safe distance from the counterweight on a crane, and never enter any area marked off by barricades or warning signs. Also, do not stand directly in front of or behind a crane when it is about to move, as the operator probably cannot see you there.\n- Struck by the load: Workers can be struck by the crane's load during lifting operations. Stay aware of your positioning when loads are being moved, and never place yourself beneath a suspended load. Also, use a tag line when helping move a load that needs to be carefully controlled, as doing so will help you maintain a safer distance from the load as it moves.\n- Dropped objects: Tools, equipment, or debris dropped while working on a crane can pose a hazard to workers below. So, do not stand beneath anyone working on the crane’s boom or deck.\n- Overloading: Operating the crane beyond its rated capacity can lead to structural failure, tipping, or loss of control. So never add any materials, tools, supplies, or other extra item to a rigged load unless you first get clearance from the qualified rigger for the lift.\n- Electrocution: Contact with overhead power lines or other electrical sources can result in electrocution, especially if the crane's boom or load becomes energized. So always alert the operator ASAP if you happen to notice any part of the crane or the load approaching overhead electrical lines. And NEVER approach or touch a crane that is in contact with an energized line.\n- Poor visibility: Limited visibility from the operator's cabin can result in accidents, especially when lifting or moving loads in congested areas. So, if you notice the crane or load approaching something that appears to represent a hazard, say something right away to the designated signal person so they can stop the crane and take steps to avoid an accidental strike.\n- Wind and weather conditions: Strong winds can cause instability in crane operations, leading to tipping or loss of control. If the wind suddenly starts to gust violently, adjust your positioning as needed to make sure you do not get struck by an out-of-control crane boom or load.\n- Unqualified operator error: Inexperienced or unauthorized crane operators may make mistakes that can endanger themselves and others on the worksite. NEVER try to operate a crane at any time or for any reason if you are not a trained, designated operator."
+        },
+        {
+          "body": "Does anyone have anything to add to today’s discussion on safety hazards to look out for when working around mobile cranes? Please sign the training certification form to ensure you get credit for attending today’s OSHA toolbox training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2023 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

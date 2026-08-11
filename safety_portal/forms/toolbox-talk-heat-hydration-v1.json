@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-heat-hydration-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — The Critical Role of Proper Hydration",
+  "variant_label": "Heat Illness Prevention — The Critical Role of Proper Hydration",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Hydration.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — The Critical Role of Proper Hydration",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Hydration.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention: The Critical Role of Proper Hydration",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nWe’ve discussed various risk factors that can lead to heat illness. Now, let’s focus on one of the most effective ways workers can prevent it: proper hydration. Staying hydrated is one of the simplest and most crucial actions workers can take to avoid heat-related illness.\n\nDehydration, often caused by excessive sweating, deprives the body of the fluids needed to regulate temperature and cool itself. Since hydration is essential for sweating, the body’s primary cooling mechanism, staying properly hydrated helps reduce the risk of heat illness. This is why employers are required to provide a clean, sanitary source of potable water to employees during work."
+        },
+        {
+          "body": "Here are some hydration tips to ensure workers stay safe:\n- Drink Water Regularly – In high heat situations, sip small amounts of cool water or other hydrating beverages every 15-20 minutes, even if you’re not thirsty. For workers engaged in moderate to heavy activity under hot conditions, it’s generally recommended to drink between 16 to 32 ounces of water per hour. However, larger individuals, those with higher sweat rates, or those involved in extreme physical exertion may need to drink even more.\n- Replenish Electrolytes - Simply drinking water isn’t enough when working in extreme heat. If you drink too much water without replacing critical minerals known as electrolytes, you risk developing low sodium and potassium levels, leading to heat cramps and other complications. Sports drinks containing electrolytes or electrolyte tablets can help replace salts and minerals lost through sweat.\n- Avoid Caffeinated or Alcoholic Beverages - Caffeine and alcohol are diuretics, meaning they increase urine production and can cause dehydration. For rehydration, stick to water or electrolyte-enriched drinks instead of caffeinated or alcoholic beverages.\n- Monitor Urine Color - Keep an eye on the color of your urine (refer to handout for this toolbox talk). Clear or light-yellow urine generally indicates good hydration. Dark yellow or amber urine signals dehydration and suggests that more fluids are needed.\n- Staying Hydrated Beyond the Worksite - Dehydration doesn’t just happen at work. Many workers begin their day already dehydrated, which can make them more susceptible to heat illness when they start working in hot conditions. In the morning, before heading to work, it’s helpful to drink a glass or two of water to kickstart your hydration for the day. After a long night’s sleep, your body has been without water for several hours, so it's always good to rehydrate as soon as you wake up."
+        },
+        {
+          "body": "Proper hydration is crucial for preventing heat illness, both at work and at home. It’s a simple but essential practice that should never be underestimated. Without sufficient hydration, the risk of heat-related illness increases significantly, especially when working in hot and physically demanding conditions. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,10 @@ _CATALOG = _ROOT / "safety_portal" / "catalog.json"
 # shape SignaturePad.tsx emits and tests/test_form_pdf.py uses). Two strokes so the
 # signature renders at least one drawable line.
 _SIG_VALUE = "M 10 20 L 30 40 L 60 25 M 80 30 L 120 60"
+
+# Leading bullet marker on a content_blocks body line — stripped by the renderer (see the
+# content_blocks branch of _expected_structural_strings).
+_BULLET_LEAD = re.compile(r"^\s*[-•*]\s+")
 
 
 # ── manifest-driven active-form discovery ──────────────────────────────────────
@@ -251,7 +256,13 @@ def _expected_structural_strings(definition: dict, *, mode: str) -> list[str]:
         elif typ == "content_blocks":
             for b in section.get("blocks", [])[:2]:
                 add(b.get("heading"))
-                add(b.get("body"))
+                # A body line LEADING with a bullet marker ("- x" / "• x" / "* x") is drawn
+                # by form_pdf._prose_flowables as a hanging-indent bullet whose text is
+                # line[2:].strip() — the marker is STRIPPED and redrawn as the bulletText
+                # glyph (form_pdf.py:400-401). The needle must drop it too, or any
+                # heading-less bullet-leading block (the shape of every OSHA toolbox talk
+                # whose source is a bare bulleted list) reports a false degradation.
+                add(_BULLET_LEAD.sub("", b.get("body") or "", count=1))
         elif typ == "guidance":
             # Both PDF renderers deliberately render a guidance section as its HEADING
             # + CALLOUT one-liners ONLY (form_pdf._section_flowables — the p/bullets
