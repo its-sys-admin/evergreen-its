@@ -383,7 +383,12 @@ describe("POST /api/fieldops/expected-material/:id/flag-incident", () => {
     const row = await expRow(id);
     expect(row.status).toBe("incident");
     expect(row.note).toBe("arrived crushed");
-    expect(row.qty_received).toBe(3);
+    // DELIBERATELY REWRITTEN 2026-08-11 (audit B6): the flag used to write the client's
+    // qty_received straight onto the row, clobbering the ledger-derived value — this test
+    // asserted row.qty_received === 3 and the two §51 sheets then disagreed forever. The
+    // ledger owns that column now: the flag body's number is audited but never reaches the
+    // row, so with zero events it is still NULL here.
+    expect(row.qty_received).toBeNull();
     expect(row.received_by).toBe("mgr.mo");
     expect(await audits("expected_material_incident")).toHaveLength(1);
 
@@ -406,6 +411,82 @@ describe("POST /api/fieldops/expected-material/:id/flag-incident", () => {
     expect(after.status).toBe("incident"); // NOT flipped to received
     expect(await events(id)).toHaveLength(1);
     expect(await audits("expected_material_receipt")).toHaveLength(1);
+    // B6, the other half: the projection now RUNS on a flagged line — Delivered Qty tracks
+    // the ledger (2) while only STATUS stays sticky, and the un-noted mark COALESCEs so the
+    // flag's note survives on the row instead of being blanked. Before 2026-08-11 the whole
+    // statement was guarded status <> 'incident': this row would have frozen at the clobbered
+    // 3 while the Receipts sheet summed 2 — permanent cross-sheet divergence.
+    expect(after.qty_received).toBe(2);
+    expect(after.note).toBe("arrived crushed");
+  });
+
+  it("resolve-incident clears the flag by EXPLICIT human act — status lands where the ledger says", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "Crushed then replaced" });
+    await p(manager, `/api/fieldops/expected-material/${id}/flag-incident`, { note: "arrived crushed" });
+
+    // note is REQUIRED — the record of HOW it was resolved is the point.
+    const bare = await p(manager, `/api/fieldops/expected-material/${id}/resolve-incident`);
+    expect(bare.status).toBe(400);
+    expect(((await bare.json()) as { error: string }).error).toBe("note_required");
+
+    // No delivered event yet → resolution returns the line to EXPECTED (still owed).
+    const res = await p(manager, `/api/fieldops/expected-material/${id}/resolve-incident`, {
+      note: "vendor is reshipping",
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("expected");
+    expect((await expRow(id)).status).toBe("expected");
+    expect(await audits("expected_material_incident_resolve")).toHaveLength(1);
+
+    // A second resolve has nothing to clear.
+    const again = await p(manager, `/api/fieldops/expected-material/${id}/resolve-incident`, { note: "?" });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: string }).error).toBe("not_flagged");
+  });
+
+  it("resolve-incident lands on RECEIVED when the latest ledger event is delivered", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "Damaged but delivered" });
+    await p(manager, `/api/fieldops/expected-material/${id}/flag-incident`, { note: "corner crushed" });
+    // The goods fully arrived AFTER the flag (sticky held it at incident)...
+    await p(manager, `/api/fieldops/expected-material/${id}/receipt`, { kind: "delivered", qty: 40 });
+    expect((await expRow(id)).status).toBe("incident");
+    // ...so an explicit resolve lands where the ledger points: received.
+    const res = await p(manager, `/api/fieldops/expected-material/${id}/resolve-incident`, {
+      note: "damage waived by the office",
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("received");
+    const row = await expRow(id);
+    expect(row.status).toBe("received");
+    expect(row.qty_received).toBe(40); // ledger-derived, untouched by the resolve
+  });
+
+  it("a delivery mark NEVER resolves the flag — only the explicit route does", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "Still a problem" });
+    await p(manager, `/api/fieldops/expected-material/${id}/flag-incident`, { note: "wrong finish" });
+    await p(manager, `/api/fieldops/expected-material/${id}/receipt`, { kind: "delivered", qty: 10 });
+    await p(manager, `/api/fieldops/expected-material/${id}/receipt`, { kind: "delivered", qty: 5 });
+    const row = await expRow(id);
+    expect(row.status).toBe("incident"); // two full deliveries later, the problem still shows
+    expect(row.qty_received).toBe(15); // while the quantities kept tracking the ledger
+  });
+
+  it("deactivating a line CASCADES to its scheduled loads (audit B9)", async () => {
+    const id = await createExp(admin, "JOB-A", { description: "With loads" });
+    const ship = await p(admin, "/api/fieldops/material-shipment", {
+      line_id: id, bol_number: "BOL-9", qty: 10,
+    });
+    expect(ship.status, await ship.clone().text()).toBe(201);
+    const del = await p(admin, `/api/fieldops/expected-material/${id}/delete`);
+    expect(del.status).toBe(200);
+    const loads = await env.DB
+      .prepare("SELECT active FROM material_shipments WHERE line_id = ?1")
+      .bind(id)
+      .all<{ active: number }>();
+    expect(loads.results).toHaveLength(1);
+    // Orphaned loads were invisible before: job-scoped read, line-bucketed render —
+    // fetched, counted against the LIMIT, shown nowhere, removable only by purge-job.
+    expect(loads.results[0].active).toBe(0);
   });
 
   it("scope holds for flag-incident too: cross-job manager → 403 forbidden_job", async () => {

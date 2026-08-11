@@ -2495,7 +2495,24 @@ as intentional.
 
 Surfaced: 2026-08-10 session close (PR4 completion session).
 
-## [OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
+## [RESOLVED 2026-08-11 — was OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
+
+> **RESOLVED 2026-08-11 (the manifest-finish PR), all nine + the B7 product decision.**
+> A1 qty picker unified into the Columns-table concepts (regression pin: a remap reaches
+> the wire); A2 merge is REAL (guarded in-place UPDATEs, locked matches reported
+> `skipped_locked`, never silently rewritten); A3 mode-aware plan totals + discard works
+> mid-`committing` with honest copy; A4 ambiguity enforced SERVER-side (resolutions
+> re-validated against the Worker's own match set — a forged line id refuses); A5 the
+> daemon clamps its grid to the Worker's bounds with visible parse notes AND classifies a
+> Worker 4xx as PERMANENT (one-shot flag + ticket, `manifest_worker_rejected`); B6 the
+> receipt projection runs on flagged lines (quantities track the ledger, status stays
+> sticky; flag no longer clobbers `qty_received`; note COALESCEd); B7 the **Resolve
+> problem** action (operator decision 2026-08-11: explicit human act, note required,
+> status lands where the ledger points); B8 the FULL shipping-log dispose (rows →
+> `material_shipments`, `source='import'`, deterministic `shipment_uuid`, unmatched parts
+> create line+load; operator chose full build over fence); B9 line delete cascades its
+> loads. The B6 drift-encoding test was deliberately rewritten and RED-verified against
+> the old guard (3 failures). The entry below is retained as the audit record.
 
 The 2026-08-10 end-to-end audit (adversarially verified, re-confirmed against post-PR4 HEAD the same
 night) found nine correctness defects across the manifest import lane and the expected-materials

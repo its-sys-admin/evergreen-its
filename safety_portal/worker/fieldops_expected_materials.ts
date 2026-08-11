@@ -438,6 +438,29 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       const res = await c.env.DB.batch([
         c.env.DB.prepare("UPDATE job_expected_materials SET active = 0 WHERE id = ?1 AND active = 1").bind(id),
         auditStmtIfChanged(c, actor, "expected_material_deactivate", String(id), { expectation_id: id }),
+        // CASCADE (2026-08-11): a line's scheduled loads die with it. They were invisible
+        // orphans before — the shipments read is job-scoped while the SPA buckets by
+        // line, so a deleted line's loads were still fetched, still counted against the
+        // read LIMIT, rendered nowhere, and were unreachable except by purge-job. Guarded
+        // on the line actually deactivating IN THIS STATEMENT's view (the loads of an
+        // already-inactive line were cascaded by the first call).
+        c.env.DB
+          .prepare(
+            "UPDATE material_shipments SET active = 0 " +
+              "WHERE line_id = ?1 AND active = 1 " +
+              "AND EXISTS (SELECT 1 FROM job_expected_materials j WHERE j.id = ?1 AND j.active = 0)",
+          )
+          .bind(id),
+        // The cascade's OWN audit row (W4 — every mutation records itself). Inline rather
+        // than auditStmtIfChanged because that helper's predicate is changes()=1 and a
+        // cascade legitimately deactivates SEVERAL loads at once; >=1 records the sweep,
+        // 0 (no loads, or already cascaded) records nothing.
+        c.env.DB
+          .prepare(
+            "INSERT INTO audit_log (actor_username, action, target_username, detail) " +
+              "SELECT ?1, 'material_shipment_cascade_deactivate', ?2, ?3 WHERE changes() >= 1",
+          )
+          .bind(actor, String(id), JSON.stringify({ expectation_id: id })),
       ]);
       if ((res[0].meta.changes ?? 0) === 0) {
         const row = await c.env.DB.prepare("SELECT id FROM job_expected_materials WHERE id = ?1").bind(id).first();
@@ -568,17 +591,26 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
           shipment_id: shipmentId,
         }),
         // 3. Legacy projection refresh. qty_received is RECOMPUTED from the ledger, never
-        //    incremented, so it cannot drift from it. `status <> 'incident'` makes an incident
-        //    flag STICKY: a delivery mark records the delivery without clearing the problem.
+        //    incremented, so it cannot drift from it — and that stays true on a FLAGGED
+        //    line: the row runs this update too, so Delivered Qty keeps tracking the
+        //    ledger while only STATUS is sticky (the CASE's first arm — an incident is
+        //    cleared exclusively by the explicit resolve route below, never by a delivery
+        //    mark: a delivered-but-damaged pallet is still a problem). The old shape
+        //    guarded the WHOLE statement `status <> 'incident'`, which froze
+        //    qty_received/note on flag and let the two §51 sheets (Material List vs the
+        //    Receipts ledger) disagree forever. `note` is COALESCEd so an un-noted mark
+        //    keeps the last note instead of blanking it on the operator's sheet.
         c.env.DB
           .prepare(
             `UPDATE job_expected_materials
-                SET status       = CASE WHEN ?2 = 'delivered' THEN 'received' ELSE 'expected' END,
+                SET status       = CASE WHEN status = 'incident' THEN 'incident'
+                                        WHEN ?2 = 'delivered' THEN 'received'
+                                        ELSE 'expected' END,
                     received_at  = unixepoch(),
                     received_by  = ?3,
-                    note         = ?4,
+                    note         = COALESCE(?4, note),
                     qty_received = (SELECT SUM(e.qty) FROM material_receipt_events e WHERE e.line_id = ?1)
-              WHERE id = ?1 AND active = 1 AND status <> 'incident'`,
+              WHERE id = ?1 AND active = 1`,
           )
           .bind(id, f.kind, actor, f.note),
       ]);
@@ -588,11 +620,12 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       throw e;
     }
     if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_found" }, 404);
-    // Report the ACTUAL persisted status, never a literal. Statement 3 is guarded
-    // `status <> 'incident'`, so on a flagged line it deliberately no-ops and the row STAYS
-    // 'incident' — the sticky-incident rule. Returning an assumed "received" there would tell the
-    // field crew a flagged delivery was resolved while the §51 Material List mirror (which reads
-    // this same column) still showed the problem: the two surfaces would disagree, silently.
+    // Report the ACTUAL persisted status, never a literal. Statement 3's CASE keeps a
+    // flagged line at 'incident' — the sticky rule — so on a flagged delivery the row's
+    // quantities move while its status does not. Returning an assumed "received" there
+    // would tell the field crew a flagged delivery was resolved while the §51 Material
+    // List mirror (which reads this same column) still showed the problem: the two
+    // surfaces would disagree, silently.
     const after = await c.env.DB.prepare(
       "SELECT status FROM job_expected_materials WHERE id = ?1",
     )
@@ -665,11 +698,18 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
     const res = await c.env.DB.batch([
       c.env.DB
         .prepare(
+          // qty_received deliberately NOT written here (2026-08-11): since 0059 the
+          // receipt LEDGER owns that column — the projection above recomputes it from
+          // SUM(events) — so a client-supplied number on flag would clobber the
+          // ledger-derived value and the two §51 sheets would disagree until the next
+          // mark. A quantity that matters on a flag belongs in the note and the incident
+          // form; the body field is still accepted (wire-compat) and still audited, but
+          // it no longer reaches the row.
           `UPDATE job_expected_materials
-           SET status = ?2, received_at = unixepoch(), received_by = ?3, qty_received = ?4, note = ?5
+           SET status = ?2, received_at = unixepoch(), received_by = ?3, note = ?4
            WHERE id = ?1 AND active = 1 AND status = 'expected'`,
         )
-        .bind(id, nextStatus, actor, f.qty_received, f.note),
+        .bind(id, nextStatus, actor, f.note),
       auditStmtIfChanged(c, actor, auditAction, row.job_id, { expectation_id: id, job_id: row.job_id, qty_received: f.qty_received }),
     ]);
     if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "already_actioned" }, 409);
@@ -712,6 +752,69 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
     gates.requireSession,
     gates.requireCapability("cap.materials.receive"),
     (c) => actionExpectation(c, "incident", "expected_material_incident", true),
+  );
+
+  // ── POST /api/fieldops/expected-material/:id/resolve-incident — clear the flag (2026-08-11). ─────
+  // Until now NOTHING could move a line off 'incident' — the sticky rule had no counterpart, so a
+  // shortfall that was later made good showed as a problem forever on every surface, and
+  // material_incidents.py documented a Line-Status resolution signal no route could produce. This
+  // is that counterpart, and it is DELIBERATELY an explicit human act (operator decision
+  // 2026-08-11): a delivery mark still never clears the flag — a delivered-but-damaged pallet is
+  // still a problem — only a person saying "this problem is resolved", with a REQUIRED note
+  // saying how, does. Status lands where the delivery LEDGER says it should: latest event
+  // 'delivered' → received, anything else (or no events) → expected — the same latest-event-wins
+  // rule the read rollup uses, so the pill and the sheets agree on what resolution looks like.
+  app.post(
+    "/api/fieldops/expected-material/:id/resolve-incident",
+    gates.requireSession,
+    gates.requireCapability("cap.materials.receive"),
+    async (c) => {
+      const roleErr = requireDailyReportRole(c);
+      if (roleErr) return roleErr;
+      const id = badId(c);
+      if (id === null) return c.json({ error: "invalid_id" }, 400);
+      const body = await readOptionalJsonBody(c);
+      if (body === null) return c.json({ error: "bad_request" }, 400);
+      const f = readActionFields(body);
+      if (typeof f === "string") return c.json({ error: f }, 400);
+      if (f.note === null) return c.json({ error: "note_required" }, 400);
+
+      const row = await c.env.DB.prepare(
+        "SELECT id, job_id FROM job_expected_materials WHERE id = ?1 AND active = 1",
+      )
+        .bind(id)
+        .first<{ id: number; job_id: string }>();
+      if (!row) return c.json({ error: "not_found" }, 404);
+      const scopeErr = await requireJobScope(c, row.job_id, SCOPE_BYPASS_CAPS);
+      if (scopeErr) return scopeErr;
+
+      const actor = c.get("session").username;
+      const res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            `UPDATE job_expected_materials
+                SET status = CASE
+                      WHEN (SELECT e.kind FROM material_receipt_events e
+                             WHERE e.line_id = ?1 ORDER BY e.id DESC LIMIT 1) = 'delivered'
+                      THEN 'received' ELSE 'expected' END,
+                    received_at = unixepoch(),
+                    received_by = ?2,
+                    note = ?3
+              WHERE id = ?1 AND active = 1 AND status = 'incident'`,
+          )
+          .bind(id, actor, f.note),
+        auditStmtIfChanged(c, actor, "expected_material_incident_resolve", row.job_id, {
+          expectation_id: id, job_id: row.job_id,
+        }),
+      ]);
+      if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_flagged" }, 409);
+      const after = await c.env.DB.prepare(
+        "SELECT status FROM job_expected_materials WHERE id = ?1",
+      )
+        .bind(id)
+        .first<{ status: string }>();
+      return c.json({ ok: true, id, status: after?.status ?? null }, 200);
+    },
   );
 
   // ── PR2 SHIPMENT CRUD (office; cap.materials.manage) ────────────────────────────────────────

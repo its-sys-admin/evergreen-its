@@ -75,8 +75,12 @@ const ROWS: api.ManifestGridRow[] = [
 const PLAN_CLEAN: api.ManifestPlanResponse = {
   ok: true, job_id: "JOB-A", committed_through_row: 0,
   counts: { incoming: 2, matched: 0, ambiguous: 0, new: 2, absent: 0, existing: 0 },
-  matched: [], ambiguous: [], absent: [], projected_total: 2, would_exceed_line_cap: false,
+  matched: [], ambiguous: [], absent: [],
+  projected_total: 2, projected_total_add_new: 2, projected_total_merge: 2,
+  would_exceed_line_cap: false, would_exceed_line_cap_merge: false,
 };
+
+const COMMIT_OK = { inserted: 2, updated: 0, shipments: 0, pages: 1, skipped_locked: [] };
 
 const PLAN_AMBIGUOUS: api.ManifestPlanResponse = {
   ...PLAN_CLEAN,
@@ -135,11 +139,16 @@ describe("ManifestValidatePage", () => {
     expect(api.commitAll).not.toHaveBeenCalled(); // a dry run writes nothing
   });
 
-  it("BLOCKS the import while an ambiguous part number is undecided", async () => {
-    // THE assertion. A part number matching more than one existing line has no single correct
-    // target; committing through it would silently pick a winner.
+  it("BLOCKS a MERGE import while an ambiguous part number is undecided", async () => {
+    // THE assertion — DELIBERATELY NARROWED 2026-08-11 (the rewrite is the point, not a
+    // workaround): ambiguity blocks exactly where a match CHANGES something. In merge (and
+    // the shipments import) the chosen line gets rewritten/attached, so committing through
+    // an undecided duplicate would silently pick a winner — blocked, here AND server-side
+    // (409 ambiguous_unresolved). In add_new every row inserts regardless, so a duplicate
+    // is informational and forcing a pointless resolution was pure friction.
     const { getByText, getByRole, getByLabelText, container } = mount();
     await waitFor(() => getByText("Preview changes"));
+    fireEvent.change(getByLabelText("Import mode"), { target: { value: "merge" } });
     vi.mocked(api.planManifest).mockResolvedValue(PLAN_AMBIGUOUS);
     fireEvent.click(getByText("Preview changes"));
 
@@ -147,11 +156,49 @@ describe("ManifestValidatePage", () => {
       expect(container.textContent ?? "").toContain("match more than one existing line"),
     );
     const importBtn = getByRole("button", { name: /^Import 2 lines$/ }) as HTMLButtonElement;
-    expect(importBtn.disabled, "commit must stay blocked until every ambiguity is decided").toBe(true);
+    expect(importBtn.disabled, "merge must stay blocked until every ambiguity is decided").toBe(true);
     expect(container.textContent ?? "").toContain("1 ambiguous part number still to decide");
 
     fireEvent.change(getByLabelText("Which existing line for row 3"), { target: { value: "11" } });
     await waitFor(() => expect(importBtn.disabled).toBe(false));
+  });
+
+  it("does NOT block an add_new import on ambiguity — every row inserts regardless", async () => {
+    const { getByText, getByRole } = mount();
+    await waitFor(() => getByText("Preview changes"));
+    vi.mocked(api.planManifest).mockResolvedValue(PLAN_AMBIGUOUS);
+    fireEvent.click(getByText("Preview changes"));
+    const importBtn = getByRole("button", { name: /^Import 2 lines$/ }) as HTMLButtonElement;
+    await waitFor(() => expect(importBtn.disabled).toBe(false));
+  });
+
+  it("REGRESSION (audit A1): remapping Quantity in the Columns table changes the committed qty", async () => {
+    // The old page kept quantity in a separate `qtyCol` state the Columns table never
+    // wrote — remapping Quantity there was silently ignored and every line committed the
+    // seeded column's value (or null). Quantity now rides the SAME concepts state as
+    // every other field; this pins the remap actually reaching the wire.
+    const onClose = vi.fn();
+    const { getByText, getByRole, getByLabelText } = mount({}, onClose);
+    await waitFor(() => getByLabelText("Import column QTY as"));
+    // Move the qty concept off the QTY column onto PART NUMBER (nonsensical on purpose —
+    // what matters is that the wire follows the human's mapping, not the parser's seed).
+    fireEvent.change(getByLabelText("Import column QTY as"), { target: { value: "ignore" } });
+    fireEvent.change(getByLabelText("Import column PART NUMBER as"), { target: { value: "qty" } });
+
+    vi.mocked(api.planManifest).mockResolvedValue(PLAN_CLEAN);
+    fireEvent.click(getByText("Preview changes"));
+    const importBtn = getByRole("button", { name: /Import 2 lines/ }) as HTMLButtonElement;
+    await waitFor(() => expect(importBtn.disabled).toBe(false));
+    vi.mocked(api.commitAll).mockResolvedValue(COMMIT_OK);
+    fireEvent.click(importBtn);
+
+    await waitFor(() => expect(api.commitAll).toHaveBeenCalled());
+    const lines = vi.mocked(api.commitAll).mock.calls[0][2];
+    // Row 2's PART NUMBER cell is "7006955": a remap that genuinely reaches the wire
+    // commits THAT as the qty, not the seeded QTY column's 4. Under the old dead qtyCol
+    // state this stayed 4 and the remap was silently ignored.
+    expect(lines[0].qty).toBe(7006955);
+    expect(lines[0].part_number).toBeNull();
   });
 
   it("invalidates a stale preview when the mapping changes", async () => {
@@ -197,7 +244,7 @@ describe("ManifestValidatePage", () => {
     const importBtn = getByRole("button", { name: /^Import 2 lines$/ });
     await waitFor(() => expect((importBtn as HTMLButtonElement).disabled).toBe(false));
 
-    vi.mocked(api.commitAll).mockResolvedValue({ inserted: 2, pages: 1 });
+    vi.mocked(api.commitAll).mockResolvedValue(COMMIT_OK);
     fireEvent.click(importBtn);
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -222,7 +269,7 @@ describe("ManifestValidatePage", () => {
     fireEvent.click(getByText("Preview changes"));
     const importBtn = getByRole("button", { name: /^Import 2 lines$/ });
     await waitFor(() => expect((importBtn as HTMLButtonElement).disabled).toBe(false));
-    vi.mocked(api.commitAll).mockResolvedValue({ inserted: 2, pages: 1 });
+    vi.mocked(api.commitAll).mockResolvedValue(COMMIT_OK);
     fireEvent.click(importBtn);
 
     await waitFor(() => expect(api.commitAll).toHaveBeenCalled());

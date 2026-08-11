@@ -120,6 +120,11 @@ export function JobMaterialsPage({
   const [marks, setMarks] = useState<Record<number, MarkDraft>>({});
   const [shipFor, setShipFor] = useState<number | null>(null);
   const [shipDraft, setShipDraft] = useState<ShipDraft>(emptyShip());
+  // Resolve-problem draft (B7, 2026-08-11): which line's resolve panel is open + its
+  // REQUIRED note. Clearing a flag is an explicit human act with a written reason — a
+  // delivery mark never does it.
+  const [resolveFor, setResolveFor] = useState<number | null>(null);
+  const [resolveNote, setResolveNote] = useState("");
 
   // ── Two-step confirm on every delivery mark (operator request, 2026-08-10) ────────────────
   // A mark is an APPEND-ONLY ledger event with no delete path: a mis-tap cannot be undone, only
@@ -475,9 +480,53 @@ export function JobMaterialsPage({
                     <>
                       {" "}
                       <span className="dash-pill dash-pill--danger">Problem reported</span>
+                      {canMark && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="btn btn--secondary btn--sm"
+                            disabled={busy}
+                            onClick={() => {
+                              setResolveFor((cur) => (cur === line.id ? null : line.id));
+                              setResolveNote("");
+                            }}
+                          >
+                            {resolveFor === line.id ? "Cancel" : "Resolve problem"}
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
+                {resolveFor === line.id && line.status === "incident" && (
+                  <div className="dash-row" aria-label={`Resolve problem for ${rowTitle(line)}`}>
+                    <input
+                      type="text"
+                      aria-label="How was it resolved"
+                      placeholder="How was it resolved? (required)"
+                      value={resolveNote}
+                      onChange={(e) => setResolveNote(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--primary btn--sm"
+                      disabled={busy || resolveNote.trim().length === 0}
+                      onClick={() =>
+                        void run(
+                          line.id,
+                          () => api.resolveExpectedMaterialIncident(line.id, resolveNote.trim()),
+                          "Problem resolved — the line now shows what the delivery ledger says.",
+                        ).then(() => {
+                          setResolveFor(null);
+                          setResolveNote("");
+                        })
+                      }
+                    >
+                      Mark resolved
+                    </button>
+                  </div>
+                )}
                 <div className="dash-card__sub">
                   {line.part_number ? `Part ${line.part_number} · ` : ""}
                   Expected {fmtQty(line.qty)} {line.unit ?? ""}
