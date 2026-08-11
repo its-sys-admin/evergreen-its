@@ -304,10 +304,16 @@ export function ManifestValidatePage({
     return out;
   }, [importableRows, rowState, added, colFor]);
 
-  const missingDescription = useMemo(
-    () => resolvedLines.filter((l) => !l.description && !l.material_id).length,
+  /** The lines the Worker WILL refuse (no description and no catalog pick) — kept as the
+   *  full list, not just a count, so the screen can name them and offer the one-tap ✕
+   *  that clears each (and all) of them from the import instead of letting one bad row
+   *  hold the other four hundred hostage. Document rows clear by unticking their keep;
+   *  hand-added rows clear by deletion. */
+  const failingLines = useMemo(
+    () => resolvedLines.filter((l) => !l.description && !l.material_id),
     [resolvedLines],
   );
+  const missingDescription = failingLines.length;
   const unresolvedAmbiguous = useMemo(
     () => (plan?.ambiguous ?? []).filter((a) => ambiguousChoice[a.source_row_index] === undefined),
     [plan, ambiguousChoice],
@@ -319,6 +325,32 @@ export function ManifestValidatePage({
   function setKeep(rowIndex: number, keep: boolean) {
     setRowState((s) => ({ ...s, [rowIndex]: { ...(s[rowIndex] ?? { edits: {} }), keep } }));
     setPlan(null); // a changed set invalidates the dry run
+  }
+
+  /** The ✕ on a failing line: clear it from the import. A DOCUMENT row clears by
+   *  unticking its keep (the row stays visible in the grid, just deselected — nothing is
+   *  hidden); a HAND-ADDED row clears by deleting it (it has no grid row to fall back
+   *  to). Same derivation the failing list uses, so the two cannot disagree. */
+  const addedBase = Math.max(0, ...importableRows.map((r) => r.row_index)) + 1;
+  function clearLines(sourceRowIndexes: number[]) {
+    const failing = new Set(sourceRowIndexes);
+    const docRows = [...failing].filter((i) => i < addedBase);
+    if (docRows.length) {
+      // ONE state update for every document row — per-row setKeep calls in a loop would
+      // be fine, but this keeps clear-one and clear-all on the identical path.
+      setRowState((s) => {
+        const out = { ...s };
+        for (const idx of docRows) out[idx] = { ...(out[idx] ?? { edits: {} }), keep: false };
+        return out;
+      });
+    }
+    // ONE filter for the hand-added rows: positions are evaluated against the CURRENT
+    // array in a single pass, so clearing several never suffers the shifted-index bug a
+    // remove-one-at-a-time loop would.
+    if ([...failing].some((i) => i >= addedBase)) {
+      setAdded((rowsA) => rowsA.filter((_, i) => !failing.has(addedBase + i)));
+    }
+    setPlan(null);
   }
 
   function setEdit(rowIndex: number, col: number, value: string) {
@@ -643,11 +675,39 @@ export function ManifestValidatePage({
               Rows ({resolvedLines.length} of {importableRows.length + added.length} selected)
             </h4>
             {missingDescription > 0 ? (
-              <p className="dash-error">
-                {missingDescription} selected line
-                {missingDescription === 1 ? " has" : "s have"} no description — the importer will
-                refuse them. Map a Description column, or edit those rows.
-              </p>
+              <div className="dash-error" role="alert">
+                <p>
+                  {missingDescription} selected line
+                  {missingDescription === 1 ? " has" : "s have"} no description — the importer will
+                  refuse them. Map a Description column, edit those rows, or clear them:
+                </p>
+                <ul aria-label="Lines the import would refuse">
+                  {failingLines.slice(0, 20).map((l) => (
+                    <li key={l.source_row_index}>
+                      Row {l.source_row_index}
+                      {l.part_number ? ` · part ${l.part_number}` : ""}{" "}
+                      <button
+                        type="button"
+                        className="btn btn--secondary btn--sm"
+                        aria-label={`Clear row ${l.source_row_index} from the import`}
+                        onClick={() => clearLines([l.source_row_index])}
+                      >
+                        ✕ Clear
+                      </button>
+                    </li>
+                  ))}
+                  {failingLines.length > 20 ? <li>…and {failingLines.length - 20} more</li> : null}
+                </ul>
+                {missingDescription > 1 ? (
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--sm"
+                    onClick={() => clearLines(failingLines.map((l) => l.source_row_index))}
+                  >
+                    ✕ Clear all {missingDescription} failing lines
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             <div style={{ overflowX: "auto", maxHeight: "28rem" }}>
               <table className="dash-table">

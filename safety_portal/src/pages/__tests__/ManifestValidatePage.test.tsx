@@ -277,6 +277,29 @@ describe("ManifestValidatePage", () => {
     expect(lines[0].description).toBe("Pile cap (revised)");
   });
 
+  it("a failing line gets an ✕ that clears it — one bad row cannot hold the import hostage", async () => {
+    // Blank row 3's description: the Worker would refuse it (description_required), so
+    // the screen names it, blocks the import, and offers the one-tap clear (operator
+    // request, 2026-08-11 — surfaced by the first real BOM day). Clearing unticks the
+    // row's keep (still visible in the grid, just deselected) and the import unblocks.
+    const { getByText, getByRole, getByLabelText, container } = mount();
+    await waitFor(() => getByLabelText("Row 3 column 2"));
+    fireEvent.change(getByLabelText("Row 3 column 2"), { target: { value: "" } });
+    await waitFor(() =>
+      expect(container.textContent ?? "").toContain("no description — the importer will refuse"),
+    );
+
+    fireEvent.click(getByLabelText("Clear row 3 from the import"));
+    await waitFor(() =>
+      expect(container.textContent ?? "").not.toContain("no description — the importer will refuse"),
+    );
+
+    vi.mocked(api.planManifest).mockResolvedValue(PLAN_CLEAN);
+    fireEvent.click(getByText("Preview changes"));
+    const importBtn = getByRole("button", { name: /^Import 1 lines$/ }) as HTMLButtonElement;
+    await waitFor(() => expect(importBtn.disabled).toBe(false));
+  });
+
   it("warns when the import would exceed the job's line cap", async () => {
     const { getByText, container } = mount();
     await waitFor(() => getByText("Preview changes"));
