@@ -297,11 +297,12 @@ and it requires deciding which sheets are canonical. Not Tier-2.
 - **The restore direction HAS been drilled live** (2026-08-10, issue #42) — archive → un-archive →
   archive, all containers, folder ids preserved throughout. The one branch still unexercised is the
   live-folder collision below; that specific case is novel → co-resolve with Seth.
-- **"Try again" after a failed un-archive presses *Archive*, not un-archive.** The button on the
-  red card always raises an archive request, and the confirmation modal it opens says so — read it.
-  The result is recoverable, not harmful: the job goes back to fully archived, and the **Un-archive**
-  button reappears once it reads Archived again. But it is not "resume the restore", and pressing it
-  without reading the modal is how an operator convinces themselves the system is fighting them.
+- **"Try again" resumes the direction that failed** — an un-archive after a failed un-archive, an
+  archive after a failed archive. Read the confirmation modal anyway: it names the direction, and
+  that is the cheapest check that the button is about to do what you expect. (Until PR #55 it always
+  raised an *archive* request regardless of direction, which stranded a failed restore with no
+  correct move — issue #54. An older session log or runbook copy saying "Try again presses Archive"
+  was true when written and no longer is.)
 
 ## Symptom 7 — "the archive queue could not be read"
 
