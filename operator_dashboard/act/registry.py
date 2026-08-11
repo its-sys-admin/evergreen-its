@@ -313,6 +313,9 @@ _ENTRIES: list[ConfigEntry] = [
     _e("progress_reports.equipment_status.row_cap_warn_threshold", "progress_reports", _KNOBS, v_int(1, 1_000_000)),
     _e("progress_reports.material_list.row_cap_warn_threshold", "progress_reports", _KNOBS, v_int(1, 1_000_000)),
     _e("progress_reports.material_incidents.row_cap_warn_threshold", "progress_reports", _KNOBS, v_int(1, 1_000_000)),
+    # The fifth row-cap sibling (#38's receipts ledger) — absent until 2026-08-10, which made the
+    # fastest-growing tracker's one alert knob the only one invisible to the Class-A editor.
+    _e("progress_reports.material_receipts.row_cap_warn_threshold", "progress_reports", _KNOBS, v_int(1, 1_000_000)),
     _e(
         "po_materials.estimate_poll.max_pages_preview",
         "po_materials",

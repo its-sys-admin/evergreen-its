@@ -376,10 +376,11 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
     ),
     "trackers": NodeBrief(
         what=(
-            "Four write helpers, all driven by fieldops-sync. Hours and incidents only gain rows: "
-            "a time correction adds one and marks the prior entry Superseded, and a filed "
-            "incident is never altered. Equipment and the material list instead re-project "
-            "current state: rows update in place and retire rather than delete."
+            "Five write helpers, all driven by fieldops-sync. Hours, incidents, and receipts only "
+            "gain rows — a receipt is append-only, corrected by a further event; its two derived "
+            "columns (Line Status, Line Qty Received) move as the rollup updates. Equipment and "
+            "the material list re-project current state: rows update in place and retire rather "
+            "than delete."
             "\n\n"
             "Day-to-day this is watch-only; corrections happen in the portal. If a tracker stops "
             "filling, check the daemon's switch and that pass's, then the error journal: a "
@@ -389,16 +390,16 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
         ),
         key_label="Key facts",
         key_line=(
-            "No daemon of its own: four passes inside fieldops-sync, each with its own switch — "
+            "No daemon of its own: five passes inside fieldops-sync, each with its own switch — "
             "writes flow from the portal to the sheets, never back."
         ),
     ),
     "sheet_trackers": NodeBrief(
         what=(
             "A dynamic family of per-job standing trackers — one Hours Log (plus equipment, "
-            "materials, and incidents siblings) per job, written one-way-up from the portal's "
-            "field capture by fieldops-sync. Append-only: rows are corrected by superseding "
-            "entries, never deleted."
+            "materials, incidents, and material-receipts siblings) per job, written one-way-up "
+            "from the portal's field capture by fieldops-sync. Append-only: rows are corrected by "
+            "superseding entries, never deleted."
             "\n\n"
             "Day-to-day these are watch-only office views; corrections happen in the portal, and "
             "the sheets follow."
