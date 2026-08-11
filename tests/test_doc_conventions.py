@@ -314,3 +314,34 @@ def test_main_clean_tree_strict_exits_zero(tmp_path: Path, monkeypatch):
     _write_doc(doc)  # full frontmatter
     rc = main(["--strict", "--paths", "docs"])
     assert rc == 0
+
+
+def test_walk_docs_lints_a_checkout_living_under_a_dot_directory(tmp_path: Path, monkeypatch):
+    """A repo root under a dot-directory must still be linted.
+
+    `walk_docs` used to test `path.parts` on the ABSOLUTE path. `REPO_ROOT` is absolute, so a
+    checkout at `.claude/worktrees/<id>/` made `.claude` a component of every file's path — the
+    hidden-file filter matched all of them, the linter walked zero documents, and it printed
+    "no violations". That is exactly where the workflow tooling puts agent worktrees, so the
+    gate reported green from a worktree while the identical commit reported 89 warnings from
+    the normal checkout.
+
+    The filter belongs on the path RELATIVE to the root: a dot-directory INSIDE docs/ is still
+    correctly skipped (asserted below), a dot-directory ABOVE the root is not our business.
+    """
+    root = tmp_path / ".claude" / "worktrees" / "wf_abc-1"
+    docs_dir = root / "docs" / "session_logs"
+    docs_dir.mkdir(parents=True)
+    _write_doc(docs_dir / "2026-06-01_thing.md")
+    # A genuinely hidden path INSIDE the tree must still be skipped.
+    hidden = root / "docs" / ".drafts"
+    hidden.mkdir(parents=True)
+    _write_doc(hidden / "2026-06-01_wip.md")
+
+    monkeypatch.setattr(lint_mod, "REPO_ROOT", root)
+    found = lint_mod.walk_docs([root / "docs"])
+
+    assert Path("docs/session_logs/2026-06-01_thing.md") in found, (
+        "a checkout under a dot-directory linted NOTHING — the gate passes by finding no work"
+    )
+    assert not any(".drafts" in str(p) for p in found), "hidden dirs inside the tree must stay skipped"

@@ -138,7 +138,7 @@ WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · 
 > wrong direction reports success while nothing moves). Smartsheet's two-call order inverts per
 > direction (archive move→rename, restore rename→move) so neither crash window can leave a
 > mis-named folder in the live tree; a restore onto a re-grown live folder refuses rather than
-> merging. Still never exercised LIVE on either system.
+> merging. **Both directions were exercised LIVE on both systems 2026-08-10** — see below.
 >
 > **The BUTTON and the DRAIN landed** — the last two structural pieces. The portal's Archive panel
 > records intent behind a typed confirmation and polls `job.archive.state` rather than claiming
@@ -152,19 +152,33 @@ WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · 
 > (Workstream `field_ops`) — seeded so the switch exists rather than having to be invented. Read
 > ITS_Config for its live value; this file does not track it.
 >
-> **Do not turn it on yet.** Neither direction has been exercised live on the **Box** side: the
-> Smartsheet half was drilled against the sandbox 2026-08-06, and every Box test is mocked. The
-> attended sandbox drill is the precondition, not a formality — a wrong Box identity is undetectable
-> in-band (Box has no ownership discriminator) and the first live archive would relocate a
-> customer's closed-out documents.
+> **DRILLED LIVE 2026-08-10, attended — the precondition below is MET.** The gate is on and the
+> full cycle ran on a real job: **archive → un-archive → archive**, all six containers accounted
+> for each time, and every folder id preserved through all three moves (so permalinks and cell
+> history survived). The re-archive additionally proved the archive folder is find-or-create
+> ADOPTED, not duplicated. What has *still* never fired is the live-folder **collision refusal** —
+> a restore meeting a live folder that re-grew the job's name; that branch is documented as
+> `docs/runbooks/job_archive.md` Symptom 6 and escalates.
 >
-> **REMAINING:** the attended sandbox drill (Box half) · `production_shares_manifest.json` needs
-> `WORKSPACE_ARCHIVE` with a byte-exact name (Safety Portal uses two EN DASHes, the others one EM
-> dash) — **and an operator decision on WHO is shared on it**, because a cross-workspace move
-> changes who can READ the relocated contents (§46) · docs (ADR-0006 — see the numbering note
-> below, 0005 is taken — the `project_closure.md`
-> rewrite, the troubleshooting-tree node, the system-map node **with its brief** —
-> `tests/test_system_map.py` enforces that) · the **§51 doctrine rider**.
+> _Superseded precondition, kept for the record:_ this block previously read "Do not turn it on
+> yet — neither direction has been exercised live on the Box side; every Box test is mocked", on
+> the reasoning that a wrong Box identity is undetectable in-band (Box has no ownership
+> discriminator) and a first live archive would relocate a customer's closed-out documents. The
+> attended drill was run precisely to discharge that risk, on a job named "Production test".
+>
+> **REMAINING** (the attended drill and the troubleshooting-tree node are DONE — struck below):
+> `production_shares_manifest.json` needs `WORKSPACE_ARCHIVE` with a byte-exact name (Safety Portal
+> uses two EN DASHes, the others one EM dash) — **and an operator decision on WHO is shared on it**,
+> because a cross-workspace move changes who can READ the relocated contents (§46) · **ADR-0006**
+> (see the numbering note below; 0005 is taken) · the **§51 doctrine rider**.
+>
+> _Done since this list was written:_ ~~the attended sandbox drill (Box half)~~ (2026-08-10, both
+> directions) · ~~the troubleshooting-tree node~~ and the §43 runbook `docs/runbooks/job_archive.md`
+> (PR #49) · ~~the `project_closure.md` correction~~ — its Task B said archiving was "temporarily
+> UNAVAILABLE", now repointed (PR #49); the fuller closure-policy rewrite is still open · the
+> system-map join (PR #43 added `job_archive` to the `fieldops_sync` node's `error_scripts` and its
+> gate to `extra_gates`; a *separate* node was deliberately not created — the archive has no plist,
+> no heartbeat and no identity of its own, so `tests/test_system_map.py` requires none).
 >
 > **Operator-blocked:** the sandbox Smartsheet PAT, the Box identity question, and the
 > `evergreen-its` push-access decision — all three now have `docs/tech_debt.md` entries dated
