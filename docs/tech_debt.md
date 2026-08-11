@@ -16,6 +16,30 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## Toolbox-talk corpus — hurricanes uncovered, and the housekeeping talk is raw regulation text [OPEN 2026-08-11, low]
+
+The 2026-08-11 expansion took the Toolbox Talk parent from 5 topic variants to 34. Two gaps were
+left deliberately rather than filled with invented content:
+
+- **Hurricanes are not covered by name.** The operator asked for "Severe Weather (Tornados,
+  Hurricanes, Lightning, and Heavy Rain)". oshatraining.com has no severe-weather talk at all
+  (all 16 categories / 182 documents were enumerated), so `toolbox-talk-severe-weather-v1` was
+  built from OSHA's own *Severe Weather Safety Awareness* poster (DTSEM 09/2025). That poster
+  covers tornadoes, high winds, lightning and flooding — the hazards a hurricane presents — but
+  never says "hurricane", and OSHA's hurricane-preparedness pages are JS-rendered chrome with no
+  verbatim-extractable body. Writing hurricane-specific guidance (evacuation orders, storm surge)
+  would have meant authoring safety content rather than transcribing it, which the operator
+  explicitly ruled out. **Fix:** obtain an official hurricane source (an OSHA/NOAA fact-sheet PDF,
+  or an operator-supplied document into `reference_forms/`) and add a hurricane variant.
+
+- **`toolbox-talk-housekeeping-v1` reads as regulation, not as a talk.** It is a verbatim archival
+  capture of 29 CFR §1926.25 + §1910.22 from the eCFR, because no official *talk* on housekeeping
+  exists to transcribe. It is legally exact and correct as a training record, but it lacks the
+  conversational framing and the "does anyone have anything to add?" close that every
+  oshatraining.com talk carries. **Fix:** operator-supplied housekeeping talk, or accept as-is.
+
+Neither blocks use — both forms render, validate, and file normally.
+
 ## Documentation-consolidation audit — ~41 findings remain unapplied [OPEN 2026-07-29, medium]
 
 A 12-agent audit (6 auditors + 6 adversarial verifiers, against HEAD `885d4a4`) produced **172

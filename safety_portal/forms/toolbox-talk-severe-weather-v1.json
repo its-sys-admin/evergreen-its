@@ -1,0 +1,90 @@
+{
+  "form_code": "toolbox-talk-severe-weather-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Severe Weather (Tornadoes, High Winds, Lightning and Flooding)",
+  "variant_label": "Severe Weather — Tornadoes, High Winds, Lightning and Flooding",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_Severe_Weather_Safety_Awareness_Poster.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Severe Weather — Tornadoes, High Winds, Lightning and Flooding",
+      "source_pdf": "OSHA_Severe_Weather_Safety_Awareness_Poster.pdf",
+      "blocks": [
+        {
+          "heading": "SEVERE WEATHER SAFETY AWARENESS",
+          "body": "Are You Ready for Severe Weather? This poster highlights the importance of emergency preparedness and employee safety during Severe Weather Safety. Tornadoes, lightning, high winds, and flooding, are examples of severe weather. These types of weather events can lead to serious injury, property damage, and even death. To help avert negative outcomes, employers should review their Emergency Action Plan with each employee covered by the plan.\n\nTips To Help Avoid Injury When Working During Adverse Weather"
+        },
+        {
+          "heading": "Communicate Your Safety and Health Status to Your Supervisor",
+          "body": "- Ensure that your supervisor has your updated contact information and telephone numbers.\n- Account for personnel to help ensure your safety and the safety of others during emergency situations."
+        },
+        {
+          "heading": "Alerts and Warnings",
+          "body": "- Sign up for local emergency and warning alerts on your smartphones and weather apps.\n- Listen to outdoor sirens, local news, radio broadcasts, Wireless Emergency Alerts, or NOAA Weather Radio, to stay informed about severe weather in your area.\n- Understand the difference between an emergency watch and warning.\n- A “Watch” means Be Prepared. It does not indicate that severe weather is happening or imminent. In other words, have a plan of action ready.\n- A “Warning” means Take Action. Severe weather has been spotted or indicated by radar and is occurring or imminent at your location and Take Shelter Immediately!"
+        },
+        {
+          "heading": "Tornadoes, High Winds, or Severe Storms",
+          "body": "- Move away from windows, doors, and outside walls.\n- Shut office doors on your way out of exterior office spaces to help prevent flying glass and debris\n- Proceed calmly and quickly to your designated shelter area.\n- Listen carefully to instructions over the building’s Public Address (PA) system or from designated officials."
+        },
+        {
+          "heading": "If You Are Outdoors During an Active Tornado",
+          "body": "- Immediately seek the lowest, most interior part of a sturdy building.\n- If no shelter is nearby, lie flat on your stomach in a ditch or low spot with your hands shielding your head.\n- Avoid overpasses and bridges to prevent from being struck by hazards, flying debris, and strong winds."
+        },
+        {
+          "heading": "Driving and Flooding: A Dangerous Combination",
+          "body": "Turn Around, Don’t Drown!\n- Avoid walking, swimming, or driving through flood waters.\n- 6 inches of moving water can knock you down, 12 inches of moving water can sweep your vehicle away, and 18-24 inches of fast-moving water can carry away a SUV.\n- Stay off bridges over fast-moving water."
+        },
+        {
+          "heading": "Depending On the Type of Flooding:",
+          "body": "- If instructed to evacuate, follow evacuation orders.\n- Move to higher ground or a higher floor.\n- When in a safe location, remain where you are."
+        },
+        {
+          "heading": "Stay in your car if it gets swept away",
+          "body": "- If your car is trapped in rapidly moving water, stay inside your vehicle. Get on the roof if water is rising inside the car."
+        },
+        {
+          "heading": "Lightning",
+          "body": "When Thunder Roars, Go Indoors!\n- Thunderstorms always generate lightning.\n- Every rumble of thunder you hear is produced by lightning."
+        },
+        {
+          "heading": "If You Are Outdoors During Lightning",
+          "body": "- If you hear thunder or a distant rumble, Seek Shelter Immediately.\n- NEVER seek shelter under a tree!\n- If safe building structures are not accessible, find a hard-topped metal vehicle with rolled up windows.\n- Avoid open vehicles such as convertibles, motorcycles, and golf carts.\n- Remain sheltered at least 30 minutes after hearing the last sound of thunder or rumble."
+        },
+        {
+          "body": "For more information, see OSHA’s Emergency Preparedness and Response webpage."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Source: OSHA \"Severe Weather Safety Awareness\" (DTSEM 09/2025), U.S. Department of Labor, Occupational Safety and Health Administration (www.osha.gov). U.S. Government work — public domain."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "form_code": "toolbox-talk-housekeeping-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Housekeeping",
+  "variant_label": "Housekeeping",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_Housekeeping_29_CFR_1926_25_and_1910_22.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Housekeeping",
+      "source_pdf": "OSHA_Housekeeping_29_CFR_1926_25_and_1910_22.pdf",
+      "blocks": [
+        {
+          "heading": "OSHA Housekeeping Requirements",
+          "body": "Archival capture of the official regulation text. Verbatim from the Electronic Code of Federal Regulations (eCFR), retrieved 2026-08-11 from www.ecfr.gov (U.S. Government work, public domain). No text has been added, removed, or reworded."
+        },
+        {
+          "heading": "§ 1926.25 Housekeeping.",
+          "body": "Subpart C — General Safety and Health Provisions, 29 CFR Part 1926 (Construction).\n\n(a) During the course of construction, alteration, or repairs, form and scrap lumber with protruding nails, and all other debris, shall be kept cleared from work areas, passageways, and stairs, in and around buildings or other structures.\n\n(b) Combustible scrap and debris shall be removed at regular intervals during the course of construction. Safe means shall be provided to facilitate such removal.\n\n(c) Containers shall be provided for the collection and separation of waste, trash, oily and used rags, and other refuse. Containers used for garbage and other oily, flammable, or hazardous wastes, such as caustics, acids, harmful dusts, etc. shall be equipped with covers. Garbage and other waste shall be disposed of at frequent and regular intervals."
+        },
+        {
+          "heading": "§ 1910.22 General requirements.",
+          "body": "Subpart D — Walking-Working Surfaces, 29 CFR Part 1910 (General Industry).\n\n(a) Surface conditions. The employer must ensure:\n\n(1) All places of employment, passageways, storerooms, service rooms, and walking-working surfaces are kept in a clean, orderly, and sanitary condition.\n\n(2) The floor of each workroom is maintained in a clean and, to the extent feasible, in a dry condition. When wet processes are used, drainage must be maintained and, to the extent feasible, dry standing places, such as false floors, platforms, and mats must be provided.\n\n(3) Walking-working surfaces are maintained free of hazards such as sharp or protruding objects, loose boards, corrosion, leaks, spills, snow, and ice.\n\n(b) Loads. The employer must ensure that each walking-working surface can support the maximum intended load for that surface.\n\n(c) Access and egress. The employer must provide, and ensure each employee uses, a safe means of access and egress to and from walking-working surfaces.\n\n(d) Inspection, maintenance, and repair. The employer must ensure:\n\n(1) Walking-working surfaces are inspected, regularly and as necessary, and maintained in a safe condition;\n(2) Hazardous conditions on walking-working surfaces are corrected or repaired before an employee uses the walking-working surface again. If the correction or repair cannot be made immediately, the hazard must be guarded to prevent employees from using the walking-working surface until the hazard is corrected or repaired; and\n\n(3) When any correction or repair involves the structural integrity of the walking-working surface, a qualified person performs or supervises the correction or repair."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Source: 29 CFR § 1926.25 and § 1910.22, retrieved from the Electronic Code of Federal Regulations (www.ecfr.gov). U.S. Government work — public domain."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

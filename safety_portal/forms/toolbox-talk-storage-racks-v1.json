@@ -1,0 +1,60 @@
+{
+  "form_code": "toolbox-talk-storage-racks-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Material Handling — Storage Racks and Shelving Safety",
+  "variant_label": "Material Handling — Storage Racks and Shelving Safety",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Material_Handling_Storage_Rack_Safety.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Material Handling — Storage Racks and Shelving Safety",
+      "source_pdf": "OSHA_TBT_Material_Handling_Storage_Rack_Safety.pdf",
+      "blocks": [
+        {
+          "heading": "Material Handling and Storage – Pallet and Storage Rack Safety",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nProper storage of materials on storage racks and shelving is crucial to preventing accidents, injuries, & property damage in the workplace. Here are some safety tips applicable to storage racks & shelves:"
+        },
+        {
+          "body": "- Regular Inspection: Take time to regularly inspect storage racks and shelves to identify any signs of damage, wear, or deformation that may compromise their integrity.\n- Secure Shelving: Make certain shelves and support beams are properly secured to prevent accidental dislodging, which can cause a collapse. Missing bolts or fasteners must be reported to your supervisor or safety rep ASAP so such hazards can be addressed.\n- Rack Repair and Maintenance: Immediately report damaged storage racks or shelves to your supervisor or safety rep. Repairs are only to be conducted by qualified personnel.\n- Load Capacity: Ensure that storage racks are never overloaded, and always remain aware that there may be different load capacity limits for different types of racks and shelves.\n- Rack Labels: Do not remove or deface any labels or placards that identify the maximum weight capacity for any storage rack or shelf.\n- Proper Load Distribution: Avoid concentrated loads that could cause beams to bend or shelves to sag. Instead, distribute weight evenly on racks and shelves to avoid overloading one side of the rack or shelf, which can lead to damage or instability.\n- Proper Storage: Store heavy items on lower racks and shelves, and lighter items on higher ones, to keep the center of gravity low and help improve stability.\n- Pallet Safety: When loading pallet racks, ensure that pallets are in good condition. Do not load and unload racks using a forklift unless you are specifically trained and authorized to do so.\n- Securing Loads: Ensure loads on pallets are secured with straps, bands, or other methods to prevent shifting during loading and storage, which can lead to instability and falling.\n- Overhead Fall Hazards: Stay clear of the area when loads are being placed on or removed from storage racks and shelves, as they can fall and strike people below.\n- Clear Aisles: Maintain clear aisles and walkways around storage units to provide easy access and emergency exits, reducing the risk of collisions and facilitating quick evacuation in emergencies."
+        },
+        {
+          "body": "By following these safety tips, employers and workers can minimize the risks associated with loading, storing, and unloading materials on pallet and storage racks, thereby preventing accidents."
+        },
+        {
+          "body": "Does anyone have anything to add to today’s discussion about safety tips applicable to storage racks and shelving? Please sign the training certification form to ensure you get credit for attending today’s OSHA training toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2023 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

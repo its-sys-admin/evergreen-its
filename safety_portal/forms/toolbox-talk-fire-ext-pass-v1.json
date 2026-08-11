@@ -1,0 +1,64 @@
+{
+  "form_code": "toolbox-talk-fire-ext-pass-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Portable Fire Extinguishers — Just Remember “PASS”",
+  "variant_label": "Portable Fire Extinguishers — Just Remember “PASS”",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Extinguishers_Remember_PASS.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Portable Fire Extinguishers — Just Remember “PASS”",
+      "source_pdf": "OSHA_TBT_Fire_Extinguishers_Remember_PASS.pdf",
+      "blocks": [
+        {
+          "heading": "Portable Fire Extinguishers – Just Remember “PASS”",
+          "body": "[Reference 1910.157 / 1926.150]\n\nThe steps to using a portable fire extinguisher seem simple to remember; at least until you are faced with a real fire! Many people in this situation have reported that their mind “goes blank”, and as a result they were unable to get their portable extinguisher to function properly, or they failed to extinguish the fire.\n\nWe have previously reviewed proper selection of fire extinguishers, and we have also discussed how they work to extinguish a fire. So today we are going to review the four steps to follow when using a portable extinguisher, and they are as easy as remembering the word “PASS”.\n\n(We recommend you make a copy of the handout that comes with this toolbox talk for each trainee and pass them out now for their reference).\n\nEach letter in “PASS” stands for one of the four sequential steps to properly use the extinguisher:"
+        },
+        {
+          "body": "- “P” stands for “PULL” the pin. The pin in the handle keeps you from accidentally discharging the extinguisher during normal handling, and must be removed for it to function. There’s usually a thin plastic tamper seal holding this pin in place, and it easily breaks when you pull out the pin.\n- “A” stands for “AIM” at the base of the fire. This step is crucial because you must direct the extinguishing media towards the material that is actually burning so it can extinguish the flame.\n- “S” stands for “SQUEEZE” the handle of the portable extinguisher from a safe distance. This causes the extinguishing media to discharge from the extinguisher. An extra word of caution; if you are using a CO2 extinguisher, avoid touching the horn-shaped discharge nozzle, as it can cause frostbite.\n- “S” stands for “SWEEP” from side to side across the base of the fire as you approach, to make sure the extinguishing media completely covers the burning material and puts out the fire. Then, keep an eye on the area for a while in case a hot spot flares up and the fire starts to burn again."
+        },
+        {
+          "body": "These four steps for using a portable extinguisher are simple, but can easily be forgotten when faced with an unexpected fire. So, in review; here are the four steps to take when using an extinguisher to put out a small fire. And they can be as simple as remembering PASS – which stands for Pull, Aim, Squeeze, and Sweep. But also remember that you should never, ever, attempt to put out a fire with an extinguisher if you are unsure about your ability to do so safely and effectively!"
+        },
+        {
+          "heading": "Just Remember “PASS”",
+          "body": "There are four basic steps to follow when using a portable fire extinguisher, and they can be recalled by remembering the acronym . . .\n\n“PASS”\n\nNever attempt to fight a fire if it is not in its early stages, or if you feel uncomfortable about your ability to do so safely and effectively. Just walk away to safety and report the fire per your site emergency action plan.\n\nSource of diagram: West Virginia University Safety and Health Extension Service."
+        },
+        {
+          "body": "Does anyone have a question or comment about the four steps outlined in the PASS method for using a portable fire extinguishers? Please be sure to sign-in on the training certification form so you get credit for attending this training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "form_code": "toolbox-talk-palletized-materials-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Material Handling — Safety for Palletized Materials",
+  "variant_label": "Material Handling — Safety for Palletized Materials",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Material_Handling_Palletized_Materials.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Material Handling — Safety for Palletized Materials",
+      "source_pdf": "OSHA_TBT_Material_Handling_Palletized_Materials.pdf",
+      "blocks": [
+        {
+          "heading": "Material Handling and Storage – Safety for Palletized Materials",
+          "body": "[Reference: 1910.176 / 192.250]\n\nProper storage of materials on pallets is crucial to prevent accidents, injuries, and property damage in the workplace. Here are several safety tips for safely storing materials on pallets:"
+        },
+        {
+          "body": "- Inspect Pallets: Before loading a pallet, inspect it for damage such as broken boards or protruding nails. Damaged pallets should be repaired before use, or taken out of service.\n- Select the Right Pallet: Choose pallets that are appropriate for the size and weight of the materials they will be holding.\n- Stack Materials Evenly: Distribute the weight of the materials evenly across the pallet to maintain stability and prevent tipping.\n- Interlock Bagged Materials: Bagged materials should be stacked by stepping back the layers and cross-keying the bags at least every 10 bags high to prevent sliding, falling or collapse.\n- Avoid Overhang: Do not allow materials to overhang the edges of the pallet, as this can create an unbalanced load and increase the risk of falling objects.\n- Secure Materials: Use appropriate methods to secure materials to the pallet, such as shrink wrap, strapping, or banding to prevent shifting or falling during storage or transport."
+        },
+        {
+          "body": "- Flat and Level Surface: Place pallets on a flat and level surface to ensure stability and prevent tipping or sliding.\n- Aisle Clearances: Maintain clear aisles and passageways around pallets for easy access and safe material handling.\n- Keep Doorways Clear: Never block doorways with pallets or other stored materials, even temporarily. Emergency exits must always remain free of obstructions.\n- Weight Limitation: Do not exceed the weight capacity of storage shelfs or platforms. These are typically labeled with their weight capacity, and this limit should never be exceeded.\n- Maintain Adequate Overhead Clearance: The minimum vertical clearance between sprinklers and material stored below shall be 18 inches minimum, to prevent the stored material from interfering with the spray of water from a sprinkler head during a fire."
+        },
+        {
+          "body": "By following these safety tips, employers and workers can minimize the risks associated with storing and transporting materials on pallets, promote workplace safety, and prevent accidents."
+        },
+        {
+          "body": "Does anyone have anything to add to today’s discussion on safe storage and handling of palletized materials? Please sign the training certification form to ensure you get credit for attending today’s OSHA toolbox training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2023 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

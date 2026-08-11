@@ -1,0 +1,60 @@
+{
+  "form_code": "toolbox-talk-heat-what-is-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — What is Heat Illness?",
+  "variant_label": "Heat Illness Prevention — What is Heat Illness?",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_What_Is_Heat_Illness.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — What is Heat Illness?",
+      "source_pdf": "OSHA_TBT_Heat_Illness_What_Is_Heat_Illness.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention: What is Heat Illness?",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nSeveral conditions, collectively known as heat illnesses, are caused by or related to an excessive core body temperature, which occurs when the body is unable to cool itself effectively. These ailments range from mild to life-threatening, and it’s essential to recognize the signs early to prevent serious damage. The symptoms of the primary types of heat illnesses, ranked from least to most serious, include:"
+        },
+        {
+          "body": "- Heat Rash, which appears as a skin irritation caused by blocked sweat glands. This leads to red, itchy bumps, often on areas where sweat accumulates. Though uncomfortable, it’s generally not severe, but it can be a sign that the body is struggling to cool down.\n- Heat Cramps, which are painful muscle spasms caused by excessive electrolyte loss through sweating. Electrolytes—such as sodium, potassium, and magnesium—are vital for fluid balance, muscle function, and proper nerve function. When these electrolytes are depleted, muscles can cramp and cause significant discomfort.\n- Heat Syncope, (pronounced sin-kuh-pee) is caused by dehydration and reduced blood flow to the brain. It often results from prolonged standing in the heat or sudden posture changes. Symptoms include dizziness, lightheadedness, and even temporary loss of consciousness.\n- Heat Exhaustion, which is a more serious condition marked by heavy sweating, dizziness, fatigue, nausea, and an elevated core body temperature. Without prompt intervention—such as rehydration and cooling down—heat exhaustion can escalate quickly to heat stroke, a much more dangerous condition.\n- Heat Stroke, the most severe form of heat illness is heat stroke, a life-threatening emergency where the body’s internal core temperature, which is usually around 98.7 degrees Fahrenheit, exceeds 104 degrees. A key sign of heat stroke is the absence of sweating, which occurs as the body depletes its fluids. As the condition worsens, symptoms can include confusion, unconsciousness, seizures, and in extreme cases, death. Immediate medical treatment is essential to prevent permanent damage."
+        },
+        {
+          "body": "Sustained elevation in core body temperature can also cause permanent damage to vital organs and the cardiovascular system. This includes cardiovascular strain caused because the heat forces the heart to work harder to circulate blood, increasing the risk of heart attacks, arrhythmias, and high blood pressure. This condition is referred to as heat stress and can have long-term effects on heart health.\n\nHeat stroke can also cause swelling and permanent damage to critical organs, such as the liver, kidneys, heart, and lungs. And if body temperature isn’t reduced quickly, heat stroke can also cause lasting brain damage due to swelling and decreased blood flow to the brain. Without prompt and proper treatment, heat stroke can be fatal. The longer the body remains overheated, the higher the risk of damage or death."
+        },
+        {
+          "body": "Preventing heat illness is critical for maintaining a safe and productive workplace. In upcoming toolbox talks, we’ll dive deeper into strategies and best practices for heat illness prevention, from recognizing various risk factors to implementing effective cooling measures and safety protocols. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}
