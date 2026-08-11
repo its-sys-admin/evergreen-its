@@ -226,7 +226,9 @@ describe("pool upload — caps (FOLDED into the INSERT's own WHERE — atomic, n
     await uploadOk(manager);
   });
 
-  it("the pool-wide pending backstop → 503 pool_backlogged (counts every job/uploader); zero rows + zero audit", async () => {
+  // 15s timeout: seeds POOL_PENDING_GLOBAL_MAX (200) rows one INSERT at a time — measured ~7.6s
+  // vs the 5s default under CI load. Same documented flake class as the manifests line-cap test.
+  it("the pool-wide pending backstop → 503 pool_backlogged (counts every job/uploader); zero rows + zero audit", { timeout: 15_000 }, async () => {
     for (let i = 0; i < POOL_PENDING_GLOBAL_MAX; i++) {
       await seedPoolRow({ job_id: i % 2 ? "JOB-A" : "JOB-B", uploaded_by: `ghost.${i % 7}`, work_date: "2026-06-01" });
     }
