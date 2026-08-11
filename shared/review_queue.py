@@ -116,11 +116,20 @@ class ReviewReason(StrEnum):
 # "progress_reports") and the P5 recipient_health send-time hook both call
 # review_queue.add(workstream="progress_reports", ...) — omitting it here raised a
 # ValueError at the first progress per-job fence (latent since P4; closed at P5).
+# `field_ops` joined 2026-08-11 — the SAME latent class, found by the FIRST REAL
+# manifest through the lane: manifest_poll tickets under workstream="field_ops",
+# every mocked test passed, and the first live refusal (Bradley 1 Customer BOM,
+# §34 SUSPICIOUS) lost its ticket to this ValueError — safe_add escalated the loss
+# to CRITICAL review_queue_ticket_failed exactly as designed. The tenant picklist
+# column carries the option too (both surfaces, same day); the parity test in
+# tests/test_review_queue.py now pins every ticketing daemon's WORKSTREAM constant
+# into this set so the NEXT daemon fails in CI, not on its first live refusal.
 VALID_WORKSTREAMS = frozenset({
     "safety_reports",
     "progress_reports",
     "po_materials",
     "subcontracts",
+    "field_ops",
     "email_triage",
     "ai_employee",
     "global",

@@ -651,3 +651,212 @@ describe("manifest /commit (paged + watermarked)", () => {
     expect(await res.json()).toMatchObject({ error: "invalid_mode" });
   });
 });
+
+// ── 2026-08-11: merge is REAL, ambiguity is enforced SERVER-SIDE, shipping logs land as
+// LOADS, and an interrupted commit can be abandoned. Before this block's subjects existed,
+// mode:'merge' was validated, stored, and never branched on — the commit always INSERTed,
+// so "Merge onto the matching line" silently duplicated every already-listed part (audit A2).
+describe("manifest /commit — merge, resolutions, shipments", () => {
+  async function lineByPart(jobId: string, part: string) {
+    return env.DB
+      .prepare(
+        "SELECT id, description, qty, status, active FROM job_expected_materials " +
+          "WHERE job_id = ?1 AND part_number = ?2 ORDER BY id ASC",
+      )
+      .bind(jobId, part)
+      .all<{ id: number; description: string | null; qty: number | null; status: string; active: number }>();
+  }
+  async function lineCount(jobId: string): Promise<number> {
+    const r = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_expected_materials WHERE job_id = ?1 AND active = 1")
+      .bind(jobId)
+      .first<{ n: number }>();
+    return r?.n ?? 0;
+  }
+  async function shipments(jobId: string) {
+    const { results } = await env.DB
+      .prepare(
+        "SELECT shipment_uuid, line_id, part_number, bol_number, qty, ship_date, delivery_date, source " +
+          "FROM material_shipments WHERE job_id = ?1 ORDER BY id ASC",
+      )
+      .bind(jobId)
+      .all<Record<string, unknown>>();
+    return results ?? [];
+  }
+
+  it("merge UPDATEs a uniquely-matched line in place — no new row, document's non-null fields win", async () => {
+    const id = await parsedManifest();
+    await seedLine("JOB-A", "7006955", "old description");
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge", lines: [{ ...line(2, "7006955", "new description", 9), unit: null }],
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ inserted: 0, updated: 1, shipments: 0, done: true });
+    const { results } = await lineByPart("JOB-A", "7006955");
+    expect(results).toHaveLength(1); // updated IN PLACE — the A2 duplicate never appears
+    expect(results[0]).toMatchObject({ description: "new description", qty: 9 });
+  });
+
+  it("merge REFUSES an undecided ambiguous part BEFORE any write", async () => {
+    const id = await parsedManifest();
+    await seedLine("JOB-A", "7000153", "first");
+    await seedLine("JOB-A", "7000153", "second");
+    const before = await lineCount("JOB-A");
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge", lines: [line(2, "7000153", "incoming", 5)],
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "ambiguous_unresolved", rows: [2] });
+    expect(await lineCount("JOB-A")).toBe(before); // all-or-nothing: nothing landed
+  });
+
+  it("merge honors a valid resolution and REJECTS one outside the server's own match set", async () => {
+    const id = await parsedManifest();
+    await seedLine("JOB-A", "7000153", "first");
+    await seedLine("JOB-A", "7000153", "second");
+    await seedLine("JOB-A", "OTHER", "unrelated");
+    const rows = (await lineByPart("JOB-A", "7000153")).results;
+    const otherId = (await lineByPart("JOB-A", "OTHER")).results[0].id;
+
+    // A resolution naming a line that is NOT among that part's matches is a forged claim,
+    // not a choice — refused, even though the id exists on the same job.
+    const forged = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge", lines: [line(2, "7000153", "incoming", 5)],
+      resolutions: { 2: otherId },
+    });
+    expect(forged.status).toBe(409);
+    expect(await forged.json()).toMatchObject({ error: "ambiguous_unresolved" });
+
+    const ok = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge", lines: [line(2, "7000153", "incoming", 5)],
+      resolutions: { 2: rows[1].id },
+    });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ updated: 1, inserted: 0 });
+    const after = (await lineByPart("JOB-A", "7000153")).results;
+    expect(after.find((r) => r.id === rows[1].id)).toMatchObject({ description: "incoming", qty: 5 });
+    expect(after.find((r) => r.id === rows[0].id)).toMatchObject({ description: "first" }); // untouched
+  });
+
+  it("merge leaves a received line's facts LOCKED and reports it skipped_locked", async () => {
+    const id = await parsedManifest();
+    await seedLine("JOB-A", "7006955", "as received");
+    await env.DB
+      .prepare("UPDATE job_expected_materials SET status='received' WHERE job_id='JOB-A' AND part_number='7006955'")
+      .run();
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge", lines: [line(2, "7006955", "rewrite attempt", 99)],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { updated: number; inserted: number; skipped_locked: unknown[] };
+    expect(body.updated).toBe(0);
+    expect(body.inserted).toBe(0);
+    expect(body.skipped_locked).toHaveLength(1);
+    const { results } = await lineByPart("JOB-A", "7006955");
+    expect(results[0]).toMatchObject({ description: "as received", status: "received" });
+  });
+
+  it("merge counts only NEW lines against the cap — updates are free", { timeout: 15_000 }, async () => {
+    const id = await parsedManifest();
+    // Bulk-batch the seeding (one round trip) — the per-INSERT loop shape is the
+    // documented CI timing flake.
+    const stmts = [];
+    for (let i = 0; i < 499; i++) {
+      stmts.push(
+        env.DB
+          .prepare(
+            "INSERT INTO job_expected_materials (job_id, description, part_number, seq, line_uuid) VALUES ('JOB-A', ?1, ?2, 10, ?3)",
+          )
+          .bind(`seed ${i}`, `M-${i}`, `lu-cap-${i}`),
+      );
+    }
+    await env.DB.batch(stmts);
+    // 90 matched lines → 90 UPDATEs, 0 inserts: passes even though 499 + 90 > 500.
+    const merges = Array.from({ length: 90 }, (_, i) => line(i + 2, `M-${i}`, `updated ${i}`, 1));
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, { mode: "merge", lines: merges });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ inserted: 0, updated: 90 });
+    // But genuinely NEW lines over the cap still refuse — on a FRESH manifest (distinct
+    // bytes: the per-job sha dedupe correctly 409s a re-upload of the committed one, and
+    // committed is done:true → takes no more pages).
+    const id2 = await uploadOk("JOB-A", "Shipping Log.xlsx", XLSX_MIME, XLSX_B64);
+    await call("/api/fieldops/manifests/internal/result", {
+      method: "POST",
+      bearer: MANIFEST_BEARER,
+      body: JSON.stringify({ manifest_id: id2, status: "parsed", box_file_id: "box-2", row_count: 3 }),
+    });
+    const res2 = await p(admin, `/api/fieldops/manifests/${id2}/commit`, {
+      mode: "merge", lines: [line(2, "BRAND-NEW", "one too many", 1), line(3, "BRAND-NEW-2", "two too many", 1)],
+    });
+    expect(res2.status).toBe(409);
+    expect(await res2.json()).toMatchObject({ error: "line_cap_exceeded" });
+  });
+
+  it("shipments import lands loads on matched lines and creates line+load for unmatched parts", async () => {
+    const id = await parsedManifest();
+    await seedLine("JOB-A", "7006955", "the expected pile caps");
+    const matchedLineId = (await lineByPart("JOB-A", "7006955")).results[0].id;
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "add_new",
+      import_as: "shipments",
+      lines: [
+        { ...line(2, "7006955", "load one", 40), expected_ship_date: "2026-08-12", expected_date: "2026-08-15", bol: "BOL-100" },
+        { ...line(3, "NEW-PART", "a part the list did not have", 8), bol: "BOL-101" },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ shipments: 2, inserted: 1, updated: 0, done: true });
+    const loads = await shipments("JOB-A");
+    expect(loads).toHaveLength(2);
+    expect(loads[0]).toMatchObject({
+      line_id: matchedLineId, part_number: "7006955", bol_number: "BOL-100",
+      qty: 40, ship_date: "2026-08-12", delivery_date: "2026-08-15", source: "import",
+    });
+    // Deterministic uuid ⇒ a replayed page cannot silently duplicate the load.
+    expect(loads[0].shipment_uuid).toBe(`mf${id}-r2`);
+    // The unmatched part got a REAL line, and its load hangs off it.
+    const created = (await lineByPart("JOB-A", "NEW-PART")).results;
+    expect(created).toHaveLength(1);
+    expect(loads[1]).toMatchObject({ line_id: created[0].id, bol_number: "BOL-101" });
+  });
+
+  it("a manifest stranded in 'committing' CAN be discarded; later commit pages then refuse", async () => {
+    const id = await parsedManifest();
+    // Page 1 lands and leaves the manifest committing (watermark 2 < the payload's 3 —
+    // simulate the interrupted client by just not posting the rest).
+    const first = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "add_new", lines: [line(2, "A-1"), line(3, "A-2")].slice(0, 1),
+    });
+    expect(first.status).toBe(200);
+    await env.DB.prepare("UPDATE job_manifests SET status='committing' WHERE id = ?1").bind(id).run();
+
+    const discard = await p(admin, `/api/fieldops/manifests/${id}/discard`);
+    expect(discard.status).toBe(200);
+    const row = await env.DB
+      .prepare("SELECT status FROM job_manifests WHERE id = ?1").bind(id)
+      .first<{ status: string }>();
+    expect(row?.status).toBe("discarded");
+    // The already-imported line SURVIVES — discard stops the import, it never unwinds it.
+    expect((await lineByPart("JOB-A", "A-1")).results).toHaveLength(1);
+    // And an in-flight page replaying AFTER the discard refuses rather than resurrecting it.
+    const late = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "add_new", lines: [line(3, "A-2")],
+    });
+    expect(late.status).toBe(409);
+    expect(await late.json()).toMatchObject({ error: "not_committable", status: "discarded" });
+  });
+
+  it("plan returns mode-aware projected totals", async () => {
+    const id = await parsedManifest();
+    await seedLine("JOB-A", "7006955");
+    const res = await p(admin, `/api/fieldops/manifests/${id}/plan`, {
+      lines: [line(2, "7006955"), line(3, "FRESH")],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, number | boolean>;
+    // 1 existing + 2 incoming if everything inserts; 1 existing + 1 fresh under merge.
+    expect(body.projected_total_add_new).toBe(3);
+    expect(body.projected_total_merge).toBe(2);
+    expect(body.projected_total).toBe(3); // the bare field keeps the CONSERVATIVE number
+  });
+});

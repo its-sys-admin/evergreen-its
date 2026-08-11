@@ -80,7 +80,7 @@ import json
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -190,6 +190,16 @@ HEARTBEAT_ROW_STATE_PATH = STATE_DIR / "heartbeat_row_ids.json"
 # per-cycle Review-Queue / CRITICAL storm. The operator remediates by deleting an entry.
 FLAGGED_PATH = STATE_DIR / "manifest_poll_flagged.json"
 MAX_FLAGS = 500
+
+# Mirrors of the Worker's grid bounds (fieldops_manifests.ts MAX_ROW_CELLS /
+# MAX_CELL_CHARS / MAX_ROWS_TOTAL). The parse clamps to these BEFORE posting — visibly,
+# with a parse note per clamp — because a grid over the Worker's bounds draws a permanent
+# 400 that the transient classifier used to retry every cycle forever (audit A5: ~720
+# ERROR rows/day, no CRITICAL, no ticket). A clamped-and-noted grid reaches the validate
+# screen where a human can SEE the truncation; a wedged one reaches nobody.
+WORKER_MAX_ROW_CELLS = 200
+WORKER_MAX_CELL_CHARS = 2_000
+WORKER_MAX_ROWS_TOTAL = 20_000
 
 DAEMON_NAME = "field_ops.manifest_poll"
 _REGISTRATION_SOURCE_ID = "Safety Portal Worker /api/fieldops/manifests/internal/pending"
@@ -773,6 +783,7 @@ def _service_one_manifest(
         parsed = manifest_parse.parse_manifest(
             grids, product_codes=manifest_parse.product_codes_from_meta(grids)
         )
+        parsed = _clamp_to_worker_bounds(parsed)
         importable = [r for r in parsed.rows if r.kind != manifest_parse.KIND_META]
         if not importable:
             counters["refused"] += 1
@@ -841,10 +852,56 @@ def _service_one_manifest(
         raise  # MUST propagate past the generic fence below
     except portal_client.PortalAuthError as exc:
         raise _BearerRejectedError from exc
+    except portal_client.PortalTransportError as exc:
+        # A Worker 4xx is PERMANENT: the same request re-serves the same rejection every
+        # cycle forever, so "stays serviceable" is a wedge, not resilience (audit A5 —
+        # the pre-clamp bounds rejections were this exact class: ~720 ERROR rows/day, no
+        # CRITICAL, no ticket, item never draining). One-shot flag + a Review-Queue
+        # ticket; the §43 remediation is the flag-file entry, same as a refusal.
+        # 401 never reaches here (PortalAuthError above); 429/503 raise
+        # PortalRateLimitError with no status_code and stay transient below.
+        status = getattr(exc, "status_code", None)
+        if status is not None and 400 <= status < 500:
+            counters["errors"] += 1
+            review_queue.safe_add(
+                script_name=SCRIPT_NAME,
+                workstream=WORKSTREAM,
+                summary=(
+                    f"manifest: Worker PERMANENTLY rejected servicing of manifest "
+                    f"{manifest_id} (HTTP {status}) — flagged, will not retry; "
+                    f"see the runbook's flag-file remediation"
+                ),
+                payload={"manifest_id": manifest_id, "http_status": status,
+                         "detail": str(exc)[:300]},
+                sla_tier=review_queue.SlaTier.RFQ_DRAFT,
+                reason=review_queue.ReviewReason.POLICY_EDGE,
+                severity=Severity.ERROR,
+                source_file=f"manifest:{manifest_id}",
+            )
+            error_log.log(
+                Severity.ERROR,
+                SCRIPT_NAME,
+                f"Worker rejected manifest {manifest_id} with HTTP {status} — "
+                f"PERMANENT, one-shot-flagged (a 4xx re-serves identically forever): "
+                f"{exc!r}",
+                error_code="manifest_worker_rejected",
+                correlation_id=correlation_id,
+            )
+            flags[str(manifest_id)] = "worker_rejected"
+            return True
+        counters["errors"] += 1
+        error_log.log(
+            Severity.ERROR,
+            SCRIPT_NAME,
+            f"transient failure servicing manifest {manifest_id} (stays serviceable "
+            f"for next cycle): {type(exc).__name__}: {exc!r}",
+            error_code="manifest_transient",
+            correlation_id=correlation_id,
+        )
+        return False
     except (
         smartsheet_client.SmartsheetError,
         box_client.BoxError,
-        portal_client.PortalTransportError,
     ) as exc:
         counters["errors"] += 1
         error_log.log(
@@ -948,6 +1005,52 @@ def _column_map_payload(cmap: manifest_parse.ColumnMap) -> dict[str, Any]:
         "qty_candidates": list(cmap.qty_candidates),
         "qty_default": cmap.qty_default,
     }
+
+
+def _clamp_to_worker_bounds(
+    parsed: manifest_parse.ParsedManifest,
+) -> manifest_parse.ParsedManifest:
+    """Clamp the parsed grid to the Worker's own row/cell bounds — VISIBLY.
+
+    The Worker 400s a grid over its bounds (row_index > 20 000, > 200 cells/row,
+    > 2 000 chars/cell), and a 400 re-serves identically every cycle: before this clamp
+    the transient classifier retried it forever (audit A5). Truncating SILENTLY would be
+    worse — inventing a smaller document than the vendor sent — so every clamp appends a
+    parse note the validate screen displays beside the grid: the human sees exactly what
+    was cut and can ask the office for a smaller export if the tail mattered."""
+    notes: list[str] = []
+    rows = parsed.rows
+    if len(rows) > WORKER_MAX_ROWS_TOTAL:
+        notes.append(
+            f"TRUNCATED: the document has {len(rows)} rows; only the first "
+            f"{WORKER_MAX_ROWS_TOTAL} are shown/importable (grid ceiling)"
+        )
+        rows = [r for r in rows[:WORKER_MAX_ROWS_TOTAL] if r.index <= WORKER_MAX_ROWS_TOTAL]
+    out: list[manifest_parse.ParsedRow] = []
+    narrowed = 0
+    shortened = 0
+    for r in rows:
+        cells = r.cells
+        if len(cells) > WORKER_MAX_ROW_CELLS:
+            narrowed += 1
+            cells = cells[:WORKER_MAX_ROW_CELLS]
+        if any(len(c) > WORKER_MAX_CELL_CHARS for c in cells):
+            shortened += sum(1 for c in cells if len(c) > WORKER_MAX_CELL_CHARS)
+            cells = [c[:WORKER_MAX_CELL_CHARS] for c in cells]
+        out.append(replace(r, cells=cells) if cells is not r.cells else r)
+    if narrowed:
+        notes.append(
+            f"TRUNCATED: {narrowed} row(s) had more than {WORKER_MAX_ROW_CELLS} columns; "
+            f"extra columns were dropped"
+        )
+    if shortened:
+        notes.append(
+            f"TRUNCATED: {shortened} cell(s) were longer than {WORKER_MAX_CELL_CHARS} "
+            f"characters and were shortened"
+        )
+    if not notes:
+        return parsed
+    return replace(parsed, rows=out, notes=[*parsed.notes, *notes])
 
 
 def _post_rows(

@@ -13,7 +13,7 @@ tags: [runbook, successor-remediation, materials, manifest_poll, bom, shipping-l
 > **In the troubleshooting tree** ([printable guide](../troubleshooting/troubleshooting_guide.md) · dashboard `/troubleshoot`). This runbook resolves:
 >   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “Uploaded manifests are not being pulled or parsed.”
 >   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “An uploaded manifest was refused (unreadable, SUSPICIOUS/MALICIOUS) or failed integrity.”
->   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “The office's import from the validate screen errors, or the manifest is stuck showing "committing".”
+>   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “The office's import from the validate screen errors, or the manifest shows "committing" after an interrupted import.”
 > Daemon(s): `manifest-poll` — see the [daemon reference](../references/daemon_reference.md).
 <!-- END TREE-XREF -->
 
@@ -162,6 +162,35 @@ unserviced but nothing is lost.
 
 **Tier-2:** check that the portal is reachable in a browser. If it is up and this persists
 past a few more cycles, **escalate**.
+
+## Symptom 9 — "manifest_worker_rejected (ERROR + a Review-Queue row)"
+
+The Worker PERMANENTLY refused something the daemon posted for this manifest (an HTTP
+4xx — e.g. a malformed grid). The daemon one-shot-flags the manifest (`worker_rejected` in
+`state/manifest_poll_flagged.json`) instead of retrying an identical rejection every cycle
+forever. Rare by construction: the daemon clamps its grid to the Worker's own bounds before
+posting, with a parse note per clamp that the validate screen displays.
+
+**Tier-2:** read the Review-Queue row (it names the HTTP status and detail). If the cause
+was transient tooling and the document should retry, delete that manifest's id from the
+flag file — the same remediation as Symptom 5, and NEVER for an integrity/malicious flag.
+A repeat on the same document escalates.
+
+## The import itself (what the office's choices mean)
+
+- **Import rows as material lines vs scheduled loads.** A BOM's rows become
+  expected-material LINES; a shipping log's rows become LOADS (`material_shipments` —
+  ship/delivery dates + BOL) attached to the part-matched line. The importer proposes the
+  right one from the document's profile; the office can override.
+- **"Merge onto the matching line" is a real merge.** A part number already on the list
+  UPDATES that line in place (the document's non-null fields win); a part matching MORE
+  than one line must be decided per row on the preview — the import refuses
+  (`ambiguous_unresolved`) rather than guessing, on the server, not just in the browser.
+  A matched line that is already received/flagged is LEFT ALONE and reported
+  ("left untouched — recorded facts are locked"), never silently rewritten.
+- **An interrupted import is not stuck.** Re-importing resumes from the watermark;
+  **Discard works mid-import** — lines from pages that already landed stay on the job's
+  list, and the screen says exactly that before the button.
 
 ## What "healthy" looks like
 

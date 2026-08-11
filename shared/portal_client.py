@@ -120,7 +120,18 @@ MANIFEST_RESULT_PATH = "/api/fieldops/manifests/internal/result"
 
 
 class PortalTransportError(Exception):
-    """Base exception for all portal-transport failures."""
+    """Base exception for all portal-transport failures.
+
+    ``status_code`` carries the HTTP status when the failure WAS an HTTP response
+    (``None`` for connection / timeout / decode failures). Consumers use it to split a
+    PERMANENT Worker rejection (a 4xx re-serves identically forever — retrying is a
+    wedge, not resilience; the 2026-08-10 audit's A5) from a genuinely transient
+    transport fault. Constructor stays message-first so every existing raise site and
+    subclass is untouched."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class PortalAuthError(PortalTransportError):
@@ -195,7 +206,8 @@ def _request(
         if response.status_code != 200:
             raise PortalTransportError(
                 f"{method} {path} unexpected status {response.status_code}: "
-                f"{response.text[:300]!r}"
+                f"{response.text[:300]!r}",
+                status_code=response.status_code,
             )
         try:
             data = response.json()
