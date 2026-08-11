@@ -536,3 +536,104 @@ def test_a_preview_failure_never_costs_the_import(_patch):
     assert stats.filed == 1  # the import still landed
     assert _patch["post_result"].call_args.kwargs["status"] == "parsed"
     assert _logs(_patch, Severity.WARN, "manifest_preview_post_failed")
+
+
+# ---- A5 (2026-08-11): Worker 4xx is PERMANENT, and the grid clamps to Worker bounds ----
+
+
+def test_a_worker_4xx_is_permanent_flag_plus_ticket_not_an_eternal_retry(_patch):
+    """The audit-A5 wedge: a 400-class rejection re-serves identically every cycle, so
+    'transient' meant ~720 ERROR rows/day, no CRITICAL, no ticket, item never draining.
+    Now: one-shot flag + Review-Queue ticket, and the row is terminal this cycle."""
+    data = _MINIMAL_XLSX
+    _patch["pending"].return_value = [_row(data, id=9)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_rows"].side_effect = portal_client.PortalTransportError(
+        "POST rows unexpected status 422", status_code=422
+    )
+
+    stats = manifest_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.ERROR, "manifest_worker_rejected")
+    assert not _logs(_patch, Severity.ERROR, "manifest_transient")
+    _patch["review"].assert_called_once()
+    # The one-shot flag reached the persisted set — next cycle skips, never re-tickets.
+    flagged = _patch["persist_flags"].call_args.args[0]
+    assert flagged == {"9": "worker_rejected"}
+
+
+def test_a_worker_5xx_stays_transient_and_unflagged(_patch):
+    data = _MINIMAL_XLSX
+    _patch["pending"].return_value = [_row(data, id=9)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_rows"].side_effect = portal_client.PortalTransportError(
+        "POST rows unexpected status 502", status_code=502
+    )
+
+    stats = manifest_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.ERROR, "manifest_transient")
+    assert not _logs(_patch, Severity.ERROR, "manifest_worker_rejected")
+    _patch["persist_flags"].assert_not_called()
+    _patch["review"].assert_not_called()
+
+
+def test_a_statusless_transport_error_stays_transient(_patch):
+    """Connection drops / decode failures carry no status — genuinely transient."""
+    data = _MINIMAL_XLSX
+    _patch["pending"].return_value = [_row(data, id=9)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_rows"].side_effect = portal_client.PortalTransportError("connection reset")
+
+    stats = manifest_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.ERROR, "manifest_transient")
+    _patch["persist_flags"].assert_not_called()
+
+
+def _mk_parsed(rows):
+    from field_ops import manifest_parse
+
+    return manifest_parse.ParsedManifest(
+        profile="customer_bom",
+        column_map=manifest_parse.ColumnMap(mapping={}, labels={}, qty_candidates=[], qty_default=None),
+        rows=rows,
+        meta={},
+        notes=["existing note"],
+    )
+
+
+def _mk_row(index, cells):
+    from field_ops import manifest_parse
+
+    return manifest_parse.ParsedRow(index=index, cells=cells, kind="data")
+
+
+def test_clamp_passes_a_clean_grid_through_untouched():
+    parsed = _mk_parsed([_mk_row(1, ["a", "b"])])
+    assert manifest_poll._clamp_to_worker_bounds(parsed) is parsed  # zero-copy fast path
+
+
+def test_clamp_truncates_rows_cells_and_chars_with_visible_notes():
+    wide = _mk_row(1, ["c"] * (manifest_poll.WORKER_MAX_ROW_CELLS + 50))
+    long_cell = _mk_row(2, ["x" * (manifest_poll.WORKER_MAX_CELL_CHARS + 100)])
+    parsed = _mk_parsed([wide, long_cell])
+
+    out = manifest_poll._clamp_to_worker_bounds(parsed)
+
+    assert len(out.rows[0].cells) == manifest_poll.WORKER_MAX_ROW_CELLS
+    assert len(out.rows[1].cells[0]) == manifest_poll.WORKER_MAX_CELL_CHARS
+    # VISIBLE, never silent: each clamp appends a note the validate screen displays.
+    assert "existing note" in out.notes
+    assert any("columns" in n for n in out.notes)
+    assert any("characters" in n for n in out.notes)
+
+
+def test_clamp_caps_the_row_count_at_the_worker_ceiling():
+    rows = [_mk_row(i + 1, ["v"]) for i in range(manifest_poll.WORKER_MAX_ROWS_TOTAL + 5)]
+    out = manifest_poll._clamp_to_worker_bounds(_mk_parsed(rows))
+    assert len(out.rows) == manifest_poll.WORKER_MAX_ROWS_TOTAL
+    assert any("TRUNCATED: the document has" in n for n in out.notes)

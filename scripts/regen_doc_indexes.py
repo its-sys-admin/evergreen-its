@@ -211,13 +211,28 @@ def _replace_between_sentinels(content: str, replacement: str) -> str | None:
 
 
 def find_readmes(roots: list[Path]) -> list[Path]:
-    """Return every `README.md` under the given root paths, excluding hidden dirs."""
+    """Return every `README.md` under the given root paths, excluding hidden dirs.
+
+    The hidden-dir test runs on the path RELATIVE to the repo root, never on the absolute path.
+    `REPO_ROOT` is absolute, so a checkout living under a dot-directory — which is exactly where
+    `.claude/worktrees/<id>/` puts every workflow-agent worktree — has `.claude` as a component of
+    EVERY file's absolute path. The old test matched it, found zero READMEs, and `--check` then
+    passed by having compared nothing.
+
+    This is the same bug `lint_doc_conventions.walk_docs` shipped with, fixed in #56; that pass
+    corrected one sibling and missed this one — the recurring incomplete-fan-out miss. A gate that
+    passes because it found no work is a green light that means silence.
+    """
     readmes: list[Path] = []
     for root in roots:
         if not root.exists():
             continue
         for path in root.rglob("README.md"):
-            if any(part.startswith(".") for part in path.parts):
+            try:
+                rel = path.relative_to(REPO_ROOT)
+            except ValueError:  # outside the repo root — not ours to index
+                continue
+            if any(part.startswith(".") for part in rel.parts):
                 continue
             readmes.append(path)
     return readmes

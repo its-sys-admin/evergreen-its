@@ -450,15 +450,18 @@ workflows:
             class: seth_coresolve
             runbook: docs/runbooks/material_manifest_import.md
           - id: manifest_commit_refused
-            symptom: The office's import from the validate screen errors, or the manifest is stuck showing "committing".
-            signals: ["not_committable", "line_cap_exceeded", "invalid_material_id", "invalid_mode"]
+            symptom: The office's import from the validate screen errors, or the manifest shows "committing" after an interrupted import.
+            signals: ["not_committable", "line_cap_exceeded", "invalid_material_id", "ambiguous_unresolved", "manifest_worker_rejected"]
             checks:
               - These are Worker refusals of the COMMIT half (the human dispose), not daemon faults — the daemon's work already finished when the grid appeared.
-              - line_cap_exceeded means the job would exceed its expected-materials line cap; the preview's projected total can under-count, so a green preview does not rule this out mid-import.
+              - ambiguous_unresolved means a part number matches more than one existing line and the office hasn't picked a target — a merge or shipments import refuses rather than guessing.
+              - The preview's projected totals are per-mode (add-vs-merge); line_cap_exceeded means genuinely NEW lines would push the job past its cap.
             resolutions:
-              - not_committable / invalid_mode / invalid_material_id → re-open the validate screen and retry from a fresh load; if it persists, the manifest's status no longer allows a commit — escalate rather than forcing it.
-              - A manifest stranded in "committing" after a mid-import refusal currently has NO discard path (known gap) — some pages may already be imported; check the job's Materials page before re-importing anything, and escalate to Seth.
-            class: seth_coresolve
+              - not_committable / invalid_material_id → re-open the validate screen and retry from a fresh load; if it persists, the manifest's status no longer allows a commit — escalate rather than forcing it.
+              - ambiguous_unresolved → run the preview and decide each listed part number, then import again.
+              - An import interrupted mid-way is RESUMABLE (re-importing continues from the watermark) or ABANDONABLE (Discard works on a "committing" manifest; lines from pages that already imported stay on the job's list — the screen says so).
+              - manifest_worker_rejected in ITS_Errors means the Worker permanently refused the daemon's grid post (a 4xx) — the manifest is one-shot-flagged; remediate via the runbook's flag-file procedure after the cause is fixed.
+            class: daniel_solo
             runbook: docs/runbooks/material_manifest_import.md
       - id: job_archive
         title: The archive pass relocates a closed job's six containers (and brings them back)
@@ -790,6 +793,19 @@ workflows:
             resolutions:
               - Correct the edit per the config-editor runbook.
             class: daniel_solo
+            runbook: docs/runbooks/operator_dashboard_config_editor.md
+          - id: config_row_absent
+            symptom: A capability does nothing at all and the switch for it cannot be found anywhere in ITS_Config.
+            signals: ["load-bearing ITS_Config row(s) MISSING or BLANK", "row MISSING", "Value BLANK", "config_row_missing", "INVISIBLE off-switch", "the capability is silently inert"]
+            checks:
+              - A missing row and a blank Value both read as `false` to a daemon (`_read_bool_setting(default=False)`), so the capability is inert with NO switch to flip — this is the 2026-08-10 three-day archive outage exactly.
+              - Watchdog Check Y (verify_cutover VC-03, run daily) names each absent row as `<setting> [<workstream>]` — note BOTH halves, ITS_Config is keyed on Setting AND Workstream.
+              - Read the row's Description in docs/references/its_config_dictionary.md before anything else — it may carry a doctrine precondition on activation.
+            resolutions:
+              - Seeding a missing ITS_Config row is a FIXED high-capability class — escalate to Seth with the row names; a Tier-2 operator does not create one.
+              - After the row is seeded, mark the open CRITICAL resolved — an open CRITICAL is never terminal, so Check B re-reports it forever otherwise.
+            class: seth_coresolve
+            watchdog_check: _check_cutover_config
             runbook: docs/runbooks/operator_dashboard_config_editor.md
       - id: config_actuate
         title: config-actuator validates, PRs, merges, and deploys the change

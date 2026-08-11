@@ -148,9 +148,11 @@ export async function discardManifest(id: number): Promise<{ ok: boolean; id: nu
   return postJson(`/api/fieldops/manifests/${id}/discard`);
 }
 
-/** One resolved line, ready to become a `job_expected_materials` row. `source_row_index` is what
- *  makes the paged commit replay-safe — the watermark is expressed in SOURCE rows, not in "how
- *  many lines did we insert last time", so it stays meaningful across a re-ordered payload. */
+/** One resolved line, ready to become a `job_expected_materials` row (or, on a shipments
+ *  import, a `material_shipments` LOAD). `source_row_index` is what makes the paged commit
+ *  replay-safe — the watermark is expressed in SOURCE rows, not in "how many lines did we
+ *  insert last time", so it stays meaningful across a re-ordered payload. `bol` rides only
+ *  the shipments import: a bill-of-lading belongs to a LOAD, never to an expected line. */
 export interface ManifestResolvedLine {
   source_row_index: number;
   description: string | null;
@@ -161,9 +163,18 @@ export interface ManifestResolvedLine {
   expected_date: string | null;
   expected_ship_date: string | null;
   material_id: number | null;
+  bol?: string | null;
 }
 
 export type ManifestMode = "merge" | "add_new";
+/** 'lines' = the BOM shape (rows become expected-material lines); 'shipments' = the
+ *  shipping-log shape (rows become material_shipments LOADS on part-matched lines —
+ *  ADR-0005 decision 4's two-level model). */
+export type ManifestImportAs = "lines" | "shipments";
+/** source_row_index → the chosen existing line id, for parts matching MORE than one line.
+ *  The Worker re-validates every entry against its own match set — this is a claim, not
+ *  an instruction. */
+export type ManifestResolutions = Record<number, number>;
 
 /** DRY RUN. Writes nothing; returns what committing this set WOULD do against the job's live
  *  lines — including `ambiguous`, which the screen must resolve per row rather than let the
@@ -180,8 +191,14 @@ export async function commitManifest(
   id: number,
   mode: ManifestMode,
   lines: ManifestResolvedLine[],
+  opts: { importAs?: ManifestImportAs; resolutions?: ManifestResolutions } = {},
 ): Promise<ManifestCommitResponse> {
-  return postJson<ManifestCommitResponse>(`/api/fieldops/manifests/${id}/commit`, { mode, lines });
+  return postJson<ManifestCommitResponse>(`/api/fieldops/manifests/${id}/commit`, {
+    mode,
+    lines,
+    import_as: opts.importAs ?? "lines",
+    resolutions: opts.resolutions ?? {},
+  });
 }
 
 /**
@@ -200,19 +217,27 @@ export async function commitAll(
   id: number,
   mode: ManifestMode,
   lines: ManifestResolvedLine[],
-  onProgress?: (inserted: number, total: number) => void,
-): Promise<{ inserted: number; pages: number }> {
+  opts: { importAs?: ManifestImportAs; resolutions?: ManifestResolutions } = {},
+  onProgress?: (landed: number, total: number) => void,
+): Promise<{ inserted: number; updated: number; shipments: number; pages: number;
+             skipped_locked: ManifestCommitResponse["skipped_locked"] }> {
   let inserted = 0;
+  let updated = 0;
+  let shipments = 0;
   let pages = 0;
+  const skipped: ManifestCommitResponse["skipped_locked"] = [];
   // Bound the loop: each page must strictly advance the watermark, so at most one page per line
   // is possible. A server that stopped advancing would otherwise spin here forever.
   const maxPages = Math.ceil(lines.length / COMMIT_PAGE_LINES) + 2;
   for (;;) {
-    const res = await commitManifest(id, mode, lines);
+    const res = await commitManifest(id, mode, lines, opts);
     inserted += res.inserted;
+    updated += res.updated;
+    shipments += res.shipments;
+    skipped.push(...res.skipped_locked);
     pages += 1;
-    onProgress?.(inserted, lines.length);
-    if (res.done) return { inserted, pages };
+    onProgress?.(inserted + updated + shipments, lines.length);
+    if (res.done) return { inserted, updated, shipments, pages, skipped_locked: skipped };
     if (pages >= maxPages) {
       throw new Error(
         `commit did not finish after ${pages} pages (watermark ${res.committed_through_row}) — reload and check the manifest`,

@@ -21,10 +21,12 @@ Design (M3 Slice 2 — PORTAL-AUTHORED, ONE-WAY-UP, APPEND-ONLY):
   a find-hit it compares the incoming values against the row's current cells and issues an
   `update_rows` ONLY when something actually changed. An incident's own fields are immutable, so in
   steady state this is a no-op; the ONE field that legitimately changes is `Line Status` — the CURRENT
-  status of the referenced expected-materials line (M3 Slice 1 `line_uuid` join), which flips to
-  `received` when a later receipt resolves the shortfall. That live resolution signal is the payoff of
-  the Slice-1 line reference. There is NO watermark / mark-mirrored (the Worker route is a re-projected
-  filed-set read, not an event drain).
+  status of the referenced expected-materials line (M3 Slice 1 `line_uuid` join). The flag is STICKY —
+  a delivery mark never clears it — so the flip off `incident` happens exactly when a manager/admin
+  runs the explicit **Resolve problem** action (the Worker's `resolve-incident` route, 2026-08-11):
+  the line then lands where the delivery ledger points (`received` on a latest full delivery, else
+  back to `expected`), and THAT resolution is what this column mirrors. There is NO watermark /
+  mark-mirrored (the Worker route is a re-projected filed-set read, not an event drain).
 - **ONE-WAY-UP ONLY.** The incident is authored IN THE PORTAL (the manager-side material-incident
   form); this mirror is read-only reflection UP. No down-sync, no `smartsheet_row_id` reverse link.
 - **Progress workspace only**, single-destination. The per-job FOLDER + capacity tripwire are reused

@@ -166,6 +166,7 @@ def test_checks_list_has_all_session_1_2_3_checks():
         # can never delay an alerting check ahead of it.
         watchdog._check_stale_job_archives,  # Check X (#25) — stopped / never-picked-up job archives
         watchdog._check_log_dir_rotation,  # Check W (growth Slice 2) — log-dir archive bound
+        watchdog._check_cutover_config,  # Check Y (#27) — verify_cutover VC-03, run daily
     ]
 
 
@@ -2959,6 +2960,291 @@ def test_reads_the_health_route_and_never_the_work_queue(archive_env, mocker):
     progress.assert_not_called()
 
 
+# ---- Check Y: verify_cutover VC-03, run daily instead of never (#27) ------
+#
+# THE GAP THIS CLOSES. verify_cutover is the ONLY tool comparing declared load-bearing
+# config to the LIVE tenant, and it ran nowhere — not CI, not launchd, not install.sh.
+# On 2026-08-10 the Track 6 archive sat inert three days because two ITS_Config rows did
+# not exist; VC-03 names both precisely. Detection was never the gap: required_config
+# WARNed `NO ROW` 3,442 times and a WARN never triple-fires.
+#
+# The tests that matter most here are the FAIL-SOFT ones. This check resolves ~53 enrolled
+# rows from ONE sheet read, so a broken read makes every row look missing — and firing 53
+# CRITICALs into a 20,000-row-capped sheet that has locked out before would be a far worse
+# outage than the one being detected.
+
+
+def _config_row(setting, workstream, value):
+    return {"Setting": setting, "Workstream": workstream, "Value": value}
+
+
+def _rows_for(cfg_rows, *, value="seeded-value", pad=True):
+    """A healthy ITS_Config row set covering every enrolled ConfigRow.
+
+    `requirement == "true"` rows get "true" so the healthy baseline is genuinely clean.
+    `pad` adds filler rows so the index clears CUTOVER_CONFIG_MIN_INDEX_ROWS even when a
+    test enrolls only a couple of rows.
+    """
+    rows = [
+        _config_row(c.key, c.workstream, "true" if c.requirement == "true" else value)
+        for c in cfg_rows
+    ]
+    if pad:
+        rows += [
+            _config_row(f"filler.key_{i}", "global", "x")
+            for i in range(watchdog.CUTOVER_CONFIG_MIN_INDEX_ROWS)
+        ]
+    return rows
+
+
+@pytest.fixture
+def cutover_env(monkeypatch, mocker, tmp_path):
+    """Counter isolated to tmp_path. Returns the ITS_Config get_rows mock."""
+    monkeypatch.setattr(
+        watchdog,
+        "_CUTOVER_CONFIG_FAILS",
+        watchdog.sustained_failure.SustainedFailureCounter(
+            tmp_path / "cutover_config_fails.json", "test", "y"
+        ),
+    )
+    return mocker.patch("watchdog.smartsheet_client.get_rows")
+
+
+@pytest.fixture
+def vc(cutover_env):
+    """The live verify_cutover module, imported the same bare way Check Y imports it."""
+    import verify_cutover
+
+    return verify_cutover
+
+
+def test_check_y_registered_in_checks():
+    assert watchdog._check_cutover_config in watchdog.CHECKS
+    assert watchdog.CHECK_LETTERS["_check_cutover_config"] == "Y"
+
+
+def test_check_y_is_on_the_daily_tier():
+    """The enrolled set only changes when CODE merges; hourly buys nothing and costs a
+    full-sheet cross-network read 24x/day."""
+    assert watchdog._check_cutover_config in watchdog.DAILY_ONLY_CHECKS
+
+
+def test_healthy_tenant_is_info(cutover_env, vc):
+    cutover_env.return_value = _rows_for(vc.CONFIG_ROWS)
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.INFO
+    assert "clean" in result.summary
+
+
+def test_a_missing_row_is_critical_on_the_first_sweep(cutover_env, vc):
+    """THE 2026-08-10 case: a load-bearing row that does not exist is an INVISIBLE
+    off-switch, and it must page the very first time it is seen — not on day three."""
+    rows = [r for r in _rows_for(vc.CONFIG_ROWS)
+            if r["Setting"] != "field_ops.fieldops_sync.archive_enabled"]
+    cutover_env.return_value = rows
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.CRITICAL
+    assert "field_ops.fieldops_sync.archive_enabled" in result.summary
+    assert "MISSING" in result.summary
+
+
+def test_a_blank_value_is_critical_exactly_like_a_missing_row(cutover_env, vc):
+    """`_read_bool_setting(default=False)` cannot tell blank from missing, so neither
+    may this check — splitting them would let the quieter half of one bug through."""
+    rows = _rows_for(vc.CONFIG_ROWS)
+    for r in rows:
+        if r["Setting"] == "field_ops.fieldops_sync.archive_enabled":
+            r["Value"] = "   "
+
+    cutover_env.return_value = rows
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.CRITICAL
+    assert "BLANK" in result.summary
+
+
+def test_a_paused_true_gate_is_only_a_warn(cutover_env, vc):
+    """A gate an operator deliberately turned off is a CHOICE, not a defect — VC-03
+    itself refuses to force 'true'. Paging for it is how a runner earns being ignored."""
+    true_row = next(c for c in vc.CONFIG_ROWS if c.requirement == "true")
+    rows = _rows_for(vc.CONFIG_ROWS)
+    for r in rows:
+        if r["Setting"] == true_row.key and r["Workstream"] == true_row.workstream:
+            r["Value"] = "false"
+    cutover_env.return_value = rows
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.WARN
+    assert "PAUSED" in result.summary
+    assert true_row.key in result.summary
+
+
+def test_sandbox_residue_is_only_a_warn(cutover_env, vc):
+    """Three rows carry the mirror value today. Expected pre-cutover -> WARN, and no
+    `system.cutover_profile` mute row: that would be an operator-editable silencer for
+    this very check, and a dark-shipped row reproducing the bug being fixed."""
+    scanned = next(c for c in vc.CONFIG_ROWS if c.sandbox_scan)
+    rows = _rows_for(vc.CONFIG_ROWS)
+    for r in rows:
+        if r["Setting"] == scanned.key and r["Workstream"] == scanned.workstream:
+            r["Value"] = "https://safety.evergreenmirror.com"
+    cutover_env.return_value = rows
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.WARN
+    assert "sandbox" in result.summary
+
+
+def test_a_read_exception_asserts_nothing(cutover_env):
+    """FAIL-SOFT. Our own inability to read ITS_Config is not evidence of drift, and a
+    breaker short-circuit here would otherwise page the operator to seed all 53 enrolled rows,
+    every one of which exists."""
+    cutover_env.side_effect = watchdog.smartsheet_client.SmartsheetError("breaker open")
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.INFO
+    assert "asserting nothing" in result.summary
+
+
+def test_a_renamed_column_asserts_nothing_despite_a_healthy_row_count(cutover_env, vc):
+    """THE guard that a row-count check could never provide.
+
+    A renamed `Setting`/`Workstream` column returns ~118 perfectly healthy-looking rows
+    that index to NOTHING. Any `len(rows) >= N` guard sails straight past it and reports
+    every enrolled row as missing. The floor is on the RESOLVED INDEX for this reason.
+    """
+    cutover_env.return_value = [
+        {"SettingName": f"k{i}", "Stream": "global", "Value": "v"} for i in range(118)
+    ]
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.INFO
+    assert "asserting nothing" in result.summary
+    assert "renamed" in result.summary
+
+
+def test_an_empty_sheet_asserts_nothing(cutover_env):
+    cutover_env.return_value = []
+
+    assert watchdog._check_cutover_config().severity is Severity.INFO
+
+
+def test_missing_rows_ride_the_capped_ladder_not_a_daily_page(cutover_env, vc):
+    """An open CRITICAL is NEVER terminal (shared/errors_rotation), so paging every daily
+    sweep while a row stays unseeded mints permanent unrotatable rows against the 20,000
+    cap that has locked out before. Rungs at 1, 2, 4, 8 then every 8."""
+    cutover_env.return_value = [
+        r for r in _rows_for(vc.CONFIG_ROWS)
+        if r["Setting"] != "field_ops.fieldops_sync.archive_enabled"
+    ]
+
+    sev = [watchdog._check_cutover_config().severity for _ in range(9)]
+
+    assert [s is Severity.CRITICAL for s in sev] == [
+        True, True, False, True, False, False, False, True, False
+    ]
+
+
+def test_the_streak_resets_once_every_row_is_seeded(cutover_env, vc):
+    """A re-seeded row must not leave the ladder mid-climb — the next regression has to
+    page on ITS first sweep, not on whatever rung the previous one left behind."""
+    cutover_env.return_value = [
+        r for r in _rows_for(vc.CONFIG_ROWS)
+        if r["Setting"] != "field_ops.fieldops_sync.archive_enabled"
+    ]
+    for _ in range(3):
+        watchdog._check_cutover_config()
+
+    cutover_env.return_value = _rows_for(vc.CONFIG_ROWS)
+    assert watchdog._check_cutover_config().severity is Severity.INFO
+
+    cutover_env.return_value = [
+        r for r in _rows_for(vc.CONFIG_ROWS)
+        if r["Setting"] != "field_ops.fieldops_sync.archive_enabled"
+    ]
+    assert watchdog._check_cutover_config().severity is Severity.CRITICAL
+
+
+def test_the_named_rows_are_capped(cutover_env):
+    """One bad day must not write a multi-KB summary into ITS_Errors."""
+    cutover_env.return_value = [
+        _config_row(f"filler.key_{i}", "global", "x")
+        for i in range(watchdog.CUTOVER_CONFIG_MIN_INDEX_ROWS)
+    ]
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.CRITICAL
+    assert result.summary.count("row MISSING") == watchdog.CUTOVER_CONFIG_REPORT_MAX_ROWS
+
+
+def test_check_y_reads_the_sheet_exactly_once(cutover_env, vc):
+    """`get_setting` does a FULL sheet fetch per call; resolving ~53 rows key-by-key
+    would be ~53 fetches per sweep."""
+    cutover_env.return_value = _rows_for(vc.CONFIG_ROWS)
+
+    watchdog._check_cutover_config()
+
+    cutover_env.assert_called_once()
+
+
+def test_check_y_never_writes_to_its_config(cutover_env, vc, mocker):
+    """Check Y observes the switchboard; it must never edit it."""
+    update = mocker.patch("watchdog.smartsheet_client.update_rows")
+    add = mocker.patch("watchdog.smartsheet_client.add_rows")
+    cutover_env.return_value = _rows_for(vc.CONFIG_ROWS)
+
+    watchdog._check_cutover_config()
+
+    update.assert_not_called()
+    add.assert_not_called()
+
+
+def test_verify_cutover_is_imported_lazily_not_at_module_scope():
+    """⛔ THE BLOCKING CONSTRAINT. `scripts/` has no `__init__.py`, the editable install
+    declares 8 packages and none is named `scripts`, and the plist runs
+    `.venv/bin/python __ITS_HOME__/scripts/watchdog.py` — so a module-scope import here
+    would raise ModuleNotFoundError under launchd and take down ALL of CHECKS, the entire
+    observability spine, silently (the Healthchecks.io dead-man's switch is not armed).
+
+    Asserts BOTH properties mechanically: no module-scope import of verify_cutover, and
+    the import that does exist is the BARE form inside the check function. A
+    `from scripts import verify_cutover` also makes mypy see one file under two module
+    names (tests/test_job_archive.py records that).
+    """
+    import ast
+    import inspect
+    from pathlib import Path
+
+    source = Path(watchdog.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:  # MODULE SCOPE only — nested imports are the point
+        if isinstance(node, ast.Import):
+            assert not any(a.name.startswith("verify_cutover") for a in node.names)
+        if isinstance(node, ast.ImportFrom):
+            assert node.module not in ("verify_cutover", "scripts", "scripts.verify_cutover")
+
+    fn = ast.parse(inspect.getsource(watchdog._check_cutover_config).lstrip())
+    imports = [n for n in ast.walk(fn) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert any(
+        isinstance(n, ast.Import) and any(a.name == "verify_cutover" for a in n.names)
+        for n in imports
+    ), "Check Y must `import verify_cutover` BARE, inside the function"
+    assert not any(isinstance(n, ast.ImportFrom) for n in imports), (
+        "`from scripts import verify_cutover` breaks under launchd (sys.path[0] is scripts/) "
+        "and makes mypy see the file under two module names"
+    )
+
+
 # ---- Check V: D1 prune heartbeat (GS2) ------------------------------------
 
 
@@ -3847,7 +4133,7 @@ def test_check_letters_cover_every_registered_check():
     assert registered == set(watchdog.CHECK_LETTERS), (
         "CHECK_LETTERS out of sync with CHECKS — reconcile both in the same PR"
     )
-    assert set(watchdog.CHECK_LETTERS.values()) == set("ABCDGIJKLMNOPQRSTUVWX")
+    assert set(watchdog.CHECK_LETTERS.values()) == set("ABCDGIJKLMNOPQRSTUVWXY")
 
 
 def test_run_check_returns_record_with_raw_severity(mock_log):
@@ -3909,7 +4195,9 @@ def test_daily_tier_holds_exactly_the_harmful_at_hourly_letters():
     letters = {watchdog.CHECK_LETTERS[c.__name__] for c in watchdog.DAILY_ONLY_CHECKS}
     # P joined 2026-08-10 (#26): its liveness probe spends a single-use Box refresh token
     # per run, so hourly would worsen the rotation race the same issue's retry absorbs.
-    assert letters == {"D", "G", "I", "L", "O", "P", "U", "W", "X"}
+    # Y joined 2026-08-11 (#27): a full-sheet read whose enrolled set only changes when code
+    # merges, and whose ladder is calibrated in DAYS.
+    assert letters == {"D", "G", "I", "L", "O", "P", "U", "W", "X", "Y"}
 
 
 def test_hourly_tier_keeps_the_outage_detectors():
@@ -4071,3 +4359,29 @@ def test_check_x_reads_the_worker_url_under_the_owning_workstream(monkeypatch):
         "read under the wrong workstream — the row does not exist there, so Check X skips forever"
     )
     assert creds == ("https://worker.test", "tok")
+
+
+def test_a_renamed_value_column_asserts_nothing(cutover_env, vc):
+    """FAIL-SOFT guards THREE columns, not two.
+
+    Keying the index on (Setting, Workstream) alone leaves a door open one column over: rename
+    or drop the **Value** column and the index resolves every pair perfectly — sailing past a
+    pairs-only floor — while `row.get("Value")` returns None for all of them, so every enrolled
+    row reads as BLANK.
+
+    The result is worse than a silent miss: a CRITICAL telling the operator to seed rows they
+    can plainly see populated. A genuine incident looks nothing like this — a handful absent
+    while the rest stay valued — so a valued-floor cannot mask a real outage.
+    """
+    rows = _rows_for(vc.CONFIG_ROWS)
+    for row in rows:
+        row.pop("Value", None)          # the column is gone; the keys are pristine
+
+    cutover_env.return_value = rows
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.INFO, (
+        "a dropped Value column produced a page to seed every enrolled row — all of which exist"
+    )
+    assert "Value column" in result.summary or "no VALUES" in result.summary

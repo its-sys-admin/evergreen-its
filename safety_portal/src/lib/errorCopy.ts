@@ -385,6 +385,13 @@ export const ERROR_COPY: Record<string, string> = {
   not_committable: "This manifest can't be committed — it was refused or discarded, so re-import the document.",
   line_cap_exceeded: "This job can hold 500 material lines and the import would exceed that — split it across jobs, or trim the list before committing.",
   duplicate_line: "A line collided with one that already exists — reload the validate screen to see the current list.",
+  // 2026-08-11: real merge + the shipments import.
+  invalid_import_as: "Choose whether these rows are material lines (a BOM) or scheduled loads (a shipping log).",
+  invalid_resolutions: "The ambiguous-part choices didn't come through correctly — re-run the preview and decide them again.",
+  ambiguous_unresolved: "Some part numbers match more than one existing line — run the preview and pick which line each one belongs to before importing.",
+  invalid_bol: "A BOL / load number is too long — shorten it to 120 characters or less.",
+  // Resolve-problem (the expected-materials incident flag's explicit counterpart).
+  not_flagged: "This line has no problem flag to resolve — someone may have already cleared it.",
 };
 
 /** Humanize an unknown wire code: 'some_new_code' → 'some new code'. */

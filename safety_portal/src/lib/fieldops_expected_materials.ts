@@ -147,3 +147,17 @@ export async function flagExpectedMaterialIncident(
     ...(qtyReceived !== undefined ? { qty_received: qtyReceived } : {}),
   });
 }
+
+/** Clear a line's problem flag — an explicit human act, never a side effect of a delivery
+ *  mark (a delivered-but-damaged pallet is still a problem). note is REQUIRED: the record
+ *  of HOW it was resolved is the point. Status lands where the delivery ledger says —
+ *  latest event delivered → received, otherwise back to expected. */
+export async function resolveExpectedMaterialIncident(
+  id: number,
+  note: string,
+): Promise<{ status: string | null }> {
+  return postJson<{ ok: boolean; id: number; status: string | null }>(
+    `/api/fieldops/expected-material/${id}/resolve-incident`,
+    { note },
+  );
+}

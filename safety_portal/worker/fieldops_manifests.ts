@@ -242,8 +242,13 @@ function readGridRow(raw: unknown): GridRow | string {
 /** One line the human has resolved on the validate screen, ready to become a
  *  `job_expected_materials` row. `source_row_index` is the ParsedRow.index it came from —
  *  it is what makes the paged commit replay-safe, because the watermark is expressed in
- *  SOURCE rows rather than in "how many lines did we insert last time". */
-type ResolvedLine = { fields: ExpectationFields; source_row_index: number };
+ *  SOURCE rows rather than in "how many lines did we insert last time". `bol` rides ONLY
+ *  the shipments import (a bill-of-lading is a property of a LOAD, not of an expected
+ *  line) — it is deliberately NOT part of `readExpectationFields`' shared vocabulary. */
+type ResolvedLine = { fields: ExpectationFields; source_row_index: number; bol: string | null };
+
+const MAX_BOL = 64; // SAME bound as fieldops_expected_materials' hand-entry shipment route —
+// one business rule for material_shipments.bol_number, whichever path writes it.
 
 /** Validate one posted line. Returns the resolved shape or an error CODE string.
  *
@@ -263,7 +268,13 @@ function readResolvedLine(raw: unknown): ResolvedLine | string {
   }
   const fields = readExpectationFields(raw);
   if (typeof fields === "string") return fields;
-  return { fields, source_row_index: idx };
+  let bol: string | null = null;
+  if (raw.bol !== undefined && raw.bol !== null) {
+    if (typeof raw.bol !== "string" || raw.bol.length > MAX_BOL) return "invalid_bol";
+    const t = raw.bol.trim();
+    bol = t.length ? t : null;
+  }
+  return { fields, source_row_index: idx, bol };
 }
 
 /** Read + validate a posted `lines` array. */
@@ -280,15 +291,73 @@ function readLines(body: Record<string, unknown>, cap: number): ResolvedLine[] |
   return out;
 }
 
+/** Read + validate the posted ambiguity `resolutions` map (source_row_index → chosen
+ *  existing line id). Bounded and integer-checked HERE; whether each resolution points at
+ *  a line that is genuinely among that part number's CURRENT matches is re-derived
+ *  against the job's live lines inside /commit — the client's claim is never trusted. */
+function readResolutions(body: Record<string, unknown>): Map<number, number> | { error: string } {
+  const out = new Map<number, number>();
+  if (body.resolutions === undefined || body.resolutions === null) return out;
+  if (!isPlainObject(body.resolutions)) return { error: "invalid_resolutions" };
+  const entries = Object.entries(body.resolutions);
+  if (entries.length > MAX_PLAN_LINES) return { error: "invalid_resolutions" };
+  for (const [k, v] of entries) {
+    const idx = Number(k);
+    if (!Number.isSafeInteger(idx) || idx < 1 || idx > MAX_ROWS_TOTAL) {
+      return { error: "invalid_resolutions" };
+    }
+    if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) {
+      return { error: "invalid_resolutions" };
+    }
+    out.set(idx, v);
+  }
+  return out;
+}
+
+/** The job's live line list keyed for part matching — ONE read shared by /plan and
+ *  /commit, so the two routes cannot disagree about what "matches" means. Status rides
+ *  along because merge may only rewrite a line that is still 'expected' (the same
+ *  received/incident-facts-are-locked rule the hand-edit route enforces in-WHERE). */
+async function loadPartIndex(c: Ctx, jobId: string): Promise<{
+  existing: { id: number; part_number: string | null; status: string }[];
+  byPart: Map<string, number[]>;
+}> {
+  const { results } = await c.env.DB
+    .prepare(
+      "SELECT id, part_number, status FROM job_expected_materials " +
+        "WHERE job_id = ?1 AND active = 1 ORDER BY id ASC LIMIT ?2",
+    )
+    .bind(jobId, MAX_JOB_LINES)
+    .all<{ id: number; part_number: string | null; status: string }>();
+  const existing = results ?? [];
+  const byPart = new Map<string, number[]>();
+  for (const row of existing) {
+    if (!row.part_number) continue;
+    const ids = byPart.get(row.part_number) ?? [];
+    ids.push(row.id);
+    byPart.set(row.part_number, ids);
+  }
+  return { existing, byPart };
+}
+
 /** The manifest row a plan/commit call is operating on, plus its job. */
 async function loadManifest(
   c: Ctx,
   id: number,
-): Promise<{ id: number; job_id: string; status: string; committed_through_row: number } | null> {
+): Promise<{
+  id: number; job_id: string; status: string; committed_through_row: number;
+  merge_options_json: string | null;
+} | null> {
   return c.env.DB
-    .prepare("SELECT id, job_id, status, committed_through_row FROM job_manifests WHERE id = ?1")
+    .prepare(
+      "SELECT id, job_id, status, committed_through_row, merge_options_json " +
+        "FROM job_manifests WHERE id = ?1",
+    )
     .bind(id)
-    .first<{ id: number; job_id: string; status: string; committed_through_row: number }>();
+    .first<{
+      id: number; job_id: string; status: string; committed_through_row: number;
+      merge_options_json: string | null;
+    }>();
 }
 
 export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): void {
@@ -730,21 +799,7 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
       const parsed = readLines(body, MAX_PLAN_LINES);
       if (!Array.isArray(parsed)) return c.json(parsed, 400);
 
-      const { results } = await c.env.DB
-        .prepare(
-          "SELECT id, part_number FROM job_expected_materials " +
-            "WHERE job_id = ?1 AND active = 1 ORDER BY id ASC LIMIT ?2",
-        )
-        .bind(manifest.job_id, MAX_JOB_LINES)
-        .all<{ id: number; part_number: string | null }>();
-      const existing = results ?? [];
-      const byPart = new Map<string, number[]>();
-      for (const row of existing) {
-        if (!row.part_number) continue;
-        const ids = byPart.get(row.part_number) ?? [];
-        ids.push(row.id);
-        byPart.set(row.part_number, ids);
-      }
+      const { existing, byPart } = await loadPartIndex(c, manifest.job_id);
 
       const matched: { source_row_index: number; part_number: string; line_id: number }[] = [];
       const ambiguous: { source_row_index: number; part_number: string; line_ids: number[] }[] = [];
@@ -785,14 +840,24 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
         absent,
         // What committing every remaining line would leave the job holding, against the
         // read route's own LIMIT 500 — over that, the materials page SILENTLY truncates.
-        projected_total: existing.length + fresh.length,
-        would_exceed_line_cap: existing.length + fresh.length > MAX_JOB_LINES,
+        // MODE-AWARE, because the two modes add different row counts: add_new inserts
+        // EVERY posted line, merge inserts only the unmatched ones (matched + resolved
+        // lines become UPDATEs). The bare `projected_total` keeps the conservative
+        // (add_new) number so a generic consumer can never be under-told — the original
+        // single value used merge arithmetic, so a green add_new preview could still 409
+        // `line_cap_exceeded` half-way through the commit and strand the manifest.
+        projected_total: existing.length + parsed.length,
+        projected_total_add_new: existing.length + parsed.length,
+        projected_total_merge: existing.length + fresh.length,
+        would_exceed_line_cap: existing.length + parsed.length > MAX_JOB_LINES,
+        would_exceed_line_cap_merge: existing.length + fresh.length > MAX_JOB_LINES,
       });
     },
   );
 
   // POST /api/fieldops/manifests/:id/commit — ONE PAGE of the import. Body:
-  // { mode: 'merge'|'add_new', lines: [...] }.
+  // { mode: 'merge'|'add_new', import_as?: 'lines'|'shipments', lines: [...],
+  //   resolutions?: { [source_row_index]: line_id } }.
   //
   // PAGED WITH A WATERMARK. A 900-row master BOM cannot commit inside one Worker request,
   // so each call lands at most COMMIT_PAGE_LINES lines and advances
@@ -800,6 +865,19 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
   // load-bearing: a page either fully lands or fully rolls back, and a REPLAYED page is a
   // no-op because every line at or below the watermark is dropped before any write. The
   // caller simply re-posts the remainder until `done` comes back true.
+  //
+  // THREE DISPOSITIONS, one matcher (loadPartIndex — the same index /plan derives, so the
+  // preview and the commit cannot disagree about what "matches" means):
+  //   • add_new lines      — every posted line INSERTs (choosing duplicates is deliberate).
+  //   • merge lines        — a uniquely-matched part UPDATEs its existing line (guarded
+  //     status='expected': received/incident facts are locked, exactly as the hand-edit
+  //     route locks them — a locked match is reported `skipped_locked`, never silently
+  //     rewritten); an AMBIGUOUS part (>1 match) requires a client resolution that is
+  //     re-validated against the server's OWN match set; an unmatched part INSERTs.
+  //   • shipments          — a shipping-log document (ADR-0005 decision 4): each row
+  //     becomes a material_shipments LOAD attached to its part-matched line (`source =
+  //     'import'`, deterministic shipment_uuid ⇒ replay-safe twice over); an unmatched
+  //     part first creates the line, then hangs the load off it in the same batch.
   app.post(
     "/api/fieldops/manifests/:id/commit",
     gates.requireSession,
@@ -816,6 +894,12 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
       if (!isPlainObject(body)) return c.json({ error: "bad_request" }, 400);
       const mode = str(body.mode);
       if (mode !== "merge" && mode !== "add_new") return c.json({ error: "invalid_mode" }, 400);
+      const importAs = body.import_as === undefined ? "lines" : str(body.import_as);
+      if (importAs !== "lines" && importAs !== "shipments") {
+        return c.json({ error: "invalid_import_as" }, 400);
+      }
+      const resolutions = readResolutions(body);
+      if (!(resolutions instanceof Map)) return c.json(resolutions, 400);
       const manifest = await loadManifest(c, id);
       if (!manifest) return c.json({ error: "not_found" }, 404);
       const parsedLines = readLines(body, MAX_PLAN_LINES);
@@ -845,13 +929,72 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
       const page = remaining.slice(0, COMMIT_PAGE_LINES);
       const watermark = page[page.length - 1].source_row_index;
 
+      // ONE match index for the whole page — the same derivation /plan runs, re-computed
+      // HERE against the live lines so a client cannot smuggle a stale or invented match.
+      const { existing, byPart } = await loadPartIndex(c, manifest.job_id);
+      const statusById = new Map(existing.map((r) => [r.id, r.status]));
+
+      // Classify every page line BEFORE any write: an insert, an update onto a resolved
+      // target, or a refusal. Ambiguity is enforced SERVER-SIDE — a resolution must name
+      // a line that is genuinely among that part's current matches (decision 6: the
+      // difference between an import you can trust and one that quietly loses a line).
+      type Disposition =
+        | { kind: "insert"; line: ResolvedLine }
+        | { kind: "update"; line: ResolvedLine; targetId: number }
+        | { kind: "shipment"; line: ResolvedLine; targetId: number }
+        | { kind: "shipment_new_line"; line: ResolvedLine };
+      const dispositions: Disposition[] = [];
+      const unresolved: number[] = [];
+      const skippedLocked: { source_row_index: number; line_id: number; status: string }[] = [];
+      const wantsMatch = mode === "merge" || importAs === "shipments";
+      for (const line of page) {
+        const part = line.fields.part_number;
+        const hits = wantsMatch && part ? (byPart.get(part) ?? []) : [];
+        let targetId: number | null = null;
+        if (hits.length === 1) {
+          targetId = hits[0];
+        } else if (hits.length > 1) {
+          const chosen = resolutions.get(line.source_row_index);
+          if (chosen === undefined || !hits.includes(chosen)) {
+            unresolved.push(line.source_row_index);
+            continue;
+          }
+          targetId = chosen;
+        }
+        if (importAs === "shipments") {
+          dispositions.push(
+            targetId !== null
+              ? { kind: "shipment", line, targetId }
+              : { kind: "shipment_new_line", line },
+          );
+        } else if (mode === "merge" && targetId !== null) {
+          // A received/incident line's recorded facts are LOCKED (same rule as the
+          // hand-edit route's in-WHERE guard) — report it, never silently rewrite it.
+          if (statusById.get(targetId) !== "expected") {
+            skippedLocked.push({
+              source_row_index: line.source_row_index, line_id: targetId,
+              status: statusById.get(targetId) ?? "unknown",
+            });
+          } else {
+            dispositions.push({ kind: "update", line, targetId });
+          }
+        } else {
+          dispositions.push({ kind: "insert", line });
+        }
+      }
+      if (unresolved.length > 0) {
+        // Refused BEFORE any write — the page is all-or-nothing, so a half-resolved page
+        // cannot land its resolved half and strand the rest.
+        return c.json({ error: "ambiguous_unresolved", rows: unresolved.slice(0, 50) }, 409);
+      }
+
       // The job's line list has a hard read cap; blowing past it would silently truncate
-      // the materials page and the daily form rather than fail visibly.
-      const existing = await c.env.DB
-        .prepare("SELECT COUNT(*) n FROM job_expected_materials WHERE job_id = ?1 AND active = 1")
-        .bind(manifest.job_id)
-        .first<{ n: number }>();
-      if ((existing?.n ?? 0) + page.length > MAX_JOB_LINES) {
+      // the materials page and the daily form rather than fail visibly. Only NEW LINES
+      // count — merge updates and attached loads add no rows to the line list.
+      const newLineCount = dispositions.filter(
+        (d) => d.kind === "insert" || d.kind === "shipment_new_line",
+      ).length;
+      if (existing.length + newLineCount > MAX_JOB_LINES) {
         return c.json({ error: "line_cap_exceeded", cap: MAX_JOB_LINES }, 409);
       }
 
@@ -865,17 +1008,63 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
       }
 
       const actor = c.get("session").username;
-      const stmts = [];
-      let seq = ((existing?.n ?? 0) + 1) * 10;
-      for (const line of page) {
+      // ── The batch, in a load-bearing ORDER (2026-08-11 security review, finding 1). ──
+      // Statement 0 is the STATE TRANSITION (parsed/committing → committing, watermark
+      // advance), and every row-level write after it is guarded on the manifest being
+      // 'committing' AT THIS PAGE'S WATERMARK. D1 runs a batch as one serialized
+      // transaction, so inside the batch that guard is decided ONCE, by statement 0: if a
+      // concurrent /discard landed between our pre-reads and this batch, statement 0
+      // no-ops and every subsequent write's EXISTS fails — the whole page lands nothing,
+      // and the meta.changes check below turns that into an honest 409 instead of
+      // `ok:true` on writes that never happened. Before this ordering, the row writes
+      // carried no manifest-status guard at all, and making 'committing' discardable had
+      // opened exactly that race.
+      const MANIFEST_LIVE_GUARD =
+        "EXISTS (SELECT 1 FROM job_manifests WHERE id = ?12 AND status = 'committing' " +
+        "AND committed_through_row = ?13)";
+      const priorOptions = ((): Record<string, unknown> => {
+        try {
+          return manifest.merge_options_json
+            ? (JSON.parse(manifest.merge_options_json) as Record<string, unknown>)
+            : {};
+        } catch {
+          return {};
+        }
+      })();
+      const priorResolutions = isPlainObject(priorOptions.resolutions)
+        ? (priorOptions.resolutions as Record<string, number>)
+        : {};
+      const mergedOptions = JSON.stringify({
+        mode,
+        import_as: importAs,
+        resolutions: { ...priorResolutions, ...Object.fromEntries(resolutions) },
+      });
+      const stmts = [
+        c.env.DB
+          .prepare(
+            "UPDATE job_manifests SET status='committing', committed_through_row = ?2, mode = ?3, " +
+              "merge_options_json = ?4 " +
+              "WHERE id = ?1 AND status IN ('parsed','committing') AND committed_through_row < ?2",
+          )
+          .bind(id, watermark, mode, mergedOptions),
+      ];
+      // Which batch index holds each disposition's MUTATE statement — the response counts
+      // are derived from the ACTUAL per-statement meta.changes after the batch runs, not
+      // from the pre-write classification (review finding 2: a guard-tripped write must
+      // not be counted, and its audit row must not exist).
+      const mutateIdx: { kind: "insert" | "update" | "shipment"; idx: number }[] = [];
+      let seq = (existing.length + 1) * 10;
+      const insertLine = (line: ResolvedLine, lineUuid: string) => {
         const f = line.fields;
+        mutateIdx.push({ kind: "insert", idx: stmts.length });
         stmts.push(
           c.env.DB
             .prepare(
               `INSERT INTO job_expected_materials
                  (job_id, material_id, description, qty, unit, expected_date, seq, line_uuid,
                   part_number, category, expected_ship_date)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+               SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+                WHERE ${MANIFEST_LIVE_GUARD}`,
             )
             // line_uuid MUST be minted: it is UNIQUE, and the §51 Material List mirror
             // uses it as its find-or-create key. SQLite permits multiple NULLs there, so
@@ -885,36 +1074,124 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
             // never a shipping log's delivery_date column.
             .bind(
               manifest.job_id, f.material_id, f.description, f.qty, f.unit, f.expected_date,
-              (seq += 10), crypto.randomUUID(), f.part_number, f.category, f.expected_ship_date,
+              (seq += 10), lineUuid, f.part_number, f.category, f.expected_ship_date,
+              id, watermark,
             ),
-          // UNCONDITIONAL auditStmt, never auditStmtIfChanged: `changes()` reads the LAST
-          // data-modifying statement, so in a batch interleaving N inserts every IfChanged
-          // after the first would read the wrong statement's result.
-          auditStmt(c, actor, "expected_material_create", manifest.job_id, {
+          // IfChanged, not unconditional (review finding 2): every mutate is now guarded,
+          // and each audit IMMEDIATELY follows its own mutate, so changes() reads exactly
+          // the statement it describes — a guard-blocked write leaves no lying audit row.
+          auditStmtIfChanged(c, actor, "expected_material_create", manifest.job_id, {
             job_id: manifest.job_id, manifest_id: id, source_row_index: line.source_row_index,
             part_number: f.part_number, description: f.description, qty: f.qty,
           }),
         );
+      };
+      const insertShipment = (line: ResolvedLine, target: { id: number } | { line_uuid: string }) => {
+        const f = line.fields;
+        // Deterministic uuid ⇒ a replayed page's shipment INSERT is a unique-violation,
+        // not a silent duplicate — belt to the watermark's braces.
+        const shipmentUuid = `mf${id}-r${line.source_row_index}`;
+        // BOTH forms re-resolve the line inside the statement (the module's in-WHERE
+        // guard discipline): a target deactivated between classification and this batch
+        // makes the SELECT NULL and the WHERE refuses the insert, rather than landing a
+        // load on a deleted line. The uuid form resolves a line inserted EARLIER IN THIS
+        // SAME BATCH — joined by the minted line_uuid, not a cross-statement rowid.
+        const lineIdExpr = "id" in target
+          ? "(SELECT id FROM job_expected_materials WHERE id = ?2 AND active = 1)"
+          : "(SELECT id FROM job_expected_materials WHERE line_uuid = ?2 AND active = 1)";
+        mutateIdx.push({ kind: "shipment", idx: stmts.length });
+        stmts.push(
+          c.env.DB
+            .prepare(
+              `INSERT INTO material_shipments
+                 (shipment_uuid, line_id, job_id, part_number, bol_number, qty, unit,
+                  ship_date, delivery_date, seq, source, created_by)
+               SELECT ?1, ${lineIdExpr}, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'import', ?11
+                WHERE ${lineIdExpr} IS NOT NULL AND ${MANIFEST_LIVE_GUARD}`,
+            )
+            // The shipping-log column pair maps onto the line vocabulary the validate
+            // screen already speaks: expected_ship_date → ship_date, expected_date
+            // (the 0031 DELIVERY date) → delivery_date. part_number is stored as match
+            // PROVENANCE — what the document said, even where the match was human-picked.
+            .bind(
+              shipmentUuid,
+              "id" in target ? target.id : target.line_uuid,
+              manifest.job_id, f.part_number, line.bol, f.qty, f.unit,
+              f.expected_ship_date, f.expected_date, line.source_row_index, actor,
+              id, watermark,
+            ),
+          auditStmtIfChanged(c, actor, "material_shipment_import", manifest.job_id, {
+            job_id: manifest.job_id, manifest_id: id, source_row_index: line.source_row_index,
+            part_number: f.part_number, bol: line.bol, qty: f.qty,
+          }),
+        );
+      };
+      for (const d of dispositions) {
+        if (d.kind === "insert") {
+          insertLine(d.line, crypto.randomUUID());
+        } else if (d.kind === "update") {
+          const f = d.line.fields;
+          // Merge = the DOCUMENT's non-null fields win; a column the document does not
+          // carry keeps its existing value (COALESCE). Guarded in-WHERE on the same
+          // expected-only + active rule the classification used, so a line that was
+          // received or flagged BETWEEN the read and this batch is left untouched —
+          // the write simply no-ops rather than rewriting locked facts.
+          mutateIdx.push({ kind: "update", idx: stmts.length });
+          stmts.push(
+            c.env.DB
+              .prepare(
+                `UPDATE job_expected_materials
+                    SET material_id        = COALESCE(?2, material_id),
+                        description        = COALESCE(?3, description),
+                        qty                = COALESCE(?4, qty),
+                        unit               = COALESCE(?5, unit),
+                        expected_date      = COALESCE(?6, expected_date),
+                        expected_ship_date = COALESCE(?7, expected_ship_date),
+                        category           = COALESCE(?8, category)
+                  WHERE id = ?1 AND active = 1 AND status = 'expected' AND ${MANIFEST_LIVE_GUARD}`,
+              )
+              // ?9–?11 are unreferenced filler so the shared MANIFEST_LIVE_GUARD's
+              // ?12/?13 land at the same positions in every statement that embeds it.
+              .bind(
+                d.targetId, f.material_id, f.description, f.qty, f.unit,
+                f.expected_date, f.expected_ship_date, f.category,
+                null, null, null, id, watermark,
+              ),
+            auditStmtIfChanged(c, actor, "expected_material_merge_update", manifest.job_id, {
+              job_id: manifest.job_id, manifest_id: id, line_id: d.targetId,
+              source_row_index: d.line.source_row_index, part_number: f.part_number, qty: f.qty,
+            }),
+          );
+        } else if (d.kind === "shipment") {
+          insertShipment(d.line, { id: d.targetId });
+        } else {
+          // A load for a part the job does not expect yet: the line is real (the job
+          // expects that part now), so create it and hang the load off it — both in this
+          // batch, joined by the minted line_uuid rather than a cross-statement rowid.
+          const lineUuid = crypto.randomUUID();
+          insertLine(d.line, lineUuid);
+          insertShipment(d.line, { line_uuid: lineUuid });
+        }
       }
-      // The watermark advances IN THE SAME BATCH as the inserts — that pairing is what
-      // makes a page atomic and a replay a no-op. Guarded in-WHERE so a concurrent
-      // discard cannot be overwritten, and monotonic so an out-of-order page cannot
-      // rewind it.
-      stmts.push(
-        c.env.DB
-          .prepare(
-            "UPDATE job_manifests SET status='committing', committed_through_row = ?2, mode = ?3 " +
-              "WHERE id = ?1 AND status IN ('parsed','committing') AND committed_through_row < ?2",
-          )
-          .bind(id, watermark, mode),
-      );
 
+      let res;
       try {
-        await c.env.DB.batch(stmts);
+        res = await c.env.DB.batch(stmts);
       } catch (e) {
         if (isUniqueViolation(e)) return c.json({ error: "duplicate_line" }, 409);
         throw e;
       }
+      // Statement 0 is the state transition. changes()===0 means the manifest left the
+      // committable states (or the watermark didn't advance) between our reads and the
+      // batch — every guarded write above then landed NOTHING, and saying `ok:true`
+      // would report success for work that did not happen.
+      if ((res[0].meta.changes ?? 0) === 0) {
+        const now = await loadManifest(c, id);
+        return c.json({ error: "not_committable", status: now?.status ?? "unknown" }, 409);
+      }
+      const inserted = mutateIdx.filter((m) => m.kind === "insert" && (res[m.idx].meta.changes ?? 0) > 0).length;
+      const updated = mutateIdx.filter((m) => m.kind === "update" && (res[m.idx].meta.changes ?? 0) > 0).length;
+      const shipments = mutateIdx.filter((m) => m.kind === "shipment" && (res[m.idx].meta.changes ?? 0) > 0).length;
 
       const done = remaining.length <= page.length;
       if (done) {
@@ -926,11 +1203,15 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
             )
             .bind(id),
           auditStmtIfChanged(c, actor, "job_manifest_commit", String(id), {
-            manifest_id: id, job_id: manifest.job_id, mode,
+            manifest_id: id, job_id: manifest.job_id, mode, import_as: importAs,
           }),
         ]);
       }
-      return c.json({ ok: true, done, inserted: page.length, committed_through_row: watermark });
+      return c.json({
+        ok: true, done, inserted, updated, shipments,
+        skipped_locked: skippedLocked.slice(0, 50),
+        committed_through_row: watermark,
+      });
     },
   );
 
@@ -938,6 +1219,15 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
   // in-WHERE on the non-terminal states, and drops the grid, previews and any surviving
   // chunks in the SAME batch so a discarded manifest leaves no evidence behind. A
   // discarded row leaves the per-job dedupe index, so the same document may be re-uploaded.
+  //
+  // 'committing' IS discardable (2026-08-11): a mid-import refusal (a late-page
+  // line_cap_exceeded, a browser crash) used to strand the manifest — status already
+  // 'committing', which this route refused, so the row could neither finish nor be
+  // abandoned. Discarding an interrupted commit is an explicit stop: the pages that
+  // already landed STAY on the job's list (they are real, audited rows the office can see
+  // and prune line-by-line), the watermark freezes, and any in-flight commit page then
+  // 409s `not_committable` — the guard that makes this safe against a concurrent commit.
+  // The SPA says exactly that before offering the button.
   app.post(
     "/api/fieldops/manifests/:id/discard",
     gates.requireSession,
@@ -950,7 +1240,7 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
         c.env.DB
           .prepare(
             "UPDATE job_manifests SET status='discarded' WHERE id = ?1 " +
-              "AND status IN ('pending','claimed','refused','parsed')",
+              "AND status IN ('pending','claimed','refused','parsed','committing')",
           )
           .bind(id),
         auditStmtIfChanged(c, actor, "job_manifest_discard", String(id), { manifest_id: id }),

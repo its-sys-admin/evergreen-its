@@ -83,6 +83,10 @@ _WORKSTREAM_VALUES_GLOBAL: frozenset[str] = frozenset({
     "progress_reports",
     "po_materials",
     "subcontracts",
+    # 2026-08-11 — with review_queue.VALID_WORKSTREAMS, same day, same reason (the
+    # manifest lane's first live refusal lost its ticket to the drift class this
+    # comment block already documents for progress_reports).
+    "field_ops",
     "email_triage",
     "ai_employee",
     "global",

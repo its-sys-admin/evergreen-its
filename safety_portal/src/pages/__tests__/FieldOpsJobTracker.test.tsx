@@ -75,7 +75,7 @@ beforeEach(() => {
   // Slice T: a subcontractor's log-time picker fetches its own loggable crew; default empty.
   vi.mocked(fetchMyCrew).mockResolvedValue([]);
   // M1 expected materials: safe empty defaults for the self-contained detail section.
-  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [] });
+  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [], project_name: "Deep Lake" });
   vi.mocked(fetchMaterials).mockResolvedValue({ materials: [], next_cursor: null });
   // Delivery-contact suggestions for the create-form Safety CC datalist — default empty so tests
   // that don't exercise the datalist never issue a real fetch; the datalist test overrides this.

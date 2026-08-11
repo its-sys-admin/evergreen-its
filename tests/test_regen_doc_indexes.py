@@ -212,3 +212,32 @@ def test_main_default_mode_writes_changes(tmp_path: Path, monkeypatch):
     rc = main(["--root", "docs"])
     assert rc == 0
     assert "My doc" in readme.read_text()
+
+
+def test_find_readmes_indexes_a_checkout_under_a_dot_directory(tmp_path, monkeypatch):
+    """A repo root under a dot-directory must still be indexed.
+
+    `find_readmes` tested `path.parts` on the ABSOLUTE path. `REPO_ROOT` is absolute, so a
+    checkout at `.claude/worktrees/<id>/` — where the workflow tooling puts every agent worktree —
+    made `.claude` a component of every file's path: zero READMEs found, and `--check` then passed
+    by comparing nothing.
+
+    Same bug `lint_doc_conventions.walk_docs` shipped with (fixed in #56, which corrected one
+    sibling and missed this one). The filter belongs on the path RELATIVE to the root: a dot-dir
+    INSIDE docs/ is still skipped (asserted), one ABOVE the root is not our business.
+    """
+    root = tmp_path / ".claude" / "worktrees" / "wf_abc-1"
+    docs_dir = root / "docs" / "runbooks"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "README.md").write_text("# Runbooks\n")
+    hidden = root / "docs" / ".drafts"
+    hidden.mkdir(parents=True)
+    (hidden / "README.md").write_text("# WIP\n")
+
+    monkeypatch.setattr(regen_mod, "REPO_ROOT", root)
+    found = regen_mod.find_readmes([root / "docs"])
+
+    assert any(p.name == "README.md" and "runbooks" in str(p) for p in found), (
+        "a checkout under a dot-directory indexed NOTHING — --check then passes by comparing nothing"
+    )
+    assert not any(".drafts" in str(p) for p in found), "hidden dirs inside the tree must stay skipped"

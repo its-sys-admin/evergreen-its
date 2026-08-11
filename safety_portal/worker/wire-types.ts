@@ -362,6 +362,10 @@ export interface ExpectedMaterialsResponse {
   // fails `npm run typecheck` — that is the registry teeth keeping the two surfaces in step.
   shipments: MaterialShipmentRow[];
   receipt_events: MaterialReceiptEventRow[];
+  /** The job's display name for the page heading ("Materials — Deep Lake", never the
+   *  JOB-###### key). REQUIRED for the same mock-teeth reason; null when the job row
+   *  vanished mid-read. */
+  project_name: string | null;
 }
 
 // ── GET /api/fieldops/checklist/assigned ────────────────────────────────────────────────────────
@@ -686,10 +690,16 @@ export interface ManifestPlanResponse {
   matched: ManifestPlanMatch[];
   ambiguous: ManifestPlanAmbiguous[];
   absent: ManifestPlanAbsent[];
+  /** CONSERVATIVE (add_new) arithmetic — the mode that adds the most rows — so a generic
+   *  consumer is never under-told. The per-mode pair below is what the screen shows. */
   projected_total: number;
+  projected_total_add_new: number;
+  /** Merge inserts only the UNMATCHED lines; matched + resolved ones become UPDATEs. */
+  projected_total_merge: number;
   /** The materials read route caps a job at 500 lines; past that the page and the daily form
    *  SILENTLY truncate, so the screen warns BEFORE anyone commits. */
   would_exceed_line_cap: boolean;
+  would_exceed_line_cap_merge: boolean;
 }
 
 /** POST /api/fieldops/manifests/:id/commit — ONE page of the import. `done` false means re-post
@@ -699,5 +709,12 @@ export interface ManifestCommitResponse {
   ok: true;
   done: boolean;
   inserted: number;
+  /** Merge-mode: existing lines this page rewrote in place. */
+  updated: number;
+  /** Shipments-import: loads landed in material_shipments this page. */
+  shipments: number;
+  /** Merge-mode: matched lines whose facts are LOCKED (received/incident) — reported,
+   *  never silently rewritten. */
+  skipped_locked: { source_row_index: number; line_id: number; status: string }[];
   committed_through_row: number;
 }

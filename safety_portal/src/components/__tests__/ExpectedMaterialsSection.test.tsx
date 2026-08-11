@@ -67,7 +67,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(useAuth).mockReturnValue(authWith([]));
-  vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: ROWS, shipments: [], receipt_events: [] });
+  vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: ROWS, shipments: [], receipt_events: [], project_name: "Deep Lake" });
   vi.mocked(fetchMaterials).mockResolvedValue({ materials: CATALOG, next_cursor: null });
 });
 
@@ -105,7 +105,7 @@ describe("ExpectedMaterialsSection — gating", () => {
   });
 
   it("empty list → the explicit empty state (never a silent blank)", async () => {
-    vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [] });
+    vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const { container } = await renderSection(["cap.materials.receive"]);
     await waitFor(() => expect(container.textContent ?? "").toContain("No expected materials for this job."));
   });
@@ -113,7 +113,7 @@ describe("ExpectedMaterialsSection — gating", () => {
   it("load failure → error banner with a WORKING Retry", async () => {
     vi.mocked(api.fetchExpectedMaterials)
       .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({ expected_materials: ROWS, shipments: [], receipt_events: [] });
+      .mockResolvedValueOnce({ expected_materials: ROWS, shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const { container, getByText } = await renderSection(["cap.materials.receive"]);
     await waitFor(() => expect(container.textContent ?? "").toContain("Failed to load expected materials."));
     fireEvent.click(getByText("Retry"));

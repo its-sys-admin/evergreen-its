@@ -3139,6 +3139,255 @@ def _check_stale_job_archives() -> CheckResult:
     )
 
 
+# ---- Check Y: the cutover config gate, run DAILY instead of never (#27) --
+#
+# THE GAP THIS CLOSES. `scripts/verify_cutover.py` is the ONLY tool in the system that compares
+# the repo's DECLARED load-bearing config against the LIVE tenant — and it ran NOWHERE. Not in
+# CI (it needs live Smartsheet credentials), not from launchd, not from install.sh. It was a
+# gate somebody had to remember to pull. On 2026-08-10 the Track 6 job archive sat inert for
+# three days because two ITS_Config rows did not exist; VC-03 names both, precisely and
+# exclusively. Nobody ran it.
+#
+# Detection was never the gap: `shared/required_config.py` WARNed `config_row_missing` for the
+# archive gate 3,442 times. A WARN never triple-fires, so nothing ever escalated. This check is
+# the escalation that observation always lacked.
+#
+# SCOPE: **VC-03 ONLY.** Every other verify_cutover check is deliberately excluded, and each
+# reason is recorded HERE so the next reader does not "helpfully" add them back:
+#
+#   VC-01 secrets    Keychain passes today and secrets do not vanish spontaneously. A rotation
+#                    is an operator ACT with its own detectors (Check L token-write, Check P
+#                    Box credential health).
+#   VC-02 launchd    PASSES today ("all 21 must-load ITS labels loaded; 0 send daemon(s)
+#                    correctly unloaded") — `DARK_UNLOADED_LABELS` was emptied on 2026-08-10
+#                    once every send lane was activated, which is what it had been reporting a
+#                    months-old operator decision as a violation. It is therefore NOT excluded
+#                    for being red; it is simply out of THIS change's scope. It is the strongest
+#                    follow-on candidate: it satisfies the same "green today" bar, and it covers
+#                    the sibling half of the incident that motivated this check — an unloaded
+#                    plist is exactly as invisible as a missing row, and the archive needed both
+#                    the row AND the daemon. Enrolling it is a scope decision, not a fix.
+#   VC-04 / VC-05    duplicate Check C (daemon-health / marker staleness) and Check A (stale
+#                    review queue). A second opinion on the same signal is noise, not coverage.
+#   VC-07 git        fails RIGHT NOW on an untracked `logs/migrations/*.json`. It would be red
+#                    from the first sweep, indefinitely.
+#   VC-08 portal     shells out to `npx wrangler --remote`: far too heavy and too flaky for a
+#                    daily unattended sweep, and Check Q already covers portal fetch outages.
+#   VC-09 heartbeat  fails for a KNOWN, TRACKED reason — the Healthchecks.io dead-man's switch
+#                    is unarmed (`system.heartbeat_url` still holds its seed placeholder).
+#   VC-10 shares     fails for a KNOWN, TRACKED reason — production approver shares are
+#                    deliberately not seeded before cutover.
+#
+# GOVERNING PRINCIPLE behind that exclusion list: this runner's scope is **"green today, red
+# only on a real regression"**. A daily alert about a known-unfixed item is the canonical
+# alarm-fatigue generator — a runner that is red on day one is ignored by week two, which is
+# precisely how verify_cutover came to run nowhere in the first place. Adding a check that is
+# red today does not increase coverage; it destroys the credibility of the checks that are green.
+#
+# SEVERITY PARTITION (operator-chosen 2026-08-11):
+#
+#   row MISSING                -> CRITICAL. The three-day-inert-archive case, verbatim.
+#   row present, Value BLANK   -> CRITICAL. `_read_bool_setting(default=False)` treats blank and
+#                                 missing IDENTICALLY, so a blanked gate is an equally invisible
+#                                 off-switch. Same fault, same severity — splitting them would
+#                                 let the quieter half of one bug through.
+#   requirement 'true', not true -> WARN. A deliberately PAUSED gate is an operator CHOICE, not
+#                                 a defect. VC-03 itself refuses to force 'true' on any send
+#                                 gate for exactly this reason.
+#   sandbox residue in value   -> WARN. Expected pre-cutover; there are three today (the
+#                                 `worker_base_url` trio). "Still pointed at the mirror" is
+#                                 honest at WARN, and it keeps the CRITICAL tier clean.
+#
+# WHY THE CRITICAL TIER IS AFFORDABLE: it is EMPTY against the live tenant as of the 2026-08-11
+# baseline (0 missing, 0 blank of the enrolled set; the only findings are the 3 standing sandbox
+# WARNs). CRITICAL triple-fires to Resend + Sentry, so the tier that PAGES has to stay genuinely
+# rare — and it is, by construction, because a row only enters it by disappearing or being blanked.
+#
+# NO `system.cutover_profile` MUTE ROW. An earlier sketch exempted the known sandbox rows via a
+# new ITS_Config row. Rejected on review, twice over: (a) it is a permanently operator-editable
+# MUTE for this very check — the PIN-gated Class-A config editor could silence it — and (b) it
+# would itself be a dark-shipped row, reproducing the exact unseeded-gate bug this check exists
+# to catch. Three standing WARNs are the honest cost until the portal repoints.
+#
+# TIER: DAILY. The enrolled set changes only when code merges, and this is a full-sheet
+# cross-network read. Escalation rides the CAPPED re-notify ladder
+# (`sustained_failure.is_escalation_cycle`) for the same reason Checks W and X do: an open
+# CRITICAL is NEVER terminal per `shared/errors_rotation`, so paging every single daily sweep
+# while a row stays unseeded would mint permanent, unrotatable ITS_Errors rows against the
+# 20,000-row cap that has locked out before. Threshold 1 = the FIRST sweep that sees a missing
+# row pages immediately (the operator's "MISSING -> CRITICAL"), then rungs at 2, 4, 8 and every
+# 8 sweeps thereafter, recording WARN in between. Nothing is silent; nothing storms.
+
+# A missing row pages on the FIRST sweep — see the ladder note above.
+CUTOVER_CONFIG_CRITICAL_THRESHOLD = 1
+# Cap the named rows so one bad day cannot write a multi-KB summary into ITS_Errors.
+CUTOVER_CONFIG_REPORT_MAX_ROWS = 10
+# THE FAIL-SOFT FLOOR, and it guards the resolved INDEX — deliberately NOT a raw row count.
+# A renamed `Setting` / `Workstream` column returns ~118 perfectly healthy-looking rows that
+# index to NOTHING, sailing straight past any `len(rows) >= N` guard and making every enrolled
+# row look missing. The cost is ONE CRITICAL naming up to 10 of them — `_run_check` emits a
+# single record per `CheckResult`, so this is not the 53-row burst an earlier draft of this
+# comment claimed; the damage is a false page telling the operator to seed rows that all exist,
+# not an ITS_Errors flood. Healthy is 118 indexed pairs and the enrolled set alone is 53, so 20 sits
+# far below any plausible live tenant yet far above the zero-or-handful a structural read fault
+# produces. Below it we assert NOTHING and say so: never invent drift from an absent read.
+CUTOVER_CONFIG_MIN_INDEX_ROWS = 20
+_CUTOVER_CONFIG_FAILS = sustained_failure.SustainedFailureCounter(
+    STATE_DIR / "cutover_config_fails.json",
+    _SCRIPT,
+    "cutover_config_counter_failed",
+)
+
+
+def _check_cutover_config() -> CheckResult:
+    """Check Y: VC-03's load-bearing ITS_Config rows, verified against the LIVE sheet daily.
+
+    CRITICAL on a row that is MISSING or BLANK (an invisible off-switch — the 2026-08-10
+    three-day-inert archive); WARN on a paused `true`-requirement gate or a sandbox residue,
+    both of which are operator choices rather than defects. See the block comment above for the
+    VC-03-only scope, the exclusion rationale for every other VC, and the ladder.
+
+    Fail-soft to INFO on a read exception OR an empty / implausibly-small resolved index, and
+    asserts NOTHING in that state — an unreadable sheet must never be reported as mass drift.
+    """
+    # LAZY, BARE import, INSIDE the function. BOTH properties are load-bearing — do not "tidy"
+    # either one:
+    #   * LAZY, because a module-scope import here would raise ModuleNotFoundError under launchd
+    #     and take down ALL of CHECKS — the entire observability spine — and nothing would
+    #     notice, because the Healthchecks.io dead-man's switch is not armed. `_run_check`
+    #     harness-isolates any exception a check raises into an ERROR record, so an import
+    #     failure in here degrades exactly ONE check instead of the whole sweep.
+    #   * BARE (`import verify_cutover`, never `from scripts import verify_cutover`), because
+    #     `scripts/` has no `__init__.py` and the editable install declares 8 packages, none of
+    #     them named `scripts`. The plist runs `.venv/bin/python __ITS_HOME__/scripts/watchdog.py`,
+    #     so `sys.path[0]` IS `scripts/` and the repo root is never on the path (a file-run
+    #     script does not get cwd added). This is also the house convention — every existing
+    #     consumer imports it bare after a sys.path insert; `tests/test_job_archive.py` records
+    #     WHY: a `from scripts import …` makes mypy see one file under two module names.
+    import verify_cutover  # noqa: PLC0415 — see the LAZY + BARE note above
+
+    try:
+        rows = smartsheet_client.get_rows(sheet_ids.SHEET_CONFIG)
+    except Exception as exc:  # noqa: BLE001 — includes the breaker's short-circuit
+        return CheckResult(
+            severity=Severity.INFO,
+            summary=(
+                "config scan: ITS_Config read failed — asserting nothing this run "
+                "(an unreadable sheet is not evidence of drift)."
+            ),
+            details=repr(exc),
+        )
+
+    # ONE read, ~53 lookups. `get_setting` does a FULL sheet fetch per call, so resolving the
+    # enrolled set key-by-key would be ~53 fetches per sweep.
+    index: dict[tuple[str, str], str | None] = {}
+    for row in rows:
+        setting = row.get("Setting")
+        workstream = row.get("Workstream")
+        if isinstance(setting, str) and isinstance(workstream, str):
+            value = row.get("Value")
+            index[(setting.strip(), workstream.strip())] = (
+                value if isinstance(value, str) else None
+            )
+
+    # The floor guards THREE columns, not two. Keying on (Setting, Workstream) alone leaves a
+    # door open one column over: rename or drop the **Value** column and the index resolves ~118
+    # perfectly healthy PAIRS — sailing past a pairs-only floor — while every `row.get("Value")`
+    # returns None and all 53 enrolled rows read as BLANK. The result is worse than a silent
+    # miss: a CRITICAL instructing the operator to seed 53 rows they can plainly see populated.
+    # A genuine incident looks nothing like this — it is 2 absent rows out of 53 while ~116
+    # others stay valued — so requiring a valued floor too cannot mask a real outage.
+    valued = sum(1 for v in index.values() if isinstance(v, str) and v.strip())
+    if len(index) < CUTOVER_CONFIG_MIN_INDEX_ROWS or valued < CUTOVER_CONFIG_MIN_INDEX_ROWS:
+        return CheckResult(
+            severity=Severity.INFO,
+            summary=(
+                f"config scan: ITS_Config resolved {len(index)} usable (Setting, Workstream) "
+                f"pair(s) and {valued} non-blank Value(s) from {len(rows)} row(s) — below the "
+                f"{CUTOVER_CONFIG_MIN_INDEX_ROWS} floor, so asserting nothing this run. A "
+                f"non-zero row count with an empty index means the Setting/Workstream columns "
+                f"were renamed or removed; a healthy index with no VALUES means the Value column "
+                f"was. Neither means the settings are gone."
+            ),
+        )
+
+    absent: list[str] = []   # CRITICAL tier: missing or blank — the invisible off-switch
+    paused: list[str] = []   # WARN tier: a 'true'-requirement gate an operator turned off
+    sandbox: list[str] = []  # WARN tier: still pointed at the mirror
+    for cfg_row in verify_cutover.CONFIG_ROWS:
+        label = f"{cfg_row.key} [{cfg_row.workstream}]"
+        key = (cfg_row.key, cfg_row.workstream)
+        if key not in index:
+            absent.append(f"{label}: row MISSING")
+            continue
+        text = (index[key] or "").strip()
+        if not text:
+            absent.append(f"{label}: Value BLANK")
+            continue
+        # Mirrors VC-03's own precedence (`_check_config` continues after a 'true' failure), so
+        # the two surfaces can never classify the same row differently.
+        if cfg_row.requirement == "true" and text.lower() != "true":
+            paused.append(f"{label}: expected 'true'")
+            continue
+        if cfg_row.sandbox_scan and verify_cutover.SANDBOX_DOMAIN_MARKER in text.lower():
+            sandbox.append(label)
+
+    if not absent:
+        _CUTOVER_CONFIG_FAILS.reset()
+        if not paused and not sandbox:
+            return CheckResult(
+                severity=Severity.INFO,
+                summary=(
+                    f"Cutover config clean: all {len(verify_cutover.CONFIG_ROWS)} load-bearing "
+                    f"ITS_Config rows present + non-blank."
+                ),
+            )
+        notes: list[str] = []
+        if paused:
+            notes.append(
+                f"{len(paused)} gate(s) present but PAUSED (an operator choice, not a fault): "
+                + "; ".join(paused[:CUTOVER_CONFIG_REPORT_MAX_ROWS])
+            )
+        if sandbox:
+            notes.append(
+                f"{len(sandbox)} row(s) still point at the sandbox "
+                f"({verify_cutover.SANDBOX_DOMAIN_MARKER!r}) — expected now, and must be "
+                f"repointed AT cutover: "
+                + "; ".join(sandbox[:CUTOVER_CONFIG_REPORT_MAX_ROWS])
+            )
+        return CheckResult(
+            severity=Severity.WARN,
+            summary=(
+                f"Cutover config: every row present + non-blank; {len(paused) + len(sandbox)} "
+                f"advisory finding(s). " + " | ".join(notes)
+            ),
+            details="Runbook: docs/runbooks/operator_dashboard_config_editor.md",
+        )
+
+    n = _CUTOVER_CONFIG_FAILS.record()
+    escalate = sustained_failure.is_escalation_cycle(n, CUTOVER_CONFIG_CRITICAL_THRESHOLD)
+    advisory = ""
+    if paused or sandbox:
+        advisory = f" (also {len(paused)} paused gate(s), {len(sandbox)} sandbox row(s))"
+    return CheckResult(
+        severity=Severity.CRITICAL if escalate else Severity.WARN,
+        summary=(
+            f"{len(absent)} load-bearing ITS_Config row(s) MISSING or BLANK — each is an "
+            f"INVISIBLE off-switch: a daemon reading one via _read_bool_setting(default=False) "
+            f"sees exactly what it sees for 'false', so the capability is silently inert. "
+            f"Seed each row (Op Stds §44: seeding a row is high-class — escalate to Seth): "
+            + "; ".join(absent[:CUTOVER_CONFIG_REPORT_MAX_ROWS])
+            + advisory
+        ),
+        details=(
+            f"consecutive daily sweeps with an absent row: {n} (next CRITICAL at "
+            f"{sustained_failure.next_escalation_cycle(n, CUTOVER_CONFIG_CRITICAL_THRESHOLD)} "
+            f"on the capped re-notify ladder). This is verify_cutover VC-03, run daily. "
+            f"Runbook: docs/runbooks/operator_dashboard_config_editor.md"
+        ),
+    )
+
+
 # ---- Entrypoint ---------------------------------------------------------
 
 
@@ -3237,6 +3486,15 @@ CHECKS: list[Callable[..., CheckResult]] = [
     # H never existed — X is the first free letter after W.)
     _check_stale_job_archives,
     _check_log_dir_rotation,
+    # Check Y (#27): verify_cutover VC-03 — the load-bearing ITS_Config rows — run DAILY
+    # instead of never. VC-03 is the only surface comparing declared config to the LIVE tenant
+    # and it ran nowhere; the 2026-08-10 archive sat inert three days on two rows it names
+    # exactly. CRITICAL on a MISSING/BLANK row (an invisible off-switch), WARN on a paused gate
+    # or sandbox residue. Read-only; returns a CheckResult, so _run_check pages +
+    # MAINTENANCE-defers it. DAILY tier, capped re-notify ladder. Imports verify_cutover LAZILY
+    # and BARE inside the check — a module-scope import would take down every check in CHECKS.
+    # (X went to the stale-archive check; Y is the first free letter after it.)
+    _check_cutover_config,
     # Check E (Anthropic spend trend) deferred to a follow-on PR (the
     # Check E shipping PR) — requires an Admin API key (sk-ant-admin01-...
     # prefix) provisioned in Keychain under ITS_ANTHROPIC_ADMIN_API_KEY.
@@ -3276,6 +3534,7 @@ CHECK_LETTERS: dict[str, str] = {
     "_check_portal_prune_health": "V",
     "_check_log_dir_rotation": "W",
     "_check_stale_job_archives": "X",
+    "_check_cutover_config": "Y",
 }
 
 
@@ -3332,6 +3591,14 @@ CHECK_LETTERS: dict[str, str] = {
 #                                     no earlier remedy — it would just repeat the same
 #                                     cross-network read 24x and, past the ladder threshold,
 #                                     re-notify on an hourly rather than daily rung.
+#   Y  _check_cutover_config          the enrolled set only changes when CODE merges and a row
+#                                     only leaves ITS_Config by a deliberate operator edit, so
+#                                     there is nothing an hourly re-read could catch sooner.
+#                                     It is a FULL-sheet cross-network read (~118 rows) and its
+#                                     ladder is calibrated in DAYS: at threshold 1 an hourly
+#                                     cadence would page on sweeps 1, 2, 4, 8 then every 8
+#                                     HOURS for a condition whose only repair is a human
+#                                     seeding a row.
 #
 # Keeping W on the daily tier ALSO preserves two cadence-coupled constants for free, so neither
 # needs touching: LOG_DIR_ROTATION_CRITICAL_THRESHOLD (3) keeps meaning three DAYS rather than
@@ -3354,6 +3621,7 @@ DAILY_ONLY_CHECKS: frozenset[Callable[..., CheckResult]] = frozenset(
         _check_approver_drift,
         _check_log_dir_rotation,
         _check_stale_job_archives,
+        _check_cutover_config,
     }
 )
 
