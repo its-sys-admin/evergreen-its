@@ -3104,7 +3104,8 @@ def test_sandbox_residue_is_only_a_warn(cutover_env, vc):
 
 def test_a_read_exception_asserts_nothing(cutover_env):
     """FAIL-SOFT. Our own inability to read ITS_Config is not evidence of drift, and a
-    breaker short-circuit here would otherwise mint ~53 CRITICALs in one sweep."""
+    breaker short-circuit here would otherwise page the operator to seed all 53 enrolled rows,
+    every one of which exists."""
     cutover_env.side_effect = watchdog.smartsheet_client.SmartsheetError("breaker open")
 
     result = watchdog._check_cutover_config()
@@ -4358,3 +4359,29 @@ def test_check_x_reads_the_worker_url_under_the_owning_workstream(monkeypatch):
         "read under the wrong workstream — the row does not exist there, so Check X skips forever"
     )
     assert creds == ("https://worker.test", "tok")
+
+
+def test_a_renamed_value_column_asserts_nothing(cutover_env, vc):
+    """FAIL-SOFT guards THREE columns, not two.
+
+    Keying the index on (Setting, Workstream) alone leaves a door open one column over: rename
+    or drop the **Value** column and the index resolves every pair perfectly — sailing past a
+    pairs-only floor — while `row.get("Value")` returns None for all of them, so every enrolled
+    row reads as BLANK.
+
+    The result is worse than a silent miss: a CRITICAL telling the operator to seed rows they
+    can plainly see populated. A genuine incident looks nothing like this — a handful absent
+    while the rest stay valued — so a valued-floor cannot mask a real outage.
+    """
+    rows = _rows_for(vc.CONFIG_ROWS)
+    for row in rows:
+        row.pop("Value", None)          # the column is gone; the keys are pristine
+
+    cutover_env.return_value = rows
+
+    result = watchdog._check_cutover_config()
+
+    assert result.severity is Severity.INFO, (
+        "a dropped Value column produced a page to seed every enrolled row — all of which exist"
+    )
+    assert "Value column" in result.summary or "no VALUES" in result.summary

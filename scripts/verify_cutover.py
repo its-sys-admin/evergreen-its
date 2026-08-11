@@ -64,10 +64,14 @@ now enrolled below — ``po_materials.po_send.from_mailbox`` (VC-03 sandbox-scan
 two previously-unscanned ``worker_base_url`` copies (the ``progress_reports`` + ``po_materials``
 Workstream rows of ``safety_reports.portal.worker_base_url``), closing the mechanical gap the
 manual CL-14 grep used to backstop. The keychain check already requires the
-``ITS_PORTAL_PO_TOKEN`` bearer. DEFERRED (NOT enrolled): ``po_send.polling_enabled`` /
-``scheduled_send_local`` — enrolling ``polling_enabled`` as ``"true"`` would DEMAND PO send be
-live at cutover, and first-enabling a send path is a FIXED high-capability External-Send-Gate
-decision (Seth). Enroll them only once PO send is confirmed in the Aug-7 send scope.
+``ITS_PORTAL_PO_TOKEN`` bearer. **UPDATE 2026-08-11:** ``po_send.polling_enabled`` IS now
+enrolled — as ``non_empty``, never ``"true"``. The original deferral reasoned about enrolling it
+as ``"true"``, which would indeed DEMAND PO send be live at cutover; ``non_empty`` asserts only
+that the row EXISTS and leaves the value the operator's, so the External-Send-Gate concern does
+not apply. Its structural twins ``subcontracts.subcontract_send.polling_enabled`` and
+``po_materials.rfq_send.polling_enabled`` were already enrolled that way, so its absence was an
+oversight rather than policy — surfaced by the boolean-gate parity test.
+``scheduled_send_local`` remains unenrolled.
 
 Dark-daemon-bearer + dashboard-PIN enrollment (WS2 / config editor / subcontracts,
 operator directive 2026-07-12): three more Keychain secrets are now cutover-required

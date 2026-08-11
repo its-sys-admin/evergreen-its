@@ -3158,9 +3158,15 @@ def _check_stale_job_archives() -> CheckResult:
 #   VC-01 secrets    Keychain passes today and secrets do not vanish spontaneously. A rotation
 #                    is an operator ACT with its own detectors (Check L token-write, Check P
 #                    Box credential health).
-#   VC-02 launchd    asserts a STALE plist set as of today. Changing WHAT it asserts is a FIXED
-#                    high-capability-class send-gate / doctrine action (§44) — not a watchdog
-#                    author's call to make as a side effect.
+#   VC-02 launchd    PASSES today ("all 21 must-load ITS labels loaded; 0 send daemon(s)
+#                    correctly unloaded") — `DARK_UNLOADED_LABELS` was emptied on 2026-08-10
+#                    once every send lane was activated, which is what it had been reporting a
+#                    months-old operator decision as a violation. It is therefore NOT excluded
+#                    for being red; it is simply out of THIS change's scope. It is the strongest
+#                    follow-on candidate: it satisfies the same "green today" bar, and it covers
+#                    the sibling half of the incident that motivated this check — an unloaded
+#                    plist is exactly as invisible as a missing row, and the archive needed both
+#                    the row AND the daemon. Enrolling it is a scope decision, not a fix.
 #   VC-04 / VC-05    duplicate Check C (daemon-health / marker staleness) and Check A (stale
 #                    review queue). A second opinion on the same signal is noise, not coverage.
 #   VC-07 git        fails RIGHT NOW on an untracked `logs/migrations/*.json`. It would be red
@@ -3219,8 +3225,10 @@ CUTOVER_CONFIG_REPORT_MAX_ROWS = 10
 # THE FAIL-SOFT FLOOR, and it guards the resolved INDEX — deliberately NOT a raw row count.
 # A renamed `Setting` / `Workstream` column returns ~118 perfectly healthy-looking rows that
 # index to NOTHING, sailing straight past any `len(rows) >= N` guard and making every enrolled
-# row look missing — ~53 CRITICALs in one sweep, into the very sheet whose 20,000-row cap has
-# locked out before. Healthy is 118 indexed pairs and the enrolled set alone is 53, so 20 sits
+# row look missing. The cost is ONE CRITICAL naming up to 10 of them — `_run_check` emits a
+# single record per `CheckResult`, so this is not the 53-row burst an earlier draft of this
+# comment claimed; the damage is a false page telling the operator to seed rows that all exist,
+# not an ITS_Errors flood. Healthy is 118 indexed pairs and the enrolled set alone is 53, so 20 sits
 # far below any plausible live tenant yet far above the zero-or-handful a structural read fault
 # produces. Below it we assert NOTHING and say so: never invent drift from an absent read.
 CUTOVER_CONFIG_MIN_INDEX_ROWS = 20
@@ -3282,15 +3290,24 @@ def _check_cutover_config() -> CheckResult:
                 value if isinstance(value, str) else None
             )
 
-    if len(index) < CUTOVER_CONFIG_MIN_INDEX_ROWS:
+    # The floor guards THREE columns, not two. Keying on (Setting, Workstream) alone leaves a
+    # door open one column over: rename or drop the **Value** column and the index resolves ~118
+    # perfectly healthy PAIRS — sailing past a pairs-only floor — while every `row.get("Value")`
+    # returns None and all 53 enrolled rows read as BLANK. The result is worse than a silent
+    # miss: a CRITICAL instructing the operator to seed 53 rows they can plainly see populated.
+    # A genuine incident looks nothing like this — it is 2 absent rows out of 53 while ~116
+    # others stay valued — so requiring a valued floor too cannot mask a real outage.
+    valued = sum(1 for v in index.values() if isinstance(v, str) and v.strip())
+    if len(index) < CUTOVER_CONFIG_MIN_INDEX_ROWS or valued < CUTOVER_CONFIG_MIN_INDEX_ROWS:
         return CheckResult(
             severity=Severity.INFO,
             summary=(
-                f"config scan: ITS_Config resolved only {len(index)} usable (Setting, "
-                f"Workstream) pair(s) from {len(rows)} row(s) — below the "
+                f"config scan: ITS_Config resolved {len(index)} usable (Setting, Workstream) "
+                f"pair(s) and {valued} non-blank Value(s) from {len(rows)} row(s) — below the "
                 f"{CUTOVER_CONFIG_MIN_INDEX_ROWS} floor, so asserting nothing this run. A "
                 f"non-zero row count with an empty index means the Setting/Workstream columns "
-                f"were renamed or removed, NOT that the settings are gone."
+                f"were renamed or removed; a healthy index with no VALUES means the Value column "
+                f"was. Neither means the settings are gone."
             ),
         )
 
@@ -3334,8 +3351,8 @@ def _check_cutover_config() -> CheckResult:
         if sandbox:
             notes.append(
                 f"{len(sandbox)} row(s) still point at the sandbox "
-                f"({verify_cutover.SANDBOX_DOMAIN_MARKER!r}) — expected before cutover, must be "
-                f"repointed at it: "
+                f"({verify_cutover.SANDBOX_DOMAIN_MARKER!r}) — expected now, and must be "
+                f"repointed AT cutover: "
                 + "; ".join(sandbox[:CUTOVER_CONFIG_REPORT_MAX_ROWS])
             )
         return CheckResult(
