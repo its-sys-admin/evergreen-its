@@ -558,9 +558,11 @@ NODES: tuple[MapNode, ...] = (
         id="sheet_config", label="ITS_Config", kind="sheet", lane="records", band="machine",
         blurb="The runtime switchboard: every daemon reads its gates and tuning here each "
               "cycle. Edited only through the PIN-gated config editor. Check L's daily "
-              "write probe proves the Smartsheet token can still write at all.",
+              "write probe proves the Smartsheet token can still write at all, and Check Y "
+              "proves every load-bearing row still EXISTS — a missing row is an invisible "
+              "off-switch, indistinguishable from 'false' to the daemon reading it.",
         sheet_id=sheet_ids.SHEET_CONFIG, runbook="docs/runbooks/operator_dashboard_config_editor.md",
-        watchdog_checks=("L",),
+        watchdog_checks=("L", "Y"),
         docs=(
             ("config dictionary (every setting)", "docs/references/its_config_dictionary.md"),
             ("token write probe (Check L)", "docs/runbooks/token_write_capability.md"),

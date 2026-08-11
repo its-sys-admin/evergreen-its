@@ -13,6 +13,7 @@ tags: [runbook, successor-remediation, operator-dashboard, config-editor, class-
 > **In the troubleshooting tree** ([printable guide](../troubleshooting/troubleshooting_guide.md) · dashboard `/troubleshoot`). This runbook resolves:
 >   - Purchase order — build, config, pull/render/file, send → PO purchaser / tax / terms config drives the render → “A PO renders with stale purchaser/tax/terms after an edit.”
 >   - Config change — the §50 privileged actuation rail → An operator enqueues a config edit (dashboard / portal) → “The config editor rejects an edit.”
+>   - Config change — the §50 privileged actuation rail → An operator enqueues a config edit (dashboard / portal) → “A capability does nothing at all and the switch for it cannot be found anywhere in ITS_Config.”
 >   - Operator dashboard — auth tiers and Class A/B/C actions → Class A/B/C actions (config edit, daemon control, secret rotation) → “A daemon-control action ran but the daemon still does nothing.”
 > Daemon(s): `dashboard` — see the [daemon reference](../references/daemon_reference.md).
 <!-- END TREE-XREF -->
@@ -388,6 +389,52 @@ work around it. **Pausing** (turning a gate off) is always available here and is
 **"write failed: …" / "could not read current value: …"** — a Smartsheet error (often the circuit
 breaker OPEN, or a token issue). **Tier-2:** check the dashboard's circuit-breaker panel; once the
 breaker closes, retry. A persistent auth/token error is **high-class** → escalate.
+
+### Watchdog **Check Y** CRITICAL — "N load-bearing ITS_Config row(s) MISSING or BLANK"
+
+**What it means.** A row some daemon depends on is **not there** (or its Value cell is empty).
+This is the worst-behaved fault in the whole config surface, because it is **invisible from the
+daemon's side**: a gate read via `_read_bool_setting(default=False)` sees a missing row and a blank
+row as *exactly* what it sees for `false`, so the capability is silently inert and the operator hunts
+for a switch that does not exist. On **2026-08-10** the Track 6 job archive sat inert for **three
+days** for precisely this reason — two rows did not exist, `verify_cutover` VC-03 named both, and
+nothing ran it. Check Y is that gate, now run daily. The alert **names each row and its workstream**.
+
+**What you do (Tier-2).**
+
+1. **Read the message.** It names every absent row as `<setting> [<workstream>]`. Note both halves —
+   `ITS_Config` is keyed on Setting **and** Workstream, and the same Setting legitimately exists under
+   several workstreams (`safety_reports.portal.worker_base_url` has three rows).
+2. **Look the row up** in `docs/references/its_config_dictionary.md` (or the dashboard `/config` page)
+   to see what it gates, its default, and — critically — **its Description**.
+3. **Seeding the row is HIGH-CLASS → escalate to Seth.** Per the Boundary section below, creating a
+   missing `ITS_Config` row is a FIXED high-capability-class action; a Tier-2 operator does not seed
+   one. Your job is to get the alert in front of Seth **with the row names and their Descriptions**.
+4. **Escalate immediately, do not wait, if** the row's Description carries a doctrine precondition
+   (e.g. "do NOT set true until the §51 rider is merged"). A gate whose activation contradicts
+   canonical doctrine is a **doctrine** action — the third FIXED high-capability class — and never
+   gets actioned unsupervised, however the value is finally set.
+5. **Close the loop after the row is seeded — this step is yours and it is required.** An open
+   CRITICAL is **never terminal** (`shared/errors_rotation`), so Check B and the Open-CRITICALs panel
+   keep re-reporting this forever even once the row exists. Once Seth confirms the row is seeded, use
+   the dashboard's **Class-B "mark errors resolved"** action with `Script=scripts.watchdog` to stamp
+   `Resolved At`. Skipping it leaves a permanent phantom fire and burns an unrotatable row against the
+   20,000-row cap that has locked out before.
+   > **Care with that filter.** The watchdog logs each check result without a per-check error code, so
+   > the `Error` cell just reads `critical` — filtering by `Script=scripts.watchdog` will stamp **every**
+   > open watchdog CRITICAL, not only Check Y's. Read the Open-CRITICALs panel first and confirm the
+   > others are genuinely repaired too; if any is still live, get Seth to resolve them individually
+   > rather than mass-stamping.
+
+**What it is NOT.** Check Y at **WARN** is not this fault. A WARN means every row is present and
+non-blank, and the findings are advisory: a `true`-requirement gate an operator deliberately **paused**
+(a choice, not a defect), or a row still pointing at the **sandbox** mirror. Three sandbox rows are
+expected until the portal repoints — leave them alone.
+
+**If Check Y reports INFO "asserting nothing".** The check could not read `ITS_Config`, or read it and
+resolved no usable rows. It is **refusing to invent drift from a broken read** — correct behaviour, not
+a fault. If it persists across several days, the Setting/Workstream **columns** may have been renamed
+or removed, which is **high-class** (schema change) → escalate.
 
 ## Boundary (always escalate to the Developer-Operator, Seth)
 

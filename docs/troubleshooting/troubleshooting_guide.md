@@ -1056,6 +1056,23 @@ The cloud can only ENQUEUE a config request (send-free); the config-actuator com
 
 **See also:** runbook `docs/runbooks/operator_dashboard_config_editor.md`
 
+#### A capability does nothing at all and the switch for it cannot be found anywhere in ITS_Config.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** load-bearing ITS_Config row(s) MISSING or BLANK, row MISSING, Value BLANK, config_row_missing, INVISIBLE off-switch, the capability is silently inert
+
+**Checks (in order):**
+- A missing row and a blank Value both read as `false` to a daemon (`_read_bool_setting(default=False)`), so the capability is inert with NO switch to flip — this is the 2026-08-10 three-day archive outage exactly.
+- Watchdog Check Y (verify_cutover VC-03, run daily) names each absent row as `<setting> [<workstream>]` — note BOTH halves, ITS_Config is keyed on Setting AND Workstream.
+- Read the row's Description in docs/references/its_config_dictionary.md before anything else — it may carry a doctrine precondition on activation.
+
+**Resolutions (in order):**
+- Seeding a missing ITS_Config row is a FIXED high-capability class — escalate to Seth with the row names; a Tier-2 operator does not create one.
+- After the row is seeded, mark the open CRITICAL resolved — an open CRITICAL is never terminal, so Check B re-reports it forever otherwise.
+
+**See also:** runbook `docs/runbooks/operator_dashboard_config_editor.md` · watchdog `_check_cutover_config`
+
 ### config-actuator validates, PRs, merges, and deploys the change
 
 | What happens | |

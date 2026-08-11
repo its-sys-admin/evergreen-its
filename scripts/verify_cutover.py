@@ -355,6 +355,20 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
         "po_materials.po_send.from_mailbox", "po_materials", "non_empty",
         sandbox_scan=True,
     ),
+    # po_send's GATE row, enrolled 2026-08-11 by the Check-Y gate-parity test
+    # (`tests/test_verify_cutover.py::test_every_declared_boolean_gate_is_enrolled`). It was the
+    # ONLY declared boolean gate in the fleet with no CONFIG_ROWS entry — its exact structural
+    # twins `subcontracts.subcontract_send.polling_enabled` and
+    # `po_materials.rfq_send.polling_enabled` were both already enrolled `non_empty`, so its
+    # absence was an oversight, not a policy.
+    #
+    # This does NOT contradict the "NOT enrolling po_send.polling_enabled" note above: that note
+    # objects to demanding `"true"`, which would force a send-enable — a FIXED high-capability-class
+    # External-Send-Gate decision (Seth). `non_empty` asserts only that the ROW EXISTS, so the
+    # operator has a switch to flip; the VALUE stays entirely the operator's. Same dark-ship reflex
+    # every other send gate here already rides. (`scheduled_send_local` is a str tuning row, not a
+    # gate, so the mechanical bool-typed bound leaves it out.)
+    ConfigRow("po_materials.po_send.polling_enabled", "po_materials", "non_empty"),
     # The two Box mirror-tree ROOTS — supersedes CO-3's "stay intentionally unenrolled".
     # CO-3 was right that sandbox_scan is N/A here (a Box folder id is a bare numeric
     # string; there is no `evergreenmirror` marker in it to scan, so a scan would assert
