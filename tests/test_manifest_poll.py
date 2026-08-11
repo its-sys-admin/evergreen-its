@@ -311,7 +311,17 @@ def test_malicious_screen_names_the_account_and_refuses_before_filing(_patch):
     assert _patch["post_result"].call_args.kwargs["status"] == "refused"
 
 
-def test_suspicious_screen_refuses_without_a_critical(_patch):
+def test_suspicious_screen_imports_with_a_warning_not_a_refusal(_patch):
+    """DELIBERATELY REWRITTEN 2026-08-11 (operator decision — the rewrite is the point).
+
+    This test used to pin suspicious → refused. The first real BOM through the lane
+    (Bradley 1 Customer BOM) refused on L2:pdf_active_content:OpenAction — an artifact
+    virtually every vendor-exported PDF carries — and the operator dropped the refusal
+    for THIS lane: an office upload's bytes are only ever opened by ITS inside the
+    killable sandbox, so the friction bought protection against a reader that is
+    already contained. The verdict is NEVER silent: a WARN (`manifest_active_content`)
+    and a parse note the validate screen shows beside the grid. Malicious still refuses
+    (the test above), and the PO/estimate lanes keep the refuse posture."""
     data = _MINIMAL_XLSX
     _patch["pending"].return_value = [_row(data)]
     _patch["chunks"].return_value = _one_chunk(data)
@@ -319,10 +329,18 @@ def test_suspicious_screen_refuses_without_a_critical(_patch):
 
     stats = manifest_poll.poll_once()
 
-    assert stats.refused == 1
+    assert stats.refused == 0
+    assert stats.filed == 1  # imported: filed to Box, grid posted, result parsed
+    assert _logs(_patch, Severity.WARN, "manifest_active_content")
+    assert not _logs(_patch, Severity.WARN, "manifest_suspicious")
     assert not _logs(_patch, Severity.CRITICAL, "manifest_malicious")
-    assert _logs(_patch, Severity.WARN, "manifest_suspicious")
-    _patch["upload"].assert_not_called()
+    _patch["upload"].assert_called_once()  # the original DOES reach Box now
+    # The warning reaches the validate screen as a parse note.
+    notes = _patch["post_result"].call_args.kwargs.get("parse_notes") or ""
+    assert "ACTIVE CONTENT" in notes
+    assert "pdf:embedded_js" in notes
+    # No Review-Queue ticket for a mere warning — the note + WARN are the surfaces.
+    _patch["review"].assert_not_called()
 
 
 # ---- unreadable documents (ordinary, NOT a security event) ------------------------

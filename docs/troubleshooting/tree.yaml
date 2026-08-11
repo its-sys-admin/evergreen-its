@@ -440,10 +440,11 @@ workflows:
             class: seth_coresolve
             runbook: docs/runbooks/material_manifest_import.md
           - id: manifest_refused
-            symptom: An uploaded manifest was refused (unreadable, SUSPICIOUS/MALICIOUS) or failed integrity.
-            signals: ["manifest_unreadable", "manifest_suspicious", "manifest_malicious", "manifest_integrity_failed"]
+            symptom: An uploaded manifest was refused (unreadable or MALICIOUS), failed integrity, or imported with an active-content warning.
+            signals: ["manifest_unreadable", "manifest_active_content", "manifest_malicious", "manifest_integrity_failed"]
             checks:
-              - Read the ITS_Review_Queue row. An unreadable document (a scan, an empty export, no header row) is ORDINARY — ask the office for a text-based PDF or the source spreadsheet.
+              - Read the ITS_Review_Queue row (refusals) or the validate screen's parse notes (warnings). An unreadable document (a scan, an empty export, no header row) is ORDINARY — ask the office for a text-based PDF or the source spreadsheet.
+              - manifest_active_content is a WARNING, not a refusal (disposition changed 2026-08-11, this lane only) — the document imported; the note says to take care opening the ORIGINAL from Box. Nothing to repair.
               - A security_flag row is not a readability problem; an integrity failure means the bytes disagree with what was signed.
             resolutions:
               - For a readability refusal only, clear that manifest's id from state/manifest_poll_flagged.json to retry. NEVER clear a flag for a MALICIOUS verdict or an integrity failure — both escalate, and the bytes are retained for investigation.
