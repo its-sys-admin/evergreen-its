@@ -43,6 +43,9 @@ const CONCEPT_LABELS: Record<string, string> = {
   unit: "Unit",
   ship_date: "Ship date",
   delivery_date: "Delivery date",
+  // A bill-of-lading / load number is a property of a LOAD: it lands in
+  // material_shipments on a shipments import, and is ignored on a lines import.
+  bol: "BOL / load number",
 };
 const CONCEPT_ORDER = Object.keys(CONCEPT_LABELS);
 
@@ -122,14 +125,19 @@ export function ManifestValidatePage({
   const [rows, setRows] = useState<ManifestGridRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Human decisions.
+  // Human decisions. Quantity has NO separate state — it is one more concept in the
+  // Columns table, resolved through the same `colFor` every other field uses (the old
+  // dedicated `qtyCol` state was seeded once and never written by the Columns table, so
+  // remapping Quantity there was silently ignored — audit A1).
   const [concepts, setConcepts] = useState<Record<number, string>>({});
-  const [qtyCol, setQtyCol] = useState<number | null>(null);
   const [rowState, setRowState] = useState<Record<number, RowState>>({});
   const [added, setAdded] = useState<AddedLine[]>([]);
   /** source_row_index → chosen existing line id, for part numbers matching MORE than one line. */
   const [ambiguousChoice, setAmbiguousChoice] = useState<Record<number, number>>({});
   const [mode, setMode] = useState<api.ManifestMode>("add_new");
+  /** BOM rows → expected-material LINES; shipping-log rows → material_shipments LOADS
+   *  (ADR-0005 decision 4). Seeded from the parser's document profile on load. */
+  const [importAs, setImportAs] = useState<api.ManifestImportAs>("lines");
 
   const [plan, setPlan] = useState<ManifestPlanResponse | null>(null);
   const [busy, setBusy] = useState<null | "plan" | "commit" | "discard">(null);
@@ -165,8 +173,14 @@ export function ManifestValidatePage({
         for (const [concept, idx] of Object.entries(cmap?.mapping ?? {})) {
           if (concept in CONCEPT_LABELS) seeded[idx] = concept;
         }
+        // Quantity seeds into the SAME concepts state everything else lives in, preferring
+        // the parser's confident pick, falling back to its best candidate.
+        const qtySeed = cmap?.mapping?.qty ?? cmap?.qty_default ?? null;
+        if (qtySeed !== null && seeded[qtySeed] === undefined) seeded[qtySeed] = "qty";
         setConcepts(seeded);
-        setQtyCol(cmap?.qty_default ?? cmap?.mapping?.qty ?? null);
+        // A document the parser read as a shipping log defaults to the shipments import;
+        // the office can still override — the profile is a proposal, not a verdict.
+        setImportAs(d.manifest.profile === "shipping_log" ? "shipments" : "lines");
         // Data + continuation rows start kept; header/meta/section rows are never importable.
         const st: Record<number, RowState> = {};
         for (const row of r) {
@@ -229,14 +243,20 @@ export function ManifestValidatePage({
   );
 
   /** The current decisions → the lines a commit would author. This is the single place the grid
-   *  becomes data; Preview and Commit both read it, so what you previewed IS what commits. */
+   *  becomes data; Preview and Commit both read it, so what you previewed IS what commits.
+   *  EVERY concept — quantity included — resolves through `colFor`, i.e. through the ONE
+   *  Columns-table state the human actually edits. Quantity used to read a separate
+   *  `qtyCol` state that the Columns table never wrote, so remapping Quantity there
+   *  changed nothing and every line committed `qty: null` — the 2026-08-10 audit's A1. */
   const resolvedLines = useMemo((): ManifestResolvedLine[] => {
     const cDesc = colFor("description");
     const cPart = colFor("part_number");
     const cCat = colFor("category");
+    const cQty = colFor("qty");
     const cUnit = colFor("unit");
     const cShip = colFor("ship_date");
     const cDeliv = colFor("delivery_date");
+    const cBol = colFor("bol");
     const cell = (r: ManifestGridRow, idx: number | null): string => {
       if (idx === null) return "";
       const st = rowState[r.row_index];
@@ -256,11 +276,12 @@ export function ManifestValidatePage({
         description: description || null,
         part_number: part || null,
         category: cell(r, cCat).trim() || null,
-        qty: toQty(cell(r, qtyCol)),
+        qty: toQty(cell(r, cQty)),
         unit: cell(r, cUnit).trim() || null,
         expected_date: toDate(cell(r, cDeliv)),
         expected_ship_date: toDate(cell(r, cShip)),
         material_id: null,
+        bol: cell(r, cBol).trim() || null,
       });
     }
     // Hand-added lines ride after the document's own, keyed off the highest source index so their
@@ -277,15 +298,22 @@ export function ManifestValidatePage({
         expected_date: null,
         expected_ship_date: null,
         material_id: null,
+        bol: null,
       });
     });
     return out;
-  }, [importableRows, rowState, added, colFor, qtyCol]);
+  }, [importableRows, rowState, added, colFor]);
 
-  const missingDescription = useMemo(
-    () => resolvedLines.filter((l) => !l.description && !l.material_id).length,
+  /** The lines the Worker WILL refuse (no description and no catalog pick) — kept as the
+   *  full list, not just a count, so the screen can name them and offer the one-tap ✕
+   *  that clears each (and all) of them from the import instead of letting one bad row
+   *  hold the other four hundred hostage. Document rows clear by unticking their keep;
+   *  hand-added rows clear by deletion. */
+  const failingLines = useMemo(
+    () => resolvedLines.filter((l) => !l.description && !l.material_id),
     [resolvedLines],
   );
+  const missingDescription = failingLines.length;
   const unresolvedAmbiguous = useMemo(
     () => (plan?.ambiguous ?? []).filter((a) => ambiguousChoice[a.source_row_index] === undefined),
     [plan, ambiguousChoice],
@@ -297,6 +325,32 @@ export function ManifestValidatePage({
   function setKeep(rowIndex: number, keep: boolean) {
     setRowState((s) => ({ ...s, [rowIndex]: { ...(s[rowIndex] ?? { edits: {} }), keep } }));
     setPlan(null); // a changed set invalidates the dry run
+  }
+
+  /** The ✕ on a failing line: clear it from the import. A DOCUMENT row clears by
+   *  unticking its keep (the row stays visible in the grid, just deselected — nothing is
+   *  hidden); a HAND-ADDED row clears by deleting it (it has no grid row to fall back
+   *  to). Same derivation the failing list uses, so the two cannot disagree. */
+  const addedBase = Math.max(0, ...importableRows.map((r) => r.row_index)) + 1;
+  function clearLines(sourceRowIndexes: number[]) {
+    const failing = new Set(sourceRowIndexes);
+    const docRows = [...failing].filter((i) => i < addedBase);
+    if (docRows.length) {
+      // ONE state update for every document row — per-row setKeep calls in a loop would
+      // be fine, but this keeps clear-one and clear-all on the identical path.
+      setRowState((s) => {
+        const out = { ...s };
+        for (const idx of docRows) out[idx] = { ...(out[idx] ?? { edits: {} }), keep: false };
+        return out;
+      });
+    }
+    // ONE filter for the hand-added rows: positions are evaluated against the CURRENT
+    // array in a single pass, so clearing several never suffers the shifted-index bug a
+    // remove-one-at-a-time loop would.
+    if ([...failing].some((i) => i >= addedBase)) {
+      setAdded((rowsA) => rowsA.filter((_, i) => !failing.has(addedBase + i)));
+    }
+    setPlan(null);
   }
 
   function setEdit(rowIndex: number, col: number, value: string) {
@@ -328,15 +382,32 @@ export function ManifestValidatePage({
     setMsg(null);
     setProgress(null);
     try {
-      const res = await api.commitAll(manifestId, mode, resolvedLines, (done, total) =>
-        setProgress(`${done} of ${total} lines…`),
+      const res = await api.commitAll(
+        manifestId,
+        mode,
+        resolvedLines,
+        { importAs, resolutions: ambiguousChoice },
+        (landed, total) => setProgress(`${landed} of ${total} rows…`),
       );
-      onClose(
-        { ok: true, text: `Imported ${res.inserted} material line${res.inserted === 1 ? "" : "s"}.` },
-        true,
-      );
+      const bits: string[] = [];
+      if (res.inserted) bits.push(`${res.inserted} new line${res.inserted === 1 ? "" : "s"}`);
+      if (res.updated) bits.push(`${res.updated} line${res.updated === 1 ? "" : "s"} updated`);
+      if (res.shipments) bits.push(`${res.shipments} load${res.shipments === 1 ? "" : "s"} scheduled`);
+      const locked = res.skipped_locked.length
+        ? ` ${res.skipped_locked.length} matched line${res.skipped_locked.length === 1 ? " was" : "s were"} left untouched (received or flagged — their recorded facts are locked).`
+        : "";
+      onClose({ ok: true, text: `Imported: ${bits.join(", ") || "nothing to do"}.${locked}` }, true);
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, "The import didn't finish — nothing partial was left.") });
+      // HONEST failure copy: the commit is PAGED, so earlier pages may already be on the
+      // job's list — the old text asserted "nothing partial was left", which was false by
+      // construction the moment page 2 failed. Check the Materials page before re-importing.
+      setMsg({
+        ok: false,
+        text: errText(
+          e,
+          "The import stopped part-way. Pages that already landed ARE on the job's list — check the Materials page before importing again, or discard this manifest to stop here.",
+        ),
+      });
       setBusy(null);
       setProgress(null);
     }
@@ -348,7 +419,16 @@ export function ManifestValidatePage({
     setMsg(null);
     try {
       await api.discardManifest(manifestId);
-      onClose({ ok: true, text: "Manifest discarded." }, false);
+      onClose(
+        {
+          ok: true,
+          text:
+            manifest?.status === "committing"
+              ? "Manifest discarded. Lines from pages that already imported remain on the job's list."
+              : "Manifest discarded.",
+        },
+        manifest?.status === "committing",
+      );
     } catch (e) {
       setMsg({ ok: false, text: errText(e, "Could not discard this manifest.") });
       setBusy(null);
@@ -558,13 +638,24 @@ export function ManifestValidatePage({
                 <h4>Which column is the quantity?</h4>
                 <p className="dash__intro">
                   This document has more than one quantity column. The importer pre-selected the
-                  one its arithmetic check agrees with — confirm it.
+                  one its arithmetic check agrees with — confirm it. (This shortcut writes the
+                  same Columns-table mapping above; either control works.)
                 </p>
                 <select
                   aria-label="Quantity column"
-                  value={qtyCol ?? ""}
+                  value={colFor("qty") ?? ""}
                   onChange={(e) => {
-                    setQtyCol(e.target.value === "" ? null : Number(e.target.value));
+                    const next = e.target.value === "" ? null : Number(e.target.value);
+                    setConcepts((cur) => {
+                      const out: Record<number, string> = {};
+                      // Clear any prior qty assignment, then set the chosen column — ONE
+                      // state, so the Columns table and this shortcut can never disagree.
+                      for (const [k, v] of Object.entries(cur)) {
+                        if (v !== "qty") out[Number(k)] = v;
+                      }
+                      if (next !== null) out[next] = "qty";
+                      return out;
+                    });
                     setPlan(null);
                   }}
                 >
@@ -584,11 +675,39 @@ export function ManifestValidatePage({
               Rows ({resolvedLines.length} of {importableRows.length + added.length} selected)
             </h4>
             {missingDescription > 0 ? (
-              <p className="dash-error">
-                {missingDescription} selected line
-                {missingDescription === 1 ? " has" : "s have"} no description — the importer will
-                refuse them. Map a Description column, or edit those rows.
-              </p>
+              <div className="dash-error" role="alert">
+                <p>
+                  {missingDescription} selected line
+                  {missingDescription === 1 ? " has" : "s have"} no description — the importer will
+                  refuse them. Map a Description column, edit those rows, or clear them:
+                </p>
+                <ul aria-label="Lines the import would refuse">
+                  {failingLines.slice(0, 20).map((l) => (
+                    <li key={l.source_row_index}>
+                      Row {l.source_row_index}
+                      {l.part_number ? ` · part ${l.part_number}` : ""}{" "}
+                      <button
+                        type="button"
+                        className="btn btn--secondary btn--sm"
+                        aria-label={`Clear row ${l.source_row_index} from the import`}
+                        onClick={() => clearLines([l.source_row_index])}
+                      >
+                        ✕ Clear
+                      </button>
+                    </li>
+                  ))}
+                  {failingLines.length > 20 ? <li>…and {failingLines.length - 20} more</li> : null}
+                </ul>
+                {missingDescription > 1 ? (
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--sm"
+                    onClick={() => clearLines(failingLines.map((l) => l.source_row_index))}
+                  >
+                    ✕ Clear all {missingDescription} failing lines
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             <div style={{ overflowX: "auto", maxHeight: "28rem" }}>
               <table className="dash-table">
@@ -726,18 +845,50 @@ export function ManifestValidatePage({
 
           <section className="card dash-section" aria-label="Preview and import">
             <h4>Import</h4>
+
+            {manifest?.profile === "shipping_log" ? (
+              <p className="dash__intro" role="note">
+                The importer read this document as a <strong>shipping log</strong> — rows that are
+                LOADS of a part (each with its own ship date, delivery date and BOL), not new
+                material lines. Imported as scheduled loads, each row attaches to the matching
+                line on the job's list; a part the list doesn't have yet gets its line created
+                too. Switch to "material lines" only if the importer read it wrong.
+              </p>
+            ) : null}
+
             <div className="dash-row">
-              <label htmlFor="manifest-mode">If a part number is already on the list</label>
+              <label htmlFor="manifest-import-as">Import rows as</label>
               <select
-                id="manifest-mode"
-                aria-label="Import mode"
-                value={mode}
-                onChange={(e) => setMode(e.target.value as api.ManifestMode)}
+                id="manifest-import-as"
+                aria-label="Import rows as"
+                value={importAs}
+                onChange={(e) => {
+                  setImportAs(e.target.value as api.ManifestImportAs);
+                  setPlan(null);
+                }}
               >
-                <option value="add_new">Add every line as new</option>
-                <option value="merge">Merge onto the matching line</option>
+                <option value="lines">Material lines (a BOM)</option>
+                <option value="shipments">Scheduled loads (a shipping log)</option>
               </select>
             </div>
+
+            {importAs === "lines" ? (
+              <div className="dash-row">
+                <label htmlFor="manifest-mode">If a part number is already on the list</label>
+                <select
+                  id="manifest-mode"
+                  aria-label="Import mode"
+                  value={mode}
+                  onChange={(e) => {
+                    setMode(e.target.value as api.ManifestMode);
+                    setPlan(null);
+                  }}
+                >
+                  <option value="add_new">Add every line as new</option>
+                  <option value="merge">Merge onto the matching line</option>
+                </select>
+              </div>
+            ) : null}
 
             <button
               type="button"
@@ -756,10 +907,18 @@ export function ManifestValidatePage({
                   {plan.counts.ambiguous} ambiguous, {plan.counts.absent} on the list but not in
                   this document.
                 </p>
-                {plan.would_exceed_line_cap ? (
+                {/* add_new inserts EVERY row; merge AND shipments insert only the
+                    unmatched ones (matches become updates / attached loads). */}
+                {(importAs === "lines" && mode === "add_new"
+                  ? plan.would_exceed_line_cap
+                  : plan.would_exceed_line_cap_merge) ? (
                   <p className="dash-error">
-                    This job would hold {plan.projected_total} lines, over the 500 the materials
-                    page can show. Split the import or trim the list.
+                    This job would hold{" "}
+                    {importAs === "lines" && mode === "add_new"
+                      ? plan.projected_total_add_new
+                      : plan.projected_total_merge}{" "}
+                    lines, over the 500 the materials page can show. Split the import or trim the
+                    list.
                   </p>
                 ) : null}
 
@@ -827,6 +986,11 @@ export function ManifestValidatePage({
 
             {progress ? <p role="status">Importing {progress}</p> : null}
 
+            {/* Ambiguity blocks only where a match CHANGES something: merge rewrites the
+                chosen line, a shipment attaches to it. add_new inserts everything, so an
+                undecided duplicate is informational there. The Worker enforces the same
+                rule server-side (409 ambiguous_unresolved) — this gate is convenience,
+                never the boundary. */}
             <div className="dash-row">
               <button
                 type="button"
@@ -835,13 +999,18 @@ export function ManifestValidatePage({
                   busy !== null ||
                   !committable ||
                   plan === null ||
-                  unresolvedAmbiguous.length > 0 ||
+                  ((mode === "merge" || importAs === "shipments") &&
+                    unresolvedAmbiguous.length > 0) ||
                   missingDescription > 0 ||
                   resolvedLines.length === 0
                 }
                 onClick={() => void runCommit()}
               >
-                {busy === "commit" ? "Importing…" : `Import ${resolvedLines.length} lines`}
+                {busy === "commit"
+                  ? "Importing…"
+                  : importAs === "shipments"
+                    ? `Import ${resolvedLines.length} loads`
+                    : `Import ${resolvedLines.length} lines`}
               </button>
               <button
                 type="button"
@@ -852,7 +1021,14 @@ export function ManifestValidatePage({
                 Discard this manifest
               </button>
             </div>
-            {plan && unresolvedAmbiguous.length > 0 ? (
+            {manifest?.status === "committing" ? (
+              <p className="dash__intro" role="note">
+                This import stopped part-way. Re-importing continues where it left off;
+                discarding stops here — lines from pages that already imported stay on the
+                job's list.
+              </p>
+            ) : null}
+            {plan && (mode === "merge" || importAs === "shipments") && unresolvedAmbiguous.length > 0 ? (
               <p className="dash-error">
                 {unresolvedAmbiguous.length} ambiguous part number
                 {unresolvedAmbiguous.length === 1 ? "" : "s"} still to decide.

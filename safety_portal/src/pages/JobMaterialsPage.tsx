@@ -106,6 +106,7 @@ export function JobMaterialsPage({
     lines: api.ExpectedMaterialRow[];
     shipments: api.MaterialShipmentRow[];
     events: api.MaterialReceiptEventRow[];
+    project_name: string | null;
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -120,6 +121,11 @@ export function JobMaterialsPage({
   const [marks, setMarks] = useState<Record<number, MarkDraft>>({});
   const [shipFor, setShipFor] = useState<number | null>(null);
   const [shipDraft, setShipDraft] = useState<ShipDraft>(emptyShip());
+  // Resolve-problem draft (B7, 2026-08-11): which line's resolve panel is open + its
+  // REQUIRED note. Clearing a flag is an explicit human act with a written reason — a
+  // delivery mark never does it.
+  const [resolveFor, setResolveFor] = useState<number | null>(null);
+  const [resolveNote, setResolveNote] = useState("");
 
   // ── Two-step confirm on every delivery mark (operator request, 2026-08-10) ────────────────
   // A mark is an APPEND-ONLY ledger event with no delete path: a mis-tap cannot be undone, only
@@ -153,7 +159,10 @@ export function JobMaterialsPage({
     api
       .fetchExpectedMaterials(jobId)
       .then((d) =>
-        setData({ lines: d.expected_materials, shipments: d.shipments, events: d.receipt_events }),
+        setData({
+          lines: d.expected_materials, shipments: d.shipments, events: d.receipt_events,
+          project_name: d.project_name,
+        }),
       )
       .catch(() => setLoadError("Could not load this job's materials."));
   }, [jobId]);
@@ -337,7 +346,9 @@ export function JobMaterialsPage({
           ← Back to job
         </button>
       </div>
-      <h1 className="page__heading">Materials — {jobId}</h1>
+      {/* The job NAME, not the JOB-###### key (operator request 2026-08-11) — the key is a
+          system identifier the field never speaks; the id falls back only while loading. */}
+      <h1 className="page__heading">Materials — {data?.project_name ?? jobId}</h1>
       <p className="dash__intro">
         What this job is expecting, when each part is due to ship and arrive, and what has actually
         turned up. {canMark ? "Mark each line as loads arrive — a line can be marked more than once." : null}
@@ -475,9 +486,53 @@ export function JobMaterialsPage({
                     <>
                       {" "}
                       <span className="dash-pill dash-pill--danger">Problem reported</span>
+                      {canMark && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="btn btn--secondary btn--sm"
+                            disabled={busy}
+                            onClick={() => {
+                              setResolveFor((cur) => (cur === line.id ? null : line.id));
+                              setResolveNote("");
+                            }}
+                          >
+                            {resolveFor === line.id ? "Cancel" : "Resolve problem"}
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
+                {resolveFor === line.id && line.status === "incident" && (
+                  <div className="dash-row" aria-label={`Resolve problem for ${rowTitle(line)}`}>
+                    <input
+                      type="text"
+                      aria-label="How was it resolved"
+                      placeholder="How was it resolved? (required)"
+                      value={resolveNote}
+                      onChange={(e) => setResolveNote(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--primary btn--sm"
+                      disabled={busy || resolveNote.trim().length === 0}
+                      onClick={() =>
+                        void run(
+                          line.id,
+                          () => api.resolveExpectedMaterialIncident(line.id, resolveNote.trim()),
+                          "Problem resolved — the line now shows what the delivery ledger says.",
+                        ).then(() => {
+                          setResolveFor(null);
+                          setResolveNote("");
+                        })
+                      }
+                    >
+                      Mark resolved
+                    </button>
+                  </div>
+                )}
                 <div className="dash-card__sub">
                   {line.part_number ? `Part ${line.part_number} · ` : ""}
                   Expected {fmtQty(line.qty)} {line.unit ?? ""}

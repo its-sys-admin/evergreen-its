@@ -614,19 +614,22 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/material_manifest_import.md`
 
-#### The office's import from the validate screen errors, or the manifest is stuck showing "committing".
+#### The office's import from the validate screen errors, or the manifest shows "committing" after an interrupted import.
 
-**Resolution class:** Escalate to Seth (co-resolve)
+**Resolution class:** Operator-resolvable (solo)
 
-**Signals:** not_committable, line_cap_exceeded, invalid_material_id, invalid_mode
+**Signals:** not_committable, line_cap_exceeded, invalid_material_id, ambiguous_unresolved, manifest_worker_rejected
 
 **Checks (in order):**
 - These are Worker refusals of the COMMIT half (the human dispose), not daemon faults — the daemon's work already finished when the grid appeared.
-- line_cap_exceeded means the job would exceed its expected-materials line cap; the preview's projected total can under-count, so a green preview does not rule this out mid-import.
+- ambiguous_unresolved means a part number matches more than one existing line and the office hasn't picked a target — a merge or shipments import refuses rather than guessing.
+- The preview's projected totals are per-mode (add-vs-merge); line_cap_exceeded means genuinely NEW lines would push the job past its cap.
 
 **Resolutions (in order):**
-- not_committable / invalid_mode / invalid_material_id → re-open the validate screen and retry from a fresh load; if it persists, the manifest's status no longer allows a commit — escalate rather than forcing it.
-- A manifest stranded in "committing" after a mid-import refusal currently has NO discard path (known gap) — some pages may already be imported; check the job's Materials page before re-importing anything, and escalate to Seth.
+- not_committable / invalid_material_id → re-open the validate screen and retry from a fresh load; if it persists, the manifest's status no longer allows a commit — escalate rather than forcing it.
+- ambiguous_unresolved → run the preview and decide each listed part number, then import again.
+- An import interrupted mid-way is RESUMABLE (re-importing continues from the watermark) or ABANDONABLE (Discard works on a "committing" manifest; lines from pages that already imported stay on the job's list — the screen says so).
+- manifest_worker_rejected in ITS_Errors means the Worker permanently refused the daemon's grid post (a 4xx) — the manifest is one-shot-flagged; remediate via the runbook's flag-file procedure after the cause is fixed.
 
 **See also:** runbook `docs/runbooks/material_manifest_import.md`
 

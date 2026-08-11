@@ -73,12 +73,17 @@ def test_sla_tier_values_match_live_picklist():
 def test_valid_workstreams_match_live_picklist():
     # `progress_reports` added at P5 — the progress weekly compile's per-job fence and
     # the recipient_health send-time hook both enqueue with workstream="progress_reports".
+    # `field_ops` added 2026-08-11: manifest_poll tickets under it, and the FIRST live
+    # refusal through the lane (Bradley 1 Customer BOM, §34 SUSPICIOUS) lost its ticket
+    # to the omission — the same latent class, caught by a real document instead of CI;
+    # the parity test below now enumerates the ticketing daemons so the next one fails
+    # here by name.
     # Smartsheet accepts an unknown picklist value as a plain string (the write succeeds),
-    # but the operator should add "progress_reports" to the live ITS_Review_Queue Workstream
-    # picklist so pivot views bucket it (same pattern noted in the ReviewReason docstring).
+    # but the operator should keep the live ITS_Review_Queue Workstream picklist in step
+    # so pivot views bucket it (same pattern noted in the ReviewReason docstring).
     expected = {
         "safety_reports", "progress_reports", "po_materials", "subcontracts",
-        "email_triage", "ai_employee", "global",
+        "field_ops", "email_triage", "ai_employee", "global",
     }
     assert set(VALID_WORKSTREAMS) == expected
 
@@ -486,3 +491,33 @@ def test_safe_add_swallows_even_a_non_smartsheet_error(mocker):
         reason=review_queue.ReviewReason.POLICY_EDGE,
     ) is False
     assert log.call_args.args[0] is Severity.CRITICAL
+
+
+def test_every_ticketing_daemon_workstream_is_in_the_valid_set():
+    """STRUCTURAL parity — the latent-until-first-live-refusal class, twice now.
+
+    review_queue.add validates `workstream` against VALID_WORKSTREAMS, and a daemon whose
+    module-level WORKSTREAM is absent passes every mocked test and then loses its FIRST
+    LIVE ticket to a ValueError (progress_reports at P5; field_ops on 2026-08-11 — the
+    first real manifest's §34 refusal, Bradley 1 Customer BOM, fenced with no ticket and
+    a CRITICAL). Enumerating the ticketing daemons here makes the NEXT one fail in CI by
+    name instead. The tenant picklist column must carry each value too — that half is a
+    Smartsheet column option, asserted live by §30, not here."""
+    from field_ops import fieldops_sync, manifest_poll  # noqa: PLC0415
+    from po_materials import estimate_poll, po_poll, rfq_poll  # noqa: PLC0415
+    from subcontracts import subcontract_poll  # noqa: PLC0415
+
+    for mod in (manifest_poll, fieldops_sync, estimate_poll, po_poll, rfq_poll, subcontract_poll):
+        ws = mod.WORKSTREAM
+        assert ws in review_queue.VALID_WORKSTREAMS, (
+            f"{mod.__name__}.WORKSTREAM={ws!r} is not in review_queue.VALID_WORKSTREAMS — "
+            "its first live ticket will be LOST (ValueError at add). Add it to BOTH "
+            "VALID_WORKSTREAMS and picklist_validation._WORKSTREAM_VALUES_GLOBAL, and add "
+            "the option to the live ITS_Review_Queue Workstream picklist."
+        )
+
+    from shared import picklist_validation  # noqa: PLC0415
+
+    # The two sets have drifted apart before (the P4/P5 latency documented in both files).
+    missing = review_queue.VALID_WORKSTREAMS - picklist_validation._WORKSTREAM_VALUES_GLOBAL
+    assert not missing, f"VALID_WORKSTREAMS values absent from the write gate: {missing}"

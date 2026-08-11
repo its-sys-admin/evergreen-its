@@ -50,8 +50,13 @@ Two states sit on **different axes** and must not be confused:
 - the **delivery rollup** (not marked / partial / delivered / not delivered) — from the ledger
 - the **problem flag** (`incident`) — set by *Report a problem* on the daily form. It is **sticky**:
   recording a later delivery against a flagged line **records the delivery but does not clear the
-  flag**, and every surface (page, daily form, the Material List sheet) keeps showing the problem.
+  flag** — the running total and delivered quantity keep tracking the ledger while the flag stays —
+  and every surface (page, daily form, the Material List sheet) keeps showing the problem.
   That is deliberate — a delivered-but-damaged pallet is still a problem.
+- clearing the flag is an **explicit human act**: the **Resolve problem** button beside the flag
+  (manager/admin), with a required note saying how it was resolved. The line then lands where the
+  delivery ledger says — *received* if the latest event was a full delivery, back to *expected*
+  otherwise — and the Material Incidents sheet's Line Status finally shows the resolution.
 
 ## Symptoms
 
@@ -63,7 +68,7 @@ Two states sit on **different axes** and must not be confused:
 | The page says "Nothing is on this job's materials list yet" | No expected lines have been authored for the job | Not a fault. The office (admin) adds them on this page — or uploads the vendor's BOM through **Import a manifest** and commits the accepted lines from the validate screen (`material_manifest_import.md`) |
 | "Could not load this job's materials" | Transient read failure — the page says so and offers **Retry** rather than showing an empty list | Tap **Retry**. If persistent, check whether the job's detail page loads at all, then escalate |
 | A line shows the **wrong running total** | The total is the SUM of every event's quantity. A mark recorded without a quantity contributes nothing to it; a duplicate mark contributes twice | Open the line's history — every event shows its quantity, note, date and who recorded it. If a genuine duplicate is there, record a correcting event; the ledger cannot be edited in place. Escalate if the total must be corrected at source |
-| A line still shows **Problem reported** after the goods arrived | Working as designed — the incident flag is sticky and a delivery mark does not clear it | Not a fault. The delivery IS recorded (check the history). Clearing a flag is not a Tier-2 action — escalate if the flag is genuinely wrong |
+| A line still shows **Problem reported** after the goods arrived | Working as designed — the incident flag is sticky and a delivery mark does not clear it | Not a fault. The delivery IS recorded (check the history and the running total — both keep moving). When the problem is genuinely settled, a manager/admin taps **Resolve problem** beside the flag and writes how it was resolved — that is the one thing that clears it |
 | "Add a note explaining the shortfall" when marking **Not delivered** | A non-delivery must say why — the note is required, and a quantity is refused on it | Add the note. If a quantity genuinely arrived, the mark is *Partially delivered*, not *Not delivered* |
 | "That load isn't on this material line" | The chosen load belongs to a different line | Pick one of that line's own loads, or leave the load blank — the mark records fine without one |
 | A load can't be removed / a line can't be edited | Line editing is admin-only, and a line that has been received or flagged is a **record** — content edits are locked (`not_editable`) | Expected. If the record itself is wrong, escalate |
