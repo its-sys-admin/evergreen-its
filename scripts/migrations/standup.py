@@ -80,6 +80,33 @@ MIGRATIONS = "scripts/migrations"
 DUMP_ROOT = pathlib.Path.home() / "its" / "logs" / "migrations"
 BASE = "https://api.smartsheet.com/2.0"
 
+# Every migrations-dir seeder the stand-up RUNS, in run order. Hoisted to a module constant so
+# tests/test_standup_tools.py can check VC-03's rows against the scripts this orchestrator
+# actually executes (plus seed-config-baseline's scripts/seed_its_config.py) — the old guard
+# grepped the whole migrations DIRECTORY, so a seeder that existed on disk but was never run
+# passed it. That is exactly how seed_manifest_config.py shipped 2026-08-07 and a rebuilt
+# tenant had no field_ops.manifest_poll.* rows until final-verify VC-03 failed with no scripted
+# remedy (2026-08-10). A new seeder is not DONE until it appears HERE.
+SEEDER_STAGE_SCRIPTS: tuple[str, ...] = (
+    "seed_its_forms_catalog.py",
+    "extend_its_forms_catalog_parent_variant.py",
+    "seed_its_vendors.py",
+    "seed_its_subcontractors.py",
+    "seed_safety_intake_config.py",
+    "seed_safety_intake_polling_config.py",
+    "seed_safety_recipients_config.py",
+    "seed_po_materials_config.py",
+    "seed_estimates_config.py",
+    "seed_rfq_config.py",
+    "seed_rfq_send_config.py",
+    "seed_subcontracts_config.py",
+    "seed_subcontracts_send_config.py",
+    "seed_config_actuator_config.py",
+    "seed_daemon_gate_config.py",
+    "seed_manifest_config.py",
+    "seed_generate_and_interval_config.py",
+)
+
 # The non-interactive contract with the builder family (2026-07-23 review):
 # _run_script sets this env var and closes the child's stdin. The six builder
 # confirm seams auto-approve ONLY under it (this process's master y/N gate is
@@ -668,23 +695,7 @@ def build_stages(dump_dir: pathlib.Path | None, *, skip_shares: bool,
         stages.append(("restore-rows",
                        lambda: _stage_restore_rows(dump_dir, skip_restore_sheets)))
     stages.append(("seeders", lambda: _run_many(
-        f"{MIGRATIONS}/seed_its_forms_catalog.py",
-        f"{MIGRATIONS}/extend_its_forms_catalog_parent_variant.py",
-        f"{MIGRATIONS}/seed_its_vendors.py",
-        f"{MIGRATIONS}/seed_its_subcontractors.py",
-        f"{MIGRATIONS}/seed_safety_intake_config.py",
-        f"{MIGRATIONS}/seed_safety_intake_polling_config.py",
-        f"{MIGRATIONS}/seed_safety_recipients_config.py",
-        f"{MIGRATIONS}/seed_po_materials_config.py",
-        f"{MIGRATIONS}/seed_estimates_config.py",
-        f"{MIGRATIONS}/seed_rfq_config.py",
-        f"{MIGRATIONS}/seed_rfq_send_config.py",
-        f"{MIGRATIONS}/seed_subcontracts_config.py",
-        f"{MIGRATIONS}/seed_subcontracts_send_config.py",
-        f"{MIGRATIONS}/seed_config_actuator_config.py",
-        f"{MIGRATIONS}/seed_daemon_gate_config.py",
-        f"{MIGRATIONS}/seed_generate_and_interval_config.py",
-    )))
+        *(f"{MIGRATIONS}/{name}" for name in SEEDER_STAGE_SCRIPTS))))
     if dump_dir is not None and not skip_shares:
         stages.append(("restore-shares", lambda: _stage_restore_shares(dump_dir)))
     stages.append(("final-verify", _stage_final_verify))
