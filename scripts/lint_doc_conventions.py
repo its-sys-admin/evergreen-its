@@ -405,15 +405,28 @@ def _check_plans_citation(rel_path: Path, text: str) -> LintViolation | None:
 def walk_docs(roots: list[Path]) -> list[Path]:
     """Return every `.md` file under the roots, excluding hidden + README.md
     files. README.md files are exempt by the rule above; including them in
-    the walk just to skip them later is wasteful."""
+    the walk just to skip them later is wasteful.
+
+    The hidden-file test runs on the path RELATIVE to the repo root, never on the
+    absolute path. That distinction is the whole bug this shape fixes: `REPO_ROOT`
+    is absolute, so in a checkout living under a dot-directory — which is exactly
+    where `.claude/worktrees/<id>/` puts every workflow-agent worktree — `.claude`
+    is a component of EVERY file's absolute path. The old test matched it, skipped
+    every document, and reported "no violations" because it had linted nothing.
+
+    A gate that passes by finding no work is worse than no gate: it is a green
+    light that means silence. It reported clean from a workflow worktree while the
+    identical commit reported 89 warnings from `~/its`.
+    """
     md_files: list[Path] = []
     for root in roots:
         if not root.exists():
             continue
         for path in root.rglob("*.md"):
-            if any(part.startswith(".") for part in path.parts):
+            rel = path.relative_to(REPO_ROOT)
+            if any(part.startswith(".") for part in rel.parts):
                 continue
-            md_files.append(path.relative_to(REPO_ROOT))
+            md_files.append(rel)
     return md_files
 
 
