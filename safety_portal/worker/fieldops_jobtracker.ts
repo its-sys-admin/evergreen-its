@@ -211,7 +211,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
       // values (pre-0057 the editor opened blank and a save re-sent only what was typed).
       const sqlHeader = `
         SELECT j.job_id, j.project_name, j.status, j.lifecycle, j.progress,
-               j.job_no, j.address, j.address_city, j.address_state, j.address_zip,
+               j.job_no, j.site_phase, j.address, j.address_city, j.address_state, j.address_zip,
                j.stakeholder_name, j.stakeholder_email, j.stakeholder_phone,
                j.safety_contact_name, j.safety_contact_email, j.safety_cc,
                j.progress_contact_name, j.progress_contact_email, j.progress_cc,
@@ -236,6 +236,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         archive_detail: string;
         progress: number;
         job_no: string;
+        site_phase: number;
         address: string;
         address_city: string;
         address_state: string;
@@ -427,6 +428,9 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
           // 0057 + routing SoR: display + edit-form seeding. CC arrays are stored as
           // JSON text; parse defensively (a malformed cell yields [] — never a throw).
           job_no: header.job_no ?? "",
+          // 0064 — the Evergreen identifier's third segment; the SPA recombines the two
+          // for display so the operator reads and edits the full `YYYY.NNN.S` number.
+          site_phase: header.site_phase ?? 0,
           archive: !canArchive ? null : {
             state: (header.archive_state || "none") as ArchiveState,
             direction: (header.archive_direction || "") as ArchiveDirection,

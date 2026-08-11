@@ -1,0 +1,73 @@
+{
+  "form_code": "toolbox-talk-fire-ext-how-they-work-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Portable Fire Extinguishers — How They Extinguish Fires",
+  "variant_label": "Portable Fire Extinguishers — How They Extinguish Fires",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Extinguishers_How_They_Extinguish_Fires.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Portable Fire Extinguishers — How They Extinguish Fires",
+      "source_pdf": "OSHA_TBT_Fire_Extinguishers_How_They_Extinguish_Fires.pdf",
+      "blocks": [
+        {
+          "heading": "Portable Fire Extinguishers – How Do They Extinguish Fires?",
+          "body": "[Reference 1910.157 / 1926.150]\n\nThere are three things that must be present in adequate quantities for a fire to burn. First, you need a source of fuel, for example paper, wood, cloth, plastic, paint thinner or grease. Second, oxygen must be present in sufficient quantity to support the combustion process. And third, a source of heat is required to raise the temperature of the material to the point it will ignite. And by taking away one of these three “ingredients” of combustion, you can extinguish the fire."
+        },
+        {
+          "body": "There are a variety of portable fire extinguishers that work in different ways to extinguish a small fire. One type portable extinguisher is a canister filled with water and pressurized with compressed air. The water is discharged onto the fire, which in turns cools the burning material below its ignition temperature. Water extinguishers work well on Class A fires involving ordinary combustibles such as paper, wood, cloth, and many plastics, but should never be used on Class B flammable or combustible liquid fires. That’s because oil and water don’t mix, so the water actually “carries” the burning liquid and causes it to spread. And you should never spray water on a Class C fire involving energized electrical equipment, for obvious reasons."
+        },
+        {
+          "body": "Extinguishers filled with Carbon Dioxide (CO2) gas work by flooding the fire area with the gas, which displaces the oxygen that the fire needs to burn. These type extinguishers work well on Class B fires involving flammable and combustible liquids, but caution must be taken if they are used in small, tightly enclosed spaces as they could also displace the oxygen you need to breathe."
+        },
+        {
+          "body": "Extinguishers filled with a fine inert powder pressurized with nitrogen, which are often called “Dry Chemical” extinguishers, work by “smothering” the fire, much like throwing a blanket over a small fire can also smother it out. These “combination” extinguishers are typically rated for Class A and B fires, as well as Class C electrical fires, and are the type seen most often in workplaces."
+        },
+        {
+          "body": "While these are but three of the various type portable extinguishers available to extinguish small fires, they are some of the most commonly used. All portable fire extinguishers are labelled to let you know exactly what class, or classes, of fire they are suitable for extinguishing. So take some time to look at the labels on portable fire extinguishers located in your work areas, as well as any you may have at your homes, to make certain you are familiar with the type fires they should, and should not, be used to extinguish. And if there is any doubt about the types of extinguishers available in your work area, contact your safety manager or supervisor for additional guidance."
+        },
+        {
+          "heading": "Types of Portable Fire Extinguishers",
+          "body": "- Class A fire extinguishers should be used to put out fires involving ordinary combustible materials such as cardboard, paper, wood, dried vegetation; basically anything that leaves an ash after it has burned.\n- Class B fire extinguishers should be used to put out fires involving flammable and combustible liquids, such as gasoline, diesel, oil, and oil-based paints, and many solvents.\n- Class C fire extinguishers are suitable for use to extinguish fires that involve appliances, tools, or other equipment that is plugged in or otherwise electrically energized, as well as for fires burning in close proximity to electrically-energized equipment.\n- Class D fire extinguishers are designed for use to extinguish combustible metals, such as magnesium or sodium, and are often designed for the specific type of combustible metal. This does NOT include ordinary carbon steel, only metals that will burn when ignited.\n- Class K fire extinguishers are designed to be used for putting out fires that involve oils and greases used for cooking in kitchens, such as vegetable and animal-based oils and fat."
+        },
+        {
+          "body": "Portable fire extinguishers will generally be labeled with the symbol or symbols for the class or classes of fires they are designed to extinguish. For example, a combination BC extinguisher is suitable for extinguishing fires involving flammable/combustible liquids and electrical equipment, whereas a type ABC extinguisher is suitable for extinguishing all three types of fires."
+        },
+        {
+          "body": "Does anyone have a question or comment about the types of portable fire extinguishers that are best suited for extinguishing different types of fires? Please be sure to sign-in on the training certification form so you get credit for attending this training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

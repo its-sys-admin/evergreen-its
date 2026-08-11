@@ -95,7 +95,7 @@ const SUBS: api.Subcontractor[] = [
   },
 ];
 
-const JOBS = [{ job_id: "JOB-000001", project_name: "2023.126 Kendall Solar", job_no: "" }];
+const JOBS = [{ job_id: "JOB-000001", project_name: "2023.126 Kendall Solar", job_no: "", site_phase: 0 }];
 
 function scRow(overrides: Partial<api.SubcontractListRow>): api.SubcontractListRow {
   return {

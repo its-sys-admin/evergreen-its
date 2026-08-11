@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-heat-clothing-ppe-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — Clothing and PPE Considerations",
+  "variant_label": "Heat Illness Prevention — Clothing and PPE Considerations",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Clothing_and_PPE.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — Clothing and PPE Considerations",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Clothing_and_PPE.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention: Clothing and PPE Considerations",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nThe clothing and personal protective equipment (PPE) you choose to wear can significantly influence your risk of heat illness. The right choices can help prevent overheating and keep you safe on the job. Here are some key considerations:"
+        },
+        {
+          "body": "- Light-colored clothing reflects sunlight, while darker colors absorb it, increasing heat exposure. Select for white or other lighter-colored clothing to minimize heat absorption and give yourself an edge in staying cool. This applies to hats as well—light colors help protect against the sun.\n- Lightweight, loose-fitting clothing made from natural fibers like cotton or moisture-wicking materials should be worn when possible. These fabrics allow for better airflow and promote the evaporation of sweat, helping your body cool down. Avoid heavy or non-breathable materials that trap heat and moisture, such as polyester, nylon, acrylic, rayon, and vinyl or PVC-coated fabrics.\n- A wide-brim hat made of breathable material provides essential protection from direct sunlight when working outdoors. For workers wearing hard hats, those fitted with built-in or attachable shades and sweatbands are also effective in shielding against the sun while helping manage sweat.\n- Cooling vests and other wearable gear are invaluable for preventing heat-related illnesses in high-temperature environments. These specialized garments are designed to regulate body temperature by dissipating heat and keeping workers cool. This gear uses gel packs, ice packs, or other phase-change materials that maintain a consistently cool temperature for extended periods. These are especially beneficial for workers performing tasks in extreme conditions where physical exertion and heat exposure are high.\n- In addition to cooling vests, consider incorporating other cooling products such as moisture-wicking clothing, cooling bandanas, and helmets with ventilation features. These items are lightweight and can be easily integrated with, or used in lieu of, other standard PPE.\n- Heat-reflective suits provide an extra layer of protection for employees working near extreme heat sources, such as furnaces or industrial ovens. These suits deflect radiant heat and reduce the risk of burns. However, they should be removed during rest breaks, as they tend to trap heat and moisture close to the body."
+        },
+        {
+          "body": "By making thoughtful clothing and PPE choices, you can better manage your exposure to heat and ensure a safer, more comfortable working environment. Selecting the appropriate clothing and PPE is not just about protecting yourself from heat illness—it also enhances overall safety and productivity, reducing the risk of fatigue and overheating to help workers maintain energy levels and focus throughout the day. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

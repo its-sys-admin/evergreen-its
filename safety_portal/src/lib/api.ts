@@ -93,9 +93,14 @@ export async function logout(): Promise<void> {
 export interface Job {
   job_id: string;
   project_name: string;
-  /** The Evergreen YYYY.NNN tracking number ('' when unassigned) — 0057. Builders
-   *  auto-fill from this on a dropdown pick, falling back to the name-prefix parse. */
+  /** The Evergreen YYYY.NNN PROJECT number ('' when unassigned) — 0057. Builders
+   *  auto-fill from this on a dropdown pick, falling back to the name-prefix parse.
+   *  NOT the full identifier: the site segment rides in `site_phase` below. */
   job_no: string;
+  /** The identifier's third segment (0064), 0 when the job has no site breakdown. The
+   *  PO/subcontract builders auto-fill their Site/phase input from this; join the two
+   *  with lib/jobNumber.formatJobNumber for display. */
+  site_phase: number;
 }
 
 export async function fetchJobs(): Promise<Job[]> {

@@ -362,7 +362,7 @@ describe("FieldOpsPersonnel — P2.6 manager tier (cap.crew.assign)", () => {
 
   it("manager (cap.crew.assign, role manager): the Assign button renders, opens a job <select>, and the admin-only login sub-form is NOT rendered", async () => {
     asRole("manager", ["cap.personnel.read", "cap.crew.assign"]);
-    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-A", project_name: "Alpha", job_no: "" }]);
+    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-A", project_name: "Alpha", job_no: "", site_phase: 0 }]);
     vi.mocked(api.fetchPersonnelList).mockResolvedValue({ personnel: MOCK_PERSONNEL, latest_entries: [], next_cursor: null });
 
     const { container } = render(<FieldOpsPersonnel onBack={() => {}} />);
@@ -386,7 +386,7 @@ describe("FieldOpsPersonnel — P2.6 manager tier (cap.crew.assign)", () => {
 
   it("manager WITH cap.personnel.manage: the Add-personnel form renders, but the admin-only 'create a login account' checkbox stays hidden (role≠admin)", async () => {
     asRole("manager", ["cap.personnel.read", "cap.personnel.manage", "cap.crew.assign"]);
-    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-A", project_name: "Alpha", job_no: "" }]);
+    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-A", project_name: "Alpha", job_no: "", site_phase: 0 }]);
     vi.mocked(api.fetchPersonnelList).mockResolvedValue({ personnel: MOCK_PERSONNEL, latest_entries: [], next_cursor: null });
 
     const { container } = render(<FieldOpsPersonnel onBack={() => {}} />);
@@ -398,7 +398,7 @@ describe("FieldOpsPersonnel — P2.6 manager tier (cap.crew.assign)", () => {
 
   it("admin regression: the 'create a login account' checkbox IS rendered", async () => {
     asRole("admin", ["cap.personnel.read", "cap.personnel.manage", "cap.crew.assign"]);
-    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-A", project_name: "Alpha", job_no: "" }]);
+    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-A", project_name: "Alpha", job_no: "", site_phase: 0 }]);
     vi.mocked(api.fetchPersonnelList).mockResolvedValue({ personnel: MOCK_PERSONNEL, latest_entries: [], next_cursor: null });
 
     const { container } = render(<FieldOpsPersonnel onBack={() => {}} />);
@@ -407,7 +407,7 @@ describe("FieldOpsPersonnel — P2.6 manager tier (cap.crew.assign)", () => {
 
   it("renders the 'Placed on' job NAME (not the JOB-#### id) when current_job_name is present", async () => {
     asRole("manager", ["cap.personnel.read", "cap.crew.assign"]);
-    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-000017", project_name: "Pier 7 Rebuild", job_no: "" }]);
+    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-000017", project_name: "Pier 7 Rebuild", job_no: "", site_phase: 0 }]);
     vi.mocked(api.fetchPersonnelList).mockResolvedValue({
       personnel: [{ id: 7, name: "Dana Reed", trade: "operator", username: null, current_job: "JOB-000017", current_job_name: "Pier 7 Rebuild" }],
       latest_entries: [],
@@ -424,7 +424,7 @@ describe("FieldOpsPersonnel — P2.6 manager tier (cap.crew.assign)", () => {
 
   it("falls back to the JOB-#### id in 'Placed on' when current_job_name is missing", async () => {
     asRole("manager", ["cap.personnel.read", "cap.crew.assign"]);
-    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-000017", project_name: "Pier 7 Rebuild", job_no: "" }]);
+    vi.mocked(fetchJobs).mockResolvedValue([{ job_id: "JOB-000017", project_name: "Pier 7 Rebuild", job_no: "", site_phase: 0 }]);
     vi.mocked(api.fetchPersonnelList).mockResolvedValue({
       // current_job set but no resolved name (worker returned null/undefined) → show the raw id
       personnel: [{ id: 8, name: "Evan Cole", trade: "operator", username: null, current_job: "JOB-000017", current_job_name: null }],

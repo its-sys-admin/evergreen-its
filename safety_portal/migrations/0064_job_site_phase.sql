@@ -1,0 +1,36 @@
+-- 0064 — the third segment of the Evergreen job identifier (operator ask, 2026-08-11).
+--
+-- Evergreen numbers a job site as `YYYY.NNN.S` — e.g. MH405 is 2026.384.1 and OG593 is
+-- 2026.384.2: the SAME project (2026.384), two different sites. Until now `jobs.job_no`
+-- (migration 0057) held only the two-segment `YYYY.NNN` project number and the site
+-- segment had nowhere to live, so the Job Tracker refused a real Evergreen number
+-- outright (400 invalid_job_no).
+--
+-- THE MODEL: the third segment IS `site_phase` — the field the D7 document numbering
+-- already carries. PO/SC numbers are `{job_no}.{site_phase}.{supersede_seq}.{revision}`,
+-- so storing the site here makes MH405's first PO come out `2026.384.1.0.0` — exactly the
+-- five-segment shape docs/enablement/purchase_orders.md already documents by example
+-- ("2025.364.1.2"). The alternative (stuffing all three segments into job_no) would have
+-- produced SIX-segment document numbers and broken both Mac-side parsers
+-- (po_materials/numbering.py, subcontracts/numbering.py), whose regexes anchor job_no to
+-- exactly two segments.
+--
+-- CONSEQUENCE OF THAT CHOICE: `job_no` stays two-segment EVERYWHERE — all eleven other
+-- job_no validators (worker po.ts/subcontract.ts/rfq.ts/po_estimates.ts + the five SPA
+-- copies + the two Python parsers) are untouched by this change. Only the jobs-SoR write
+-- gate (fieldops_job_write.ts parseRouting) learns to SPLIT the operator's typed
+-- `YYYY.NNN.S` into (job_no, site_phase). The portal recombines the two for display, so
+-- the operator types and reads the full number and never sees the split.
+--
+-- DEFAULT 0, not NULL: 0 is already the D7 "no site/phase" value the PO and subcontract
+-- builders default their own Site/phase input to (PoBuilderPage.tsx:292), so existing
+-- jobs keep composing exactly the numbers they compose today. NOT NULL keeps the column
+-- read-safe for every consumer without a COALESCE.
+--
+-- Writers: fieldops_job_write.ts (create + /contacts edit, origin='portal'-scoped).
+-- Readers: GET /api/jobs (the builder dropdown), GET /api/po/jobs/:id/ship-to (the PO +
+-- subcontract Site/phase autofill), GET /api/fieldops/job/:id (the Job Tracker display).
+--
+-- DEPLOY ORDER (lockout class #2): apply this migration --remote BEFORE deploying the
+-- Worker that SELECTs this column — a Worker deploy first would 500 every /api/jobs.
+ALTER TABLE jobs ADD COLUMN site_phase INTEGER NOT NULL DEFAULT 0;

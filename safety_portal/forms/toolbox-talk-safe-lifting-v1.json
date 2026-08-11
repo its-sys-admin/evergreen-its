@@ -1,0 +1,60 @@
+{
+  "form_code": "toolbox-talk-safe-lifting-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Material Handling — Safe Lifting Techniques",
+  "variant_label": "Material Handling — Safe Lifting Techniques",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Material_Handling_Safe_Lifting_Techniques.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Material Handling — Safe Lifting Techniques",
+      "source_pdf": "OSHA_TBT_Material_Handling_Safe_Lifting_Techniques.pdf",
+      "blocks": [
+        {
+          "heading": "Material Handling and Storage – Safe Lifting Techniques",
+          "body": "[Reference: NIOSH / (5)(a)(1) of OSH Act]\n\nManually lifting heavy objects improperly can lead to a range of injuries, including strains, sprains, and even more severe musculoskeletal issues. By utilizing proper lifting techniques, we can significantly reduce the risk of these injuries and promote a safer workplace."
+        },
+        {
+          "body": "- Assess the Load: Before lifting anything, take a moment to assess the weight and size of the object by gently lifting one corner, if possible. If the load seems too heavy, too large, or too awkward to lift safely, seek assistance from someone else to help you make the lift, or use mechanical aids like dollies or forklifts to lift the load.\n- Warm-Up: Just like any physical activity, warming up is essential to prevent injuries. Perform light stretching exercises before you start lifting to prepare your muscles for the task ahead.\n- Proper Body Mechanics: Maintain a stable base by keeping your feet shoulder-width apart while facing the load. Bend at the hips and knees, not at the waist. Keep your back straight and chin high, and avoid twisting while lifting. Engage your core muscles for best results.\n- Get a Good Grip: Lifting without a good grip can lead to drops and injuries. So, ensure you have a secure grip on the object before lifting. Using containers with handles, when possible, will help you get a better grip. Use both hands and, if necessary, wear gloves to increase grip.\n- Keep the Load Close: Position the load close to your body to reduce the strain on your back. Avoid lifts that require extending your arms fully, as this can put additional stress on your back and shoulder muscles.\n- Let Your Legs Do the Heavy Work: The power for lifting should come from your legs, not your back. Push through your heels, straighten your hips and knees, and then lift in a smooth, controlled motion. Do not jerk or make sudden movements while lifting.\n- Pivot, Don't Twist: When changing direction while handling a load, pivot your feet instead of twisting your torso. Twisting while carrying a heavy object can strain your back and increase the risk of injury.\n- Never Lift When Injured: If you have a previous back injury, do not attempt to make a heavy lift. And if you feel that you have just injured your back while lifting, stop what you are doing and report the injury to your supervisor ASAP so you can get first aid or medical treatment."
+        },
+        {
+          "body": "By incorporating these safe lifting techniques into our daily routines, we not only protect ourselves from potential injuries but also contribute to a culture of safety within our workplace. Remember, taking a few extra moments to assess and lift objects correctly can make a significant difference in our overall well-being."
+        },
+        {
+          "body": "Does anyone have anything to add to today’s discussion about safety tips for safe lifting techniques? Please sign the training certification form to ensure you get credit for attending today’s OSHA training toolbox talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2023 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

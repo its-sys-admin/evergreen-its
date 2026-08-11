@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-fire-prevention-tips-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Fire Prevention — Avoiding Accidental Fires",
+  "variant_label": "Fire Prevention — Avoiding Accidental Fires",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Prevention_Avoiding_Accidental_Fires.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Fire Prevention — Avoiding Accidental Fires",
+      "source_pdf": "OSHA_TBT_Fire_Prevention_Avoiding_Accidental_Fires.pdf",
+      "blocks": [
+        {
+          "heading": "Fire Prevention – Tips for Preventing Accidental Fires",
+          "body": "[Reference 1910.39 & 1910.106 / 1926.152]\n\nAccidental fires are an unusual occurrence in most workplaces. So it is easy to take for granted some of the everyday hazards that, if overlooked, can contribute to the occurrence of these fires. So here are some general tips to help prevent accidental fires at work, as well as at your home:"
+        },
+        {
+          "body": "- Dispense flammable liquids only in areas free from sparks, flames, and other sources of ignition (see the handout for a reminder of the Pictogram that will appear on labels of flammable liquid containers);\n- Keep all containers of flammable liquids closed or covered when they are not in use. And return them to their designated storage area when you are done using them;\n- When dispensing flammable liquid from one container into another, bond the two containers together and ground one. This helps prevent the build-up of static electricity, which can create a spark and ignite the vapors (see handout for example);\n- Discard all rags and waste materials that are impregnated with flammable or combustible liquids, oil, or grease in covered, self-closing metal containers (should be colored red), and empty these containers into designated receptacles at the end of your shift;\n- Keep all waste paper, cardboard, and similar combustible materials cleaned up and placed in designated waste receptacles. Letting these items accumulate on the floor or other work areas creates an unnecessary fire hazard;\n- Only use flame or spark-producing equipment, such as welders, torches, and grinders, in designated areas. Special approval of management must be obtained to use this type equipment in areas where it is not normally used (discuss your company’s “hot-work permit”, if you have one);\n- Smoking is allowed only in designated areas. Always dispose of butts in designated receptacles (if you have implemented a smoking ban at your site, discuss that instead);\n- Make certain to avoid stacking materials too close to fire sprinkler heads, as doing so can affect their ability to disperse water adequately when activated; usually we must maintain a minimum of 18 inches of clearance below the level of the sprinkler heads;\n- Make sure portable fire extinguishers remain fully charged and accessible at all times."
+        },
+        {
+          "body": "Does anybody have a question or comment about these tips for the prevention of fires at work or home? Please be sure to sign your name to the training certification form so you get credit for attending this training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

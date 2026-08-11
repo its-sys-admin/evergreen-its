@@ -256,6 +256,9 @@ export async function updateVendor(vendorKey: string, fields: VendorFields): Pro
 export interface JobShipTo {
   job_id: string;
   job_no: string;
+  /** 0064 — the Evergreen identifier's third segment, so the builder's Site/phase input
+   *  auto-fills from the job instead of the operator re-deriving it. 0 = no site. */
+  site_phase: number;
   ship_to_name: string;
   ship_to_address: string;
   ship_to_city: string;

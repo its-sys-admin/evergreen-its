@@ -491,7 +491,8 @@ fan-out class of bug (a value that must be updated in N places at once).
 | Job ID | `JOB-######` | D1 `jobs.job_id` (PK) · both ITS_Active_Jobs sheets (`Job ID` / `Portal Job Key`) · every report · Box per-job folder name |
 | Submission UUID | UUID | D1 `submissions.submission_uuid` · the HMAC payload · Box `ITS Photos/<uuid>/` |
 | Vendor / Sub key | `VEN-######` / `SUB-######` | D1 cache PK · ITS_Vendors / ITS_Subcontractors bridge column |
-| PO / SC number | `{job_no}.{site_phase}.{supersede_seq}.{revision}` | D1 `purchase_orders.po_number` / `subcontracts.sc_number` · the ledger-mirror sheet |
+| Evergreen job number | `YYYY.NNN` (project) + `.S` (site) | Stored SPLIT as D1 `jobs.job_no` + `jobs.site_phase` (0057 + 0064); the SPA joins them for display, so the operator types and reads `2026.384.1`. `job_no` stays TWO segments everywhere downstream |
+| PO / SC number | `{job_no}.{site_phase}.{supersede_seq}.{revision}` | D1 `purchase_orders.po_number` / `subcontracts.sc_number` · the ledger-mirror sheet. Five segments — the site rides in `site_phase`, which is why `job_no` is never widened to three |
 | Correlation ID | opaque | Threaded across ITS_Errors, the Resend alert, and Sentry for one occurrence |
 
 ---

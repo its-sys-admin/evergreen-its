@@ -1,0 +1,57 @@
+{
+  "form_code": "toolbox-talk-fire-ext-dos-donts-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Portable Fire Extinguishers — Do's and Don'ts",
+  "variant_label": "Portable Fire Extinguishers — Do's and Don'ts",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Fire_Extinguishers_Dos_and_Donts.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Portable Fire Extinguishers — Do's and Don'ts",
+      "source_pdf": "OSHA_TBT_Fire_Extinguishers_Dos_and_Donts.pdf",
+      "blocks": [
+        {
+          "heading": "Portable Fire Extinguishers – Do’s and Don’ts",
+          "body": "[Reference 1910.157 / 1926.150]\n\nWe have already discussed how to select the proper type of fire extinguisher in a previous safety talk, and we also covered the “PASS” method for using an extinguisher to put out a fire. However, portable fire extinguishers are not appropriate for use in all situations. And when we do use them, the risk of personal injury goes up dramatically. So here is a short list of a few things to keep in mind before, and after, attempting to put out a fire with an extinguisher:"
+        },
+        {
+          "body": "- Notify someone else about the fire. They can activate the fire alarm system while you attempt to extinguish the fire, and also keep an eye on you in case trouble develops.\n- Make sure the fire is not too big! Portable extinguishers are intended for use on small “incipient stage” fires that have just started. They are not for use to fight large fires that require the user to wear thermal protective clothing or a respiratory protection device.\n- Look for “traps” that could cause you to get injured. Flammable liquids that are spilled on the floor could catch on fire and cause the fire to spread, but they could also cause you to lose your footing and slip. And burning fires could create toxic gases that might overcome you, so avoid fighting a fire that have already produced a lot of smoke in the area.\n- Make certain you always have a clear escape route. Never put yourself in a position where you may become trapped should the fire spread. Always try to keep the fire in front of you, and a clear route of escape behind you.\n- Keep an eye out for flare-ups. Once the fire is supposedly extinguished, it is possible for embers to smolder for quite a while and cause the fire to reignite. Look for signs of smoke, as that is a clue that heat is present in the fire debris that could cause a flare-up.\n- Always turn in extinguishers to be recharged after any use. Even though the used extinguisher may still be partially filled, activating the extinguisher breaks the seal that retains the pressure inside the shell. If someone else picks it up later and tries to put out a fire, the extinguisher will not fully function as intended. So never re-mount any extinguisher if you have pulled the pin, just turn it in so we can get it checked out and recharged."
+        },
+        {
+          "body": "Does anyone have a question or comment about this short list of do’s and don’ts to keep in mind before and after using a portable fire extinguishers? Please be sure to sign-in on the training certification form so you get credit for attending this training session."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talk provided courtesy of www.oshatraining.com. Copyright 2014. Not to be sold, nor displayed on any other commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}

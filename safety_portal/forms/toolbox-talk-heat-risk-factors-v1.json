@@ -1,0 +1,60 @@
+{
+  "form_code": "toolbox-talk-heat-risk-factors-v1",
+  "parent_form_code": "toolbox-talk",
+  "form_name": "Toolbox Talk — Heat Illness Prevention — Workplace & Personal Risk Factors",
+  "variant_label": "Heat Illness Prevention — Workplace & Personal Risk Factors",
+  "version": 1,
+  "archetype": "content_signin",
+  "source_pdf": "OSHA_TBT_Heat_Illness_Risk_Factors.pdf",
+  "branding": {
+    "logo": true,
+    "title": "5-MINUTE SAFETY TALK"
+  },
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "topic_content",
+      "title": "Heat Illness Prevention — Workplace & Personal Risk Factors",
+      "source_pdf": "OSHA_TBT_Heat_Illness_Risk_Factors.pdf",
+      "blocks": [
+        {
+          "heading": "Heat Illness Prevention: Workplace & Personal Risk Factors for Heat Illness",
+          "body": "[Reference: (5)(a)(1) of OSH Act]\n\nEnvironmental factors like temperature and humidity play a significant role in how your body responds to heat, as we discussed in a previous toolbox talk. However, beyond these environmental conditions, several workplace and personal factors can also increase the risk of heat illness."
+        },
+        {
+          "body": "Here’s some workplace risk factors that can contribute to developing heat illness:\n\n- Strenuous Work - When workers perform physical labor, muscles literally generate heat as they burn calories for energy. This excess heat raises the body's internal temperature, contributing to the risk of heat illness. It’s important to understand that heat illness can occur even if a worker isn’t directly exposed to the sun. Strenuous work can lead to overheating indoors, in shaded areas, or on cloudy days.\n- Heat-Producing Equipment - Tools and machinery that generate heat, such as welders and oxy-acetylene torches, can raise ambient temperatures significantly. Large heat sources like furnaces, boilers, industrial dryers, and ovens also add to the overall heat burden in the workplace, making it more challenging for the body to maintain a safe temperature.\n- Poor Ventilation - Poor airflow in enclosed spaces such as warehouses, factories, unventilated vehicle cabs, or enclosed rooms can trap heat. This restricts the body’s ability to cool itself by limiting heat dissipation. The situation worsens in confined spaces like attics, crawl spaces, and tanks, where heat can become dangerously concentrated.\n- Inappropriate Clothing and PPE - Certain types of personal protective equipment (PPE) and clothing materials can exacerbate heat stress. Some fabrics trap heat and moisture or restrict airflow, preventing sweat from evaporating and hindering the body’s natural cooling mechanisms. Choosing the right clothing and PPE is essential, and we’ll cover proper selection in a future toolbox talk."
+        },
+        {
+          "body": "In addition, several personal risk factors also make workers more vulnerable to heat illness. These include:\n\n- Lack of Heat Acclimatization - Workers who aren't acclimatized to hot environments have a harder time managing heat stress. If a worker is suddenly exposed to extreme heat or humidity levels beyond what their body is used to, they may struggle to regulate their core body temperature.\n- Inadequate Fluid Intake - Dehydration is one of the most common contributors to heat illness. Even if water or other fluids are available at the job site, workers must make an effort to actively drink and stay hydrated. Without adequate hydration, the body cannot sweat effectively, increasing the risk of overheating.\n- Pre-existing Health Conditions - Certain health conditions can make individuals more susceptible to heat illness. For example, heart disease, high blood pressure, and asthma can weaken the circulatory system, impairing the body’s ability to cool itself. Diuretic drugs, commonly prescribed for high blood pressure, increase fluid loss through urine, potentially leading to dehydration. And Antihistamines, used for allergies, can reduce sweating, limiting the body’s natural cooling mechanism."
+        },
+        {
+          "body": "The combination of environmental, workplace, and personal factors can significantly increase the risk of heat illness. In upcoming toolbox talks, we’ll explore practical measures to prevent heat illness and ensure a safer, healthier workplace. Please remember to sign-in to get credit for attending this talk."
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "emphasis": "footer",
+      "text": "Free toolbox talks provided courtesy of www.oshatraining.com. Copyright 2025 - OSHA Training Services Inc. ©. Not to be altered, sold, or displayed for a profit on any commercial website."
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "title": "Safety Meeting / Training Sign In Sheet",
+      "min_rows": 8,
+      "allow_add": true,
+      "columns": [
+        {
+          "key": "instructor_worker_name",
+          "label": "Instructor / Worker Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature"
+        }
+      ]
+    }
+  ]
+}
