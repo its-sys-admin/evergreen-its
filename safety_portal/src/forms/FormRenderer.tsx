@@ -3,7 +3,6 @@ import type { Dispatch, SetStateAction } from "react";
 import { AdditionalPhotosSection } from "../components/AdditionalPhotosSection";
 import { PhotoField } from "../components/PhotoField";
 import { SignaturePad } from "../components/SignaturePad";
-import { statusPill, rowTitle } from "../components/ExpectedMaterialsSection";
 import { DAILY_STATUS_FAMILIES, type DailyRequirementItem } from "../lib/fieldops_daily_form";
 import type { ExpectedMaterialRow } from "../lib/fieldops_expected_materials";
 import { dayPhaseFor } from "./dayPhase";
@@ -71,16 +70,6 @@ export interface JobRequirementResponse {
   response: string;
 }
 
-/** One row of the v7 expected-materials day snapshot. All display strings — see
- *  `seedExpectedMaterialsSnapshot` for why this carries no ids. */
-export interface ExpectedMaterialSnapshotEntry {
-  material: string;
-  part_number: string;
-  expected: string;
-  status: string;
-  received: string;
-}
-
 /** A fresh (all-empty) values array for a fetched requirement set — the HOST seeds
  *  values[<section key>] with this when the items load, so a submission filed with zero
  *  interaction still carries the requirements it displayed. */
@@ -88,66 +77,28 @@ export function seedRequirementResponses(items: DailyRequirementItem[]): JobRequ
   return items.map((it) => ({ label: it.label, kind: it.kind, response: "" }));
 }
 
-/** Delivery state in the words the report uses on screen. The 0059 `receipt_status` rollup wins
- *  when a mark exists; otherwise the coarse `status`, which also carries the orthogonal sticky
- *  `incident` flag. */
-function receiptStatusLabel(r: ExpectedMaterialRow): string {
-  if (r.receipt_status === "delivered") return "Delivered";
-  if (r.receipt_status === "partial") return "Partially delivered";
-  if (r.receipt_status === "not_delivered") return "Not delivered";
-  if (r.status === "incident") return "Problem reported";
-  if (r.status === "received") return "Received";
-  return "Expected";
-}
+// (seedExpectedMaterialsSnapshot + its snapshot-entry shape lived here from #45 until
+// 2026-08-11 — the deep-link-card decision means new daily filings carry no materials
+// snapshot. form_pdf keeps BOTH render paths: an already-filed v7 snapshot still renders
+// as a table; an absent key renders the classic note line.)
 
-/** The day's expected-materials SNAPSHOT (v7) — what the report SHOWED, frozen into the values the
- *  submission files.
- *
- *  Self-describing display strings, deliberately, exactly like `seedRequirementResponses`: the PDF
- *  renders these generically, so a filed document keeps reading correctly however the live D1 list
- *  is later edited, and a new field renders without a form-definition change. Nothing here is an id
- *  or a foreign key — this is a printed record, not a join.
- *
- *  Why snapshot at all: the manager signs a report that displayed a set of materials in a
- *  particular delivery state, and every later mark rewrites that state, so it cannot be
- *  reconstructed from live data afterwards. v5/v6 filed nothing here; their PDFs are unchanged. */
-export function seedExpectedMaterialsSnapshot(
-  rows: ExpectedMaterialRow[],
-): ExpectedMaterialSnapshotEntry[] {
-  return rows.map((r) => ({
-    material: r.material_name || r.description || "",
-    part_number: r.part_number ?? "",
-    expected: r.qty == null ? "" : `${r.qty}${r.unit ? ` ${r.unit}` : ""}`,
-    status: receiptStatusLabel(r),
-    received: r.qty_received_total == null ? "" : String(r.qty_received_total),
-  }));
-}
-
-/** Adapter for `expected_materials` sections (Material receipts M2). Like FormLinkAdapter, the
- *  renderer itself never fetches or mutates — the HOST (the Daily tab) supplies the job's
- *  expected-material rows (M1's read) plus the two receipt actions, and owns the per-row busy
- *  state and any action error. With NO adapter the section renders NOTHING — the generic fill
- *  page (and every non-daily form) is unaffected. The section files NO form values of its own:
- *  the host's onConfirmReceipt appends a deliveries_received row; problems file as the
- *  material-incident form's OWN submission (deep-linked by the host). The live
- *  "Filed ✓" indicator for that incident form rides the EXISTING FormLinkAdapter.filedLabel
- *  ('material-incident' is a DAILY_STATUS_FAMILIES member since M2). */
+/** Adapter for `expected_materials` sections (Material receipts M2 → deep-link card,
+ *  2026-08-11). The renderer never fetches or mutates — the HOST (the Daily tab) supplies
+ *  the job's rows for the one-line COUNT SUMMARY and the deep link; every ACTION (the
+ *  three-way mark, Report-a-problem, resolve) lives on the Materials page the link opens.
+ *  With NO adapter the section renders NOTHING — the generic fill page (and every
+ *  non-daily form) is unaffected. The section files NO form values: the daily PDF's
+ *  absent-key path renders the classic note line (already-filed v7 snapshots still render
+ *  as tables). The live "Filed ✓" indicator for the material-incident form rides the
+ *  EXISTING FormLinkAdapter.filedLabel ('material-incident' is a DAILY_STATUS_FAMILIES
+ *  member since M2). */
 export interface ExpectedMaterialsAdapter {
   /** The job's expected materials, seq order (fetch state — including errors — is the host's). */
   rows: ExpectedMaterialRow[];
-  /** Rows with an in-flight receive/flag call — their action buttons render disabled. */
-  busyIds: ReadonlySet<number>;
-  /** A failed action's message, rendered inline in the section (never silent). */
-  actionError?: string | null;
-  /** "Confirm receipt" — the host calls the M1 receive route + appends the deliveries row. */
-  onConfirmReceipt: (row: ExpectedMaterialRow) => void;
-  /** "Report a problem →" — the host flags the row + deep-links material-incident prefilled. */
-  onReportProblem: (row: ExpectedMaterialRow) => void;
-  /** PR2 — "Materials tracking →", the deep link into the per-job Materials page (the full list
-   *  with ship/delivery dates, scheduled loads and the delivery history). OPTIONAL, so the
-   *  section renders exactly as before for any host with nowhere to navigate to — which is why
-   *  this needs NO form-definition change: the mount's whole body is authored here, and the
-   *  definition contributes only type/key/title. */
+  /** "Materials tracking →" — the deep link into the per-job Materials page. OPTIONAL, so the
+   *  section stays mountable anywhere with nowhere to navigate to — which is why this needs NO
+   *  form-definition change: the mount's whole body is authored here, and the definition
+   *  contributes only type/key/title. */
   onOpenMaterials?: () => void;
 }
 
@@ -451,82 +402,42 @@ function SectionView(p: SectionProps) {
     case "expected_materials": {
       const em = p.expectedMaterials;
       if (!em) return null;
-      // Live "Filed ✓" for the incident form this section deep-links to — material-incident
-      // is a DAILY_STATUS_FAMILIES member (M2), served by the same status read form_link uses.
+      // DEEP-LINK CARD, not a line list (operator decision 2026-08-11, first live BOM day).
+      // The section used to render every expected line with per-line Confirm-receipt /
+      // Report-a-problem — duplicating the Materials page inside the daily form, with a
+      // WEAKER control (one-tap receive vs the page's two-tap three-way mark). Now the
+      // form gives the manager the day's shape in one line — how many lines, how many
+      // still outstanding, how many flagged — and sends every ACTION through the one
+      // place that owns them. Consequences that are deliberate, not accidental:
+      //   • the daily submission no longer files a materials snapshot (the PDF's absent-key
+      //     path renders the classic note line; already-filed v7 snapshots still render);
+      //   • Report-a-problem moved WITH the actions to the Materials page.
       const incidentFiled = p.formLinks?.filedLabel?.("material-incident") ?? null;
+      const outstanding = em.rows.filter((r) => r.status === "expected").length;
+      const flagged = em.rows.filter((r) => r.status === "incident").length;
       return (
         <section className="fr__section fr__expected-materials">
           <h2 className="fr__section-title">{s.title ?? "Expected materials"}</h2>
+          <p className="muted">
+            {em.rows.length === 0
+              ? "No expected materials for this job."
+              : `${em.rows.length} line${em.rows.length === 1 ? "" : "s"} on this job's list` +
+                (outstanding ? ` · ${outstanding} still expected` : "") +
+                (flagged ? ` · ${flagged} flagged` : "")}
+          </p>
           {em.onOpenMaterials ? (
             <p>
-              <button type="button" className="btn btn--secondary" onClick={em.onOpenMaterials}>
+              <button type="button" className="btn btn--primary" onClick={em.onOpenMaterials}>
                 Materials tracking →
-              </button>
+              </button>{" "}
+              <span className="dash-card__sub muted">
+                Mark deliveries and report problems there.
+              </span>
             </p>
           ) : null}
           {incidentFiled ? (
             <p className="fr__form-link-filed">Material incident report: {incidentFiled}</p>
           ) : null}
-          {em.actionError ? (
-            <p className="banner banner--err" role="alert">
-              {em.actionError}
-            </p>
-          ) : null}
-          {em.rows.length === 0 ? (
-            <p className="muted">No expected materials for this job.</p>
-          ) : (
-            <ul className="dash-tasklist">
-              {em.rows.map((r) => {
-                const pill = statusPill(r.status);
-                const busy = em.busyIds.has(r.id);
-                return (
-                  <li key={r.id}>
-                    <span className={pill.className}>{pill.label}</span> <strong>{rowTitle(r)}</strong>
-                    {r.qty != null ? (
-                      <span className="dash-chip">
-                        {r.qty}
-                        {r.unit ? ` ${r.unit}` : ""}
-                      </span>
-                    ) : r.unit ? (
-                      <span className="dash-chip">{r.unit}</span>
-                    ) : null}
-                    {r.expected_date ? <span className="dash-chip">expected {r.expected_date}</span> : null}
-                    {r.status === "expected" ? (
-                      <div className="dash-row">
-                        <button
-                          type="button"
-                          className="btn btn--primary"
-                          disabled={busy}
-                          aria-label={`Confirm receipt of ${rowTitle(r)}`}
-                          onClick={() => em.onConfirmReceipt(r)}
-                        >
-                          {busy ? "Working…" : "Confirm receipt"}
-                        </button>{" "}
-                        <button
-                          type="button"
-                          className="btn btn--secondary"
-                          disabled={busy}
-                          aria-label={`Report a problem with ${rowTitle(r)}`}
-                          onClick={() => em.onReportProblem(r)}
-                        >
-                          Report a problem →
-                        </button>
-                      </div>
-                    ) : (
-                      // Received/incident rows are receipt RECORDS: pill + who/when (+ note).
-                      <div className="dash-card__sub muted">
-                        {r.status === "received" ? "Received" : "Flagged"}
-                        {r.received_at ? ` ${new Date(r.received_at * 1000).toLocaleString()}` : ""}
-                        {r.received_by_name ? ` by ${r.received_by_name}` : ""}
-                        {r.qty_received != null ? ` · qty received ${r.qty_received}` : ""}
-                        {r.note ? ` · ${r.note}` : ""}
-                      </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
         </section>
       );
     }

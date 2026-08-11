@@ -1,30 +1,31 @@
 /**
- * expected_materials section rendering + receipt actions (Material receipts M2).
+ * expected_materials section rendering — the DEEP-LINK CARD (2026-08-11).
  *
- * The section is a PLACEHOLDER in the definition (daily-report-v5); the content is the
- * `expectedMaterials` ADAPTER the HOST supplies (the Daily tab: the job's M1 rows + the two
- * receipt actions + per-row busy + action error). This file asserts the M2 render contract:
- *   • no adapter → the section renders NOTHING — the generic fill page and every other form
- *     are unaffected; and it contributes NO initialValues key (it files no values of its own);
+ * THIRD CONTRACT for this section, each an operator decision, each rewrite deliberate:
+ *   v5/v6 — placeholder, no values, per-line list with one-tap Confirm receipt;
+ *   v7 (#45) — the same list + the day's values snapshot filed into the submission;
+ *   2026-08-11 — the first day real BOMs put hundreds of lines behind this section, the
+ *   inline list was cut entirely: the daily form shows the day's SHAPE (counts) and
+ *   deep-links the Materials page, which owns every action (the two-tap three-way mark,
+ *   Report-a-problem, resolve). No values are seeded — a NEW filing's PDF renders the
+ *   classic note line; ALREADY-FILED v7 snapshots still render as tables (form_pdf keeps
+ *   both paths; tests/test_form_pdf.py pins them).
+ *
+ * What this file asserts now:
+ *   • no adapter → the section renders NOTHING — the generic fill page and every other
+ *     form are unaffected; and it contributes NO initialValues key;
  *   • adapter with zero rows → the explicit empty state;
- *   • a PENDING (status 'expected') row renders description/qty/unit/expected-date + the two
- *     actions ("Confirm receipt" / "Report a problem →"), wired to the adapter callbacks and
- *     disabled while the row is busy;
- *   • RECEIVED / INCIDENT rows render status pills + the received-by/at record line, with NO
- *     action buttons;
- *   • actionError renders inline (never silent);
+ *   • the count summary reads lines / still-expected / flagged from the rows;
+ *   • the "Materials tracking →" deep link fires the adapter callback; absent callback →
+ *     no button (mountable anywhere);
+ *   • NO per-line content and NO per-line actions render, whatever the rows carry;
  *   • the live material-incident "Filed ✓" indicator rides FormLinkAdapter.filedLabel
  *     ('material-incident' is a DAILY_STATUS_FAMILIES member since M2).
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  FormRenderer,
-  initialValues,
-  seedExpectedMaterialsSnapshot,
-  type ExpectedMaterialsAdapter,
-} from "../FormRenderer";
+import { FormRenderer, initialValues, type ExpectedMaterialsAdapter } from "../FormRenderer";
 import { formCatalog, getDefinition } from "../registry";
 import { DAILY_STATUS_FAMILIES } from "../../lib/fieldops_daily_form";
 import type { ExpectedMaterialRow } from "../../lib/fieldops_expected_materials";
@@ -58,192 +59,82 @@ const ROWS: ExpectedMaterialRow[] = [
   },
 ];
 
-function adapter(overrides: Partial<ExpectedMaterialsAdapter> = {}): ExpectedMaterialsAdapter {
-  return {
-    rows: ROWS,
-    busyIds: new Set<number>(),
-    onConfirmReceipt: vi.fn(),
-    onReportProblem: vi.fn(),
-    ...overrides,
-  };
+function mount(adapter?: Partial<ExpectedMaterialsAdapter>) {
+  const values = initialValues(DEF);
+  return render(
+    <FormRenderer
+      def={DEF}
+      values={values}
+      setValues={vi.fn()}
+      expectedMaterials={
+        adapter === undefined ? undefined : ({ rows: ROWS, ...adapter } as ExpectedMaterialsAdapter)
+      }
+    />,
+  );
 }
 
-describe("daily-report-v5 carries the receipt mount", () => {
-  it("is bundled with ONE expected_materials section keyed expected_materials_receipt, in the D.13 region", () => {
-    expect(DEF).not.toBeNull();
-    const mounts = DEF.sections.filter((s) => s.type === "expected_materials");
-    expect(mounts).toHaveLength(1);
-    expect(mounts[0]).toMatchObject({ key: "expected_materials_receipt", title: "Expected materials" });
-    // Right after the deliveries guidance, immediately before the Deliveries Received table.
-    const idx = DEF.sections.findIndex((s) => s.type === "expected_materials");
-    expect(DEF.sections[idx - 1]).toMatchObject({
-      type: "guidance",
-      heading: "13. Material & Equipment Deliveries",
-    });
-    expect(DEF.sections[idx + 1]).toMatchObject({ type: "repeating_table", key: "deliveries_received" });
-  });
-
-  it("contributes NO initialValues key (the HOST seeds it when the rows load)", () => {
+describe("expected_materials — the deep-link card", () => {
+  it("renders NOTHING without an adapter, and contributes no initialValues key", () => {
+    const { container } = mount(undefined);
+    expect(container.querySelector(".fr__expected-materials")).toBeNull();
+    // No values key: a new filing carries no materials snapshot — the PDF's absent-key
+    // path renders the classic note line (pinned Python-side in tests/test_form_pdf.py).
     expect("expected_materials_receipt" in initialValues(DEF)).toBe(false);
   });
 
-  it("material-incident is a DAILY_STATUS_FAMILIES member (the SPA mirror of the Worker list)", () => {
-    expect(DAILY_STATUS_FAMILIES).toContain("material-incident");
+  it("summarises the day's shape — lines, still expected, flagged — with no per-line content", () => {
+    const { container } = mount({});
+    const text = container.textContent ?? "";
+    expect(text).toContain("3 lines on this job's list");
+    expect(text).toContain("1 still expected");
+    expect(text).toContain("1 flagged");
+    // The list is GONE — none of the rows' own content renders here anymore.
+    expect(text).not.toContain("Q.PEAK DUO");
+    expect(text).not.toContain("Rebar bundles");
+    expect(text).not.toContain("crushed corner");
+    // And so are the old per-line actions — marking lives on the Materials page.
+    expect(text).not.toContain("Confirm receipt");
+    expect(text).not.toContain("Report a problem");
   });
-});
 
-describe("empty states", () => {
-  it("without the adapter (the generic fill page) the section renders NOTHING", () => {
-    const { container } = render(
-      <FormRenderer def={DEF} values={initialValues(DEF)} setValues={() => {}} />,
-    );
-    expect(container.querySelector(".fr__expected-materials")).toBeNull();
-  });
-
-  it("with zero rows renders the explicit empty copy", () => {
+  it("zero rows → the explicit empty state", () => {
     const { container } = render(
       <FormRenderer
         def={DEF}
         values={initialValues(DEF)}
-        setValues={() => {}}
-        expectedMaterials={adapter({ rows: [] })}
+        setValues={vi.fn()}
+        expectedMaterials={{ rows: [] }}
       />,
     );
     expect(container.textContent ?? "").toContain("No expected materials for this job.");
   });
-});
 
-describe("row states + receipt actions", () => {
-  it("a PENDING row renders description/qty/unit/date and fires the adapter actions", () => {
-    const onConfirmReceipt = vi.fn();
-    const onReportProblem = vi.fn();
-    const { container, getByLabelText } = render(
-      <FormRenderer
-        def={DEF}
-        values={initialValues(DEF)}
-        setValues={() => {}}
-        expectedMaterials={adapter({ onConfirmReceipt, onReportProblem })}
-      />,
-    );
-    const text = container.textContent ?? "";
-    expect(text).toContain("Q.PEAK DUO");
-    expect(text).toContain("40 panels");
-    expect(text).toContain("expected 2026-07-10");
-    fireEvent.click(getByLabelText("Confirm receipt of Q.PEAK DUO"));
-    expect(onConfirmReceipt).toHaveBeenCalledWith(ROWS[0]);
-    fireEvent.click(getByLabelText("Report a problem with Q.PEAK DUO"));
-    expect(onReportProblem).toHaveBeenCalledWith(ROWS[0]);
+  it("the deep link fires the adapter callback; without one, no button renders", () => {
+    const onOpenMaterials = vi.fn();
+    const { getByText } = mount({ onOpenMaterials });
+    fireEvent.click(getByText("Materials tracking →"));
+    expect(onOpenMaterials).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    const { queryByText } = mount({});
+    expect(queryByText("Materials tracking →")).toBeNull();
   });
 
-  it("a busy row's actions are disabled (per-row busy)", () => {
-    const { getByLabelText } = render(
-      <FormRenderer
-        def={DEF}
-        values={initialValues(DEF)}
-        setValues={() => {}}
-        expectedMaterials={adapter({ busyIds: new Set([1]) })}
-      />,
-    );
-    expect((getByLabelText("Confirm receipt of Q.PEAK DUO") as HTMLButtonElement).disabled).toBe(true);
-    expect((getByLabelText("Report a problem with Q.PEAK DUO") as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it("RECEIVED / INCIDENT rows render pills + the record line, with NO action buttons", () => {
-    const { container, queryByLabelText } = render(
-      <FormRenderer
-        def={DEF}
-        values={initialValues(DEF)}
-        setValues={() => {}}
-        expectedMaterials={adapter()}
-      />,
-    );
-    const text = container.textContent ?? "";
-    expect(text).toContain("Rebar bundles");
-    expect(text).toContain("by Mo Manager");
-    expect(text).toContain("qty received 12");
-    expect(text).toContain("Crate of clamps");
-    expect(text).toContain("crushed corner");
-    const pills = Array.from(container.querySelectorAll(".fr__expected-materials .dash-pill")).map(
-      (el) => el.textContent,
-    );
-    expect(pills).toEqual(["Expected", "Received", "Incident"]);
-    expect(queryByLabelText("Confirm receipt of Rebar bundles")).toBeNull();
-    expect(queryByLabelText("Report a problem with Crate of clamps")).toBeNull();
-  });
-
-  it("actionError renders inline as an alert (never silent)", () => {
+  it("the live material-incident Filed ✓ indicator rides FormLinkAdapter.filedLabel", () => {
+    expect(DAILY_STATUS_FAMILIES).toContain("material-incident");
+    const values = initialValues(DEF);
     const { container } = render(
       <FormRenderer
         def={DEF}
-        values={initialValues(DEF)}
-        setValues={() => {}}
-        expectedMaterials={adapter({ actionError: "Couldn't confirm receipt — try again." })}
+        values={values}
+        setValues={vi.fn()}
+        expectedMaterials={{ rows: ROWS }}
+        formLinks={{
+          open: vi.fn(),
+          filedLabel: (code: string) => (code === "material-incident" ? "Filed ✓ 14:02" : null),
+        }}
       />,
     );
-    const alert = container.querySelector(".fr__expected-materials [role='alert']");
-    expect(alert?.textContent).toContain("Couldn't confirm receipt — try again.");
-  });
-
-  it("the material-incident Filed ✓ indicator rides FormLinkAdapter.filedLabel", () => {
-    const filedLabel = vi.fn((code: string) =>
-      code === "material-incident" ? "Filed ✓ 2:14 PM by Mo Manager" : null,
-    );
-    const { container } = render(
-      <FormRenderer
-        def={DEF}
-        values={initialValues(DEF)}
-        setValues={() => {}}
-        formLinks={{ open: vi.fn(), filedLabel }}
-        expectedMaterials={adapter()}
-      />,
-    );
-    expect(filedLabel).toHaveBeenCalledWith("material-incident");
-    expect(container.textContent ?? "").toContain("Material incident report: Filed ✓ 2:14 PM by Mo Manager");
-  });
-});
-
-describe("seedExpectedMaterialsSnapshot (the v7 day snapshot)", () => {
-  const BASE: ExpectedMaterialRow = {
-    id: 1, material_id: null, material_name: null, description: "Ground screws",
-    qty: null, unit: null, expected_date: null, status: "expected",
-    received_at: null, received_by_name: null, qty_received: null, note: null, seq: 1,
-    line_uuid: "u-1", part_number: null, category: null, expected_ship_date: null,
-    receipt_status: null, qty_received_total: null,
-  };
-
-  it("prefers the catalog name, falls back to the free-text description", () => {
-    expect(seedExpectedMaterialsSnapshot([{ ...BASE, material_name: "Q.PEAK DUO" }])[0].material)
-      .toBe("Q.PEAK DUO");
-    expect(seedExpectedMaterialsSnapshot([BASE])[0].material).toBe("Ground screws");
-  });
-
-  it("the 0059 receipt_status rollup WINS over the coarse legacy status", () => {
-    // receipt_status is the real three-way delivery state; status is the coarse projection.
-    const row = { ...BASE, status: "received" as const, receipt_status: "partial" as const };
-    expect(seedExpectedMaterialsSnapshot([row])[0].status).toBe("Partially delivered");
-  });
-
-  it("falls back to the coarse status, and `incident` is reported (it is sticky and orthogonal)", () => {
-    expect(seedExpectedMaterialsSnapshot([{ ...BASE, status: "incident" }])[0].status)
-      .toBe("Problem reported");
-    expect(seedExpectedMaterialsSnapshot([{ ...BASE, status: "received" }])[0].status)
-      .toBe("Received");
-    expect(seedExpectedMaterialsSnapshot([BASE])[0].status).toBe("Expected");
-  });
-
-  it("renders qty with its unit, and a null running total as blank (NOT '0')", () => {
-    // null means nothing has been quantified, which is deliberately distinct from a recorded 0.
-    const row = { ...BASE, qty: 120, unit: "panels", qty_received_total: null };
-    expect(seedExpectedMaterialsSnapshot([row])[0].expected).toBe("120 panels");
-    expect(seedExpectedMaterialsSnapshot([row])[0].received).toBe("");
-    expect(seedExpectedMaterialsSnapshot([{ ...row, qty_received_total: 0 }])[0].received).toBe("0");
-  });
-
-  it("carries only display strings — no ids, so a filed PDF never depends on a live join", () => {
-    const entry = seedExpectedMaterialsSnapshot([{ ...BASE, part_number: "7000153" }])[0];
-    expect(Object.keys(entry).sort()).toEqual(
-      ["expected", "material", "part_number", "received", "status"],
-    );
-    expect(Object.values(entry).every((v) => typeof v === "string")).toBe(true);
+    expect(container.textContent ?? "").toContain("Material incident report: Filed ✓ 14:02");
   });
 });
