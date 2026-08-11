@@ -111,3 +111,68 @@ was deployed ahead of its migration (the forensic-#2 stale-deploy class). **This
 design — no job is created and no number is burned.** **Repair:** apply `0022 --remote`, then
 redeploy. This is a deploy/migration fault (code/high-capability-class) — the Successor-Operator
 escalates to Seth; it is NOT a Tier-2 repair.
+
+## Activation — 0064, the Evergreen job identifier's site segment (operator, one-time, ORDER-DEPENDENT)
+
+Evergreen numbers a job **site** as `YYYY.NNN.S` — MH405 is `2026.384.1` and OG593 is `2026.384.2`:
+the same project (`2026.384`), two different sites. The portal now accepts that full identifier on
+the Job Tracker's create and edit forms.
+
+It is stored as **two columns**: `jobs.job_no` keeps the two-segment project number and the site
+segment goes in the new `jobs.site_phase`. The operator never sees that split — the portal rejoins
+them for display, so you type and read `2026.384.1`. The reason for the split is that the PO and
+subcontract numbers are already `{job_no}.{site_phase}.{supersede_seq}.{revision}`, so MH405's first
+PO comes out `2026.384.1.0.0` — the same five-segment shape as always.
+
+Activate in THIS order (same stale-checkout discipline as every other migration here):
+
+1. Pull `~/its` to current `main` (never deploy from a stale tree).
+2. Apply migration `0064_job_site_phase.sql` to live D1 **remotely BEFORE** the Worker redeploy —
+   a Worker deploy first would 500 every `/api/jobs` on the unknown column.
+3. Redeploy the Worker.
+
+No backfill is needed. Existing jobs get `site_phase = 0`, which means "no site breakdown" and is
+exactly what the PO/subcontract builders already defaulted to, so their numbers do not change.
+
+## New failure mode — "the portal won't accept our job number"
+
+**Symptom:** an office admin types an Evergreen number into the Job Tracker's **Evergreen job
+number** field and the form refuses it with *"The Evergreen job number must look like 2026.384 or
+2026.384.1 (year.number.site)."*
+
+**What the Successor-Operator checks — in this order:**
+
+1. **Is it really that shape?** Legal: `2026.384` or `2026.384.1`. The year is four digits, the
+   project number is exactly three, and the site (if present) is a plain number up to 9999.
+   Rejected on purpose: a trailing dot (`2026.384.`), four segments (`2026.384.1.2`), a letter
+   (`2026.384.A`), or a number plus a name in the same box (`2026.384.1 Coker`). The project name
+   goes in the **Project name** field, never in the number field.
+2. **Was the number pasted?** A trailing space is trimmed, but a non-breaking space or an en-dash
+   pasted from a PDF is not a digit and will be refused. Retype it by hand.
+3. **Is the refusal coming from a DIFFERENT screen?** The PO, RFQ, subcontract and estimate
+   builders take only the **two-segment project number** (`2026.384`) in their own Job-number box —
+   the site rides in their separate **Site / phase** field, which auto-fills from the job. If one of
+   those screens says the job number is invalid, drop the site segment there; that is expected, not
+   a fault.
+
+**Repair:** correcting what is typed is the whole repair — this is a form-validation refusal, so
+**nothing was written and nothing is in a bad state.** No daemon, no config, no re-run.
+
+## New failure mode — "the PO number came out with the wrong site"
+
+**Symptom:** a PO or subcontract generated for a multi-site project carries the wrong third segment
+— e.g. MH405's PO reads `2026.384.0.0.0` or `2026.384.2.0.0` instead of `2026.384.1.0.0`.
+
+**What the Successor-Operator checks:** open the job in the Job Tracker → **Edit job details** and
+read the **Evergreen job number** field. It should show the full identifier including the site
+(`2026.384.1`). If it shows only `2026.384`, the job's site segment was never set (or was cleared by
+an edit that blanked the number) — the builder then correctly defaults Site/phase to 0.
+
+**Low-class repair:** retype the full identifier (`2026.384.1`) in that field and save. New POs and
+subcontracts pick up the corrected site on their next draft. **Already-generated documents are NOT
+renumbered** — a generated number is contractual. If a filed PO carries the wrong site, that is a
+supersede/cancel decision, not a data fix.
+
+**Escalate to Seth when:** the field shows the right identifier but a **newly drafted** PO still
+composes the wrong segment (that is a code fault, not data), or a document that has already been
+**sent** carries the wrong number (an external-send consequence — FIXED high-capability class).

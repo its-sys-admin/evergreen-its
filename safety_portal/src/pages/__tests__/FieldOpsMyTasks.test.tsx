@@ -85,6 +85,7 @@ const JOB_DETAIL: jobtracker.JobDetailResponse = {
     job_id: "JOB-A", project_name: "Alpha", status: "active", lifecycle: "active", archive: null, progress: 0, client: null,
     crew: [], tasks: [], time_entries: [], equipment_on_site: [], inspections: [],
     job_no: "",
+    site_phase: 0,
     routing: {
       address: "", address_city: "", address_state: "", address_zip: "",
       stakeholder_name: "", stakeholder_email: "", stakeholder_phone: "",

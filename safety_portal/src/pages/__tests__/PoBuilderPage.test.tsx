@@ -98,7 +98,7 @@ const VENDORS: api.Vendor[] = [
   },
 ];
 
-const JOBS = [{ job_id: "JOB-000001", project_name: "2023.126 Kendall Solar", job_no: "" }];
+const JOBS = [{ job_id: "JOB-000001", project_name: "2023.126 Kendall Solar", job_no: "", site_phase: 0 }];
 
 const CATALOG: api.CatalogMaterial[] = [
   { id: 11, model_id: "Q.PEAK_DUO_XL-G11.3_BFG", manufacturer: "Qcells", category: "module", key_specs: "570-585Wp bifacial" },
@@ -110,6 +110,7 @@ const CATALOG: api.CatalogMaterial[] = [
 const EMPTY_SHIPTO: api.JobShipTo = {
   job_id: "JOB-000001",
   job_no: "",
+  site_phase: 0,
   ship_to_name: "",
   ship_to_address: "",
   ship_to_city: "",
@@ -398,6 +399,7 @@ describe("PoBuilderPage — ship-to auto-fill (S6 follow-up)", () => {
   const FILLED: api.JobShipTo = {
     job_id: "JOB-000001",
     job_no: "2023.126",
+    site_phase: 0,
     ship_to_name: "2023.126 Kendall Solar",
     ship_to_address: "742 Panel Way",
     ship_to_city: "",
@@ -457,6 +459,50 @@ describe("PoBuilderPage — ship-to auto-fill (S6 follow-up)", () => {
     expect((r.getByLabelText("Job number (YYYY.NNN)") as HTMLInputElement).value).toBe("2023.126");
     expect((r.getByLabelText("Address") as HTMLInputElement).value).toBe("");
     expect((r.getByLabelText("Name") as HTMLInputElement).value).toBe("");
+  });
+
+  // ── 0064: the Site/phase auto-fill ───────────────────────────────────────────────────────────
+  // The whole user-visible payload of the split. Without it the operator re-types the site by
+  // hand on every PO and a slip composes a document number for the WRONG site of the project.
+  it("0064: picking a job auto-fills Site / phase from the job record", async () => {
+    vi.mocked(fetchJobs).mockResolvedValue([
+      { job_id: "JOB-000001", project_name: "MH405", job_no: "2026.384", site_phase: 1 },
+    ]);
+    const r = render(<PoBuilderPage onReviewEstimate={() => {}} onOpenEstimatesTab={() => {}} />);
+    await openBuilder(r);
+    fireEvent.change(r.getByLabelText("Job"), { target: { value: "JOB-000001" } });
+    await waitFor(() =>
+      expect((r.getByLabelText("Job number (YYYY.NNN)") as HTMLInputElement).value).toBe("2026.384"),
+    );
+    // Together these compose 2026.384.1.<supersede>.<revision> — MH405's real PO number.
+    expect((r.getByLabelText("Site / phase") as HTMLInputElement).value).toBe("1");
+  });
+
+  it("0064: a job with no site resets Site / phase to 0 rather than keeping the previous job's", async () => {
+    vi.mocked(fetchJobs).mockResolvedValue([
+      { job_id: "JOB-000001", project_name: "MH405", job_no: "2026.384", site_phase: 2 },
+      { job_id: "JOB-000002", project_name: "Legacy", job_no: "2026.123", site_phase: 0 },
+    ]);
+    const r = render(<PoBuilderPage onReviewEstimate={() => {}} onOpenEstimatesTab={() => {}} />);
+    await openBuilder(r);
+    fireEvent.change(r.getByLabelText("Job"), { target: { value: "JOB-000001" } });
+    await waitFor(() => expect((r.getByLabelText("Site / phase") as HTMLInputElement).value).toBe("2"));
+    // Switching jobs must not carry the old site across — that would silently mis-number the PO.
+    fireEvent.change(r.getByLabelText("Job"), { target: { value: "JOB-000002" } });
+    await waitFor(() => expect((r.getByLabelText("Site / phase") as HTMLInputElement).value).toBe("0"));
+  });
+
+  it("0064: with no stored job_no, the site comes from the NAME prefix and is never truncated away", async () => {
+    vi.mocked(fetchJobs).mockResolvedValue([
+      { job_id: "JOB-000001", project_name: "2026.384.1 Coker Solar", job_no: "", site_phase: 0 },
+    ]);
+    const r = render(<PoBuilderPage onReviewEstimate={() => {}} onOpenEstimatesTab={() => {}} />);
+    await openBuilder(r);
+    fireEvent.change(r.getByLabelText("Job"), { target: { value: "JOB-000001" } });
+    await waitFor(() =>
+      expect((r.getByLabelText("Job number (YYYY.NNN)") as HTMLInputElement).value).toBe("2026.384"),
+    );
+    expect((r.getByLabelText("Site / phase") as HTMLInputElement).value).toBe("1");
   });
 });
 
@@ -536,6 +582,7 @@ describe("PoBuilderPage — configured delivery-contact suggestions (Feature C)"
     vi.mocked(api.fetchJobShipTo).mockResolvedValue({
       job_id: "JOB-000001",
       job_no: "2023.126",
+      site_phase: 0,
       ship_to_name: "2023.126 Kendall Solar",
       ship_to_address: "742 Panel Way",
       ship_to_city: "",

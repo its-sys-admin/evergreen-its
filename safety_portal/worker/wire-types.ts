@@ -206,8 +206,13 @@ export interface JobDetail {
    *  least-privilege shape as `routing`. */
   archive: JobArchiveStatus | null;
   progress: number;
-  /** The Evergreen YYYY.NNN tracking number ('' when unassigned) — 0057. */
+  /** The Evergreen YYYY.NNN PROJECT number ('' when unassigned) — 0057. NOT the full
+   *  identifier: the site segment rides in `site_phase`. */
   job_no: string;
+  /** The identifier's third segment (0064), 0 when the job has no site breakdown. The SPA
+   *  joins the two for display (lib/jobNumber.formatJobNumber) so the operator sees and
+   *  edits `2026.384.1`, never the split. */
+  site_phase: number;
   /** The routing/SoR seed block — cap.jobtracker.manage ONLY; null for read-tier callers
    *  (least-privilege: these are the external-send recipient/CC sets). */
   routing: JobRoutingBlock | null;

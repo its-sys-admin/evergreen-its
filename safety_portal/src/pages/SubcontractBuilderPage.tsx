@@ -285,10 +285,22 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
     setProjectName(job.project_name);
     setJobName(job.project_name);
     setSiteName(job.project_name);
-    // The STORED Evergreen number (0057) first; the YYYY.NNN name-prefix parse stays
-    // the fallback for jobs that predate the structured field. Editable either way.
-    const m = /^(\d{4}\.\d{3})/.exec(job.project_name.trim());
-    setJobNo(job.job_no || (m ? m[1] : ""));
+    // The STORED Evergreen number (0057) first; the name-prefix parse stays the fallback for
+    // jobs that predate the structured field. Editable either way.
+    //
+    // 0064 — the identifier's THIRD segment is the Site/phase, so it auto-fills alongside the
+    // number rather than being re-derived by hand: picking MH405 (2026.384.1) fills job_no
+    // 2026.384 + Site/phase 1, and the document number composes as 2026.384.1.<supersede>.<rev>.
+    // The fallback regex captures that segment too and is anchored at the END OF THE NUMBER
+    // (`(?![\d.])`, not `$` — the name continues after it). Previously it was open at the tail,
+    // so "2026.384.1 Coker Solar" silently matched and filled the TRUNCATED "2026.384" — a
+    // wrong-but-plausible number belonging to a different site of the same project.
+    const m = /^(\d{4}\.\d{3})(?:\.(\d+))?(?![\d.])/.exec(job.project_name.trim());
+    const storedJobNo = job.job_no || "";
+    // Both parts from the SAME source — never a stored number paired with a name-parsed site.
+    setJobNo(storedJobNo || (m ? m[1] : ""));
+    const sitePhaseFill = storedJobNo ? job.site_phase : m && m[2] !== undefined ? parseInt(m[2], 10) : 0;
+    setSitePhase(String(sitePhaseFill ?? 0));
     // Site address auto-fills from the Smartsheet ITS_Active_Jobs "Address" SoR (C1) when available —
     // a CONVENIENCE only: a blank / 404 / degraded fetch leaves the operator-editable Site-address
     // field alone (never clobbers it with an empty on a job whose SoR address is unset).

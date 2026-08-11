@@ -11,6 +11,7 @@ import { InlineRowMsg, SectionError, TaskDue, errMsg, type RowFeedback } from ".
 import { JobDailyRequirementsSection } from "../components/JobDailyRequirementsSection";
 import { statusLabel, lifecycleLabel } from "../lib/labels";
 import { JobArchivePanel } from "../components/JobArchivePanel";
+import { formatJobNumber, splitJobNumber, JOB_NUMBER_MAX_LENGTH } from "../lib/jobNumber";
 
 // R7 — a load-failure that owns a working Retry (never a dead banner, never a lying empty state).
 interface RetryableError {
@@ -126,7 +127,9 @@ function routingFormFromJob(job: api.JobDetail): RoutingForm {
   const r = job.routing;
   return {
     project_name: job.project_name ?? "",
-    job_no: job.job_no ?? "",
+    // 0064 — rejoin the stored (job_no, site_phase) pair into the full Evergreen
+    // identifier. The editor shows what the operator typed ('2026.384.1'), not the split.
+    job_no: formatJobNumber(job.job_no, job.site_phase),
     address: r?.address ?? "",
     address_city: r?.address_city ?? "",
     address_state: r?.address_state ?? "",
@@ -244,8 +247,8 @@ function RoutingFields({
           aria-label="Evergreen job number"
           value={routing.job_no}
           onChange={(e) => set({ job_no: e.target.value })}
-          placeholder="Evergreen job # (YYYY.NNN, e.g. 2026.123)"
-          maxLength={8}
+          placeholder="Evergreen job # (YYYY.NNN or YYYY.NNN.S, e.g. 2026.384.1)"
+          maxLength={JOB_NUMBER_MAX_LENGTH}
         />
       </div>
       {/* 0057 — structured address: street stays in `address`; city/state/zip are their own
@@ -730,12 +733,19 @@ export function FieldOpsJobTracker({
       setActionMsg({ ok: false, text: "Project name is required." });
       return;
     }
-    // Safety CC is REQUIRED on create (up to the ≤MAX_CC cap the editor already enforces) — the
-    // weekly safety email CCs these recipients. Create-only: the routing EDIT path still allows
-    // blanking the CC list. The Worker independently re-enforces (400 safety_cc_required).
-    const safetyCcFilled = createRouting.safety_cc.map((s) => s.trim()).filter(Boolean);
-    if (safetyCcFilled.length === 0) {
-      setActionMsg({ ok: false, text: "At least one Safety CC recipient is required." });
+    // TOMBSTONE (operator decision, 2026-08-11): the "At least one Safety CC recipient is
+    // required." create-time block was REMOVED here and in the Worker (fieldops_job_write.ts).
+    // Safety CC is now optional at create — a job may be created with none and have recipients
+    // added later through the routing editor, which always permitted an empty list. The ≤MAX_CC
+    // cap and the per-entry email-shape check are UNCHANGED (CcEditor + the Worker's parseCc).
+    //
+    // Validate the Evergreen number before submitting so a typo is a pointed inline message
+    // rather than a round-trip 400 — the Worker still re-validates and remains authoritative.
+    if (splitJobNumber(createRouting.job_no) === null) {
+      setActionMsg({
+        ok: false,
+        text: "The Evergreen job number must look like 2026.384 or 2026.384.1 (year.number.site).",
+      });
       return;
     }
     setActionBusy(true);
@@ -811,6 +821,15 @@ export function FieldOpsJobTracker({
   async function submitEditContacts(e: FormEvent) {
     e.preventDefault();
     if (!selectedJob || actionBusy) return;
+    // Same pre-flight as create — the edit form carries the identical Evergreen-number input,
+    // so a typo here deserves the identical pointed message instead of a bare 400.
+    if (splitJobNumber(editRouting.job_no) === null) {
+      setActionMsg({
+        ok: false,
+        text: "The Evergreen job number must look like 2026.384 or 2026.384.1 (year.number.site).",
+      });
+      return;
+    }
     setActionBusy(true);
     setActionMsg(null);
     try {

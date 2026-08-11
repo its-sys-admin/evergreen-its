@@ -641,11 +641,15 @@ app.post("/api/logout", async (c) => {
 
 /** GET /api/jobs — Active jobs for the dropdown (from D1; the portal never reads Smartsheet).
  *  job_no (0057) rides along so a dropdown pick auto-fills the Evergreen YYYY.NNN number in
- *  every builder ('' when unassigned — the builders fall back to the name-prefix parse). */
+ *  every builder ('' when unassigned — the builders fall back to the name-prefix parse).
+ *  site_phase (0064) is the identifier's THIRD segment, carried SEPARATELY so the PO and
+ *  subcontract builders can auto-fill their own Site/phase input from the job rather than
+ *  making the operator re-derive it — see the 0064 header for why it is not folded into
+ *  job_no (six-segment document numbers; both Mac-side parsers anchor two segments). */
 app.get("/api/jobs", requireSession, async (c) => {
   const { results } = await c.env.DB
-    .prepare("SELECT job_id, project_name, job_no FROM jobs WHERE active = 1 ORDER BY project_name")
-    .all<{ job_id: string; project_name: string; job_no: string }>();
+    .prepare("SELECT job_id, project_name, job_no, site_phase FROM jobs WHERE active = 1 ORDER BY project_name")
+    .all<{ job_id: string; project_name: string; job_no: string; site_phase: number }>();
   return c.json({ jobs: results });
 });
 
