@@ -102,6 +102,97 @@ describe("archive-pending — the queue", () => {
   });
 });
 
+describe("archive-health — the observability read (#25)", () => {
+  // THE POINT OF THIS ROUTE. `archive-pending` is the daemon's WORK queue and serves only
+  // requested/in_progress, so it is structurally blind to `partial`/`failed` — which are
+  // TERMINAL for the daemon. A job that reaches one leaves the queue, never auto-retries, and
+  // sits half-relocated across Smartsheet and Box with no detector. Check X reads this route
+  // precisely so that state is visible.
+  function health(token = TOKEN) {
+    return call("/api/internal/fieldops/archive-health", { headers: { authorization: `Bearer ${token}` } });
+  }
+  async function healthIds(): Promise<string[]> {
+    const out = (await (await health()).json()) as { jobs: { job_id: string }[] };
+    return out.jobs.map((r) => r.job_id);
+  }
+
+  it("is bearer-gated: absent and wrong tokens both 401", async () => {
+    expect((await call("/api/internal/fieldops/archive-health")).status).toBe(401);
+    expect((await health("nope")).status).toBe(401);
+    expect((await health()).status).toBe(200);
+  });
+
+  it("SEES the stopped states that archive-pending cannot", async () => {
+    const stuck = await createOk(admin, "Stuck");
+    const half = await createOk(admin, "Halfway");
+    const dead = await createOk(admin, "Nothing moved");
+    await request(stuck, "Stuck");
+    await request(half, "Halfway");
+    await request(dead, "Nothing moved");
+    await post({ updates: [{ job_id: half, direction: "archive", state: "partial" }] });
+    await post({ updates: [{ job_id: dead, direction: "archive", state: "failed" }] });
+
+    // The work queue has dropped both terminal jobs — this is the blind spot.
+    const queued = (await (await pending()).json()) as { jobs: { job_id: string }[] };
+    expect(queued.jobs.map((r) => r.job_id)).toEqual([stuck]);
+
+    // The health read keeps all three.
+    expect((await healthIds()).sort()).toEqual([dead, half, stuck].sort());
+  });
+
+  it("drops a job once the archive actually completes", async () => {
+    const id = await createOk(admin, NAME);
+    await request(id, NAME);
+    expect(await healthIds()).toContain(id);
+    await post({ updates: [{ job_id: id, direction: "archive", state: "complete" }] });
+    expect(await healthIds()).not.toContain(id);
+  });
+
+  it("ignores jobs with no archive activity, and smartsheet-origin rows", async () => {
+    const idle = await createOk(admin, "Idle");
+    await seedJobRow("SS-8", { status: "active", projectName: "Legacy" });
+    await env.DB
+      .prepare("UPDATE jobs SET archive_state='failed', archive_direction='archive' WHERE job_id='SS-8'")
+      .run();
+    const ids = await healthIds();
+    expect(ids).not.toContain(idle);
+    expect(ids).not.toContain("SS-8");
+  });
+
+  it("returns the fields Check X reports on, oldest request first", async () => {
+    const a = await createOk(admin, "Alpha");
+    const b = await createOk(admin, "Bravo");
+    await request(a, "Alpha");
+    await request(b, "Bravo");
+    await env.DB.prepare("UPDATE jobs SET archive_requested_at=100 WHERE job_id=?").bind(b).run();
+    await env.DB.prepare("UPDATE jobs SET archive_requested_at=200 WHERE job_id=?").bind(a).run();
+
+    const out = (await (await health()).json()) as { jobs: Record<string, unknown>[] };
+    expect(out.jobs.map((r) => r.job_id)).toEqual([b, a]); // oldest first
+    expect(Object.keys(out.jobs[0]).sort()).toEqual(
+      ["archive_attempts", "archive_direction", "archive_folder_key", "archive_requested_at",
+       "archive_state", "job_id", "job_no", "project_name"],
+    );
+  });
+
+  it("MUTATES NOTHING — a health read must not disturb the queue it observes", async () => {
+    // It runs on the watchdog's schedule, not the daemon's; any write here would be a write
+    // nobody asked for, on a row a human may be acting on.
+    const id = await createOk(admin, NAME);
+    await request(id, NAME);
+    await post({ updates: [{ job_id: id, direction: "archive", state: "partial" }] });
+    const before = await jobRow(id);
+    const auditBefore = await env.DB.prepare("SELECT COUNT(*) AS n FROM audit_log").first<{ n: number }>();
+
+    await health();
+    await health();
+
+    expect(await jobRow(id)).toEqual(before);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM audit_log").first<{ n: number }>())!.n)
+      .toBe(auditBefore!.n);
+  });
+});
+
 describe("job-archive-progress — validation", () => {
   it("is bearer-gated", async () => {
     expect((await post({ updates: [] }, "nope")).status).toBe(401);

@@ -109,6 +109,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+from field_ops import fieldops_sync
 from po_materials import po_review, rfq_review
 from progress_reports import progress_weekly_generate, wpr_review
 from safety_reports import generate_core, portal_poll, weekly_generate, wsr_review
@@ -2909,6 +2910,227 @@ def _check_log_dir_rotation(
     )
 
 
+# ---- Check X: stale / stopped job archives (#25) -------------------------
+#
+# THE GAP THIS CLOSES. The Track 6 job archive is deliberately asynchronous — the portal
+# button records INTENT and `fieldops_sync`'s archive pass relocates the six containers
+# later. That design is right, but it makes "the operator pressed Archive and nothing ever
+# happened" a reachable steady state, and until now NO check covered it: `grep archive
+# scripts/watchdog.py` hit only Check W (log rotation, unrelated). On 2026-08-10
+# `JOB-000030` sat at `requested` with `archive_attempts=0` for hours; nothing fired, and it
+# was found only because the operator asked why the button had done nothing. The portal
+# meanwhile renders the in-flight state as a GREEN `banner--ok` reading "Waiting for the
+# office Mac to pick this up" — honest, reassuring, and it never escalates.
+#
+# TWO distinct failure shapes, and the check must cover both:
+#
+#   1. STUCK IN THE QUEUE (`requested` / `in_progress`). The pass will retry these on its own
+#      every ~90 s, so age is the only signal: past ARCHIVE_STUCK_AFTER something is stopping
+#      it. The commonest cause by far is the pass's gate being OFF, which is why the message
+#      reads the gate and says so — that was literally the 2026-08-10 incident.
+#   2. STOPPED (`partial` / `failed`). These are TERMINAL for the daemon: `/archive-pending`
+#      serves only `requested`/`in_progress`, so a stopped archive LEAVES the queue and
+#      resumes only when a human presses "Try again". MAX_ARCHIVE_ATTEMPTS (20) is
+#      unreachable in practice for the same reason. A `partial` is the worse of the two — the
+#      job's folders are split across Smartsheet and Box — and no amount of waiting fixes it.
+#      Age is NOT a qualifier here; terminal is terminal.
+#
+# Reads the dedicated `/archive-health` route (NOT `/archive-pending`, which by construction
+# cannot see shape 2). Read-only: this check observes the archive, it never advances one.
+#
+# DAILY tier. Both shapes are standing conditions that need a human, not transients an hourly
+# sweep would catch sooner in any useful sense, and the route is a cross-network read.
+#
+# Severity rides the CAPPED re-notify ladder (`sustained_failure.is_escalation_cycle`) for the
+# same reason Check W does: an open CRITICAL is never terminal per `shared/errors_rotation`,
+# so firing CRITICAL on every daily sweep while a job sits unarchived would mint permanent,
+# unrotatable ITS_Errors rows against the 20,000-row cap that has locked out before. WARN each
+# run; CRITICAL on the crossing run then at 2x/4x/8x the threshold (days 3, 6, 12, 24, then
+# every 24). Nothing is silent, and a long unattended wedge still re-notifies.
+ARCHIVE_STUCK_AFTER = timedelta(minutes=30)
+ARCHIVE_STALE_CRITICAL_THRESHOLD = 3
+# Cap the per-job detail so one bad day cannot write a multi-KB summary into ITS_Errors.
+ARCHIVE_REPORT_MAX_JOBS = 8
+_ARCHIVE_STALE_RUNS = sustained_failure.SustainedFailureCounter(
+    STATE_DIR / "archive_stale_runs.json",
+    _SCRIPT,
+    "archive_stale_counter_failed",
+)
+
+_ARCHIVE_STOPPED_STATES = ("partial", "failed")
+_ARCHIVE_QUEUED_STATES = ("requested", "in_progress")
+
+
+def _resolve_fieldops_creds() -> tuple[str, str] | None:
+    """Best-effort (base_url, bearer) for the FIELD-OPS token tier — fail-soft None.
+
+    Reuses fieldops_sync's canonical names so there is exactly ONE definition of where the
+    Worker lives and which token reads the archive routes. Deliberately the fieldops bearer
+    and NOT portal_poll's internal token: `/api/internal/fieldops/*` is a separate privilege
+    tier, and the two are not interchangeable. Never raises — fieldops_sync owns the
+    missing-creds page for its own cycle; duplicating it from the watchdog is alert noise.
+    """
+    try:
+        raw = smartsheet_client.get_setting(
+            fieldops_sync.CFG_WORKER_BASE_URL, workstream=fieldops_sync.WORKSTREAM
+        )
+    except smartsheet_client.SmartsheetError:
+        return None
+    base_url = raw if isinstance(raw, str) and raw else ""
+    try:
+        bearer = keychain.get_secret(fieldops_sync.KC_FIELDOPS_TOKEN)
+    except keychain.KeychainError:
+        return None
+    if not (base_url and bearer):
+        return None
+    return base_url, bearer
+
+
+def _archive_gate_clause() -> str:
+    """Name the archive pass's gate state when it is the likely cause. Never raises.
+
+    Calls fieldops_sync's OWN accessor rather than re-reading ITS_Config here, so the check
+    reports the gate exactly as the DAEMON resolves it — a second implementation could
+    disagree with the daemon and send an operator to flip a switch that was already on.
+    """
+    try:
+        if not fieldops_sync._archive_enabled():
+            return (
+                f" LIKELY CAUSE: the archive pass is GATED OFF — ITS_Config "
+                f"`{fieldops_sync.CFG_ARCHIVE_ENABLED}` (workstream "
+                f"`{fieldops_sync.WORKSTREAM}`) does not read true, so fieldops_sync is not "
+                f"draining the queue at all. This is the 2026-08-10 failure exactly. Flipping "
+                f"it back on is a low-class Tier-2 config edit."
+            )
+    except Exception as exc:  # noqa: BLE001 — a decoration read must not fail the check
+        return f" (archive gate state unreadable: {exc!r})"
+    return (
+        " The archive pass IS enabled, so the gate is not the cause — see "
+        "docs/runbooks/job_archive.md for the per-container diagnosis."
+    )
+
+
+def _describe_archive_row(row: dict[str, Any], now: datetime) -> str:
+    """One job's line: id, direction, state, attempts, age. The fields an operator acts on."""
+    job_id = row.get("job_id") or "<unknown>"
+    direction = row.get("archive_direction") or "<unset>"
+    state = row.get("archive_state") or "<unset>"
+    attempts = row.get("archive_attempts")
+    requested = _archive_requested_at(row)
+    age = "age unknown" if requested is None else f"{(now - requested).total_seconds() / 3600:.1f}h"
+    return f"{job_id} ({direction}/{state}, attempts={attempts}, {age})"
+
+
+def _archive_requested_at(row: dict[str, Any]) -> datetime | None:
+    """Parse `archive_requested_at` (unix seconds) — None when absent or malformed.
+
+    A row whose timestamp we cannot read is NOT dropped by the caller: for the queued shape
+    it is treated as stuck (we cannot prove it is young, and a missing request time on a
+    queued row is itself abnormal), which keeps the check from going quiet on bad data.
+    """
+    raw = row.get("archive_requested_at")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return None
+    try:
+        return datetime.fromtimestamp(float(raw), tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _check_stale_job_archives() -> CheckResult:
+    """Check X: a job archive that stopped, or was never picked up, must not stay silent.
+
+    Escalates on BOTH shapes (see the block comment above): a request aging in the queue past
+    ARCHIVE_STUCK_AFTER, and any job sitting in the terminal `partial`/`failed` states that
+    never resume without a human. Reports job_id, direction, attempts and age for each, and
+    names the pass's gate when that is the likely cause.
+
+    Fail-soft on transport (INFO — our own inability to reach the Worker is not an archive
+    fault); WARN on a rejected bearer, which is a deterministic misconfig that will not
+    self-heal and which would otherwise make this check silently blind.
+    """
+    creds = _resolve_fieldops_creds()
+    if creds is None:
+        return CheckResult(
+            severity=Severity.INFO,
+            summary=(
+                "archive-health creds unresolved (worker_base_url / fieldops token) — "
+                "skipping; fieldops_sync owns the missing-creds page."
+            ),
+        )
+    base_url, bearer = creds
+    try:
+        rows = portal_client.get_fieldops_archive_health(base_url, bearer)
+    except portal_client.PortalAuthError as exc:
+        return CheckResult(
+            severity=Severity.WARN,
+            summary=(
+                "archive-health bearer REJECTED (401) — deterministic misconfig "
+                "(rotated/missing ITS_PORTAL_FIELDOPS_TOKEN?); stalled archives are "
+                "unobserved until it is fixed."
+            ),
+            details=repr(exc),
+        )
+    except portal_client.PortalTransportError as exc:
+        return CheckResult(
+            severity=Severity.INFO,
+            summary="archive-health unreachable (transient) — no archive data this run.",
+            details=repr(exc),
+        )
+
+    now = datetime.now(UTC)
+    stopped = [r for r in rows if r.get("archive_state") in _ARCHIVE_STOPPED_STATES]
+    queued = [r for r in rows if r.get("archive_state") in _ARCHIVE_QUEUED_STATES]
+    # An unparseable request time counts as stuck — see `_archive_requested_at`.
+    stuck = [
+        r for r in queued
+        if (req := _archive_requested_at(r)) is None or (now - req) >= ARCHIVE_STUCK_AFTER
+    ]
+
+    if not stopped and not stuck:
+        _ARCHIVE_STALE_RUNS.reset()
+        healthy = (
+            f"{len(queued)} archive(s) in flight, all within {ARCHIVE_STUCK_AFTER}"
+            if queued else "no archives in flight"
+        )
+        return CheckResult(
+            severity=Severity.INFO, summary=f"Job archives healthy: {healthy}."
+        )
+
+    n = _ARCHIVE_STALE_RUNS.record()
+    escalate = sustained_failure.is_escalation_cycle(n, ARCHIVE_STALE_CRITICAL_THRESHOLD)
+
+    parts: list[str] = []
+    if stopped:
+        parts.append(
+            f"{len(stopped)} STOPPED (partial/failed — TERMINAL for the daemon: these left "
+            f"the queue and will NOT retry on their own; a `partial` has folders split "
+            f"across Smartsheet and Box). Press \"Try again\" in the portal to requeue: "
+            + "; ".join(
+                _describe_archive_row(r, now) for r in stopped[:ARCHIVE_REPORT_MAX_JOBS]
+            )
+        )
+    if stuck:
+        parts.append(
+            f"{len(stuck)} STUCK in the queue past {ARCHIVE_STUCK_AFTER} (a healthy "
+            f"relocation completes in one ~90s cycle): "
+            + "; ".join(
+                _describe_archive_row(r, now) for r in stuck[:ARCHIVE_REPORT_MAX_JOBS]
+            )
+            + _archive_gate_clause()
+        )
+
+    return CheckResult(
+        severity=Severity.CRITICAL if escalate else Severity.WARN,
+        summary="Job archive(s) not progressing. " + " | ".join(parts),
+        details=(
+            f"consecutive daily sweeps with a stalled archive: {n} "
+            f"(CRITICAL on the capped re-notify ladder from "
+            f"{ARCHIVE_STALE_CRITICAL_THRESHOLD}). Runbook: docs/runbooks/job_archive.md"
+        ),
+    )
+
+
 # ---- Entrypoint ---------------------------------------------------------
 
 
@@ -2998,6 +3220,14 @@ CHECKS: list[Callable[..., CheckResult]] = [
     # WARN, with a sustained failure escalating to CRITICAL via the CAPPED is_escalation_cycle
     # ladder (F2 — days 3/6/12/24 then every 24, so a wedge never mints a NEW unrotatable
     # open-CRITICAL every day — see the _LOG_ROTATION_FAILS note).
+    # Check X (#25): a job archive that stopped (partial/failed — TERMINAL, never auto-retries)
+    # or was never picked up (requested/in_progress aging in the queue). Before this, NO check
+    # covered the archive at all and a job sat at `requested` for hours in silence while the
+    # portal showed a green "waiting" banner. Reads the dedicated /archive-health route, which
+    # unlike /archive-pending can see the terminal states. Read-only; returns a CheckResult, so
+    # _run_check pages + MAINTENANCE-defers it. DAILY tier. (E deferred, F retired 2026-06-05,
+    # H never existed — X is the first free letter after W.)
+    _check_stale_job_archives,
     _check_log_dir_rotation,
     # Check E (Anthropic spend trend) deferred to a follow-on PR (the
     # Check E shipping PR) — requires an Admin API key (sk-ant-admin01-...
@@ -3037,6 +3267,7 @@ CHECK_LETTERS: dict[str, str] = {
     "_check_approver_drift": "U",
     "_check_portal_prune_health": "V",
     "_check_log_dir_rotation": "W",
+    "_check_stale_job_archives": "X",
 }
 
 
@@ -3087,6 +3318,12 @@ CHECK_LETTERS: dict[str, str] = {
 #                                     recent, F1) and that lane NEVER deletes, so hourly would mint
 #                                     ~24 permanent .gz archives per launchd log per day —
 #                                     inverting the very growth bound Check W exists to enforce.
+#   X  _check_stale_job_archives      both shapes it detects are STANDING conditions needing a
+#                                     human (a terminal partial/failed never auto-retries; a
+#                                     stuck request is usually a gate left off), so hourly buys
+#                                     no earlier remedy — it would just repeat the same
+#                                     cross-network read 24x and, past the ladder threshold,
+#                                     re-notify on an hourly rather than daily rung.
 #
 # Keeping W on the daily tier ALSO preserves two cadence-coupled constants for free, so neither
 # needs touching: LOG_DIR_ROTATION_CRITICAL_THRESHOLD (3) keeps meaning three DAYS rather than
@@ -3108,6 +3345,7 @@ DAILY_ONLY_CHECKS: frozenset[Callable[..., CheckResult]] = frozenset(
         _check_box_token_freshness,
         _check_approver_drift,
         _check_log_dir_rotation,
+        _check_stale_job_archives,
     }
 )
 

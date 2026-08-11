@@ -277,7 +277,9 @@ NODES: tuple[MapNode, ...] = (
             # operator could not find a switch for.
             "field_ops.fieldops_sync.archive_enabled",
         ),
-        watchdog_checks=("C",), script_path="field_ops/fieldops_sync.py",
+        # X (#25) watches the archive pass this daemon drives: a job stopped at
+        # partial/failed (terminal — never auto-retries) or a request never picked up.
+        watchdog_checks=("C", "X"), script_path="field_ops/fieldops_sync.py",
         runbook="docs/runbooks/fieldops_sync.md", send_half="generation", marker="fieldops_sync",
     ),
     MapNode(

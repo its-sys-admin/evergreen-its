@@ -75,6 +75,7 @@ FIELDOPS_PENDING_JOBS_PATH = "/api/internal/fieldops/pending-jobs"
 FIELDOPS_JOBS_MARK_MIRRORED_PATH = "/api/internal/fieldops/jobs-mark-mirrored"
 FIELDOPS_HOURS_PENDING_PATH = "/api/internal/fieldops/hours-pending"
 FIELDOPS_ARCHIVE_PENDING_PATH = "/api/internal/fieldops/archive-pending"
+FIELDOPS_ARCHIVE_HEALTH_PATH = "/api/internal/fieldops/archive-health"
 FIELDOPS_ARCHIVE_PROGRESS_PATH = "/api/internal/fieldops/job-archive-progress"
 FIELDOPS_HOURS_MARK_MIRRORED_PATH = "/api/internal/fieldops/hours-mark-mirrored"
 FIELDOPS_EQUIPMENT_SNAPSHOT_PATH = "/api/internal/fieldops/equipment-snapshot"
@@ -428,6 +429,40 @@ def get_fieldops_pending_archives(base_url: str, token: str) -> list[dict[str, A
     if not isinstance(jobs, list):
         raise PortalTransportError(
             f"GET {FIELDOPS_ARCHIVE_PENDING_PATH} missing/invalid 'jobs' array "
+            f"(got {type(jobs).__name__})"
+        )
+    return [row for row in jobs if isinstance(row, dict)]
+
+
+def get_fieldops_archive_health(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Read every job in a NON-terminal archive state: GET /archive-health (#25).
+
+    The observability twin of `get_fieldops_pending_archives`, and the distinction is the
+    whole point. `/archive-pending` is the daemon's WORK queue and serves only
+    `requested` / `in_progress`; `partial` and `failed` are TERMINAL for the daemon, so a
+    job that reaches one drops off the queue and resumes ONLY when a human presses "Try
+    again" in the portal. Reading the queue to answer "is any archive stuck?" would
+    therefore be blind to the worst case — a job half-relocated across Smartsheet and Box
+    with no retry pending. This route adds those two states.
+
+    Same row shape as the queue (`job_id, project_name, job_no, archive_folder_key,
+    archive_direction, archive_state, archive_attempts, archive_requested_at`), so a
+    caller can report job/direction/attempts/age uniformly.
+
+    Consumer is watchdog Check X, NOT the archive pass — reading this must never be
+    mistaken for claiming work. The Worker caps the page at 200 (a row here costs one
+    SELECT, not the queue's six external API sequences) and orders oldest-request-first,
+    so a truncated page still leads with the worst offenders.
+
+    A control-plane read of OUR OWN Worker (bearer = `PORTAL_FIELDOPS_API_TOKEN`, the same
+    token as the job / hours / archive queues), NOT a customer send. Typed-error contract
+    as elsewhere: `PortalAuthError` (401) / `PortalRateLimitError` / `PortalTransportError`.
+    """
+    data = _request("GET", base_url, FIELDOPS_ARCHIVE_HEALTH_PATH, token)
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
+        raise PortalTransportError(
+            f"GET {FIELDOPS_ARCHIVE_HEALTH_PATH} missing/invalid 'jobs' array "
             f"(got {type(jobs).__name__})"
         )
     return [row for row in jobs if isinstance(row, dict)]

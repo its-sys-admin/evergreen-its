@@ -602,19 +602,20 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 | What happens | |
 |---|---|
 | Daemon | `fieldops-sync` |
-| Worker route | `GET /api/internal/fieldops/archive-pending` |
+| Worker route | `GET /api/internal/fieldops/archive-pending (the daemon's work queue) + GET /api/internal/fieldops/archive-health (watchdog Check X's read-only view, which unlike the queue can see the terminal partial/failed states)` |
 | Config gates | `field_ops.fieldops_sync.archive_enabled`, `field_ops.box.archive_root_folder_id` |
 
 **Healthy signals:**
 - Pressing Archive in the portal records intent only; within a cycle or two the card reads "Archived. All 6 folders are filed under ITS — Archive / <Job>".
 - Four Smartsheet folders (Safety, Progress, Purchase Orders, Subcontracts) and two Box folders (Safety, Progress) are relocated — a move, never a delete; ids, permalinks and history are preserved.
 - The cycle summary reads `archive complete=N partial=0 failed=0 capped=0 errors=0`; no `job_archive` rows in ITS_Errors.
+- Watchdog Check X (daily) reports `Job archives healthy` — no job stopped at partial/failed and none aging in the queue.
 
 #### An Archive press never moves anything; the portal still says "Archiving… Waiting for the office Mac to pick this up."
 
 **Resolution class:** Escalate to Seth (co-resolve)
 
-**Signals:** archive pass gate off, designed-dark, no ITS_Errors row at all, stale fieldops_sync heartbeat
+**Signals:** archive pass gate off, designed-dark, no ITS_Errors row at all, stale fieldops_sync heartbeat, Job archive(s) not progressing, STUCK in the queue past
 
 **Checks (in order):**
 - Is field_ops.fieldops_sync.archive_enabled on, AND field_ops.fieldops_sync.sync_enabled (the whole daemon) too? A dark pass runs silently by design — no log, no error.
@@ -625,13 +626,13 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 - Nothing is lost and no re-press is needed — the job stays queued and is picked up on the first cycle after the cause is fixed.
 - Reloading the launchd job is low-class; turning a gate ON is a capability activation — confirm with Seth.
 
-**See also:** runbook `docs/runbooks/job_archive.md`
+**See also:** runbook `docs/runbooks/job_archive.md` · watchdog `_check_stale_job_archives`
 
 #### An archive stopped at "Partly archived — N of 6 folders moved" or "Nothing moved", and does not resume.
 
 **Resolution class:** Operator-resolvable (solo)
 
-**Signals:** archive_state partial, archive_state failed, archive_container_failed, DEGRADED cycle, N archive(s) STOPPED, will not resume without a re-press
+**Signals:** archive_state partial, archive_state failed, archive_container_failed, DEGRADED cycle, N archive(s) STOPPED, will not resume without a re-press, Job archive(s) not progressing, N STOPPED (partial/failed
 
 **Checks (in order):**
 - partial/failed are TERMINAL for the daemon (the queue serves only requested/in_progress) — NOTHING resumes it until a human presses "Try again".

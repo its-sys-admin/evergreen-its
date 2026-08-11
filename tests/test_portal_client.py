@@ -1104,3 +1104,75 @@ def test_manifest_internal_paths_match_the_worker_routes():
         # The client writes `{id}` where Hono writes `:id`.
         route = const.replace("{id}", ":id")
         assert f'"{route}"' in worker_src, f"no Worker route registered for {route}"
+
+
+# ---- get_fieldops_archive_health (#25) -----------------------------------
+
+
+def test_archive_health_returns_rows_and_sends_the_bearer(mocker):
+    rows = [{
+        "job_id": "JOB-000030", "project_name": "Production test", "job_no": "30",
+        "archive_folder_key": "Production test", "archive_direction": "archive",
+        "archive_state": "partial", "archive_attempts": 1, "archive_requested_at": 1786144888,
+    }]
+    req = _patch_requests(mocker, _mock_response(json_body={"jobs": rows}))
+
+    out = portal_client.get_fieldops_archive_health(BASE, TOKEN)
+
+    assert out == rows
+    assert req.call_args.args[0] == "GET"
+    assert req.call_args.args[1].endswith(portal_client.FIELDOPS_ARCHIVE_HEALTH_PATH)
+    assert req.call_args.kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_archive_health_drops_non_dict_rows(mocker):
+    _patch_requests(mocker, _mock_response(json_body={"jobs": [{"job_id": "A"}, "junk", None]}))
+    assert portal_client.get_fieldops_archive_health(BASE, TOKEN) == [{"job_id": "A"}]
+
+
+def test_archive_health_missing_jobs_array_is_a_transport_error(mocker):
+    """A shape change must fail LOUD, not read as 'no stalled archives'."""
+    _patch_requests(mocker, _mock_response(json_body={"unexpected": 1}))
+    with pytest.raises(PortalTransportError):
+        portal_client.get_fieldops_archive_health(BASE, TOKEN)
+
+
+def test_archive_health_401_raises_auth_error(mocker):
+    _patch_requests(mocker, _mock_response(status=401))
+    with pytest.raises(PortalAuthError):
+        portal_client.get_fieldops_archive_health(BASE, TOKEN)
+
+
+def _worker_index_src():
+    from pathlib import Path
+
+    return (
+        Path(__file__).resolve().parent.parent / "safety_portal" / "worker" / "index.ts"
+    ).read_text(encoding="utf-8")
+
+
+def test_archive_health_path_matches_a_real_worker_route():
+    """Same wire-drift class the manifest tests guard: a path typo 404s forever while
+    both sides' mocks agree with themselves."""
+    assert f'"{portal_client.FIELDOPS_ARCHIVE_HEALTH_PATH}"' in _worker_index_src()
+
+
+def test_archive_health_route_is_read_only_and_sees_the_terminal_states():
+    """The two properties Check X depends on, asserted against the REAL Worker source.
+
+    If archive-health ever narrows to the queue's state set it becomes a duplicate of
+    archive-pending and Check X goes blind to `partial`/`failed` — the exact gap #25
+    exists to close. And a health probe that mutated would be writing on the watchdog's
+    schedule, on rows a human may be acting on.
+    """
+    src = _worker_index_src()
+    start = src.index(f'app.get("{portal_client.FIELDOPS_ARCHIVE_HEALTH_PATH}"')
+    handler = src[start:src.index("});", start)]
+
+    for state in ("'requested'", "'in_progress'", "'partial'", "'failed'"):
+        assert state in handler, f"archive-health no longer serves {state}"
+    assert "requireFieldopsToken" in handler, "archive-health lost its bearer gate"
+    for verb in ("UPDATE ", "INSERT ", "DELETE ", "DB.batch"):
+        assert verb not in handler, (
+            f"archive-health became a MUTATING route ({verb.strip()}) — it is a read-only probe"
+        )
