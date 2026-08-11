@@ -754,7 +754,10 @@ def _service_one_manifest(
         screened = po_attach_screen.screen_attachment(
             filename, declared_mime, data, clamav_enabled=clamav_enabled
         )
-        if screened.disposition != "clean":
+        if screened.disposition == "malicious":
+            # MALICIOUS still refuses, always — a ClamAV hit / an embedded executable is
+            # not a formatting artifact. Only malicious reaches _refuse_screened since
+            # 2026-08-11; the suspicious branch below explains why.
             counters["refused"] += 1
             _refuse_screened(
                 manifest_id, manifest_uuid, job_id, filename, uploaded_by,
@@ -766,6 +769,33 @@ def _service_one_manifest(
                 correlation_id, counters,
             )
             return True
+        screen_warning: str | None = None
+        if screened.disposition == "suspicious":
+            # PROCEED-WITH-WARNING, not refuse (operator decision 2026-08-11, THIS LANE
+            # ONLY — PO attachments and vendor estimates keep the refuse posture). The
+            # first real BOM through the lane (Bradley 1 Customer BOM) refused on
+            # L2:pdf_active_content:OpenAction — an artifact virtually every
+            # vendor-exported PDF carries — and an office-uploaded procurement document
+            # is only ever OPENED by ITS inside the killable sandbox, so the refusal was
+            # high-friction protection against a reader that is already contained. The
+            # residual risk is a human opening the original from Box, which equals the
+            # risk of opening the vendor's email attachment directly. Never silent: the
+            # verdict lands as a WARN here and as a parse note the validate screen
+            # displays beside the grid. §34 disposition-table rider owed doctrine-side.
+            screen_warning = (
+                f"ACTIVE CONTENT detected ({screened.layer}:{screened.detail}) — imported "
+                f"anyway (office upload; ITS parses it only inside a sandbox). Take care "
+                f"opening the ORIGINAL from Box outside a viewer you trust."
+            )
+            error_log.log(
+                Severity.WARN,
+                SCRIPT_NAME,
+                f"manifest {manifest_id} ({filename!r}, job {job_id}) carries active "
+                f"content ({screened.layer}:{screened.detail}) — proceeding per the "
+                f"2026-08-11 disposition (suspicious=warn+import, malicious=refuse)",
+                error_code="manifest_active_content",
+                correlation_id=correlation_id,
+            )
 
         # 5. SANDBOXED extract → parse. Both stages degrade rather than raise.
         grids = _extract_grids(data, declared_mime)
@@ -784,6 +814,11 @@ def _service_one_manifest(
             grids, product_codes=manifest_parse.product_codes_from_meta(grids)
         )
         parsed = _clamp_to_worker_bounds(parsed)
+        if screen_warning is not None:
+            # The screen verdict rides the parse notes so the validate screen shows it
+            # beside the grid — the operator sees WHY the document was flagged without
+            # the upload being blocked.
+            parsed = replace(parsed, notes=[*parsed.notes, screen_warning])
         importable = [r for r in parsed.rows if r.kind != manifest_parse.KIND_META]
         if not importable:
             counters["refused"] += 1

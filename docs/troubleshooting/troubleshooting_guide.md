@@ -599,14 +599,15 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/material_manifest_import.md`
 
-#### An uploaded manifest was refused (unreadable, SUSPICIOUS/MALICIOUS) or failed integrity.
+#### An uploaded manifest was refused (unreadable or MALICIOUS), failed integrity, or imported with an active-content warning.
 
 **Resolution class:** Escalate to Seth (co-resolve)
 
-**Signals:** manifest_unreadable, manifest_suspicious, manifest_malicious, manifest_integrity_failed
+**Signals:** manifest_unreadable, manifest_active_content, manifest_malicious, manifest_integrity_failed
 
 **Checks (in order):**
-- Read the ITS_Review_Queue row. An unreadable document (a scan, an empty export, no header row) is ORDINARY — ask the office for a text-based PDF or the source spreadsheet.
+- Read the ITS_Review_Queue row (refusals) or the validate screen's parse notes (warnings). An unreadable document (a scan, an empty export, no header row) is ORDINARY — ask the office for a text-based PDF or the source spreadsheet.
+- manifest_active_content is a WARNING, not a refusal (disposition changed 2026-08-11, this lane only) — the document imported; the note says to take care opening the ORIGINAL from Box. Nothing to repair.
 - A security_flag row is not a readability problem; an integrity failure means the bytes disagree with what was signed.
 
 **Resolutions (in order):**
