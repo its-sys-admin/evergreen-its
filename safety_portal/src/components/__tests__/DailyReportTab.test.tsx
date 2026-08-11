@@ -84,6 +84,7 @@ const DETAIL: jobs.JobDetailResponse = {
     archive: null,
     progress: 0,
     job_no: "",
+    site_phase: 0,
     routing: {
       address: "", address_city: "", address_state: "", address_zip: "",
       stakeholder_name: "", stakeholder_email: "", stakeholder_phone: "",

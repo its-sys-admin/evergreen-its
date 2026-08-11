@@ -45,6 +45,16 @@ const MAX_CC = 5; // mirrors each Active-Jobs sheet's CC 1..5 columns
 // Loose email shape: no whitespace, one @, a dotted domain (matches shared/active_jobs _EMAIL_RE).
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+// 0064 — the Evergreen job identifier AS THE OPERATOR TYPES IT: the two-segment project number
+// `YYYY.NNN`, optionally followed by the site segment (`YYYY.NNN.S`). Group 1 is stored as
+// `jobs.job_no`, group 2 as `jobs.site_phase`. This is the ONLY validator in the system that
+// accepts the three-segment form — every other job_no regex (worker po/subcontract/rfq/
+// po_estimates, the five SPA builder copies, both Python numbering parsers) still sees the
+// two-segment value this splits out, which is exactly why they needed no change.
+const JOB_NO_INPUT_RE = /^(\d{4}\.\d{3})(?:\.(\d+))?$/;
+// Matches the site_phase ceiling po.ts:386 / subcontract.ts already enforce on their own input.
+const MAX_SITE_PHASE = 9999;
+
 // The values /lifecycle will SET. Deliberately EXCLUDES 'archived' — see the route below.
 // 'archived' remains a legal stored value (JOB_LIFECYCLES in constants.ts, migration 0021); it is
 // simply not settable through this route.
@@ -86,6 +96,7 @@ async function allocateJobNumber(db: D1Database): Promise<string | null> {
 
 interface Routing {
   job_no: string;
+  site_phase: number;
   address: string;
   address_city: string;
   address_state: string;
@@ -126,11 +137,26 @@ type RoutingResult = { ok: true; routing: Routing } | { ok: false; error: string
 /** Parse the SoR/routing block from a request body. All fields optional (default ''); a present
  *  contact email must be email-shaped; CC arrays bounded. Used by create (full) + contacts (edit). */
 function parseRouting(body: Record<string, unknown>): RoutingResult {
-  // 0057 — the Evergreen YYYY.NNN tracking number + the structured address block.
-  // job_no: empty (not yet assigned) or the exact Evergreen shape; the builders'
-  // dropdown autofill reads it back, so a malformed value is refused loudly here.
-  const job_no = str(body.job_no);
-  if (job_no && !/^\d{4}\.\d{3}$/.test(job_no)) return { ok: false, error: "invalid_job_no" };
+  // 0057 + 0064 — the Evergreen job identifier + the structured address block.
+  //
+  // The operator types the FULL identifier as Evergreen writes it — `YYYY.NNN` or, for a
+  // multi-site project, `YYYY.NNN.S` (MH405 = 2026.384.1, OG593 = 2026.384.2: one project,
+  // two sites). We SPLIT it on the way in: `job_no` keeps the two-segment project number and
+  // the third segment lands in `site_phase` (0064), which is the field D7 document numbering
+  // already carries. See the 0064 header for why the alternative — one three-segment job_no —
+  // was rejected (six-segment PO/SC numbers; both Mac-side parsers anchor two segments).
+  //
+  // Empty stays legal (not yet assigned). Anything else must match EXACTLY: the builders'
+  // dropdown autofill reads these back, so a malformed value is refused loudly here rather
+  // than silently truncated (the failure mode of the legacy name-prefix parse in po.ts).
+  const job_no_input = str(body.job_no);
+  const jobNoMatch = job_no_input ? JOB_NO_INPUT_RE.exec(job_no_input) : null;
+  if (job_no_input && !jobNoMatch) return { ok: false, error: "invalid_job_no" };
+  const job_no = jobNoMatch ? jobNoMatch[1] : "";
+  // Bounded to the SAME 0..9999 range po.ts:386 and subcontract.ts enforce on their own
+  // site_phase input, so a number that stores here can always compose a document number.
+  const site_phase = jobNoMatch && jobNoMatch[2] !== undefined ? parseInt(jobNoMatch[2], 10) : 0;
+  if (site_phase > MAX_SITE_PHASE) return { ok: false, error: "invalid_job_no" };
   const address = str(body.address);
   const address_city = str(body.address_city);
   if (address_city.length > MAX_NAME) return { ok: false, error: "invalid_address_city" };
@@ -162,7 +188,7 @@ function parseRouting(body: Record<string, unknown>): RoutingResult {
   return {
     ok: true,
     routing: {
-      job_no, address, address_city, address_state, address_zip,
+      job_no, site_phase, address, address_city, address_state, address_zip,
       stakeholder_name, stakeholder_email, stakeholder_phone,
       safety_contact_name, safety_contact_email, safety_cc,
       progress_contact_name, progress_contact_email, progress_cc,
@@ -210,13 +236,16 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
       if (!routed.ok) return c.json({ error: routed.error }, 400);
       const r = routed.routing;
 
-      // CREATE-ONLY: at least one Safety CC recipient is REQUIRED on a new job (up to the MAX_CC cap
-      // that parseCc already enforces). The weekly safety email CCs these addresses; a job created
-      // with none would silently ship to the primary recipient only. This guard lives HERE, NOT in
-      // the shared parseRouting/parseCc — the /contacts EDIT route below MUST still allow blanking
-      // the CC list (operator decision: required is create-only). Evaluated before the client insert
-      // + number allocation so a rejected create burns nothing.
-      if (r.safety_cc.length === 0) return c.json({ error: "safety_cc_required" }, 400);
+      // TOMBSTONE (operator decision, 2026-08-11): the CREATE-ONLY "at least one Safety CC" guard
+      // — an `r.safety_cc.length === 0` check returning 400 `safety_cc_required` (deliberately NOT
+      // written here in its literal `error:` form — tests/test_error_copy_parity.py scans this file
+      // for that shape and would then demand ERROR_COPY for a code the route can no longer emit) —
+      // was REMOVED. It existed because the weekly safety email CCs these addresses and a job with
+      // none ships to the primary recipient only; that remains true, but it is now a routing choice
+      // the operator makes per job rather than a create-time refusal. The /contacts EDIT route
+      // always allowed blanking the list, so a job could reach zero CCs the moment after it was
+      // created — the guard bought a one-request delay, not an invariant. CC bounds (≤MAX_CC,
+      // email-shaped, length-capped) are UNCHANGED and still enforced by parseCc above.
 
       // Client linkage: an existing client_id (verified) OR an inline new_client. Validate shapes.
       const clientIdRaw = typeof body.client_id === "number" && Number.isInteger(body.client_id) ? body.client_id : null;
@@ -271,21 +300,21 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
                  safety_contact_name, safety_contact_email, safety_cc,
                  progress_contact_name, progress_contact_email, progress_cc,
                  lifecycle, mirror_version,
-                 job_no, address_city, address_state, address_zip)
+                 job_no, address_city, address_state, address_zip, site_phase)
                VALUES (?1, ?2, 1, 'active', ?3, ?4, unixepoch(),
                        'portal', 'pending', ?1,
                        ?5, ?6, ?7, ?8,
                        ?9, ?10, ?11,
                        ?12, ?13, ?14,
                        'active', 1,
-                       ?15, ?16, ?17, ?18)`,
+                       ?15, ?16, ?17, ?18, ?19)`,
             )
             .bind(
               jobId, projectName, progress, clientId,
               r.address, r.stakeholder_name, r.stakeholder_email, r.stakeholder_phone,
               r.safety_contact_name, r.safety_contact_email, JSON.stringify(r.safety_cc),
               r.progress_contact_name, r.progress_contact_email, JSON.stringify(r.progress_cc),
-              r.job_no, r.address_city, r.address_state, r.address_zip,
+              r.job_no, r.address_city, r.address_state, r.address_zip, r.site_phase,
             ),
           auditStmt(c, actor, "job_create", jobId, { job_id: jobId, client_id: clientId, origin: "portal" }),
         ]);
@@ -393,7 +422,7 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
                safety_contact_name=?6, safety_contact_email=?7, safety_cc=?8,
                progress_contact_name=?9, progress_contact_email=?10, progress_cc=?11,
                job_no=?12, address_city=?13, address_state=?14, address_zip=?15,
-               project_name=COALESCE(?16, project_name),
+               project_name=COALESCE(?16, project_name), site_phase=?17,
                mirror_version=mirror_version+1, sync_state='pending'
              WHERE job_id=?1 AND origin='portal'`,
           )
@@ -403,7 +432,7 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
             r.safety_contact_name, r.safety_contact_email, JSON.stringify(r.safety_cc),
             r.progress_contact_name, r.progress_contact_email, JSON.stringify(r.progress_cc),
             r.job_no, r.address_city, r.address_state, r.address_zip,
-            projectName,
+            projectName, r.site_phase,
           ),
         auditStmtIfChanged(c, actor, "job_contacts", jobId, { job_id: jobId }),
       ]);

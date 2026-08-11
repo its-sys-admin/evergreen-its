@@ -373,6 +373,7 @@ describe("ship-to auto-fill feed", () => {
     expect(body).toEqual({
       job_id: "JOB-000017",
       job_no: "2026.001", // parsed YYYY.NNN prefix of the project name
+      site_phase: 0, // 0064 — no third segment in the name ⇒ no site breakdown
       ship_to_name: "2026.001 Sunrise Solar",
       ship_to_address: "100 Array Rd, Rockford IL",
       ship_to_city: "",
@@ -389,9 +390,49 @@ describe("ship-to auto-fill feed", () => {
       .bind("Sunrise Solar (no number)", "JOB-000017")
       .run();
     const res = await g(admin, "/api/po/jobs/JOB-000017/ship-to");
-    const body = await json<{ job_no: string; ship_to_name: string }>(res);
+    const body = await json<{ job_no: string; site_phase: number; ship_to_name: string }>(res);
     expect(body.job_no).toBe("");
+    expect(body.site_phase).toBe(0);
     expect(body.ship_to_name).toBe("Sunrise Solar (no number)");
+  });
+
+  // ── 0064: the name-prefix FALLBACK must not truncate a three-segment number ────────────────
+  // PROVE-THE-CONTROL-BITES. Before 0064 this regex was /^(\d{4}\.\d{3})/ — open at the tail.
+  // Against "2026.384.1 Coker Solar" it MATCHED and returned "2026.384", silently handing the PO
+  // builder a number belonging to a DIFFERENT site of the same project. Every other job_no
+  // validator in the system refuses loudly; this one corrupted. Reverting the regex to the old
+  // form fails these two cases.
+  it("0064: a three-segment name prefix yields BOTH parts, never a truncated job_no", async () => {
+    await env.DB.prepare("UPDATE jobs SET project_name=?1, job_no='' WHERE job_id=?2")
+      .bind("2026.384.1 Coker Solar", "JOB-000017")
+      .run();
+    const body = await json<{ job_no: string; site_phase: number }>(
+      await g(admin, "/api/po/jobs/JOB-000017/ship-to"),
+    );
+    expect(body.job_no).toBe("2026.384");
+    expect(body.site_phase).toBe(1); // the segment the old regex threw away
+  });
+
+  it("0064: a STORED identifier wins over the name parse, and both parts come from one source", async () => {
+    // A deliberately CONFLICTING name: were the two mixed, this would compose 2026.384.7.
+    await env.DB.prepare("UPDATE jobs SET project_name=?1, job_no=?2, site_phase=?3 WHERE job_id=?4")
+      .bind("2020.999.7 Stale Name", "2026.384", 2, "JOB-000017")
+      .run();
+    const body = await json<{ job_no: string; site_phase: number }>(
+      await g(admin, "/api/po/jobs/JOB-000017/ship-to"),
+    );
+    expect(body.job_no).toBe("2026.384");
+    expect(body.site_phase).toBe(2); // the STORED site, not the name's 7
+  });
+
+  it("0064: a stored two-segment job_no reports site_phase 0, not the name's segment", async () => {
+    await env.DB.prepare("UPDATE jobs SET project_name=?1, job_no=?2, site_phase=0 WHERE job_id=?3")
+      .bind("2026.384.5 Named Site", "2026.384", "JOB-000017")
+      .run();
+    const body = await json<{ job_no: string; site_phase: number }>(
+      await g(admin, "/api/po/jobs/JOB-000017/ship-to"),
+    );
+    expect(body.site_phase).toBe(0);
   });
 
   it("404s an unknown job_id", async () => {

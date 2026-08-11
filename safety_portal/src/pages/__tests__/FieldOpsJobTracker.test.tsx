@@ -130,6 +130,7 @@ const DETAIL: api.JobDetail = {
   archive: null,
   progress: 60,
   job_no: "2026.123",
+  site_phase: 0,
   routing: {
     address: "100 Coker Rd", address_city: "Rockford", address_state: "IL", address_zip: "61101",
     stakeholder_name: "", stakeholder_email: "", stakeholder_phone: "",
@@ -296,7 +297,7 @@ describe("FieldOpsJobTracker — write UI", () => {
     // Slice 6: no Job ID input — the office employee types only the Project Name; the portal assigns the id.
     fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "Charlie" } });
     fireEvent.change(getByPlaceholderText("Client name (optional)"), { target: { value: "Globex" } });
-    // Safety CC is now REQUIRED on create — supply one.
+    // (A Safety CC is optional since 2026-08-11; kept here to pin the CC payload shape.)
     fireEvent.click(getAllByText("+ Add CC")[0]); // Safety CC
     fireEvent.change(getByLabelText("Safety CC 1"), { target: { value: "scc@ex.com" } });
     fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
@@ -357,8 +358,9 @@ describe("FieldOpsJobTracker — write UI", () => {
     );
   });
 
-  // ── Safety CC on create: delivery-contacts datalist + required-on-create (2026-07-24) ────────────
-  it("create BLOCKS submit when no Safety CC is entered, with an inline required message", async () => {
+  // ── Safety CC on create: delivery-contacts datalist (2026-07-24); the required-on-create
+  //    block was REMOVED 2026-08-11 (operator decision) — this is the INVERTED regression.
+  it("create SUBMITS with no Safety CC entered (the required-on-create block was removed)", async () => {
     vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
     vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
     vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
@@ -367,13 +369,55 @@ describe("FieldOpsJobTracker — write UI", () => {
 
     fireEvent.click(getByText("+ New job"));
     fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "Charlie" } });
-    // No Safety CC added → submit must be blocked client-side (the Worker also 400s independently).
+    // No Safety CC added — this used to be blocked client-side before the request was sent.
+    fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
+
+    await waitFor(() => expect(api.createJob).toHaveBeenCalledWith({ project_name: "Charlie" }));
+    expect(container.textContent ?? "").not.toContain("At least one Safety CC recipient is required.");
+  });
+
+  // ── 0064: the Evergreen identifier's third segment ───────────────────────────────────────────
+  it("create accepts a three-segment Evergreen number and sends it whole for the Worker to split", async () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
+    const { container, getByText, getByLabelText, getByPlaceholderText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+
+    fireEvent.click(getByText("+ New job"));
+    fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "MH405" } });
+    fireEvent.change(getByLabelText("Evergreen job number"), { target: { value: "2026.384.1" } });
+    fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
+
+    await waitFor(() =>
+      expect(api.createJob).toHaveBeenCalledWith({ project_name: "MH405", job_no: "2026.384.1" }),
+    );
+  });
+
+  it("the job-number input admits all 13 characters of the longest identifier (was maxLength 8)", () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    const { getByText, getByLabelText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    fireEvent.click(getByText("+ New job"));
+    // maxLength 8 silently truncated "2026.384.1" to "2026.384" AS THE OPERATOR TYPED — the
+    // number looked plausible and belonged to a different site. Regression teeth.
+    expect((getByLabelText("Evergreen job number") as HTMLInputElement).maxLength).toBe(13);
+  });
+
+  it("create REFUSES a malformed Evergreen number inline, without a round-trip", async () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
+    const { container, getByText, getByLabelText, getByPlaceholderText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+
+    fireEvent.click(getByText("+ New job"));
+    fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "Bad" } });
+    fireEvent.change(getByLabelText("Evergreen job number"), { target: { value: "2026.384.1.2" } });
     fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
 
     expect(api.createJob).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(container.textContent ?? "").toContain("At least one Safety CC recipient is required."),
-    );
+    await waitFor(() => expect(container.textContent ?? "").toContain("must look like 2026.384 or 2026.384.1"));
   });
 
   it("create Safety CC renders a <datalist> of delivery-contact emails (Progress CC gets none)", async () => {

@@ -138,8 +138,6 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_email: "Enter a valid email address.",
   invalid_phone: "The phone number isn't valid.",
   invalid_cc: "CC lists take up to 5 valid email addresses.",
-  // Create-only: the /contacts edit route deliberately still allows blanking the list.
-  safety_cc_required: "Add at least one safety CC contact — it's required when creating a job.",
   invalid_contact_name: "The contact name isn't valid.",
   invalid_client_name: "Enter a client name.",
   invalid_client_id: "Pick a valid client.",
@@ -244,7 +242,7 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_region: "That isn't a valid region.",
   vendor_exists: "That vendor already exists.",
   unknown_vendor: "That vendor doesn't exist or is inactive — pick another.",
-  invalid_job_no: "The job number must look like 2023.126 (year.number).",
+  invalid_job_no: "The job number must look like 2026.384, or 2026.384.1 for a specific site.",
   invalid_address_city: "The job city doesn't fit — up to 256 characters.",
   invalid_address_state: "The job state must be the 2-letter abbreviation (e.g. IL).",
   invalid_address_zip: "The job ZIP doesn't fit — up to 16 characters.",

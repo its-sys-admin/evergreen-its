@@ -339,6 +339,70 @@ describe("0057 — job_no + structured address", () => {
     ).toBe(400);
   });
 
+  // ── 0064: the three-segment Evergreen identifier ──────────────────────────────────────────
+  // Evergreen numbers a job SITE as YYYY.NNN.S — MH405 is 2026.384.1, OG593 is 2026.384.2: one
+  // project, two sites. The route SPLITS the typed identifier so job_no stays two-segment (every
+  // other job_no validator and both Mac-side document-number parsers depend on that) and the site
+  // lands in site_phase, the field D7 numbering already carries.
+  it("0064: a three-segment job_no is SPLIT into (job_no, site_phase)", async () => {
+    const id = await createOk(admin, { project_name: "MH405", job_no: "2026.384.1" });
+    const row = await jobRow(id);
+    expect(row.job_no).toBe("2026.384"); // two-segment, as every downstream validator expects
+    expect(row.site_phase).toBe(1);
+  });
+
+  it("0064: same project, different sites → same job_no, different site_phase", async () => {
+    const mh = await createOk(admin, { project_name: "MH405", job_no: "2026.384.1" });
+    const og = await createOk(admin, { project_name: "OG593", job_no: "2026.384.2" });
+    const [a, b] = [await jobRow(mh), await jobRow(og)];
+    expect(a.job_no).toBe(b.job_no); // 2026.384 — the shared PROJECT number
+    expect([a.site_phase, b.site_phase]).toEqual([1, 2]); // the sites are what differ
+  });
+
+  it("0064: a two-segment job_no still stores site_phase 0 (no site breakdown)", async () => {
+    const id = await createOk(admin, { project_name: "Legacy", job_no: "2026.123" });
+    const row = await jobRow(id);
+    expect(row.job_no).toBe("2026.123");
+    expect(row.site_phase).toBe(0);
+  });
+
+  it("0064: a job created WITHOUT a job_no defaults to site_phase 0, never null", async () => {
+    const row = await jobRow(await createOk(admin, { project_name: "NoNumber" }));
+    expect(row.job_no).toBe("");
+    expect(row.site_phase).toBe(0); // NOT NULL DEFAULT 0 — safe to read without a COALESCE
+  });
+
+  it("0064: malformed third segments are refused, never silently truncated to the project number", async () => {
+    // The failure mode this guards: accepting the string and storing only "2026.384" would file
+    // MH405's documents under a number that belongs to no particular site.
+    for (const bad of ["2026.384.", "2026.384.1.2", "2026.384.x", "2026.384.10000", "2026.384 .1"]) {
+      const res = await j(admin, "/api/fieldops/job", { project_name: "Bad", job_no: bad, safety_cc: ["c@x.com"] });
+      expect(res.status, `expected 400 for job_no ${JSON.stringify(bad)}`).toBe(400);
+      expect(((await res.json()) as any).error).toBe("invalid_job_no");
+    }
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>()).toMatchObject({ n: 0 });
+  });
+
+  it("0064: site_phase 9999 is accepted (the D7 ceiling) and 10000 is not", async () => {
+    const row = await jobRow(await createOk(admin, { project_name: "Edge", job_no: "2026.384.9999" }));
+    expect(row.site_phase).toBe(9999);
+    const over = await j(admin, "/api/fieldops/job", { project_name: "Over", job_no: "2026.384.10000", safety_cc: ["c@x.com"] });
+    expect(over.status).toBe(400);
+  });
+
+  it("0064: the /contacts EDIT route re-splits too — changing the site updates site_phase", async () => {
+    const id = await createOk(admin, { project_name: "Movable", job_no: "2026.384.1" });
+    expect((await j(admin, `/api/fieldops/job/${id}/contacts`, { job_no: "2026.384.2" })).status).toBe(200);
+    const row = await jobRow(id);
+    expect(row.job_no).toBe("2026.384");
+    expect(row.site_phase).toBe(2);
+    // Clearing the number clears BOTH halves — no orphan site left behind on the row.
+    expect((await j(admin, `/api/fieldops/job/${id}/contacts`, { address: "1 Main St" })).status).toBe(200);
+    const cleared = await jobRow(id);
+    expect(cleared.job_no).toBe("");
+    expect(cleared.site_phase).toBe(0);
+  });
+
   it("/contacts optional project_name: present renames, ABSENT leaves it unchanged, blank is 400", async () => {
     const jobId = await createOk(admin, { project_name: "Old Name", job_no: "2026.123" });
     // Absent → unchanged (the routing full-overwrite does NOT extend to the name).
@@ -405,26 +469,44 @@ describe("0057 — job_no + structured address", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Safety CC on create — REQUIRED-ON-CREATE + the delivery-contacts read route (2026-07-24).
-// The weekly safety email CCs jobs.safety_cc; a job created with none silently ships to the
-// primary recipient only. Required is CREATE-ONLY — the /contacts EDIT route still allows blanking.
+// Safety CC on create — OPTIONAL since 2026-08-11 (operator decision). It was required-on-create
+// from 2026-07-24 until then; the guard is gone from both the Worker and the SPA. The CC BOUNDS
+// (≤MAX_CC, email-shaped, length-capped) are unchanged. Case (i) is the inverted regression: the
+// exact three bodies that used to 400 must now succeed.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("Safety CC required-on-create + delivery-contacts read route", () => {
-  it("(i) create with an empty safety_cc → 400 safety_cc_required (no number burned)", async () => {
-    // Absent key.
+describe("Safety CC optional-on-create + delivery-contacts read route", () => {
+  it("(i) INVERTED: create with an empty safety_cc now SUCCEEDS (the create-only guard was removed)", async () => {
+    // Absent key — the body that used to return 400 safety_cc_required.
     const noKey = await j(admin, "/api/fieldops/job", { project_name: "NoCC" });
-    expect(noKey.status).toBe(400);
-    expect(((await noKey.json()) as any).error).toBe("safety_cc_required");
+    expect(noKey.status, await noKey.clone().text()).toBe(201);
+    expect(((await noKey.json()) as any).job_id).toBe("JOB-000017");
     // Explicit empty array (parseCc → []).
-    const emptyArr = await j(admin, "/api/fieldops/job", { project_name: "NoCC", safety_cc: [] });
-    expect(emptyArr.status).toBe(400);
-    expect(((await emptyArr.json()) as any).error).toBe("safety_cc_required");
-    // A whitespace-only entry is skipped by parseCc → still empty → refused.
-    const blank = await j(admin, "/api/fieldops/job", { project_name: "NoCC", safety_cc: ["   "] });
-    expect(blank.status).toBe(400);
-    // No row written, and the counter never advanced — the next valid create is still JOB-000017.
+    const emptyArr = await j(admin, "/api/fieldops/job", { project_name: "NoCC2", safety_cc: [] });
+    expect(emptyArr.status).toBe(201);
+    // A whitespace-only entry is skipped by parseCc → still empty → still fine.
+    const blank = await j(admin, "/api/fieldops/job", { project_name: "NoCC3", safety_cc: ["   "] });
+    expect(blank.status).toBe(201);
+    // All three really landed, and each stored an EMPTY CC list rather than a mangled one.
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>()).toMatchObject({ n: 3 });
+    expect(JSON.parse((await jobRow("JOB-000017")).safety_cc)).toEqual([]);
+    // The counter advanced once per create — no number was burned or skipped.
+    expect(((await blank.json()) as any).job_id).toBe("JOB-000019");
+  });
+
+  it("(i-b) the CC BOUNDS survive the guard removal — over-cap and malformed are still 400", async () => {
+    // >MAX_CC (5) entries.
+    const overCap = await j(admin, "/api/fieldops/job", {
+      project_name: "TooMany",
+      safety_cc: ["a@x.com", "b@x.com", "c@x.com", "d@x.com", "e@x.com", "f@x.com"],
+    });
+    expect(overCap.status).toBe(400);
+    expect(((await overCap.json()) as any).error).toBe("invalid_cc");
+    // A non-email-shaped entry.
+    const malformed = await j(admin, "/api/fieldops/job", { project_name: "BadCc", safety_cc: ["not-an-email"] });
+    expect(malformed.status).toBe(400);
+    expect(((await malformed.json()) as any).error).toBe("invalid_cc");
+    // Neither burned a row.
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first<{ n: number }>()).toMatchObject({ n: 0 });
-    expect(await createOk(admin, { project_name: "ok", safety_cc: ["s@x.com"] })).toBe("JOB-000017");
   });
 
   it("(ii) create with ≥1 valid safety_cc → 201 + the row stores the CC", async () => {
@@ -433,7 +515,7 @@ describe("Safety CC required-on-create + delivery-contacts read route", () => {
     expect(JSON.parse(row.safety_cc)).toEqual(["cc1@x.com", "cc2@x.com"]);
   });
 
-  it("(iii) REGRESSION: the /contacts EDIT route still ACCEPTS an empty safety_cc (required is create-only)", async () => {
+  it("(iii) REGRESSION: the /contacts EDIT route still ACCEPTS an empty safety_cc", async () => {
     const id = await createOk(admin, { project_name: "EditMe", safety_cc: ["cc1@x.com"] });
     // An edit that omits safety_cc (full-overwrite → clears it) must SUCCEED — never 400.
     const res = await j(admin, `/api/fieldops/job/${id}/contacts`, { address: "1 Main St" });

@@ -98,7 +98,7 @@ const VENDORS: api.Vendor[] = [
   },
 ];
 
-const JOBS = [{ job_id: "JOB-000001", project_name: "2023.126 Kendall Solar", job_no: "" }];
+const JOBS = [{ job_id: "JOB-000001", project_name: "2023.126 Kendall Solar", job_no: "", site_phase: 0 }];
 
 const CATALOG: api.CatalogMaterial[] = [
   { id: 11, model_id: "Q.PEAK_DUO_XL-G11.3_BFG", manufacturer: "Qcells", category: "module", key_specs: "570-585Wp bifacial" },
@@ -110,6 +110,7 @@ const CATALOG: api.CatalogMaterial[] = [
 const EMPTY_SHIPTO: api.JobShipTo = {
   job_id: "JOB-000001",
   job_no: "",
+  site_phase: 0,
   ship_to_name: "",
   ship_to_address: "",
   ship_to_city: "",
@@ -398,6 +399,7 @@ describe("PoBuilderPage — ship-to auto-fill (S6 follow-up)", () => {
   const FILLED: api.JobShipTo = {
     job_id: "JOB-000001",
     job_no: "2023.126",
+    site_phase: 0,
     ship_to_name: "2023.126 Kendall Solar",
     ship_to_address: "742 Panel Way",
     ship_to_city: "",
@@ -536,6 +538,7 @@ describe("PoBuilderPage — configured delivery-contact suggestions (Feature C)"
     vi.mocked(api.fetchJobShipTo).mockResolvedValue({
       job_id: "JOB-000001",
       job_no: "2023.126",
+      site_phase: 0,
       ship_to_name: "2023.126 Kendall Solar",
       ship_to_address: "742 Panel Way",
       ship_to_city: "",
