@@ -442,9 +442,11 @@ export function JobMaterialsPage({
                           ? "Ready to check"
                           : m.status === "pending" || m.status === "claimed"
                             ? "Being read…"
-                            : m.status === "refused"
-                              ? `Refused${m.detail ? ` — ${m.detail}` : ""}`
-                              : m.status}
+                            : m.status === "committed"
+                              ? "Imported"
+                              : m.status === "refused"
+                                ? `Refused${m.detail ? ` — ${m.detail}` : ""}`
+                                : m.status}
                       </td>
                       <td>{m.row_count ?? "—"}</td>
                       <td>
@@ -457,6 +459,37 @@ export function JobMaterialsPage({
                         >
                           {m.status === "parsed" ? "Check & import" : "Open"}
                         </button>
+                        {/* Remove (operator request 2026-08-11): a refused or stale upload
+                            used to sit in this list forever with no way off it. Discards
+                            the manifest — same action as the validate screen's button; the
+                            row is retained in D1 for audit but stops rendering. An
+                            IMPORTED manifest keeps its row (it is the provenance of lines
+                            now on the list; the Worker refuses its discard anyway). */}
+                        {m.status !== "committed" ? (
+                          <>
+                            {" "}
+                            <ConfirmDelete
+                              actionLabel="Remove"
+                              ariaLabel={`Remove ${m.filename}`}
+                              copy={
+                                m.status === "committing"
+                                  ? "Stop this import and remove it? Lines already imported stay on the list."
+                                  : "Remove this upload from the list?"
+                              }
+                              busy={manifestBusy}
+                              onConfirm={() =>
+                                void (async () => {
+                                  try {
+                                    await manifests.discardManifest(m.id);
+                                  } catch {
+                                    /* surfaced by the list not changing; refresh below */
+                                  }
+                                  loadManifests();
+                                })()
+                              }
+                            />
+                          </>
+                        ) : null}
                       </td>
                     </tr>
                   ))}

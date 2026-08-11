@@ -701,10 +701,15 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
     const limit = Math.min(Math.max(parseInt(c.req.query("limit") || "50", 10) || 50, 1), LIST_CAP);
     const { results } = await c.env.DB
       .prepare(
+        // Discarded rows are EXCLUDED (2026-08-11): "Remove" on the Materials page is a
+        // discard, and a removed row reappearing as `discarded` would make the button look
+        // broken. The row itself is retained in D1 (audit trail + the dedupe index ignores
+        // it), it just stops rendering.
         "SELECT id, manifest_uuid, job_id, filename, declared_mime, size_bytes, status, detail, " +
           "profile, row_count, mode, committed_through_row, uploaded_by, box_file_id, " +
           "created_at, parsed_at, committed_at " +
-          "FROM job_manifests WHERE job_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2",
+          "FROM job_manifests WHERE job_id = ?1 AND status <> 'discarded' " +
+          "ORDER BY created_at DESC, id DESC LIMIT ?2",
       )
       .bind(jobId, limit)
       .all<Record<string, unknown>>();
