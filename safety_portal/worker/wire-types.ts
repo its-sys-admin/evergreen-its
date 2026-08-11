@@ -357,6 +357,10 @@ export interface ExpectedMaterialsResponse {
   // fails `npm run typecheck` — that is the registry teeth keeping the two surfaces in step.
   shipments: MaterialShipmentRow[];
   receipt_events: MaterialReceiptEventRow[];
+  /** The job's display name for the page heading ("Materials — Deep Lake", never the
+   *  JOB-###### key). REQUIRED for the same mock-teeth reason; null when the job row
+   *  vanished mid-read. */
+  project_name: string | null;
 }
 
 // ── GET /api/fieldops/checklist/assigned ────────────────────────────────────────────────────────

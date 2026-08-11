@@ -81,6 +81,7 @@ beforeEach(() => {
     expected_materials: [LINE],
     shipments: [SHIPMENT],
     receipt_events: [EVENT],
+    project_name: "Deep Lake",
   });
   vi.mocked(fetchMaterials).mockResolvedValue({ materials: [], next_cursor: null });
 });
@@ -100,6 +101,10 @@ describe("JobMaterialsPage — what it shows", () => {
     const { container } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(container.textContent ?? "").toContain("1P driven pile W8x10"));
     const text = container.textContent ?? "";
+    // The heading says the job's NAME, never the JOB-###### system key (operator
+    // request 2026-08-11 — the field doesn't speak job ids).
+    expect(text).toContain("Materials — Deep Lake");
+    expect(text).not.toContain("Materials — JOB-");
     expect(text).toContain("Part 805275");
     expect(text).toContain("ships 2026-06-26"); // the SHIP date — new in PR2
     expect(text).toContain("due 2026-06-29"); // expected_date, relabelled as delivery
@@ -258,7 +263,7 @@ describe("JobMaterialsPage — never-silent load states", () => {
     expect(alert.textContent ?? "").toContain("Could not load");
 
     vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({
-      expected_materials: [LINE], shipments: [], receipt_events: [],
+      expected_materials: [LINE], shipments: [], receipt_events: [], project_name: "Deep Lake",
     });
     fireEvent.click(getByText("Retry"));
     await waitFor(() => expect(api.fetchExpectedMaterials).toHaveBeenCalledTimes(2));
@@ -266,7 +271,7 @@ describe("JobMaterialsPage — never-silent load states", () => {
 
   it("an empty list says so rather than rendering nothing", async () => {
     vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({
-      expected_materials: [], shipments: [], receipt_events: [],
+      expected_materials: [], shipments: [], receipt_events: [], project_name: "Deep Lake",
     });
     const { container } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() =>

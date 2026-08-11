@@ -248,7 +248,7 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       // PR2 — one read, three projections, ONE batch. A separate "materials page" read would be
       // free to drift from the daily form's read; keeping one wire shape is what stops the two
       // surfaces disagreeing about a delivery.
-      const [lines, shipments, events] = await c.env.DB.batch([
+      const [lines, shipments, events, jobRow] = await c.env.DB.batch([
         c.env.DB
           .prepare(
             `SELECT jem.id, jem.material_id,
@@ -289,11 +289,19 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
              LIMIT 2000`,
           )
           .bind(jobId),
+        // The job's display name — the page's heading says "Materials — Deep Lake", not
+        // the JOB-###### key (operator request 2026-08-11). Rides the same batch; the
+        // route is deep-linkable, so the name must come from data, not navigation state.
+        c.env.DB
+          .prepare("SELECT project_name FROM jobs WHERE job_id = ?1")
+          .bind(jobId),
       ]);
       const payload: ExpectedMaterialsResponse = {
         expected_materials: (lines.results ?? []) as ExpectedMaterialRow[],
         shipments: (shipments.results ?? []) as MaterialShipmentRow[],
         receipt_events: (events.results ?? []) as MaterialReceiptEventRow[],
+        project_name:
+          ((jobRow.results?.[0] as { project_name?: string } | undefined)?.project_name) ?? null,
       };
       return c.json(payload, 200);
     },

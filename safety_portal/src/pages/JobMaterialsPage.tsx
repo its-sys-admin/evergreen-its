@@ -106,6 +106,7 @@ export function JobMaterialsPage({
     lines: api.ExpectedMaterialRow[];
     shipments: api.MaterialShipmentRow[];
     events: api.MaterialReceiptEventRow[];
+    project_name: string | null;
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -158,7 +159,10 @@ export function JobMaterialsPage({
     api
       .fetchExpectedMaterials(jobId)
       .then((d) =>
-        setData({ lines: d.expected_materials, shipments: d.shipments, events: d.receipt_events }),
+        setData({
+          lines: d.expected_materials, shipments: d.shipments, events: d.receipt_events,
+          project_name: d.project_name,
+        }),
       )
       .catch(() => setLoadError("Could not load this job's materials."));
   }, [jobId]);
@@ -342,7 +346,9 @@ export function JobMaterialsPage({
           ← Back to job
         </button>
       </div>
-      <h1 className="page__heading">Materials — {jobId}</h1>
+      {/* The job NAME, not the JOB-###### key (operator request 2026-08-11) — the key is a
+          system identifier the field never speaks; the id falls back only while loading. */}
+      <h1 className="page__heading">Materials — {data?.project_name ?? jobId}</h1>
       <p className="dash__intro">
         What this job is expecting, when each part is due to ship and arrive, and what has actually
         turned up. {canMark ? "Mark each line as loads arrive — a line can be marked more than once." : null}

@@ -120,7 +120,7 @@ beforeEach(() => {
   vi.mocked(jobs.fetchJobDetail).mockResolvedValue(DETAIL);
   vi.mocked(fetchDailyFormStatus).mockResolvedValue(EMPTY_STATUS);
   vi.mocked(fetchDailyRequirements).mockResolvedValue([]);
-  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [] });
+  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [], project_name: "Deep Lake" });
   vi.mocked(receiveExpectedMaterial).mockResolvedValue(undefined);
   vi.mocked(flagExpectedMaterialIncident).mockResolvedValue(undefined);
   vi.mocked(api.fetchRecent).mockResolvedValue(null);
@@ -686,7 +686,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   it("files the day's expected-materials SNAPSHOT with the submission (the v7 inversion)", async () => {
     vi.mocked(fetchExpectedMaterials).mockResolvedValue({
       expected_materials: [{ ...PENDING, part_number: "7000153", qty_received_total: null }],
-      shipments: [], receipt_events: [],
+      shipments: [], receipt_events: [], project_name: "Deep Lake",
     });
     const { getByLabelText, container } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(container.textContent ?? "").toContain("Q.PEAK DUO"));
@@ -726,7 +726,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
     //
     // Asserted through UNMOUNT, which is what flushes the debounced draft write — checking
     // sessionStorage while still mounted proves nothing, because the timer has not fired yet.
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const view = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(view.container.textContent ?? "").toContain("Q.PEAK DUO"));
     view.unmount();
@@ -735,7 +735,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   });
 
   it("fetches the job's expected materials and renders the pending row inside the form", async () => {
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(container.textContent ?? "").toContain("Q.PEAK DUO"));
     expect(fetchExpectedMaterials).toHaveBeenCalledWith("JOB-A");
@@ -745,7 +745,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   });
 
   it("Confirm receipt fires the M1 receive route, flips the pill, and APPENDS a Deliveries Received row", async () => {
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(container.textContent ?? "").toContain("Q.PEAK DUO"));
     fireEvent.click(getByLabelText("Confirm receipt of Q.PEAK DUO"));
@@ -778,7 +778,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   });
 
   it("the Confirm-receipt append is draft-persisted (survives an unmount like typed work)", async () => {
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const first = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(first.container.textContent ?? "").toContain("Q.PEAK DUO"));
     fireEvent.click(first.getByLabelText("Confirm receipt of Q.PEAK DUO"));
@@ -790,7 +790,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   });
 
   it("Report a problem prompts for the REQUIRED note, flags the row, and deep-links material-incident prefilled", async () => {
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Crushed corner on 3 pallets");
     const onOpenForm = vi.fn();
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={onOpenForm} />);
@@ -819,7 +819,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   it("M3 Slice 1 — a row with a NULL line_uuid deep-links WITHOUT a line_uuid value (a valid unlinked incident)", async () => {
     vi.mocked(fetchExpectedMaterials).mockResolvedValue({
       expected_materials: [{ ...PENDING, line_uuid: null }],
-      shipments: [],
+      shipments: [], project_name: "Deep Lake",
       receipt_events: [],
     });
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Short shipment");
@@ -835,7 +835,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   });
 
   it("a cancelled prompt does nothing; an empty note errors WITHOUT flagging (the note is required)", async () => {
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue(null);
     const onOpenForm = vi.fn();
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={onOpenForm} />);
@@ -853,7 +853,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   });
 
   it("a failed receive surfaces the action error inline and does NOT flip or append (never silent)", async () => {
-    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+    vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     vi.mocked(receiveExpectedMaterial).mockRejectedValue(new Error("Already received by someone else."));
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(container.textContent ?? "").toContain("Q.PEAK DUO"));
@@ -868,7 +868,7 @@ describe("DailyReportTab — expected-materials receipt flow (Material receipts 
   it("a fetch failure soft-warns with a WORKING Retry — the form stays fillable (never silent)", async () => {
     vi.mocked(fetchExpectedMaterials)
       .mockRejectedValueOnce(new ApiError(null, 500))
-      .mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [] });
+      .mockResolvedValue({ expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Deep Lake" });
     const { container, getByLabelText } = render(<DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />);
     // R1 convention: the ApiError's HUMAN copy surfaces; the `what`-scoped Retry disambiguates
     // it from any sibling (status / requirements) warn.
