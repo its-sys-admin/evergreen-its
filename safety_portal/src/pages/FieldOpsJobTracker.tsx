@@ -423,6 +423,11 @@ export function FieldOpsJobTracker({
   // New-job form (list view)
   const [newJobName, setNewJobName] = useState("");
   const [newJobClient, setNewJobClient] = useState("");
+  // Client picker (2026-08-11). "" = no client · "new" = the free-text escape hatch · otherwise
+  // the chosen client's id as a string. Defaults to "" so an untouched form still sends NO client
+  // key at all, keeping the minimal-create contract byte-identical.
+  const [newJobClientId, setNewJobClientId] = useState("");
+  const [clientOptions, setClientOptions] = useState<api.ClientOption[]>([]);
   const [newJobOpen, setNewJobOpen] = useState(false);
   const [createRouting, setCreateRouting] = useState<RoutingForm>(EMPTY_ROUTING); // P2.5 routing SoR
   // Delivery-contact suggestions for the create form's Safety CC <datalist> (fetched when the form
@@ -547,6 +552,17 @@ export function FieldOpsJobTracker({
       .then((cs) => live && setDeliveryContacts(cs))
       .catch(() => {
         /* best-effort: datalist absent, free-text CC entry still works */
+      });
+    // The client picker's options, fetched on the same trigger. Also best-effort, and the
+    // degraded state is deliberately SAFE: an empty list leaves only "No client" and
+    // "+ New client…", so a failed load can never silently bind a job to the WRONG existing
+    // client — the worst case is the operator typing a name, which the Worker then
+    // find-or-creates onto the right row anyway (§45).
+    api
+      .fetchClients()
+      .then((cs) => live && setClientOptions(cs))
+      .catch(() => {
+        /* best-effort: picker shows only "No client" / "+ New client…" */
       });
     return () => {
       live = false;
@@ -752,14 +768,25 @@ export function FieldOpsJobTracker({
     setActionMsg(null);
     try {
       const clientName = newJobClient.trim();
+      // Client linkage. An EXISTING pick sends client_id (the row is reused, never duplicated);
+      // "new" sends new_client. The two are mutually exclusive — the Worker 400s on both, and it
+      // now find-or-creates by name anyway, so a name that already exists reuses its row even
+      // through this branch.
+      const clientLink =
+        newJobClientId && newJobClientId !== "new"
+          ? { client_id: Number(newJobClientId) }
+          : newJobClientId === "new" && clientName
+            ? { new_client: { name: clientName } }
+            : {};
       // Slice 6: no job_id in the body — the worker assigns the next JOB-###### and returns it.
       const created = await api.createJob({
         project_name: projectName,
-        ...(clientName ? { new_client: { name: clientName } } : {}),
+        ...clientLink,
         ...routingPayload(createRouting),
       });
       setNewJobName("");
       setNewJobClient("");
+      setNewJobClientId("");
       setCreateRouting(EMPTY_ROUTING);
       setNewJobOpen(false);
       await reloadList();
@@ -1729,12 +1756,32 @@ export function FieldOpsJobTracker({
                   placeholder="Project name"
                   maxLength={256}
                 />{" "}
-                <input
-                  value={newJobClient}
-                  onChange={(e) => setNewJobClient(e.target.value)}
-                  placeholder="Client name (optional)"
-                  maxLength={256}
-                />
+                <select
+                  aria-label="Client"
+                  value={newJobClientId}
+                  onChange={(e) => {
+                    setNewJobClientId(e.target.value);
+                    if (e.target.value !== "new") setNewJobClient("");
+                  }}
+                >
+                  <option value="">No client</option>
+                  {api.collapseClients(clientOptions).map((cl) => (
+                    <option key={cl.id} value={String(cl.id)}>{cl.name}</option>
+                  ))}
+                  <option value="new">+ New client…</option>
+                </select>
+                {newJobClientId === "new" && (
+                  <>
+                    {" "}
+                    <input
+                      aria-label="New client name"
+                      value={newJobClient}
+                      onChange={(e) => setNewJobClient(e.target.value)}
+                      placeholder="New client name"
+                      maxLength={256}
+                    />
+                  </>
+                )}
               </div>
               <RoutingFields routing={createRouting} onChange={setCreateRouting} showName={false} safetyCcContacts={deliveryContacts} />
               <div className="dash-row">
@@ -1744,6 +1791,10 @@ export function FieldOpsJobTracker({
                   onClick={() => {
                     setNewJobOpen(false);
                     setCreateRouting(EMPTY_ROUTING);
+                    // Clear the client selection too — a cancelled form that reopens still
+                    // holding the last pick would silently attach the NEXT job to it.
+                    setNewJobClientId("");
+                    setNewJobClient("");
                   }}
                   className="btn--secondary"
                 >

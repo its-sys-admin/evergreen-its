@@ -144,10 +144,49 @@ export async function createJob(
   body: {
     project_name: string;
     progress?: number;
+    /** Link an EXISTING client. Mutually exclusive with new_client (the Worker 400s on both). */
+    client_id?: number;
     new_client?: NewJobClient;
   } & JobRouting,
 ): Promise<{ job_id: string }> {
   return postJson<{ ok: boolean; job_id: string }>("/api/fieldops/job", body);
+}
+
+/** One row of GET /api/fieldops/clients — the create form's client picker. */
+export interface ClientOption {
+  id: number;
+  name: string;
+  /** How many jobs point at THIS row. Names are not unique (the historic duplicate-client
+   *  defect), so the picker collapses same-named rows and uses this to choose which id
+   *  survives — most-used wins, lowest id breaks the tie. */
+  jobs: number;
+}
+
+/** The client list for the create form's picker. cap.jobtracker.manage; read-only. */
+export async function fetchClients(): Promise<ClientOption[]> {
+  const res = await fetch("/api/fieldops/clients", { credentials: "same-origin" });
+  if (!res.ok) throw new Error("Could not load clients.");
+  return ((await res.json()) as { clients: ClientOption[] }).clients;
+}
+
+/** Collapse same-named client rows into ONE option the operator can actually tell apart.
+ *
+ *  Live D1 carries four rows named "KSI" (three of them each holding a job) because the create
+ *  form used to mint a new row every time. A raw picker would render "KSI" four times with no way
+ *  to choose correctly. Rule: group case-insensitively by trimmed name, keep the id with the MOST
+ *  jobs, lowest id breaking the tie — deterministic, and it steers new jobs onto the row already
+ *  in use rather than deepening the split. Existing duplicates are NOT deleted here; retiring them
+ *  is a separate data decision. */
+export function collapseClients(rows: ClientOption[]): ClientOption[] {
+  const byName = new Map<string, ClientOption>();
+  for (const r of rows) {
+    const key = r.name.trim().toLowerCase();
+    const cur = byName.get(key);
+    if (!cur || r.jobs > cur.jobs || (r.jobs === cur.jobs && r.id < cur.id)) {
+      byName.set(key, { ...r, name: r.name.trim() });
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 // TOMBSTONE (R4-F5, 2026-07-03): the dead client fns `closeJob` (POST …/close) and
 // `setJobProgress` (POST …/progress) were DELETED — zero SPA callers since setLifecycle (P2.5)

@@ -16,6 +16,7 @@ vi.mock("../../lib/fieldops_jobtracker", async (importOriginal) => {
     fetchJobDetail: vi.fn(),
     createJob: vi.fn(),
     getDeliveryContacts: vi.fn(),
+    fetchClients: vi.fn(), // collapseClients stays REAL — pure logic, asserted through the picker
     setLifecycle: vi.fn(),
     editContacts: vi.fn(),
     addTask: vi.fn(),
@@ -80,6 +81,10 @@ beforeEach(() => {
   // Delivery-contact suggestions for the create-form Safety CC datalist — default empty so tests
   // that don't exercise the datalist never issue a real fetch; the datalist test overrides this.
   vi.mocked(api.getDeliveryContacts).mockResolvedValue([]);
+  // Default the client picker to EMPTY so every pre-existing create-form test is unaffected: an
+  // empty list renders only "No client" / "+ New client…", and an untouched picker sends no
+  // client key at all — byte-identical to the pre-picker create body.
+  vi.mocked(api.fetchClients).mockResolvedValue([]);
 });
 
 // Picker fixtures for the assign controls. Pat is unplaced; "Al Already" is already on JOB-A (so the
@@ -296,7 +301,9 @@ describe("FieldOpsJobTracker — write UI", () => {
     fireEvent.click(getByText("+ New job"));
     // Slice 6: no Job ID input — the office employee types only the Project Name; the portal assigns the id.
     fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "Charlie" } });
-    fireEvent.change(getByPlaceholderText("Client name (optional)"), { target: { value: "Globex" } });
+    // The free-text client box is now behind the picker's "+ New client…" option (2026-08-11).
+    fireEvent.change(getByLabelText("Client"), { target: { value: "new" } });
+    fireEvent.change(getByLabelText("New client name"), { target: { value: "Globex" } });
     // (A Safety CC is optional since 2026-08-11; kept here to pin the CC payload shape.)
     fireEvent.click(getAllByText("+ Add CC")[0]); // Safety CC
     fireEvent.change(getByLabelText("Safety CC 1"), { target: { value: "scc@ex.com" } });
@@ -374,6 +381,111 @@ describe("FieldOpsJobTracker — write UI", () => {
 
     await waitFor(() => expect(api.createJob).toHaveBeenCalledWith({ project_name: "Charlie" }));
     expect(container.textContent ?? "").not.toContain("At least one Safety CC recipient is required.");
+  });
+
+  // ── Client picker (2026-08-11) ───────────────────────────────────────────────────────────────
+  it("CLIENTS: picking an existing client sends client_id, never new_client", async () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
+    vi.mocked(api.fetchClients).mockResolvedValue([
+      { id: 7, name: "Qcells", jobs: 0 },
+      { id: 3, name: "KSI", jobs: 2 },
+    ]);
+    const { container, getByText, getByLabelText, getByPlaceholderText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(getByText("+ New job"));
+    await waitFor(() => expect(api.fetchClients).toHaveBeenCalled());
+
+    fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "MH405" } });
+    fireEvent.change(getByLabelText("Client"), { target: { value: "7" } });
+    fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
+
+    await waitFor(() =>
+      expect(api.createJob).toHaveBeenCalledWith({ project_name: "MH405", client_id: 7 }),
+    );
+    // The whole point: no new_client key, so no duplicate row is minted.
+    expect(vi.mocked(api.createJob).mock.calls[0][0]).not.toHaveProperty("new_client");
+  });
+
+  it("CLIENTS: duplicate-named rows collapse to ONE option, bound to the most-used id", async () => {
+    // Live D1 really does carry four rows named KSI. Rendering four identical options would give
+    // the operator no way to choose correctly.
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
+    vi.mocked(api.fetchClients).mockResolvedValue([
+      { id: 2, name: "KSI", jobs: 0 },
+      { id: 3, name: "KSI", jobs: 1 },
+      { id: 5, name: "KSI", jobs: 3 }, // most-used → this id must win
+      { id: 6, name: "ksi", jobs: 1 }, // case-insensitive duplicate
+    ]);
+    const { container, getByText, getByLabelText, getByPlaceholderText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(getByText("+ New job"));
+    await waitFor(() => expect(api.fetchClients).toHaveBeenCalled());
+
+    const sel = getByLabelText("Client") as HTMLSelectElement;
+    const clientOpts = [...sel.options].map((o) => o.text).filter((t) => t !== "No client" && t !== "+ New client…");
+    expect(clientOpts).toEqual(["KSI"]); // four rows → one option
+
+    fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "Minooka" } });
+    fireEvent.change(sel, { target: { value: sel.options[1].value } });
+    fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
+    await waitFor(() =>
+      expect(api.createJob).toHaveBeenCalledWith({ project_name: "Minooka", client_id: 5 }),
+    );
+  });
+
+  it("CLIENTS: '+ New client…' reveals a text box and sends new_client", async () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
+    vi.mocked(api.fetchClients).mockResolvedValue([{ id: 3, name: "KSI", jobs: 1 }]);
+    const { container, getByText, getByLabelText, getByPlaceholderText, queryByLabelText } = render(
+      <FieldOpsJobTracker onBack={() => {}} />,
+    );
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(getByText("+ New job"));
+    await waitFor(() => expect(api.fetchClients).toHaveBeenCalled());
+
+    expect(queryByLabelText("New client name")).toBeNull(); // hidden until chosen
+    fireEvent.change(getByLabelText("Client"), { target: { value: "new" } });
+    fireEvent.change(getByLabelText("New client name"), { target: { value: "Qcells" } });
+    fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "MH405" } });
+    fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
+
+    await waitFor(() =>
+      expect(api.createJob).toHaveBeenCalledWith({ project_name: "MH405", new_client: { name: "Qcells" } }),
+    );
+  });
+
+  it("CLIENTS: leaving the picker on 'No client' sends NO client key at all", async () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.createJob).mockResolvedValue({ job_id: "JOB-C" });
+    vi.mocked(api.fetchClients).mockResolvedValue([{ id: 3, name: "KSI", jobs: 1 }]);
+    const { container, getByText, getByPlaceholderText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(getByText("+ New job"));
+    fireEvent.change(getByPlaceholderText("Project name"), { target: { value: "Solo" } });
+    fireEvent.submit(container.querySelector('[aria-label="Create job"]')!);
+    // The minimal-create contract stays byte-identical for an untouched form.
+    await waitFor(() => expect(api.createJob).toHaveBeenCalledWith({ project_name: "Solo" }));
+  });
+
+  it("CLIENTS: a failed client load degrades SAFELY — no existing client can be picked", async () => {
+    vi.mocked(useAuth).mockReturnValue(authWith(["cap.jobtracker.manage"]));
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.fetchClients).mockRejectedValue(new Error("403"));
+    const { container, getByText, getByLabelText } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(getByText("+ New job"));
+    await waitFor(() => expect(api.fetchClients).toHaveBeenCalled());
+    // Worst case is "type a name" (which the Worker find-or-creates onto the right row) — never a
+    // silent bind to the WRONG client.
+    const sel = getByLabelText("Client") as HTMLSelectElement;
+    expect([...sel.options].map((o) => o.value)).toEqual(["", "new"]);
   });
 
   // ── 0064: the Evergreen identifier's third segment ───────────────────────────────────────────
