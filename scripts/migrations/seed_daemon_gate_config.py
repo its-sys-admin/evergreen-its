@@ -322,6 +322,19 @@ CONFIG_ROWS: list[dict[str, Any]] = [
             "Per-job Material Incidents sheet row-count WARN threshold (fieldops_sync mirror pass). " + _REHEARSAL_NOTE
         ),
     },
+    # ---- 2026-08-10: the receipts mirror (evergreen-its#38) declared this key in
+    # REQUIRED_CONFIG but never grew a seeder row — the fifth row-cap sibling. Missing on the
+    # tenant it WARNed config_row_missing EVERY 90s cycle (resolve_and_log runs before the
+    # sync_enabled bail, so even a gated-off daemon storms). Same class as the 2026-07-13 batch
+    # above.
+    {
+        "Setting": "progress_reports.material_receipts.row_cap_warn_threshold",
+        "Workstream": "progress_reports",
+        "Value": "15000",
+        "Description": (
+            "Per-job Material Receipts sheet row-count WARN threshold (fieldops_sync mirror pass). " + _REHEARSAL_NOTE
+        ),
+    },
     {
         "Setting": "alerting.dedupe_window_minutes",
         "Workstream": "global",

@@ -1492,11 +1492,19 @@ def ensure_columns(sheet_id: int, specs: list[dict[str, Any]]) -> list[str]:
     if not missing:
         return []
 
+    # ONE shared index for every column in the call. The Smartsheet Add Columns API rejects a
+    # multi-column body whose members carry different indices (HTTP 400, errorCode 1135:
+    # "Input column index N is different from the first input column index M") — columns are
+    # inserted CONSECUTIVELY at the shared index, in array order, so index=len(columns) still
+    # means "append, in specs order". Per-column `start + offset` looked equivalent, passed every
+    # mock, and failed on the first live sheet (Kiwi — Material List, 2026-08-10): the
+    # mocks-pass-live-API-rejects class, which is why the regression test pins the SAME-index
+    # shape rather than the arithmetic.
     start = len(columns)
     bodies = []
-    for offset, spec in enumerate(missing):
+    for spec in missing:
         body = {k: v for k, v in spec.items() if k != "primary"}
-        body["index"] = start + offset  # append, in specs order
+        body["index"] = start  # shared by ALL bodies in the call (errorCode 1135)
         bodies.append(smartsheet.models.Column(body))
     try:
         get_client().Sheets.add_columns(sheet_id, bodies)
