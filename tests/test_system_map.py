@@ -316,11 +316,11 @@ def test_every_registered_watchdog_letter_is_badged_on_a_node() -> None:
     # 22 callables span 21 distinct letters (Check I has a safety + a progress
     # wrapper). E is deferred (Admin-API prerequisite) and not registered; F was
     # retired 2026-06-05; H never existed.
-    assert len(CHECKS) == 22, (
+    assert len(CHECKS) == 23, (
         "watchdog.CHECKS changed — update REGISTERED_LETTERS below AND badge the "
         "new check's subject node in system_map.py (watchdog_checks=...)"
     )
-    registered_letters = set("ABCDGIJKLMNOPQRSTUVWX")
+    registered_letters = set("ABCDGIJKLMNOPQRSTUVWXY")
     badged = {letter for n in NODES for letter in n.watchdog_checks}
     unbadged = sorted(registered_letters - badged)
     assert not unbadged, (

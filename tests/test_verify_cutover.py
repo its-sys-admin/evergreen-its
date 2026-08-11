@@ -288,12 +288,31 @@ def test_all_three_worker_base_url_copies_enrolled_and_scanned():
             assert r.sandbox_scan is True, f"{r.workstream} copy must be sandbox-scanned"
 
 
-def test_po_send_polling_gate_not_enrolled():
-    """Enrolling po_send.polling_enabled='true' would DEMAND a send-enable at cutover — a
-    high-class External-Send-Gate decision (Seth). It must stay OUT until PO send is in scope."""
-    keys = {r.key for r in vc.CONFIG_ROWS}
-    assert "po_materials.po_send.polling_enabled" not in keys
-    assert "po_materials.po_send.scheduled_send_local" not in keys
+def test_po_send_polling_gate_is_never_forced_true():
+    """The invariant this test has always been about: VC-03 must never DEMAND a PO send-enable
+    at cutover — that is a FIXED high-capability-class External-Send-Gate decision (Seth).
+
+    NARROWED 2026-08-11 (#27, Check Y's gate-parity test). It previously asserted the row was
+    absent from CONFIG_ROWS ENTIRELY, which is strictly stronger than its own stated rationale
+    and was already inconsistent with the fleet: `subcontracts.subcontract_send.polling_enabled`
+    and `po_materials.rfq_send.polling_enabled` — the exact structural twins, same send gate,
+    same escalation posture — were both already enrolled `non_empty`. `non_empty` asserts only
+    that the ROW EXISTS so the operator has a switch to flip (the dark-ship reflex); it says
+    nothing about the value, so it cannot force a send-enable. What must never happen is
+    `requirement='true'`, and that is what this now pins.
+
+    `scheduled_send_local` stays OUT: it is a `str` tuning row, not a gate, so the mechanical
+    bool-typed bound of the gate-parity test does not reach it.
+    """
+    row = next(
+        (r for r in vc.CONFIG_ROWS if r.key == "po_materials.po_send.polling_enabled"), None
+    )
+    assert row is not None, "po_send's gate row must be enrolled so a missing switch is caught"
+    assert row.requirement == "non_empty", (
+        "po_send.polling_enabled must assert PRESENCE only — requirement='true' would force a "
+        "send-enable at cutover (high-class, Seth)"
+    )
+    assert "po_materials.po_send.scheduled_send_local" not in {r.key for r in vc.CONFIG_ROWS}
 
 
 def test_operator_email_enrolled_and_sandbox_scanned():
@@ -654,3 +673,122 @@ def test_dark_daemon_bearers_and_operator_pin_enrolled():
         "ITS_OPERATOR_PIN",
     ):
         assert name in vc.REQUIRED_SECRETS, f"{name} must be enrolled in REQUIRED_SECRETS"
+
+
+# ---- Gate-enrollment parity: the GENERIC fix behind Check Y (#27) ---------
+#
+# THE GAP THIS CLOSES. Detection was NEVER the problem. `shared/required_config.py`
+# WARNed `config_row_missing` for the Track 6 archive gate 3,442 times while the archive
+# sat inert for three days — a WARN never triple-fires, so nothing ever escalated. Check Y
+# turns "a load-bearing row is absent" into a CRITICAL, but Check Y can only see rows that
+# are ENROLLED in CONFIG_ROWS. This test is what stops that enrollment from drifting: every
+# boolean GATE a daemon declares it resolves at runtime must be a row VC-03 — and therefore
+# Check Y — actually asserts.
+#
+# ⛔ GATES ONLY, and the bound is load-bearing — do NOT relax this to all declared keys.
+# Measured against live HEAD 2026-08-11: 27 declared keys sit outside CONFIG_ROWS and 24 of
+# them are TUNABLES — thresholds, timeouts, model names, `ollama_base_url`, `allowed_senders`,
+# `mailbox`, row-cap warn levels. VC-03's own module docstring argues at length that
+# shared-infrastructure tunables must NOT become cutover assertions (a tuning knob sitting at
+# its default is CORRECT, so asserting it yields a meaningless verdict), and
+# `system.heartbeat_url` is already covered by VC-09. An all-keys rule would enroll ~24 rows
+# whose absence is harmless and drown the signal that matters.
+#
+# "Gate" is resolved MECHANICALLY, never by per-row judgement: `ConfigKey` carries a `kind`
+# field and `kind == "bool"` IS the gate test. A boolean key is a switch by construction —
+# and it is precisely the shape that fails INVISIBLY, because `_read_bool_setting(default=
+# False)` reads a MISSING row identically to `false`.
+
+
+def _declared_boolean_gates() -> dict[tuple[str, str], set[str]]:
+    """Every (setting, workstream) a daemon declares as a bool ConfigKey.
+
+    Reuses the config-dictionary generator's discovery (§14 — ONE definition of "which
+    modules declare REQUIRED_CONFIG"), so a NEW daemon is picked up with no edit here.
+    """
+    import generate_config_dictionary as gen  # noqa: PLC0415 — sys.path primed at module top
+
+    gates: dict[tuple[str, str], set[str]] = {}
+    for key in gen.collect_daemon_keys():
+        if key.kind == "bool":
+            gates.setdefault((key.setting, key.workstream), set()).add(key.source)
+    return gates
+
+
+# The ONLY sanctioned exemptions, each (setting, workstream) -> why. Narrow by design: a new
+# gate must be ENROLLED, not added here. Adding an entry is a deliberate act that has to
+# survive review, because it removes a switch from the one surface that checks the switch exists.
+_GATE_ENROLLMENT_EXEMPT: dict[tuple[str, str], str] = {
+    # Both are read ONLY inside `intake._run_pipeline` — the LEGACY EMAIL path, whose Stage 1
+    # is "fetch from Graph". Verified against live HEAD 2026-08-11: the LIVE path is
+    # `intake._run_portal_pipeline` (reached via `process_portal_submission`, which
+    # `portal_poll` calls) and it shares NONE of those stages; `_run_pipeline`'s only caller is
+    # `process_message`, whose only caller `safety_reports/intake_poll.py` was DELETED
+    # 2026-07-03. Enrolling a retired lane's gates would make VC-03 assert rows whose correct
+    # future is DELETION, and would red-light the day someone finishes retiring the lane
+    # (HOUSE_REFLEXES §6, "don't harden dormant subsystems"). If email intake is ever
+    # resurrected, delete these two entries in the same PR that revives it.
+    ("safety_reports.intake.box_filing_enabled", "safety_reports"):
+        "legacy email-intake path (intake._run_pipeline); superseded by the portal pipeline",
+    ("safety_reports.intake.review_queue_on_low_confidence", "safety_reports"):
+        "legacy email-intake path (intake._run_pipeline); superseded by the portal pipeline",
+}
+
+
+def test_every_declared_boolean_gate_is_enrolled_in_config_rows():
+    """A boolean gate a daemon reads but VC-03 does not assert is an INVISIBLE off-switch:
+    `_read_bool_setting(default=False)` cannot distinguish a missing row from `false`, so the
+    capability ships inert with no switch to find and nothing escalating. That is the
+    2026-08-10 three-day archive outage, exactly.
+
+    Enroll new gates `non_empty` — asserting PRESENCE, never forcing `true`. Forcing `true`
+    would pin an operator choice and, on any send gate, bake a FIXED high-capability-class
+    External-Send-Gate decision (Op Stds §44) into a CI assertion.
+    """
+    enrolled = {(row.key, row.workstream) for row in vc.CONFIG_ROWS}
+    unenrolled = {
+        key: sorted(sources)
+        for key, sources in _declared_boolean_gates().items()
+        if key not in enrolled and key not in _GATE_ENROLLMENT_EXEMPT
+    }
+    assert not unenrolled, (
+        "boolean ITS_Config gate(s) declared in a daemon's REQUIRED_CONFIG but ABSENT from "
+        f"verify_cutover.CONFIG_ROWS: {unenrolled}. Enroll each as "
+        "ConfigRow(<setting>, <workstream>, 'non_empty') — presence only, NEVER forced "
+        "'true' — or, if the declaring code path is genuinely dormant, add it to "
+        "_GATE_ENROLLMENT_EXEMPT with the verified reason."
+    )
+
+
+def test_no_new_enrolled_gate_row_is_forced_true():
+    """The dark-ship reflex, mechanically. A row asserted `requirement='true'` forces the
+    capability ON at cutover — an operator decision, and on a send gate a FIXED high-class
+    one. The five legacy `true` rows predate this rule and are pinned so the set cannot
+    quietly grow."""
+    forced_true = {
+        (row.key, row.workstream) for row in vc.CONFIG_ROWS if row.requirement == "true"
+    }
+    assert forced_true == {
+        ("safety_reports.portal_poll.polling_enabled", "safety_reports"),
+        ("safety_reports.weekly_send.polling_enabled", "safety_reports"),
+        ("progress_reports.progress_send.polling_enabled", "progress_reports"),
+        ("progress_reports.intake_enabled", "safety_reports"),
+        ("field_ops.fieldops_sync.sync_enabled", "field_ops"),
+    }, (
+        "a CONFIG_ROWS entry gained requirement='true'. New gates enroll 'non_empty' — "
+        "presence is what VC-03 asserts; the VALUE stays the operator's."
+    )
+
+
+def test_the_gate_exemption_list_stays_narrow_and_real():
+    """An exemption must name a key some daemon genuinely DECLARES — a stale entry silently
+    widens the hole as the exempted key is renamed or removed."""
+    declared = set(_declared_boolean_gates())
+    stale = sorted(k for k in _GATE_ENROLLMENT_EXEMPT if k not in declared)
+    assert not stale, (
+        f"_GATE_ENROLLMENT_EXEMPT names key(s) no daemon declares any more: {stale} — delete "
+        "them; they exempt nothing and hide the next real gap."
+    )
+    enrolled = {(row.key, row.workstream) for row in vc.CONFIG_ROWS}
+    both = sorted(k for k in _GATE_ENROLLMENT_EXEMPT if k in enrolled)
+    assert not both, f"key(s) both enrolled AND exempted — drop the exemption: {both}"

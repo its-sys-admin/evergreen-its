@@ -791,6 +791,19 @@ workflows:
               - Correct the edit per the config-editor runbook.
             class: daniel_solo
             runbook: docs/runbooks/operator_dashboard_config_editor.md
+          - id: config_row_absent
+            symptom: A capability does nothing at all and the switch for it cannot be found anywhere in ITS_Config.
+            signals: ["load-bearing ITS_Config row(s) MISSING or BLANK", "row MISSING", "Value BLANK", "config_row_missing", "INVISIBLE off-switch", "the capability is silently inert"]
+            checks:
+              - A missing row and a blank Value both read as `false` to a daemon (`_read_bool_setting(default=False)`), so the capability is inert with NO switch to flip — this is the 2026-08-10 three-day archive outage exactly.
+              - Watchdog Check Y (verify_cutover VC-03, run daily) names each absent row as `<setting> [<workstream>]` — note BOTH halves, ITS_Config is keyed on Setting AND Workstream.
+              - Read the row's Description in docs/references/its_config_dictionary.md before anything else — it may carry a doctrine precondition on activation.
+            resolutions:
+              - Seeding a missing ITS_Config row is a FIXED high-capability class — escalate to Seth with the row names; a Tier-2 operator does not create one.
+              - After the row is seeded, mark the open CRITICAL resolved — an open CRITICAL is never terminal, so Check B re-reports it forever otherwise.
+            class: seth_coresolve
+            watchdog_check: _check_cutover_config
+            runbook: docs/runbooks/operator_dashboard_config_editor.md
       - id: config_actuate
         title: config-actuator validates, PRs, merges, and deploys the change
         what_happens:
