@@ -671,6 +671,40 @@ export function JobMaterialsPage({
                         </span>
                       );
                     })}
+                    {/* Report a problem MOVED HERE from the daily form (2026-08-11, with the
+                        deep-link-card decision — the daily form keeps no per-line actions).
+                        Single-tap on purpose, unlike the marks: the flag is corrected by the
+                        explicit Resolve action, not append-only, and the note prompt is
+                        already its own deliberate step. Only a still-expected line offers
+                        it — a received line's problem is a resolve-then-reflag flow. */}
+                    {line.status === "expected" ? (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="btn btn--secondary"
+                          disabled={busy}
+                          aria-label={`Report a problem with ${rowTitle(line)}`}
+                          onClick={() => {
+                            const note = window.prompt(
+                              `Report a problem with "${rowTitle(line)}" — what's wrong? (required)`,
+                            );
+                            if (note === null) return;
+                            if (!note.trim()) {
+                              setMsg({ ok: false, text: "A short note describing the problem is required." });
+                              return;
+                            }
+                            void run(
+                              line.id,
+                              () => api.flagExpectedMaterialIncident(line.id, note.trim()),
+                              "Problem reported — the line shows the flag until someone resolves it.",
+                            );
+                          }}
+                        >
+                          Report a problem
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 )}
 

@@ -10,16 +10,12 @@ import {
 } from "../lib/fieldops_daily_form";
 import {
   fetchExpectedMaterials,
-  flagExpectedMaterialIncident,
-  receiveExpectedMaterial,
   type ExpectedMaterialRow,
 } from "../lib/fieldops_expected_materials";
-import { rowTitle } from "./ExpectedMaterialsSection";
 import { formCatalog, getDefinition, resolveFormTarget } from "../forms/registry";
 import {
   FormRenderer,
   initialValues,
-  seedExpectedMaterialsSnapshot,
   seedRequirementResponses,
   type ExpectedMaterialsAdapter,
   type FormLinkAdapter,
@@ -181,26 +177,19 @@ export function DailyReportTab({
   const reqSection = def?.sections.find((s) => s.type === "job_requirements");
   const reqKey = reqSection && "key" in reqSection ? reqSection.key : "job_requirements";
 
-  // ── Expected materials (Material receipts M2) — the job's M1 receipt list, rendered inside
-  // the form's expected_materials section. Per JOB (not per date).
+  // ── Expected materials — a COUNT SUMMARY + deep link, per JOB (not per date).
   //
-  // v7 INVERTS the v5/v6 contract. Until now the section filed NO values of its own, on the
-  // rationale that "reprinting the live D1 list would snapshot mutable state the submission never
-  // carried". That is exactly backwards for a document of record: the manager signs a report that
-  // SHOWED a set of expected materials in a particular delivery state, and reconstructing that
-  // later from live D1 is impossible, because every later delivery mark rewrites it. So the day's
-  // list is now captured into values[<key>] as a SELF-DESCRIBING snapshot — the same shape and
-  // rationale as job_requirements (D4) — and the PDF renders what was on screen. Submissions filed
-  // under v5/v6 have no such key and are unaffected; that version boundary is the whole reason v7
-  // exists, since its sections are otherwise byte-identical to v6.
+  // The section's third contract in four days, each an operator decision worth recording:
+  // v5/v6 filed no values ("don't snapshot mutable state"); v7 (#45) inverted that and
+  // filed the day's list as a snapshot; and on 2026-08-11 — the first day real BOMs put
+  // hundreds of lines behind this section — the operator cut the inline list entirely:
+  // the daily form shows the day's SHAPE (counts) and deep-links the Materials page,
+  // which owns every action (the two-tap three-way mark, Report-a-problem, resolve).
+  // The rows are still fetched for the counts; NO values are seeded, so a new filing's
+  // PDF renders the classic note line (form_pdf's absent-key path) while already-filed
+  // v7 snapshots keep rendering as tables.
   const [expectedRows, setExpectedRows] = useState<ExpectedMaterialRow[] | null>(null);
   const [expectedError, setExpectedError] = useState<string | null>(null);
-  const [expectedBusy, setExpectedBusy] = useState<ReadonlySet<number>>(new Set());
-  const [expectedActionError, setExpectedActionError] = useState<string | null>(null);
-  // The section's value key, read from the definition (daily-report-v7: "expected_materials_receipt").
-  const emSection = def?.sections.find((s) => s.type === "expected_materials");
-  const emKey =
-    emSection && "key" in emSection ? emSection.key : "expected_materials_receipt";
 
   const [busy, setBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -490,28 +479,8 @@ export function DailyReportTab({
     };
   }, [placedJob, refreshToken]);
 
-  // ── v7 expected-materials day snapshot — keep values[emKey] equal to what the section is
-  // currently showing.
-  //
-  // Derived from `expectedRows` rather than seeded at each fetch site, so ONE effect covers all
-  // three ways the list changes: first load, Refresh, and the optimistic flip after a delivery
-  // mark. Seeding per fetch site would silently miss that third case and file a snapshot that
-  // contradicts the screen the manager just acted on.
-  //
-  // `setValues`, NEVER `editValues` — this is the load-bearing distinction. `editValues` sets
-  // dirtyRef, which gates draft persistence to sessionStorage and prefill suppression, so seeding
-  // through it would persist a draft the manager never typed and resurrect it on a later visit.
-  //
-  // Unconditional re-seed, NOT the merge-if-absent that requirements use (D4). Requirements hold
-  // USER-TYPED answers, so a draft must win; this value is entirely derived display state with
-  // nothing of the user's in it, so the freshest projection is always the correct one — and
-  // freezing the first-loaded copy would be a bug the moment a delivery is marked.
-  useEffect(() => {
-    if (expectedRows === null) return; // not loaded (or load failed) — file nothing rather than []
-    const snapshot = seedExpectedMaterialsSnapshot(expectedRows);
-    lastPrefill.current = { ...lastPrefill.current, [emKey]: snapshot };
-    setValues((v) => ({ ...v, [emKey]: snapshot }));
-  }, [expectedRows, emKey]);
+  // (The v7 snapshot-seeding effect lived here until 2026-08-11 — the deep-link-card
+  // decision removed it; see the expected-materials comment block above.)
 
   // ── Filed status (the form_link indicators + the filed banner) + the amend candidate. ──────────
   async function loadStatus(jobId: string, forDate: string) {
@@ -677,122 +646,14 @@ export function DailyReportTab({
     }
   }
 
-  // ── M2 receipt actions (the expected_materials section's two buttons) ─────────────────────────
-  function markExpectedBusy(id: number, on: boolean) {
-    setExpectedBusy((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  }
-
-  // "Confirm receipt": the M1 receive route (expected→received, idempotent-safe 409 on repeat) +
-  // an optimistic pill flip + a Deliveries Received row APPENDED to the form values so the FILED
-  // daily report records the receipt (the section itself files nothing). The append goes through
-  // editValues — dirty-tracked and draft-persisted exactly like typed work.
-  async function confirmReceipt(row: ExpectedMaterialRow) {
-    if (expectedBusy.has(row.id)) return;
-    markExpectedBusy(row.id, true);
-    setExpectedActionError(null);
-    try {
-      await receiveExpectedMaterial(row.id);
-      // Optimistic flip — the Worker stamped the authoritative received_at/by; a later
-      // refetch (Refresh / next visit) shows the resolved display name.
-      setExpectedRows((rows) =>
-        (rows ?? []).map((r) =>
-          r.id === row.id
-            ? { ...r, status: "received" as const, received_at: Math.floor(Date.now() / 1000) }
-            : r,
-        ),
-      );
-      const delivered = {
-        item_material: rowTitle(row),
-        condition: "Received OK",
-        notes: row.qty != null ? `qty ${row.qty}${row.unit ? ` ${row.unit}` : ""}` : (row.unit ?? ""),
-      };
-      editValues((v) => {
-        const rows0 = Array.isArray(v.deliveries_received)
-          ? (v.deliveries_received as Record<string, string>[])
-          : [];
-        // Drop fully-empty rows (the min_rows=1 blank seed) so the table doesn't keep a stray
-        // blank line above the appended receipt; any partially-typed row is preserved.
-        const kept = rows0.filter((r) => Object.values(r).some((x) => String(x ?? "").trim() !== ""));
-        return { ...v, deliveries_received: [...kept, delivered] };
-      });
-    } catch (err) {
-      setExpectedActionError(errMsg(err, "Couldn't confirm receipt — try again."));
-    } finally {
-      markExpectedBusy(row.id, false);
-    }
-  }
-
-  // "Report a problem →": the M1 flag-incident route (note REQUIRED — prompted up front so the
-  // D1 record carries the reason even if the manager abandons the incident form), an optimistic
-  // flip to the incident pill, then the material-incident deep-link prefilled (job/date at the
-  // envelope + the row's description / expected qty through the R5 openForm values mechanism).
-  // The draft effect already persisted the typed day, so navigating away loses nothing (D2 fix).
-  async function reportProblem(row: ExpectedMaterialRow) {
-    if (expectedBusy.has(row.id)) return;
-    const note = window.prompt(`Report a problem with "${rowTitle(row)}" — what's wrong? (required)`);
-    if (note === null) return; // cancelled — no flag, no navigation
-    if (!note.trim()) {
-      setExpectedActionError("A short note describing the problem is required.");
-      return;
-    }
-    markExpectedBusy(row.id, true);
-    setExpectedActionError(null);
-    try {
-      await flagExpectedMaterialIncident(row.id, note.trim());
-      setExpectedRows((rows) =>
-        (rows ?? []).map((r) =>
-          r.id === row.id
-            ? {
-                ...r,
-                status: "incident" as const,
-                received_at: Math.floor(Date.now() / 1000),
-                note: note.trim(),
-              }
-            : r,
-        ),
-      );
-      if (onOpenForm && placement) {
-        const target = resolveFormTarget("material-incident");
-        onOpenForm({
-          jobId: placement.job_id,
-          parentCode: target.parentCode,
-          variantCode: target.variantCode || undefined,
-          workDate: date,
-          values: {
-            material_description: rowTitle(row),
-            ...(row.qty != null ? { qty_expected: String(row.qty) } : {}),
-            // M3 Slice 1 — carry the flagged line's stable key so the incident submission REFERENCES
-            // this M2 expected-materials line (validated server-side in /api/submit). Rides as a
-            // submission VALUE (NOT a form field). In-memory only: a page refresh drops the S5 prefill
-            // values, so line_uuid is lost and the Worker treats the incident as a valid UNLINKED one
-            // (absent line_uuid → allowed) — graceful degradation, never an error.
-            ...(row.line_uuid ? { line_uuid: row.line_uuid } : {}),
-          },
-        });
-      }
-    } catch (err) {
-      setExpectedActionError(errMsg(err, "Couldn't flag the delivery problem — try again."));
-    } finally {
-      markExpectedBusy(row.id, false);
-    }
-  }
-
-  // M2 — the expected_materials section adapter. Supplied only once the read SUCCEEDED: while
-  // loading (null) or failed (the soft-warn above carries the Retry) the section renders
-  // nothing rather than a lying "no expected materials" empty state.
+  // The expected_materials section adapter — the deep-link card's counts + link (2026-08-11;
+  // every ACTION lives on the Materials page it opens). Supplied only once the read
+  // SUCCEEDED: while loading (null) or failed (the soft-warn above carries the Retry) the
+  // section renders nothing rather than a lying "no expected materials" empty state.
   const expectedAdapter: ExpectedMaterialsAdapter | undefined =
     expectedRows !== null
       ? {
           rows: expectedRows,
-          busyIds: expectedBusy,
-          actionError: expectedActionError,
-          onConfirmReceipt: (r) => void confirmReceipt(r),
-          onReportProblem: (r) => void reportProblem(r),
           onOpenMaterials:
             onOpenMaterials && placement ? () => onOpenMaterials(placement.job_id) : undefined,
         }
