@@ -533,24 +533,38 @@ def test_regen_expect_table_matches_registry_and_stages() -> None:
     assert regen_stages == set(standup.REGEN_EXPECT)
 
 
-def test_every_vc03_config_row_has_a_seeder() -> None:
+def test_every_vc03_config_row_has_a_seeder_that_standup_runs() -> None:
     """Every load-bearing ITS_Config row verify_cutover VC-03 asserts must be
-    SEEDED by some script — the 2026-07-23 rehearsal found 15 rows that had only
-    ever been hand-created, so a fresh tenant failed VC-03 with no scripted
-    remedy. A new ConfigRow in verify_cutover without a matching seeder literal
-    RED-lights here (add it to a seeder in the same PR)."""
+    seeded by a script the STAND-UP ACTUALLY EXECUTES — not merely one that
+    exists on disk. The 2026-07-23 rehearsal found 15 rows that had only ever
+    been hand-created; the 2026-08-10 sequel found the opposite failure: the
+    old guard grepped the whole migrations DIRECTORY, so seed_manifest_config.py
+    satisfied it while standup's seeders stage never ran it — a rebuilt tenant
+    had no field_ops.manifest_poll.* rows and VC-03 failed with no scripted
+    remedy. Corpus = seed-config-baseline (scripts/seed_its_config.py) + the
+    scripts in standup.SEEDER_STAGE_SCRIPTS + the builder/one-shot scripts
+    standup's OTHER stages run (box-roots paste, docs-index self-record)."""
     vc_text = (REPO_ROOT / "scripts" / "verify_cutover.py").read_text(encoding="utf-8")
     settings = set(re.findall(r'ConfigRow\(\s*"([^"]+)"', vc_text))
     assert len(settings) > 30, "ConfigRow parse regressed"
+    # Every listed seeder must actually exist on disk...
+    for name in standup.SEEDER_STAGE_SCRIPTS:
+        assert (REPO_ROOT / "scripts" / "migrations" / name).is_file(), (
+            f"standup lists a seeder that does not exist: {name}")
+    # ...and the corpus is exactly what a stand-up runs, not what the directory holds.
     corpus = (REPO_ROOT / "scripts" / "seed_its_config.py").read_text(encoding="utf-8")
-    for path in sorted((REPO_ROOT / "scripts" / "migrations").glob("*.py")):
-        corpus += path.read_text(encoding="utf-8")
+    for name in standup.SEEDER_STAGE_SCRIPTS:
+        corpus += (REPO_ROOT / "scripts" / "migrations" / name).read_text(encoding="utf-8")
+    # Non-seeder stages that legitimately create VC-03 rows: the box-roots paste
+    # and the docs-index self-record (both standup stages, different scripts).
+    for extra in ("build_box_roots.py", "build_docs_index_sheet.py"):
+        p = REPO_ROOT / "scripts" / "migrations" / extra
+        if p.is_file():
+            corpus += p.read_text(encoding="utf-8")
+    corpus += (REPO_ROOT / "scripts" / "migrations" / "standup.py").read_text(encoding="utf-8")
     unseeded = {s for s in settings if s not in corpus}
-    # system.docs_index_sheet_id is SELF-RECORDED by build_docs_index_sheet.py and
-    # the Box-root rows are auto-pasted by standup's box-roots stage — both appear
-    # in the corpus as literals, so no static exemptions are needed today.
     assert not unseeded, (
-        f"VC-03 config rows with NO seeder anywhere: {sorted(unseeded)}")
+        f"VC-03 config rows no stand-up-run seeder creates: {sorted(unseeded)}")
 
 
 def test_restore_sheet_targets_are_valid_constants() -> None:

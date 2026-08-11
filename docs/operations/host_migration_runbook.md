@@ -172,7 +172,7 @@ All three green = the host can run ITS code. Any failure here is a
 provisioning defect — fix before proceeding (do not carry a red gate into
 Phase B).
 
-### A5 — Keychain re-seed: the 11 non-Box secrets (+ 6 pending; 20 total at cutover)
+### A5 — Keychain re-seed: the 11 non-Box secrets (+ 7 pending; 21 total at cutover)
 
 Seed each with the interactive form (Hazard 1):
 
@@ -198,10 +198,11 @@ security add-generic-password -a "$USER" -s ITS_SMARTSHEET_TOKEN -w
 | — | `ITS_PORTAL_SUB_TOKEN` | **PENDING** — subcontract-poll daemon bearer; required by cutover (VC-01) |
 | — | `ITS_PORTAL_ESTIMATE_TOKEN` | **PENDING** — estimate-poll daemon bearer (ADR-0004; scopes only `/api/po/estimates/internal/*`, deliberately NOT the PO or RFQ token); required by cutover (VC-01) |
 | — | `ITS_PORTAL_RFQ_TOKEN` | **PENDING** — rfq-poll daemon bearer (ADR-0004 decision 4; scopes only `/api/po/rfqs/internal/*`); required by cutover (VC-01) |
+| — | `ITS_PORTAL_MANIFEST_TOKEN` | **PENDING** — manifest-poll daemon bearer (ADR-0005, the decision-4 posture: scopes only `/api/fieldops/manifests/internal/*`, deliberately NOT the fieldops or estimate token, because the daemon behind it decodes hostile PDF/xlsx bytes); required by cutover (VC-01). *Absent from this table until 2026-08-10 — a migration run from it would have left manifest_poll fail-closed on the new host.* |
 | — | `ITS_OPERATOR_PIN` | **PENDING** — operator-dashboard ACT-surface PIN (the dashboard is launchd-managed, `org.solutionsmith.its.dashboard`, and ships fail-closed DARK until this is set); required by cutover (VC-01) |
 
-**Box triplet deliberately absent** (Hazard 2). Total VC-01 required = **20** (11
-core non-Box seeded here + Box triplet in Phase B + 6 pending above).
+**Box triplet deliberately absent** (Hazard 2). Total VC-01 required = **21** (11
+core non-Box seeded here + Box triplet in Phase B + 7 pending above).
 `scripts/verify_cutover.py` `REQUIRED_SECRETS` is the composition of record — re-derive
 rather than trusting this count.
 
