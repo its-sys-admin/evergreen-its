@@ -421,6 +421,7 @@ def test_d4_adopts_existing_roots_without_creating(monkeypatch, capsys):
     root = [
         {"type": "folder", "id": "111", "name": "ITS Safety Reports"},
         {"type": "folder", "id": "222", "name": "ITS Progress Reports"},
+        {"type": "folder", "id": "444", "name": "ITS Purchase Orders"},
         {"type": "folder", "id": "333", "name": "ITS Archive"},
         {"type": "folder", "id": "333", "name": "Evergreen Ops"},
     ]
@@ -443,6 +444,7 @@ def test_d4_second_run_is_a_pure_no_op(monkeypatch):
     root = [
         {"type": "folder", "id": "111", "name": "ITS Safety Reports"},
         {"type": "folder", "id": "222", "name": "ITS Progress Reports"},
+        {"type": "folder", "id": "444", "name": "ITS Purchase Orders"},
         {"type": "folder", "id": "333", "name": "ITS Archive"},
     ]
     _stub_box_root(monkeypatch, root)
@@ -565,7 +567,7 @@ def test_d3_never_creates_a_workspace_or_a_folder(monkeypatch, capsys):
 
 def test_d4_create_branch_parents_at_the_box_root(monkeypatch):
     _stub_box_root(monkeypatch, [])
-    create = MagicMock(side_effect=["555", "666", "777"])
+    create = MagicMock(side_effect=["555", "666", "888", "777"])
     monkeypatch.setattr(d4.box_client, "get_or_create_folder", create)
     _answer(monkeypatch, True)
     _argv(monkeypatch)
@@ -574,6 +576,7 @@ def test_d4_create_branch_parents_at_the_box_root(monkeypatch):
     assert [c.args for c in create.call_args_list] == [
         ("0", "ITS Safety Reports"),
         ("0", "ITS Progress Reports"),
+        ("0", "ITS Purchase Orders"),
         ("0", "ITS Archive"),
     ]
 
@@ -1606,6 +1609,7 @@ def test_d4_duplicate_root_names_warn_with_every_id_and_create_nothing(monkeypat
         {"type": "folder", "id": "111", "name": "ITS Safety Reports"},
         {"type": "folder", "id": "777", "name": "ITS Safety Reports"},
         {"type": "folder", "id": "222", "name": "ITS Progress Reports"},
+        {"type": "folder", "id": "444", "name": "ITS Purchase Orders"},
         {"type": "folder", "id": "333", "name": "ITS Archive"},
     ]
     _stub_box_root(monkeypatch, root)
@@ -1940,6 +1944,7 @@ def test_d4_reports_expected_identity_without_a_mismatch_warn(monkeypatch, capsy
     root = [
         {"type": "folder", "id": "111", "name": "ITS Safety Reports"},
         {"type": "folder", "id": "222", "name": "ITS Progress Reports"},
+        {"type": "folder", "id": "444", "name": "ITS Purchase Orders"},
         {"type": "folder", "id": "333", "name": "ITS Archive"},
     ]
     _stub_box_root(monkeypatch, root)  # _whoami defaults to EXPECTED_BOX_LOGIN
@@ -1960,9 +1965,9 @@ def test_d4_identity_mismatch_warns_and_names_the_login_in_the_prompt(monkeypatc
     """A login != EXPECTED_BOX_LOGIN raises box_identity_mismatch naming BOTH logins, threads
     the ACTUAL login into the y/N prompt, and — WARN-not-block — STILL creates once the operator
     confirms (Box has no ownership discriminator to fail closed on; confirmation IS the control)."""
-    _stub_box_root(monkeypatch, [])  # both roots absent -> create branch...
+    _stub_box_root(monkeypatch, [])  # all roots absent -> create branch...
     _stub_whoami(monkeypatch, "seth@personal.com", "Seth Personal")  # ...under the WRONG account
-    create = MagicMock(side_effect=["555", "666", "777"])
+    create = MagicMock(side_effect=["555", "666", "888", "777"])
     monkeypatch.setattr(d4.box_client, "get_or_create_folder", create)
     captured: dict[str, str] = {}
 
@@ -1986,6 +1991,7 @@ def test_d4_identity_mismatch_warns_and_names_the_login_in_the_prompt(monkeypatc
     assert [c.args for c in create.call_args_list] == [
         ("0", "ITS Safety Reports"),
         ("0", "ITS Progress Reports"),
+        ("0", "ITS Purchase Orders"),
         ("0", "ITS Archive"),
     ]
 
@@ -2048,11 +2054,14 @@ def test_canonical_object_lists_are_exactly_the_deliverable():
         "ITS_Config", "ITS_Errors", "ITS_Quarantine", "ITS_Review_Queue", "ITS_Daemon_Health",
     ]
     assert [n for n, _k, _w in d4.ROOT_FOLDERS] == [
-        "ITS Safety Reports", "ITS Progress Reports", "ITS Archive",
+        "ITS Safety Reports", "ITS Progress Reports", "ITS Purchase Orders", "ITS Archive",
     ]
     assert [k for _n, k, _w in d4.ROOT_FOLDERS] == [
         "safety_reports.box.portal_root_folder_id",
         "progress_reports.box.portal_root_folder_id",
+        # The PO lane's own root (2026-08-11 split) — same portal-root suffix as its
+        # safety/progress siblings, so production_repoint enrolls it automatically.
+        "po_materials.box.portal_root_folder_id",
         # Track 6. The SUFFIX differs from its two siblings on purpose (this is an archive
         # root, not a portal root) and that difference is load-bearing at cutover — see
         # production_repoint.ALLOWED_SETTING_SUFFIXES, which must list it or the row is

@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from po_materials import po_generate, po_log, po_poll, po_review, vendors
+from po_materials import po_generate, po_log, po_naming, po_poll, po_review, vendors
 from shared import picklist_validation, portal_client, portal_hmac, sheet_ids
 from shared.box_client import BoxError
 from shared.smartsheet_client import SmartsheetError
@@ -298,7 +298,17 @@ def test_happy_path_verifies_files_and_receipts_last(_patch):
     assert folder == "folder-1" and name == "Sunrise Solar_PO_2026.001.2.0.0.pdf" and pdf == b"%PDF-fake"
     _patch["log_append"].assert_called_once()
     _patch["review_add"].assert_called_once()
-    _patch["attach"].assert_called_once()
+    # The inline PDF attach lands on BOTH the ledger row (2026-08-11 parity) and the
+    # review row; the per-job mirror's copy rides the (mocked) helper below.
+    assert _patch["attach"].call_count == 2
+    ledger_call, review_call = _patch["attach"].call_args_list
+    assert ledger_call.kwargs.get("sheet_id") == sheet_ids.SHEET_PO_LOG
+    assert ledger_call.args[1] == "Sunrise Solar_PO_2026.001.2.0.0.pdf"
+    assert review_call.args[0] == 321 and "sheet_id" not in review_call.kwargs
+    # The per-job mirror receives the SAME bytes + filename for its own inline copy.
+    _patch["perjob"].assert_called_once()
+    assert _patch["perjob"].call_args.kwargs["pdf_filename"] == "Sunrise Solar_PO_2026.001.2.0.0.pdf"
+    assert _patch["perjob"].call_args.kwargs["pdf_bytes"] == b"%PDF-fake"
     # The receipt is LAST and carries the structural Box file id.
     _patch["mark_filed"].assert_called_once()
     _, mark_kwargs = _patch["mark_filed"].call_args
@@ -991,7 +1001,8 @@ def test_perjob_failure_never_fails_the_filing(_patch, mocker):
 
 def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
     """The helper wires FOLDER_PO_JOBS + the flat Log as template + the sanitized
-    job folder name + the fixed sheet name, then appends with sheet_id=<per-job>."""
+    job folder name + the fixed sheet name, then appends with sheet_id=<per-job>
+    and attaches the inline PDF on the fresh row (2026-08-11 parity)."""
     ensure = mocker.patch(
         "po_materials.po_poll.job_sheet.ensure_job_sheet", return_value=555
     )
@@ -999,11 +1010,15 @@ def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
         "po_materials.po_log.find_row_by_po_number", return_value=None
     )
     append = mocker.patch(
-        "po_materials.po_log.append_filed_row", return_value=1
+        "po_materials.po_log.append_filed_row", return_value=91
     )
+    attach = mocker.patch("po_materials.po_poll._attach_pdf_best_effort")
     row_kwargs = {"po_number": "2026.001.2.0.0", "job_project": "2026.001 — Sunrise Solar"}
 
-    po_poll._append_perjob_row_best_effort("Sunrise Solar", row_kwargs, "corr-1")
+    po_poll._append_perjob_row_best_effort(
+        "Sunrise Solar", row_kwargs, "corr-1",
+        pdf_filename="Sunrise Solar_PO_2026.001.2.0.0.pdf", pdf_bytes=b"%PDF-fake",
+    )
 
     ensure.assert_called_once_with(
         sheet_ids.FOLDER_PO_JOBS,
@@ -1016,11 +1031,16 @@ def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
     )
     find.assert_called_once_with("2026.001.2.0.0", sheet_id=555)
     append.assert_called_once_with(sheet_id=555, **row_kwargs)
+    attach.assert_called_once_with(
+        91, "Sunrise Solar_PO_2026.001.2.0.0.pdf", b"%PDF-fake", "corr-1", sheet_id=555
+    )
 
 
 def test_perjob_helper_is_idempotent_against_target_sheet(mocker):
     """A crash between the flat append and the mirror re-runs cleanly: the PO number
-    already present in the TARGET sheet suppresses the duplicate append."""
+    already present in the TARGET sheet suppresses the duplicate append — but the
+    inline attach STILL runs against the existing row (the every-service self-heal
+    posture; attach_pdf_to_row replaces a same-filename attachment, so no dupes)."""
     mocker.patch(
         "po_materials.po_poll.job_sheet.ensure_job_sheet", return_value=555
     )
@@ -1029,12 +1049,15 @@ def test_perjob_helper_is_idempotent_against_target_sheet(mocker):
         return_value={"_row_id": 1},
     )
     append = mocker.patch("po_materials.po_log.append_filed_row")
+    attach = mocker.patch("po_materials.po_poll._attach_pdf_best_effort")
 
     po_poll._append_perjob_row_best_effort(
-        "Sunrise Solar", {"po_number": "2026.001.2.0.0"}, "corr-1"
+        "Sunrise Solar", {"po_number": "2026.001.2.0.0"}, "corr-1",
+        pdf_filename="f.pdf", pdf_bytes=b"%PDF",
     )
 
     append.assert_not_called()
+    attach.assert_called_once_with(1, "f.pdf", b"%PDF", "corr-1", sheet_id=555)
 
 
 def test_perjob_helper_fences_generic_exception(mocker):
@@ -1047,11 +1070,32 @@ def test_perjob_helper_fences_generic_exception(mocker):
     log = mocker.patch("po_materials.po_poll.error_log.log")
 
     po_poll._append_perjob_row_best_effort(
-        "Sunrise Solar", {"po_number": "2026.001.2.0.0"}, "corr-1"
+        "Sunrise Solar", {"po_number": "2026.001.2.0.0"}, "corr-1",
+        pdf_filename="f.pdf", pdf_bytes=b"%PDF",
     )  # must not raise
 
     codes = [kw.get("error_code") for _, kw in log.call_args_list]
     assert "po_perjob_sheet_failed" in codes
+
+
+def test_po_box_resolver_reads_the_lanes_own_root(mocker):
+    """The 2026-08-11 split: the resolver reads po_naming.CFG_BOX_PORTAL_ROOT under
+    Workstream='po_materials' (NOT the shared safety root) and files DIRECTLY in the
+    per-job folder — no intermediate 'Purchase Orders' level survives."""
+    read = mocker.patch(
+        "po_materials.po_poll._read_str_setting", return_value="root-po"
+    )
+    ensure = mocker.patch(
+        "po_materials.po_poll.box_client.get_or_create_folder", return_value="job-9"
+    )
+
+    assert po_poll._resolve_po_box_folder("Sunrise Solar") == "job-9"
+
+    read.assert_called_once_with(
+        po_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
+    )
+    ensure.assert_called_once_with("root-po", "Sunrise Solar")
 
 
 # ---- config-read transient fence (error-hygiene 2026-07-19) ---------------------

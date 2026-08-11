@@ -159,7 +159,7 @@ DEFAULT_INCIDENTS_ENABLED = False
 CFG_RECEIPTS_ENABLED = "field_ops.fieldops_sync.receipts_enabled"
 DEFAULT_RECEIPTS_ENABLED = False
 
-# Track 6 job archive — the pass that drains `/archive-pending` and relocates a closed job's six
+# Track 6 job archive — the pass that drains `/archive-pending` and relocates a closed job's seven
 # containers across Smartsheet and Box. Its own gate, shipped OFF, and the reason it needs one is
 # not caution about the code: turning this on is what makes an operator-visible Archive button in
 # the portal actually DO something. Until then a press records intent and nothing acts on it, which
@@ -1961,7 +1961,7 @@ def _archive_pass(base_url: str, bearer: str) -> dict[str, int]:
 
         if attempts >= job_archive.MAX_ARCHIVE_ATTEMPTS:
             # A PERMANENT condition (a deleted destination, a share never fixed) would otherwise
-            # re-fire the whole six-container sequence every cycle forever. The operator's "Try
+            # re-fire the whole seven-container sequence every cycle forever. The operator's "Try
             # again" resets the counter in D1. Deliberately NOT logged per cycle: the failures that
             # got it here already have their own ITS_Errors rows, and a WARN every few minutes for
             # a row nobody is watching is how a log stops being read.

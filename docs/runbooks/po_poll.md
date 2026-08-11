@@ -39,7 +39,8 @@ passes**, each behind its own ITS_Config gate:
    (specs/drawings) are pulled from the portal pool, §34-screened
    (`po_materials/po_attach_screen.py`; optional ClamAV layer behind
    `po_materials.po_attach_screen.clamav_enabled`, seeded `false`), and only CLEAN files
-   land in the job's Box "Purchase Orders" folder + on the `PO_Log` row (Symptom 13).
+   land in the PO root's per-job Box folder (beside the PO PDFs) + on the `PO_Log` row
+   (Symptom 13).
 2. **Vendor down-sync pass** (`po_materials.po_poll.vendors_sync_enabled`) — project the full
    `ITS_Vendors` SoR into the Worker's D1 cache (full-replace; the Worker's dirty-row fence
    protects un-mirrored portal edits).
@@ -284,20 +285,21 @@ low-class; anything about the picklist *definition* is code.)
 
 ### What it means
 
-The shared Box mirror-tree root (ITS_Config, `safety_reports.box.portal_root_folder_id`) is
-unset, so the daemon can't find the folder to file the PO PDF into. This is the same key the
-submission mirror tree and item-photo screening use.
+The PO lane's own Box root (ITS_Config, `po_materials.box.portal_root_folder_id`,
+Workstream `po_materials` — the "ITS Purchase Orders" tree, split from the safety root
+2026-08-11) is unset, so the daemon can't find the folder to file the PO PDF into. The same
+key feeds `rfq_poll` and `estimate_poll`.
 
 ### The low-class Tier-2 action
 
-**Set the documented ITS_Config value** `safety_reports.box.portal_root_folder_id` (workstream
-`safety_reports`) to the Box mirror-tree root folder ID. Setting a documented ITS_Config
-value is the canonical Tier-2 action. No flag to clear — the next cycle files the queued PO
-automatically.
+**Set the documented ITS_Config value** `po_materials.box.portal_root_folder_id` (workstream
+`po_materials`) to the PO Box root folder ID (`build_box_roots.py` prints it). Setting a
+documented ITS_Config value is the canonical Tier-2 action. No flag to clear — the next cycle
+files the queued PO automatically.
 
 > "Claude, POs are logging `po_box_root_unresolved`. Confirm the ITS_Config
-> `safety_reports.box.portal_root_folder_id` row and walk me through setting it to the
-> mirror-tree root."
+> `po_materials.box.portal_root_folder_id` row and walk me through setting it to the
+> PO Box root."
 
 ### Escalate-to-Seth condition
 
@@ -431,8 +433,8 @@ novel/code → Seth.
 ### Symptom
 
 - A PO filed normally (PDF in Box, `PO_Log` + `PO_Pending_Review` rows exist), but a
-  spec/drawing the office attached in the builder never appeared in the job's Box
-  "Purchase Orders" folder or on the `PO_Log` row, **and/or**
+  spec/drawing the office attached in the builder never appeared in the PO root's
+  per-job Box folder or on the `PO_Log` row, **and/or**
 - an `ITS_Review_Queue` row names the attachment: summary starting `po: attachment …
   refused as SUSPICIOUS`, `po: MALICIOUS attachment …`, or `po: attachment INTEGRITY
   FAILURE …`, **and/or**
@@ -541,7 +543,8 @@ Run in order; each gate row's ITS_Config Description restates its own preconditi
    (`scripts/migrations/seed_po_materials_config.py` — gates `false`, incl. the Feature-B
    `po_attach_screen.clamav_enabled` row); seed `ITS_Vendors`
    (`scripts/migrations/seed_its_vendors.py`); set ITS_Config
-   `safety_reports.box.portal_root_folder_id` (the Box mirror-tree root).
+   `po_materials.box.portal_root_folder_id` (the PO lane's own Box root — the
+   "ITS Purchase Orders" folder id `build_box_roots.py` prints).
 5. **Install + load** the plist (`scripts/launchd/install.sh load org.solutionsmith.its.po-poll`).
 6. **Partial live smoke:** once the S8 `scripts/smoke_test_po_generate.py` lands, run it green
    on the mirror; until then, run one `po_poll.poll_once()` cycle from a worktree venv (above)

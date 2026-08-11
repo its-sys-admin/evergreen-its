@@ -223,6 +223,37 @@ def test_clean_readable_manifest_files_posts_the_grid_and_reports_parsed(_patch)
     assert stats.rows_posted == 2
 
 
+def test_box_folder_keys_off_project_name_when_the_join_provides_one(_patch):
+    """The Worker JOINs jobs.project_name into the pending payload (OUTSIDE the
+    manifest:v1 signature — adding it post-signing here proves that). The Box folder
+    keys off the PROJECT NAME, the same folder every other artifact and the Track 6
+    archive resolve; keying off the raw job_id grew an id-named folder (JOB-000031)
+    the archive could never see."""
+    data = _MINIMAL_XLSX
+    row = _row(data)
+    row["project_name"] = "Bradley 1"  # post-signing — the join field is unsigned
+    _patch["pending"].return_value = [row]
+    _patch["chunks"].return_value = _one_chunk(data)
+
+    stats = manifest_poll.poll_once()
+
+    assert stats.filed == 1
+    _patch["box_folder"].assert_called_once_with("Bradley 1")
+
+
+def test_box_folder_falls_back_to_job_id_without_a_project_name(_patch):
+    """A NULL/absent join result (job row vanished, or a Worker predating the join)
+    degrades to the pre-join behavior rather than failing the filing."""
+    data = _MINIMAL_XLSX
+    _patch["pending"].return_value = [_row(data)]  # no project_name key at all
+    _patch["chunks"].return_value = _one_chunk(data)
+
+    stats = manifest_poll.poll_once()
+
+    assert stats.filed == 1
+    _patch["box_folder"].assert_called_once_with("JOB-2026-014")
+
+
 def test_result_post_is_last_so_an_earlier_failure_leaves_the_row_serviceable(_patch):
     """The result post is the COMMIT POINT. If Box fails, nothing is reported and the row
     stays claimed — a crash before the commit re-serves it and every prior step is

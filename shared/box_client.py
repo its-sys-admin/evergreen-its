@@ -766,14 +766,18 @@ def move_folder(
     """MOVE a folder (and everything in it) under `new_parent_folder_id`, optionally
     renaming it in the same call. Returns ``{"id", "name", "parent_id"}``.
 
-    The Box half of the Track 6 job archive. Only TWO Box containers move per job, not
-    five: ``safety_reports.box.portal_root_folder_id`` is the SHARED root for safety AND
-    purchase orders AND RFQs AND subcontracts (`po_poll._resolve_po_box_folder`,
-    `rfq_poll._resolve_rfq_box_folder`, `subcontract_poll._resolve_subcontract_box_folder`
-    all bottom out on it), so relocating ``<safety root>/<Job>`` carries
-    ``Purchase Orders/``, ``RFQs/``, ``Vendor Quotes/`` and the subcontract files with it.
-    Progress has its own root. A future reader will be tempted to "fix" this by adding four
-    Box slots — don't.
+    The Box half of the Track 6 job archive. THREE Box containers move per job, not six:
+    the PO lane owns its own root since 2026-08-11 (``po_materials.box.portal_root_folder_id``
+    — `po_poll._resolve_po_box_folder`, `rfq_poll._resolve_rfq_box_folder` and
+    `estimate_poll._resolve_quotes_box_folder` all bottom out on it, and its per-job folder
+    carries ``RFQs/`` + ``Vendor Quotes/`` along), while
+    ``safety_reports.box.portal_root_folder_id`` remains the SHARED root for safety AND
+    subcontracts AND materials manifests (`subcontract_poll._resolve_subcontract_box_folder`
+    and `manifest_poll._resolve_manifests_box_folder` bottom out on it), so relocating
+    ``<safety root>/<Job>`` still carries those. Progress has its own root. A future reader
+    will be tempted to "fix" the residual asymmetry by adding rfq / vendor-quote /
+    subcontract / manifest Box slots — don't: those subtrees ride their parent folders, and
+    a second slot would double-move them into the very collision this function refuses.
 
     ATOMIC move+rename, unlike Smartsheet. boxsdk emits ONE ``PUT /folders/{id}`` carrying
     both ``parent.id`` and ``name``, so there is no crash window between relocating and
