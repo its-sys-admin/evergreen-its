@@ -2519,24 +2519,7 @@ as intentional.
 
 Surfaced: 2026-08-10 session close (PR4 completion session).
 
-## [RESOLVED 2026-08-11 — was OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
-
-> **RESOLVED 2026-08-11 (the manifest-finish PR), all nine + the B7 product decision.**
-> A1 qty picker unified into the Columns-table concepts (regression pin: a remap reaches
-> the wire); A2 merge is REAL (guarded in-place UPDATEs, locked matches reported
-> `skipped_locked`, never silently rewritten); A3 mode-aware plan totals + discard works
-> mid-`committing` with honest copy; A4 ambiguity enforced SERVER-side (resolutions
-> re-validated against the Worker's own match set — a forged line id refuses); A5 the
-> daemon clamps its grid to the Worker's bounds with visible parse notes AND classifies a
-> Worker 4xx as PERMANENT (one-shot flag + ticket, `manifest_worker_rejected`); B6 the
-> receipt projection runs on flagged lines (quantities track the ledger, status stays
-> sticky; flag no longer clobbers `qty_received`; note COALESCEd); B7 the **Resolve
-> problem** action (operator decision 2026-08-11: explicit human act, note required,
-> status lands where the ledger points); B8 the FULL shipping-log dispose (rows →
-> `material_shipments`, `source='import'`, deterministic `shipment_uuid`, unmatched parts
-> create line+load; operator chose full build over fence); B9 line delete cascades its
-> loads. The B6 drift-encoding test was deliberately rewritten and RED-verified against
-> the old guard (3 failures). The entry below is retained as the audit record.
+## [OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
 
 The 2026-08-10 end-to-end audit (adversarially verified, re-confirmed against post-PR4 HEAD the same
 night) found nine correctness defects across the manifest import lane and the expected-materials
@@ -2649,3 +2632,92 @@ Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight r
 stage belongs in the next prune.ts touch.
 
 Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).
+
+## [OPEN 2026-08-11, medium] `regen_doc_indexes.py::find_readmes` has the identical absolute-path hidden-dir bug `lint_doc_conventions.py` shipped with — #56 fixed one sibling, not this one
+
+PR #56 fixed `lint_doc_conventions.py::walk_docs`: it tested `path.parts` against `REPO_ROOT`-derived
+ABSOLUTE paths, so a checkout living under a dot-directory — exactly where `.claude/worktrees/<id>/`
+puts every workflow-agent worktree — matched `.claude` on every file and silently skipped them all,
+reporting "no violations" having linted nothing (proven: 89 warnings from a normal checkout, 0 from a
+worktree on the identical commit). `scripts/regen_doc_indexes.py:213-223` (`find_readmes`) has the SAME
+shape, unfixed: `roots = [REPO_ROOT / r for r in roots_arg]` are absolute, `root.rglob("README.md")`
+yields absolute paths, and `if any(part.startswith(".") for part in path.parts)` tests those absolute
+paths — so a workflow-agent worktree run finds zero READMEs and `--check` (the CI doc-index-freshness
+gate) reports clean having examined nothing. Same failure class the #56 docstring names: "a gate that
+passes by finding no work is worse than no gate."
+
+**Fix:** mirror the #56 shape exactly — compute `rel = path.relative_to(REPO_ROOT)` and test `rel.parts`,
+not `path.parts`. Add a regression test on the #56 pattern (assert a nonzero README count survives a
+dot-prefixed root fixture). `grep -rn 'startswith(\".\")' scripts/ shared/` confirms these two are the
+only two hidden-dir absolute-path filters in the tree — no third sibling.
+
+**Tag:** `tooling`, `ci`, `doc-conventions`, `worktree`, `medium`.
+
+**Revisit when:** next `scripts/regen_doc_indexes.py` touch, or before trusting a doc-index-freshness
+green from a workflow-agent worktree.
+
+Surfaced: 2026-08-11 session close, following the #56 fix to the sibling script.
+
+## [OPEN 2026-08-11, low] `build_box_roots.py`'s lazy-iteration comment is now stale — #57 fixed the two functions it names
+
+`scripts/migrations/build_box_roots.py:94-99` documents the `shared/box_client.py` lazy-iteration/
+translation gap ("every daemon calling `list_folder` / `search` has the same hole... a candidate
+tech-debt entry") in the present tense. PR #57 closed both named holes — `list_folder` (:648) and
+`search` (:821) now materialize the boxsdk iterator INSIDE `_call`'s translation/retry frame
+(`_call(lambda: list(...))`), per the code comments at those two sites. The migration-script comment
+was not updated and now describes a gap that no longer exists for its two named functions, which will
+mislead the next reader into re-diagnosing an already-fixed bug. (The remaining raw
+`client.folder(...).get_items(...)` call sites — `box_clone_1111a_to_projects.py`,
+`box_build_1111b_blueprint.py`, `reclone_projects_from_1111b.py` — are completed one-time 1111A→1111B
+cutover scripts with no live daemon consumer, out of scope per the dont-harden-dormant reflex.)
+
+**Fix:** update the comment block to note #57 closed `list_folder`/`search`; keep the general
+"materialize lazy boxsdk collections inside `_call`" guidance for any FUTURE addition to
+`shared/box_client.py` — that part of the lesson is still correct and reusable.
+
+**Tag:** `docs`, `box`, `code-comment-drift`, `low`.
+
+**Revisit when:** next `scripts/migrations/build_box_roots.py` or `shared/box_client.py` touch.
+
+Surfaced: 2026-08-11 session close.
+
+## [OPEN 2026-08-11, low] VC-02 (launchd) is the strongest follow-on candidate for a Check-Y-shaped daily sweep — deliberately not bundled into #65
+
+Check Y (#65, closing issue #27) runs `verify_cutover.py`'s VC-03 daily; VC-02 (launchd label parity /
+dark-send-daemon detection) is EXCLUDED by name in the block comment at `scripts/watchdog.py:3161-3169`,
+not because it fails, but as a scope decision: `DARK_UNLOADED_LABELS` was emptied in this same PR (all
+send lanes now activated), so VC-02 reads clean against the live tenant today — the same "green today"
+bar Check Y required of VC-03 before enrollment. VC-02 covers the sibling half of the motivating
+incident: an unloaded plist is exactly as invisible as a missing config row, and the Track 6 archive
+outage needed both the row (VC-03) AND the daemon (VC-02) to be wrong before it went unnoticed. No
+watchdog check currently covers a shipped plist silently failing to load.
+
+**Fix:** a Check Z (or a Check-Y extension) running VC-02 daily on the same capped re-notify ladder
+shape Check Y established (severity partition, sustained-failure counter, DAILY tier).
+
+**Tag:** `watchdog`, `verify_cutover`, `send-gate`, `low`.
+
+**Revisit when:** the next watchdog-check session, or bandwidth after Check Y's live behavior is
+confirmed stable.
+
+Surfaced: 2026-08-11 session close (Check Y's own scope-exclusion note, PR #65).
+
+## [OPEN 2026-08-11, low] Untracked `logs/migrations/po_vendors_backup_20260810.json` keeps VC-07 (git-clean) permanently red
+
+`logs/migrations/*` reports/dumps are normally committed (the 1111B-cutover `reclone_*` reports and
+`box_build_1111b_report.txt` are all tracked) but this vendor-table backup dump (25,840 bytes, a full
+`ITS_Vendors`-shaped `results` array carrying vendor names/addresses/contacts) sits untracked with no
+producing script left in the tree (`grep -rn po_vendors_backup scripts/` is empty) — likely a one-off
+manual dump. `scripts/verify_cutover.py`'s VC-07 (`repo on main, working tree clean`) fails on it
+indefinitely; Check Y's own exclusion comment (`scripts/watchdog.py:3172`) now cites it by name as the
+reason VC-07 stays out of the daily sweep.
+
+**Fix:** a data-sensitivity call, not a mechanical one — either (a) commit it, matching the established
+`logs/migrations/*` convention, or (b) gitignore `logs/migrations/*_backup_*.json` (or similar) and
+delete this instance, if vendor contact data shouldn't ride git history. Either resolves VC-07.
+
+**Tag:** `git-hygiene`, `verify_cutover`, `low`.
+
+**Revisit when:** next `verify_cutover.py`/VC-07 touch, or when Seth makes the commit-vs-gitignore call.
+
+Surfaced: 2026-08-11 session close.
