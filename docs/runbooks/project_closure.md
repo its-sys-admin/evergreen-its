@@ -132,13 +132,13 @@ closed job; which parts should change is exactly what the closure-policy proposa
 
 | Surface | Where it stays |
 |---|---|
-| Safety week sheets + per-job folder | `ITS — Safety Portal` workspace, in place |
-| Progress week sheets + the per-job folder shell | `ITS — Progress Reporting` (only the 4 tracker *sheets* move on Archived; the folder and week sheets stay) |
+| Safety week sheets + per-job folder | On **Archived** (with the archive pass enabled), the per-job FOLDER relocates to `ITS — Archive / <Job> / Safety/` — contents intact; on Inactive, in place |
+| Progress week sheets + the per-job folder | On **Archived**, the whole per-job FOLDER — all five tracker sheets AND the week sheets inside it — relocates to `ITS — Archive / <Job> / Progress/` ([job_archive.md](job_archive.md)); on Inactive, in place |
 | WSR / WPR human-review rows | Their review sheets, in place (send history) |
 | `ITS_Active_Jobs` / `ITS_Active_Jobs_Progress` rows | In-sheet, flagged Inactive/Archived (by design — the history; never delete) |
-| Per-job "Purchase Orders" / "RFQs" / "Subcontracts" sheets | The PO + Subcontracts workspaces' Jobs folders, in place |
+| Per-job "Purchase Orders" / "RFQs" / "Subcontracts" sheets | On **Archived**, their per-job FOLDERS relocate to `ITS — Archive / <Job> / <Workstream>/`; on Inactive, in place |
 | PO_Log / RFQ_Log / Estimate_Log / Subcontract_Log rows + procurement review rows | Flat ledgers, in place (live commercial records, retained by design) |
-| The job's entire Box tree (week PDFs, packets, photos, PO/RFQ/quote/subcontract files) | Box, in place — no move/archive primitive even exists for Box today |
+| The job's Box tree (week PDFs, packets, PO/RFQ/quote/subcontract files) | On **Archived**, the two per-job Box containers relocate to `ITS Archive / <Job> /` via `box_client.move_folder` — the safety root's job folder carries the procurement files with it; `ITS DATA` / `ITS Photos` stay in place |
 | D1 field-ops records (time entries, tasks, equipment history, checklists, …) | D1, retained (payroll-grade source records; only the guarded prune/purge paths above ever remove anything) |
 
 ### Task D — Removing a job entirely (destructive — NOT closure; escalate)

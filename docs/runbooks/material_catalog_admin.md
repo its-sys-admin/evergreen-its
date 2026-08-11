@@ -47,9 +47,11 @@ deactivate; history is kept). Managers and field PMs (`cap.materials.receive`) s
 ### Manager receipt flow — the daily form (Material receipts M2)
 
 The manager's action surface is the **Daily tab** (My Tasks → Daily): the daily report form
-(daily-report-v5) carries an **Expected materials** section in the D.13 deliveries region that
-renders the placed job's pending rows live. Both actions are send-free D1 writes through the
-routes below (per-job ownership-scoped).
+(catalog-current `daily-report`; the `expected_materials` section is value-bearing since **v7**,
+which also files the day's snapshot into the PDF) carries an **Expected materials** section in
+the D.13 deliveries region that renders the placed job's pending rows live. Both actions are
+send-free D1 writes through the routes below (per-job ownership-scoped). Read
+`safety_portal/catalog.json` for the current form code — never this file.
 
 > **Changed 2026-08-07 (materials tracking, migration 0059).** "Confirm receipt" is no longer a
 > one-shot flip. It appends to an **append-only delivery ledger** (`material_receipt_events`), so
@@ -105,8 +107,8 @@ page refresh dropped the in-memory reference). This ships **dark** on the existi
 - Correcting a **received/incident row's recorded facts** (stamps, status un-flip) — a data/code change.
 - Anything touching migration `0031_job_expected_materials.sql` or the status model.
 - Any change to the daily-report / material-incident **form definitions** (the publish pipeline,
-  daily-report-v5's `expected_materials` mount, the material-incident required-content floor) —
-  definition + legal-floor changes are code/doctrine class.
+  the daily report's `expected_materials` mount — value-bearing since v7, the material-incident
+  required-content floor) — definition + legal-floor changes are code/doctrine class.
 - The **incident → material line** validation itself (M3 Slice 1: the `/api/submit`
   `unknown_material_line` gate, the `line_uuid` deep-link threading) — a code change.
 
