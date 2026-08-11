@@ -2395,3 +2395,80 @@ is just stale for these three form codes until the re-run happens.
 fallback packet is missing one of these three forms.
 
 Surfaced: 2026-08-10 (session-close, #44/#47 follow-up).
+
+## [OPEN 2026-08-10, medium] PR4 materials/delivery workflow — five PRs merged, none live-smoked; dev host has zero ITS launchd jobs
+
+`_mirror_material_receipts_pass` (#38), the Material List column back-fill (#40), daily-report v7 +
+two-tap delivery marks (#45), the editor-mirror fix (#48), and the daily-photo line-binding migration
+`0063` (#50) all landed on `main`, all four-part verified (`state=MERGED` · `mergedAt` · `mergeCommit` ·
+main-branch CI SUCCESS). None of it has run against a real tenant. This host is a development Mac with
+**zero ITS launchd jobs loaded** — no daemon cycle, no Smartsheet write, no Box upload, no live D1
+migration apply has happened for any of these five PRs. Every "it works" claim in the five PR bodies
+means "tests pass and mocks agree," not "observed against Smartsheet/Box/D1."
+
+Two things make this more than the routine dev/production gap: (1) migration `0063` is **order-dependent**
+— it must apply to remote D1 before the Worker deploys, because the daily-photo upload route binds the
+new columns and a Worker deployed ahead of the migration 500s every daily-photo upload (the exact class
+`block-stale-cloudflare-deploy.sh` and watchdog Check Q exist to catch, but only once the code is actually
+being deployed); (2) `receipts_enabled` is a six-registry gate (see the info-gap-doc §5/§6 additions this
+session) — a config-dictionary regen, a VC-03 row, and the dashboard's own ACT registry all need to be
+live-current before the operator can find the switch to flip.
+
+**Fix:** a session on the Florida production host: `git -C ~/its pull origin main` → confirm migration
+`0063` is pending via `wrangler d1 migrations list its-safety-portal-db --remote` (expect `0061`/`0062`
+already applied from the concurrent session) → apply → `npm run deploy` (Worker + SPA) → verify the live
+asset hash changed → operator smoke: the receipts mirror against a real per-job sheet, the Material List
+back-fill against a pre-existing sheet, a real v7 daily-report PDF render, and the two-tap delivery marks
+end-to-end on a phone → only then flip `field_ops.fieldops_sync.receipts_enabled` true. A ready-to-paste
+session prompt already exists at `~/Desktop/its-deploy-prompt.md` (exec-host scratch, not committed to
+either repo).
+
+**Tag:** `field-ops`, `materials`, `deploy-gap`, `medium`.
+
+**Revisit when:** the next Florida-host session, or before `receipts_enabled` is flipped true.
+
+Surfaced: 2026-08-10 session close (PR4 completion session).
+
+## [OPEN 2026-08-10, low] Two Worker-test-suite CI timing flakes exceed the 5000ms default timeout under load
+
+`fieldops-manifests.test.ts` "refuses a commit that would push the job past the line cap" timed out at
+~6530ms this session (default timeout 5000ms) — it seeds 450+ rows before the assertion. Same class as the
+pre-existing `fieldops-daily-photo.test.ts` "the pool-wide pending backstop → 503 pool_backlogged" test,
+which runs ~7.6s seeding `POOL_PENDING_GLOBAL_MAX` rows. Neither is a code regression — both reproduce as
+a genuine timing flake under a loaded machine, the same shape as the already-tracked
+`tests/test_state_io.py::test_concurrent_writers_lock_serializes_overlap` Python-side flake above. Not
+fixed this session.
+
+**Fix (not scoped):** either raise the per-test timeout for these two tests specifically (`vitest`'s
+`it("...", { timeout: N }, fn)` form), reduce the seeded row count to the minimum that still exercises the
+cap/backstop boundary, or accept the flake and retry-on-red in CI if the tooling supports it.
+
+**Tag:** `testing`, `safety-portal`, `flaky-test`, `low`.
+
+**Revisit when:** either test is next seen red in CI, or the next touch to `fieldops_manifests.ts` /
+`fieldops_daily_photos.ts`.
+
+Surfaced: 2026-08-10 session close (PR4 completion session).
+
+## [OPEN 2026-08-10, low] Daily report's "Confirm receipt" button remains one-click, asymmetric with the now-two-tap delivery marks
+
+PR #45 made the three delivery-mark buttons (Delivered / Partially delivered / Not delivered) two-tap
+(arm → confirm, 6s expiry) because a mark is an append-only ledger event with no delete path — a mis-tap
+is permanent. `DailyReportTab.confirmReceipt` (the M1 receive route — expected→received, idempotent-safe
+409 on repeat, distinct code path from the delivery-mark buttons) still records on a **single** click. The
+two-tap change deliberately covered only the three delivery marks per the operator's specific request this
+session; the asymmetry was not an oversight but was also not evaluated for whether the same append-only
+argument applies to Confirm-receipt.
+
+**Fix (not scoped, needs an operator call):** if Confirm-receipt should get the same two-tap treatment,
+it's a small follow-up reusing the `(line,kind)`-keyed arm/confirm pattern from #45. If the 409-idempotent
+repeat-safety of the M1 receive route is judged sufficient protection against a mis-tap (unlike the
+ledger-append marks, a repeat Confirm-receipt click is a no-op, not a duplicate event), this can be closed
+as intentional.
+
+**Tag:** `field-ops`, `materials`, `ux`, `low`.
+
+**Revisit when:** an operator/field report of an accidental Confirm-receipt tap, or the next
+`DailyReportTab.tsx` materials-section touch.
+
+Surfaced: 2026-08-10 session close (PR4 completion session).
