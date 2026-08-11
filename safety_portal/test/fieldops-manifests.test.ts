@@ -621,7 +621,10 @@ describe("manifest /commit (paged + watermarked)", () => {
     expect(await res.json()).toMatchObject({ error: "not_committable", status: "pending" });
   });
 
-  it("refuses a commit that would push the job past the line cap", async () => {
+  // 15s timeout: seeds 450 rows one INSERT at a time before the assertion — measured ~6.5s on a
+  // loaded runner vs the 5s default, and it flaked main-branch CI on #60's merge commit
+  // (2026-08-11) exactly as the tech-debt entry predicted. Timing flake, not a regression.
+  it("refuses a commit that would push the job past the line cap", { timeout: 15_000 }, async () => {
     const id = await parsedManifest();
     const many = Array.from({ length: 501 }, (_, i) => line(i + 2, `P-${i}`));
     // The first page is fine; seed the job to just under the cap so the page overflows it.
