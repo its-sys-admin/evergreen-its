@@ -196,6 +196,46 @@ describe("job archive - the state machine", () => {
     expect(((await res.json()) as { error: string }).error).toBe("not_archived");
   });
 
+  // A STALLED un-archive must be resumable. `complete` is already consumed by the archive that
+  // preceded it, so without a resume arm every retry 409s and a half-restored job is stranded —
+  // and the UI's only control on a partial would have to run the OPPOSITE direction to move at
+  // all. (issue #54)
+  it("RESUMES a stalled un-archive from partial", async () => {
+    const id = await createOk(admin, { project_name: NAME });
+    await setArchive(id, "partial", "unarchive");
+    const res = await j(admin, `/api/fieldops/job/${id}/unarchive`, { confirm: NAME });
+    expect(res.status).toBe(200);
+    const row = await env.DB
+      .prepare("SELECT archive_state, archive_direction FROM jobs WHERE job_id=?")
+      .bind(id)
+      .first<{ archive_state: string; archive_direction: string }>();
+    expect(row!.archive_state).toBe("requested");
+    expect(row!.archive_direction).toBe("unarchive");
+  });
+
+  it("RESUMES a stalled un-archive from failed", async () => {
+    const id = await createOk(admin, { project_name: NAME });
+    await setArchive(id, "failed", "unarchive");
+    expect((await j(admin, `/api/fieldops/job/${id}/unarchive`, { confirm: NAME })).status).toBe(200);
+  });
+
+  // The resume arm is scoped to an un-archive's OWN wreckage. A partial ARCHIVE is still an
+  // archive: un-archiving it would claim to restore folders that never left.
+  it("does NOT treat a partial ARCHIVE as un-archivable", async () => {
+    const id = await createOk(admin, { project_name: NAME });
+    await setArchive(id, "partial", "archive");
+    const res = await j(admin, `/api/fieldops/job/${id}/unarchive`, { confirm: NAME });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("not_archived");
+  });
+
+  // `none` carries no half-done work, so there is nothing to resume even if a direction lingers.
+  it("does NOT resume from none", async () => {
+    const id = await createOk(admin, { project_name: NAME });
+    await setArchive(id, "none", "unarchive");
+    expect((await j(admin, `/api/fieldops/job/${id}/unarchive`, { confirm: NAME })).status).toBe(409);
+  });
+
   it("un-archive returns the job to INACTIVE, never active", async () => {
     const id = await createOk(admin, { project_name: NAME });
     await setArchive(id, "complete", "archive");

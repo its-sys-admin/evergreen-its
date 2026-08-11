@@ -200,3 +200,43 @@ describe("JobArchivePanel — the request is gated on the typed confirmation", (
     expect(api.archiveJob).not.toHaveBeenCalled();
   });
 });
+
+describe("JobArchivePanel — Try again resumes the direction that stalled", () => {
+  // The whole point of the control is "resume it". It used to hard-code the archive modal, so on a
+  // half-finished UN-archive it offered to move the containers that had just come back INTO the
+  // archive again. It is also the only retry control rendered on a partial, so the wrong direction
+  // left a stranded job with no correct move. (issue #54)
+  const stalled = (direction: "archive" | "unarchive") =>
+    archiveBlock({
+      state: "partial",
+      direction,
+      containers: [
+        ...CONTAINERS.slice(0, 4),
+        { key: "box:safety", label: "Safety", moved: false, note: "RuntimeError" },
+        { key: "box:progress", label: "Progress", moved: false, note: "RuntimeError" },
+      ],
+    });
+
+  it("opens the UN-ARCHIVE confirm on a stalled un-archive", async () => {
+    show(stalled("unarchive"));
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toMatch(/un-archive/i);
+    // The give-away that the direction is wrong: the archive modal says it moves folders INTO
+    // the archive area.
+    expect(dialog.textContent).not.toMatch(/moves the job's folders into/i);
+  });
+
+  it("still opens the ARCHIVE confirm on a stalled archive", async () => {
+    show(stalled("archive"));
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toMatch(/archive/i);
+    expect(dialog.textContent).not.toMatch(/un-archive "/i);
+  });
+
+  it("says 'Partly un-archived', not 'Partly archived', when restoring", () => {
+    show(stalled("unarchive"));
+    expect(screen.getByRole("alert").textContent).toMatch(/partly un-archived/i);
+  });
+});

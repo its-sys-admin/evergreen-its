@@ -175,7 +175,8 @@ export function JobArchivePanel({
           <div className="banner banner--err" role="alert">
             <strong>
               {state === "partial"
-                ? `Partly archived — ${moved} of ${total} folders moved.`
+                ? `${direction === "unarchive" ? "Partly un-archived" : "Partly archived"} — ` +
+                  `${moved} of ${total} folders moved.`
                 : "Nothing moved."}
             </strong>
             {stuck.length > 0 && (
@@ -199,7 +200,16 @@ export function JobArchivePanel({
             </div>
           </div>
           <div className="dash-row">
-            <button type="button" className="btn btn--retire" onClick={() => setModal("archive")}>
+            {/* RESUME THE DIRECTION THAT STALLED. This used to hard-code "archive", so pressing
+                "Try again" on a half-finished UN-archive offered to archive — moving the
+                containers that had just come back into the archive again, the exact opposite of
+                resuming. It is also the ONLY retry control rendered on a partial, so getting the
+                direction wrong left a stranded job with no correct move. (issue #54) */}
+            <button
+              type="button"
+              className="btn btn--retire"
+              onClick={() => setModal(direction === "unarchive" ? "unarchive" : "archive")}
+            >
               Try again
             </button>
           </div>
