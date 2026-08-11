@@ -117,7 +117,9 @@ export interface JobRouting {
   /** OPTIONAL rename (edit page, 2026-07-20): absent = unchanged; never blankable.
    *  A rename changes which per-job folder FUTURE filings open (find-or-create by name). */
   project_name?: string;
-  /** The Evergreen YYYY.NNN tracking number (0057) — '' clears it. */
+  /** The Evergreen job identifier AS TYPED — `YYYY.NNN` or `YYYY.NNN.S` (0057 + 0064);
+   *  '' clears it. Sent whole: the Worker SPLITS it into (job_no, site_phase). See
+   *  lib/jobNumber.ts for the matching client-side pair. */
   job_no?: string;
   address?: string;
   address_city?: string;

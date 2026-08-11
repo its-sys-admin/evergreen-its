@@ -713,7 +713,7 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     const row = await c.env.DB
       .prepare(
         "SELECT job_id, project_name, address, stakeholder_name, stakeholder_phone, stakeholder_email, " +
-          "job_no, address_city, address_state, address_zip " +
+          "job_no, site_phase, address_city, address_state, address_zip " +
           "FROM jobs WHERE job_id = ?1",
       )
       .bind(jobId)
@@ -725,17 +725,38 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
         stakeholder_phone: string;
         stakeholder_email: string;
         job_no: string;
+        site_phase: number;
         address_city: string;
         address_state: string;
         address_zip: string;
       }>();
     if (!row) return c.json({ error: "not_found" }, 404);
-    // job_no: the STORED Evergreen number (0057) first; the YYYY.NNN name-prefix parse
-    // stays as the legacy fallback for jobs that predate the structured field.
-    const jobNoMatch = /^(\d{4}\.\d{3})/.exec((row.project_name ?? "").trim());
+    // job_no + site_phase: the STORED Evergreen identifier (0057 + 0064) first; the
+    // name-prefix parse stays as the legacy fallback for jobs that predate the structured
+    // fields.
+    //
+    // The fallback regex now captures the OPTIONAL third segment and is anchored at BOTH
+    // ends of the number (`(?![\d.])` — end-of-number, not end-of-string, since the name
+    // continues: "2026.384.1 Coker Solar"). Before 0064 it was `/^(\d{4}\.\d{3})/`, open at
+    // the tail: against that same name it MATCHED and returned the truncated "2026.384",
+    // silently handing the builder a wrong-but-plausible number for a DIFFERENT site of the
+    // same project — the one surface in this fan-out that corrupted rather than refused.
+    const jobNoMatch = /^(\d{4}\.\d{3})(?:\.(\d+))?(?![\d.])/.exec((row.project_name ?? "").trim());
+    const fallbackJobNo = jobNoMatch ? jobNoMatch[1] : "";
+    // Bounded by the SAME ceiling parseDraftBody enforces on a typed site_phase (0..9999): an
+    // out-of-range segment in a project NAME resolves to 0 (no site) rather than pre-filling a
+    // value the very next request would reject as invalid_site_phase.
+    const parsedSite = jobNoMatch && jobNoMatch[2] !== undefined ? parseInt(jobNoMatch[2], 10) : 0;
+    const fallbackSitePhase = Number.isSafeInteger(parsedSite) && parsedSite >= 0 && parsedSite <= 9999 ? parsedSite : 0;
+    // Both parts come from the SAME source — stored or parsed, never one of each. Mixing a
+    // stored job_no with a name-parsed site (or vice versa) would compose a document number
+    // for a site the operator never named.
+    const hasStoredJobNo = (row.job_no ?? "") !== "";
     return c.json({
       job_id: row.job_id,
-      job_no: (row.job_no ?? "") || (jobNoMatch ? jobNoMatch[1] : ""),
+      job_no: hasStoredJobNo ? row.job_no : fallbackJobNo,
+      // 0064 — the identifier's third segment, feeding the builder's Site/phase auto-fill.
+      site_phase: hasStoredJobNo ? (row.site_phase ?? 0) : fallbackSitePhase,
       ship_to_name: row.project_name ?? "",
       ship_to_address: row.address ?? "",
       // 0057: the structured address block (street stays in `address`); '' when the job

@@ -83,7 +83,10 @@ segments:
 {job_no}.{site_phase}.{supersede_seq}.{revision}
 ```
 
-where `job_no` is the Evergreen `YYYY.NNN` project number — e.g. **`2025.364.1.2`**. When a
+where `job_no` is the Evergreen `YYYY.NNN` project number and `site_phase` is the **site**
+segment of the job's Evergreen identifier — so a job numbered `2026.384.1` produces PO numbers
+`2026.384.1.<supersede>.<revision>`, e.g. **`2025.364.1.2`**. You never re-type the site: picking
+the job in the builder fills both the job number and the Site/phase from the job record. When a
 PO supersedes an earlier one, the numbers **chain** (a revised PO carries a higher revision;
 the predecessor is marked **Superseded** in `PO_Log`). The number comes from the **job
 record**, never from a folder name, and ITS refuses to file a **duplicate** number — if a
