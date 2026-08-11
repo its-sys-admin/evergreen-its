@@ -517,17 +517,17 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/fieldops_job_write.md`
 
-### Hours / equipment / materials / incidents mirror passes
+### Hours / equipment / materials / incidents / receipts mirror passes
 
 | What happens | |
 |---|---|
 | Daemon | `fieldops-sync` |
-| Config gates | `field_ops.fieldops_sync.hours_enabled`, `field_ops.fieldops_sync.equipment_enabled`, `field_ops.fieldops_sync.materials_enabled`, `field_ops.fieldops_sync.incidents_enabled` |
+| Config gates | `field_ops.fieldops_sync.hours_enabled`, `field_ops.fieldops_sync.equipment_enabled`, `field_ops.fieldops_sync.materials_enabled`, `field_ops.fieldops_sync.incidents_enabled`, `field_ops.fieldops_sync.receipts_enabled` |
 
 **Healthy signals:**
 - Each enabled pass mirrors its records; the Hours Log is one-way-up (§51).
 
-#### A tracker (hours/equipment/materials/incidents) is not mirroring.
+#### A tracker (hours/equipment/materials/incidents/receipts) is not mirroring.
 
 **Resolution class:** Escalate to Seth (co-resolve)
 
@@ -540,6 +540,23 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 - Flip the gate only if its documented precondition is met; a doctrine-preconditioned flip is a §44 high-class action — confirm with Seth.
 
 **See also:** runbook `docs/runbooks/hours_log_sync.md`
+
+#### A delivery mark made in the portal never appears on the job's Material Receipts sheet, or a line's Line Qty Received / Line Status stops moving.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** material_receipts_perjob_failed, material_receipts_row_cap_check_failed, material_receipts_sheet_race_duplicate, receipts pass gate off
+
+**Checks (in order):**
+- The ledger re-projects IN FULL every cycle (no watermark), so a transient fault self-heals on the next cycle — wait one 90s cycle before treating it as a fault.
+- Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption.
+- Check field_ops.fieldops_sync.receipts_enabled, then the error journal for the codes above.
+
+**Resolutions (in order):**
+- Gate off → flip it back on (no documented precondition); rows catch up on the first cycle back. A permanent per-event failure opens a Review Queue row naming the job — follow it.
+- Duplicate rows after a create race → keep the daemon's row (the one that keeps updating); the duplicate is inert. Escalate only if duplicates keep appearing.
+
+**See also:** runbook `docs/runbooks/fieldops_sync.md`
 
 #### A crew time entry needs an office-side correction/amendment.
 
@@ -594,6 +611,22 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **Resolutions (in order):**
 - For a readability refusal only, clear that manifest's id from state/manifest_poll_flagged.json to retry. NEVER clear a flag for a MALICIOUS verdict or an integrity failure — both escalate, and the bytes are retained for investigation.
+
+**See also:** runbook `docs/runbooks/material_manifest_import.md`
+
+#### The office's import from the validate screen errors, or the manifest is stuck showing "committing".
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** not_committable, line_cap_exceeded, invalid_material_id, invalid_mode
+
+**Checks (in order):**
+- These are Worker refusals of the COMMIT half (the human dispose), not daemon faults — the daemon's work already finished when the grid appeared.
+- line_cap_exceeded means the job would exceed its expected-materials line cap; the preview's projected total can under-count, so a green preview does not rule this out mid-import.
+
+**Resolutions (in order):**
+- not_committable / invalid_mode / invalid_material_id → re-open the validate screen and retry from a fresh load; if it persists, the manifest's status no longer allows a commit — escalate rather than forcing it.
+- A manifest stranded in "committing" after a mid-import refusal currently has NO discard path (known gap) — some pages may already be imported; check the job's Materials page before re-importing anything, and escalate to Seth.
 
 **See also:** runbook `docs/runbooks/material_manifest_import.md`
 

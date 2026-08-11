@@ -13,6 +13,7 @@ tags: [runbook, successor-remediation, materials, manifest_poll, bom, shipping-l
 > **In the troubleshooting tree** ([printable guide](../troubleshooting/troubleshooting_guide.md) · dashboard `/troubleshoot`). This runbook resolves:
 >   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “Uploaded manifests are not being pulled or parsed.”
 >   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “An uploaded manifest was refused (unreadable, SUSPICIOUS/MALICIOUS) or failed integrity.”
+>   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → manifest-poll screens, parses, and files an uploaded BOM / shipping log → “The office's import from the validate screen errors, or the manifest is stuck showing "committing".”
 > Daemon(s): `manifest-poll` — see the [daemon reference](../references/daemon_reference.md).
 <!-- END TREE-XREF -->
 

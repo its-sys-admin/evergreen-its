@@ -393,8 +393,41 @@ def test_error_script_join_covers_the_known_identities() -> None:
         "po_materials.rfq_poll": "rfq_poll",
         "po_materials.rfq_send_poll": "rfq_send",
         "po_materials.rfq_send": "rfq_send",
+        # 2026-08-10 wiring pass: the receipts ledger (#38), the archive pass's
+        # undotted identity, and the manifest importer — each had ITS_Errors rows
+        # rendering with no /system?focus= link until joined here.
+        "progress_reports.material_receipts": "trackers",
+        "job_archive": "fieldops_sync",
+        "field_ops.manifest_poll": "manifest_poll",
     }.items():
         assert NODE_BY_ERROR_SCRIPT.get(script) == node
+
+
+def test_every_fieldops_pass_gate_is_on_the_node() -> None:
+    """STRUCTURAL parity — the phantom-pass class. fieldops_sync grows a new mirror pass by
+    adding a `field_ops.fieldops_sync.<pass>_enabled` ConfigKey; if the node's `extra_gates`
+    is not updated in the same PR, the pass exists with no `/config?f=` deep link on the rail
+    and the operator cannot find its switch (bit receipts_enabled AND archive_enabled,
+    2026-08-10). Enumerating REQUIRED_CONFIG makes the NEXT pass fail here by name instead."""
+    from field_ops import fieldops_sync  # noqa: PLC0415
+
+    node = NODES_BY_ID["fieldops_sync"]
+    declared_gates = {
+        k.setting
+        for k in fieldops_sync.REQUIRED_CONFIG
+        if k.setting.startswith("field_ops.fieldops_sync.") and k.setting.endswith("_enabled")
+    }
+    on_node = {node.config_gate, *node.extra_gates}
+    missing = declared_gates - on_node
+    assert not missing, f"fieldops_sync pass gates missing from the system-map node: {missing}"
+
+
+def test_manifest_poll_is_not_an_edgeless_orphan() -> None:
+    """Until 2026-08-10 manifest_poll was the map's only EDGE-LESS daemon — drawn as a box
+    that talks to nothing while live it pulls the pool, files to Box, posts the grid back,
+    and tickets refusals. A daemon node with zero edges is a wiring miss, not a style choice."""
+    touching = [e for e in EDGES if "manifest_poll" in (e.src, e.dst)]
+    assert len(touching) >= 3, f"manifest_poll has only {len(touching)} edges"
 
 
 # ── routes (hermetic) ────────────────────────────────────────────────────────
