@@ -911,8 +911,15 @@ def test_ensure_columns_noop_and_zero_api_calls_when_all_present(mocker):
 
 
 def test_ensure_columns_adds_only_the_missing_titles_appended_in_order(mocker):
+    """REGRESSION (errorCode 1135, live 2026-08-10): every body in one add_columns call must
+    carry the SAME index. The API inserts them consecutively at that index in array order, so
+    a shared index=len(columns) is what "append, in specs order" actually looks like on the
+    wire. The original per-column `start + offset` arithmetic passed every mock and 400'd on
+    the first real sheet ('Kiwi — Material List'): "Input column index N is different from the
+    first input column index M". The SAME-index assertion below is the shape that matters —
+    do not "fix" it back to consecutive indices."""
     client = _install_add_columns(mocker)
-    # Three existing columns → the two new ones append at indices 3 and 4, in specs order.
+    # Three existing columns → both new ones land at shared index 3, in specs order.
     mocker.patch(
         "shared.smartsheet_client._column_map", return_value={"A": 1, "B": 2, "C": 3},
     )
@@ -922,7 +929,9 @@ def test_ensure_columns_adds_only_the_missing_titles_appended_in_order(mocker):
     assert added == ["Part Number", "Expected Ship Date"]
     bodies = client.Sheets.add_columns.call_args.args[1]
     assert [b.title for b in bodies] == ["Part Number", "Expected Ship Date"]
-    assert [b.index for b in bodies] == [3, 4]  # APPENDED, never inserted
+    # APPENDED, never inserted — and ONE index shared by all bodies (1135).
+    assert [b.index for b in bodies] == [3, 3]
+    assert len({b.index for b in bodies}) == 1
     assert [b.type for b in bodies] == ["TEXT_NUMBER", "DATE"]
 
 

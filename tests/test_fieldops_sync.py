@@ -1581,6 +1581,25 @@ def test_the_receipts_gate_row_is_seeded_even_though_it_ships_false():
     assert row["Value"] == "false"
 
 
+def test_the_receipts_row_cap_key_is_seeded():
+    """The fifth row-cap sibling. #38 declared this key in REQUIRED_CONFIG but shipped no seeder
+    row, so on the live tenant it WARNed config_row_missing every 90s cycle — resolve_and_log
+    runs BEFORE the sync_enabled bail, so even a gated-off daemon storms. (Live 2026-08-10.)"""
+    import sys
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parents[1] / "scripts" / "migrations"
+    if str(migrations) not in sys.path:
+        sys.path.insert(0, str(migrations))
+    import seed_daemon_gate_config as seeder  # noqa: PLC0415
+
+    row = next(
+        r for r in seeder.CONFIG_ROWS if r["Setting"] == material_receipts.CFG_ROW_CAP_WARN
+    )
+    assert row["Workstream"] == "progress_reports"
+    assert row["Value"] == str(material_receipts.DEFAULT_ROW_CAP_WARN)
+
+
 def test_the_receipts_gate_is_operator_editable_and_cutover_verified():
     from operator_dashboard.act import registry  # noqa: PLC0415
 
