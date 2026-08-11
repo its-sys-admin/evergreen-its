@@ -561,3 +561,32 @@ def test_bearer_401_during_preview_post_stops_cycle_and_persists_prior_flag(_pat
     _patch["flags_persist"].assert_called_once()
     (persisted,), _ = _patch["flags_persist"].call_args
     assert persisted == {"41": "refused"}
+
+
+# ---- Box folder resolution (the 2026-08-11 PO-lane root split) ----------------------
+
+
+def test_quotes_box_resolver_reads_the_po_lanes_own_root(mocker):
+    """The resolver reads po_naming.CFG_BOX_PORTAL_ROOT under Workstream='po_materials'
+    (NOT the shared safety root) and files under ROOT→<job>→'Vendor Quotes' — the
+    intermediate 'Purchase Orders' level is gone."""
+    from po_materials import po_naming
+
+    read = mocker.patch(
+        "po_materials.estimate_poll._read_str_setting", return_value="root-po"
+    )
+    ensure = mocker.patch(
+        "po_materials.estimate_poll.box_client.get_or_create_folder",
+        side_effect=["job-9", "quotes-3"],
+    )
+
+    assert estimate_poll._resolve_quotes_box_folder("Sunrise Solar") == "quotes-3"
+
+    read.assert_called_once_with(
+        po_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
+    )
+    assert ensure.call_args_list == [
+        mocker.call("root-po", "Sunrise Solar"),
+        mocker.call("job-9", "Vendor Quotes"),
+    ]

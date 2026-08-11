@@ -151,7 +151,7 @@ creates the review row. A blank "Compiled PDF" cell → nothing to attach → HE
 
 ### The low-class Tier-2 repair
 
-1. Confirm the RFQ PDF exists in Box (`<job>/Purchase Orders/RFQs/`).
+1. Confirm the RFQ PDF exists in Box (`<PO root>/<job>/RFQs/` — the PO lane's own root since 2026-08-11).
 2. If the Box link is simply missing from the row, restore it in the "Compiled PDF" cell from
    the Box file URL; if the PDF itself was never filed, re-generate the RFQ in the portal (a
    fresh generate re-files the PDF + re-seeds the link).

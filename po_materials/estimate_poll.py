@@ -20,7 +20,7 @@ behind ONE gate (`po_materials.estimate_poll.polling_enabled`, shipped false):
   red-team #5): invoice/ap_report are REFUSED from the PO path, visibly
   (Estimate_Log 'refused' + POLICY_EDGE Review-Queue row + result post
   `wrong_doc_type:<t>`; the Worker deletes the chunks on refused) → surviving docs
-  file the ORIGINAL bytes to Box (ROOT→job→"Purchase Orders"→"Vendor Quotes",
+  file the ORIGINAL bytes to Box (PO ROOT→job→"Vendor Quotes" — the lane's own root,
   §45 find-or-create / §47 version-on-conflict, name "<est_uuid> - <filename>")
   → Estimate_Log row (needs_review) → page-preview PNGs (Quartz via the sandbox;
   Pillow re-encoded; best-effort — failure never blocks filing) → result post
@@ -122,6 +122,7 @@ from po_materials import (
     estimate_log,
     estimate_preview,
     po_attach_screen,
+    po_naming,
 )
 from safety_reports import safety_naming
 from shared import (
@@ -197,9 +198,9 @@ DEFAULT_EXTRACT_TIMEOUT_S = 600
 # budget whether or not it succeeds (a wedged model must not serialize the pool).
 TIER2_DOCS_PER_CYCLE = 1
 
-# Box filing path under the job's mirror-tree folder: the PO subfolder plus the
-# estimate-specific leaf (§45 find-or-create at every level).
-PO_BOX_SUBFOLDER = "Purchase Orders"
+# Box filing leaf under the PO root's per-job folder (§45 find-or-create at every
+# level; the PO lane's OWN tree — po_naming.CFG_BOX_PORTAL_ROOT → <job> →
+# "Vendor Quotes").
 VENDOR_QUOTES_SUBFOLDER = "Vendor Quotes"
 
 # #336 — every ITS_Config key this daemon resolves at RUNTIME. The declared-but-not-
@@ -225,12 +226,11 @@ REQUIRED_CONFIG: list[ConfigKey] = [
         CFG_WORKER_BASE_URL, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
         description="Shared Worker base URL; owned by safety_reports, read here too.",
     ),
+    # The PO lane's OWN Box root; owned by po_naming (the config-dictionary
+    # description lives on po_poll's declaration — one owner's prose per key).
+    # Clean estimates file under ROOT→<job>→'Vendor Quotes'.
     ConfigKey(
-        safety_naming.CFG_BOX_PORTAL_ROOT, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
-        description=(
-            "Shared Box mirror-tree root; owned by safety_reports. Clean estimates "
-            "file under ROOT→<job>→'Purchase Orders'→'Vendor Quotes'."
-        ),
+        po_naming.CFG_BOX_PORTAL_ROOT, po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM, "", "str",
     ),
     ConfigKey(
         CFG_TIER1_ENABLED, WORKSTREAM, DEFAULT_TIER1_ENABLED, "bool",
@@ -986,7 +986,7 @@ def _service_one_estimate(
             tiers=tiers, tier2_budget=tier2_budget, correlation_id=correlation_id,
         )
 
-        # 6 — Box filing: §45 find-or-create ROOT→job→"Purchase Orders"→"Vendor
+        # 6 — Box filing: §45 find-or-create the PO ROOT→job→"Vendor
         # Quotes", §47 version-on-conflict under the est_uuid-prefixed name (the
         # uuid disambiguates same-named uploads AND makes a crash-retry version
         # instead of duplicate).
@@ -995,8 +995,8 @@ def _service_one_estimate(
             counters["errors"] += 1
             error_log.log(
                 Severity.ERROR, SCRIPT_NAME,
-                f"Box portal root unresolved (ITS_Config "
-                f"{safety_naming.CFG_BOX_PORTAL_ROOT} unset) — estimate {est_uuid} "
+                f"PO Box root unresolved (ITS_Config "
+                f"{po_naming.CFG_BOX_PORTAL_ROOT} unset) — estimate {est_uuid} "
                 f"left claimed until the root is configured",
                 error_code="estimate_box_root_unresolved",
                 correlation_id=correlation_id,
@@ -2001,22 +2001,21 @@ def _post_previews_best_effort(
 
 
 def _resolve_quotes_box_folder(job_name: str) -> str | None:
-    """§45 find-or-create the estimate filing folder: mirror-tree ROOT → per-job
-    folder (the SAME `safety_naming.job_folder_name` as every other portal
-    artifact) → 'Purchase Orders' → 'Vendor Quotes'. None when the shared root is
-    unconfigured (the caller leaves the row claimed + ERRORs — a config gap, not a
-    per-row defect)."""
+    """§45 find-or-create the estimate filing folder: the PO lane's OWN Box ROOT
+    (`po_naming.CFG_BOX_PORTAL_ROOT`) → per-job folder (the SAME
+    `safety_naming.job_folder_name` as every other portal artifact) → 'Vendor
+    Quotes'. None when the root is unconfigured (the caller leaves the row
+    claimed + ERRORs — a config gap, not a per-row defect)."""
     root = _read_str_setting(
-        safety_naming.CFG_BOX_PORTAL_ROOT, "",
-        workstream=CFG_WORKER_BASE_URL_WORKSTREAM,
+        po_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
     ).strip()
     if not root:
         return None
     job_folder = box_client.get_or_create_folder(
         root, safety_naming.job_folder_name(job_name)
     )
-    po_folder = box_client.get_or_create_folder(job_folder, PO_BOX_SUBFOLDER)
-    return box_client.get_or_create_folder(po_folder, VENDOR_QUOTES_SUBFOLDER)
+    return box_client.get_or_create_folder(job_folder, VENDOR_QUOTES_SUBFOLDER)
 
 
 if __name__ == "__main__":

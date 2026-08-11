@@ -34,8 +34,7 @@ from __future__ import annotations
 
 import sys
 
-from po_materials import po_poll
-from safety_reports import safety_naming
+from po_materials import po_naming, po_poll
 from shared import sheet_ids, smartsheet_client
 from shared.kill_switch import SystemState, check_system_state
 
@@ -84,12 +83,12 @@ def main() -> int:
     print(f"  OK — polling_enabled={drafts_on} vendors_sync_enabled={vendors_on} status_sync_enabled={status_on}")
     if not (drafts_on or vendors_on or status_on):
         print("  INFO — all gates false (DARK) — expected pre-cutover; flip after the deploy + smoke.")
-    box_root = po_poll._read_str_setting(safety_naming.CFG_BOX_PORTAL_ROOT, "",
-                                         workstream=po_poll.CFG_WORKER_BASE_URL_WORKSTREAM)
+    box_root = po_poll._read_str_setting(po_naming.CFG_BOX_PORTAL_ROOT, "",
+                                         workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM)
     if box_root:
-        print(f"  OK — Box portal root = {box_root!r}")
+        print(f"  OK — PO Box root = {box_root!r}")
     else:
-        print(f"  WARN — {safety_naming.CFG_BOX_PORTAL_ROOT} unset — filing HELDs (po_box_root_unresolved) until set.")
+        print(f"  WARN — {po_naming.CFG_BOX_PORTAL_ROOT} unset — filing HELDs (po_box_root_unresolved) until set.")
     base_url = po_poll._read_str_setting(po_poll.CFG_WORKER_BASE_URL, "",
                                          workstream=po_poll.CFG_WORKER_BASE_URL_WORKSTREAM)
     print(f"  {'OK' if base_url else 'WARN'} — Worker base URL = {base_url!r}"

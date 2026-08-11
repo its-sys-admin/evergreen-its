@@ -37,7 +37,7 @@ vendor without a person approving it (the permanent **External Send Gate**).
    generate.
 2. **Generate** — click **Generate**. The Worker re-checks the math, allocates the PO number,
    and queues the PO. Within a minute or two the Mac-side generator (`po_poll`) renders the
-   PDF, files it to **Box** (the job's `Purchase Orders` folder), appends the **`PO_Log`**
+   PDF, files it to **Box** (the job's folder under the `ITS Purchase Orders` root), appends the **`PO_Log`**
    ledger, and creates a **`PO_Pending_Review`** row for approval.
 3. **Review & approve** — an authorised approver opens the `PO_Pending_Review` row, reads the
    attached PDF, edits the **Email Body** if desired, and checks **Send Now** (send this

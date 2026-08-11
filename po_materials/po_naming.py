@@ -10,10 +10,26 @@ identical sanitisation (already the PO Box-folder sanitiser in `po_poll`).
 
 Pure naming — no I/O, no external send. A blank job name falls back to the pre-existing
 number-only name so a numberless/jobless edge case never crashes.
+
+This module also OWNS the PO lane's Box mirror-tree ROOT config key (below) — the
+deliberately-light home the three lane daemons (`po_poll` / `rfq_poll` /
+`estimate_poll`) AND the Track 6 archive (`field_ops/job_archive.py`) import it from,
+the same leaf-module posture as `safety_naming.CFG_BOX_PORTAL_ROOT`.
 """
 from __future__ import annotations
 
 from safety_reports import safety_naming
+
+# The PO lane's OWN Box mirror-tree ROOT (ITS_Config Setting + the Workstream cell its
+# row is read under). Tree shape: ROOT → <job folder> holds the PO PDFs directly, with
+# "RFQs" and "Vendor Quotes" as child folders — the PO lane's Box tree is its own path,
+# NOT a subtree of the safety root (operator directive 2026-08-11; before that the lane
+# nested under `safety_naming.CFG_BOX_PORTAL_ROOT` → <job> → "Purchase Orders").
+# The root folder is built + seeded by `scripts/migrations/build_box_roots.py`; the
+# `.portal_root_folder_id` suffix keeps it enrolled in `production_repoint.py`'s
+# repoint allowlist alongside the safety/progress twins.
+CFG_BOX_PORTAL_ROOT = "po_materials.box.portal_root_folder_id"
+CFG_BOX_PORTAL_ROOT_WORKSTREAM = "po_materials"
 
 
 def po_pdf_filename(po_number: str, job_name: str | None) -> str:

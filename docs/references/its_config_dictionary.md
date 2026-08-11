@@ -47,8 +47,8 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
-| `field_ops.box.archive_root_folder_id` | str | *(unset)* | Box root the Track 6 job archive relocates a closed job's Safety and Progress containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py. | field_ops.job_archive |
-| `field_ops.fieldops_sync.archive_enabled` | bool | false | Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's six Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on. | field_ops.fieldops_sync |
+| `field_ops.box.archive_root_folder_id` | str | *(unset)* | Box root the Track 6 job archive relocates a closed job's Safety, Progress and Purchase Orders containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py. | field_ops.job_archive |
+| `field_ops.fieldops_sync.archive_enabled` | bool | false | Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's seven Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.equipment_enabled` | bool | false | Per-stream gate: mirror equipment status from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.hours_enabled` | bool | false | Per-stream gate: mirror crew hours from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.incidents_enabled` | bool | false | Per-stream gate: mirror material incidents from the portal into Smartsheet. | field_ops.fieldops_sync |
@@ -61,6 +61,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
+| `po_materials.box.portal_root_folder_id` | str | *(unset)* | The PO lane's OWN Box mirror-tree root ('ITS Purchase Orders' — built by build_box_roots.py). The drafts pass files PO PDFs under ROOT→<job>; rfq_poll/estimate_poll file into its 'RFQs' / 'Vendor Quotes' children. | field_ops.job_archive, po_materials.estimate_poll, po_materials.po_poll, po_materials.rfq_poll |
 | `po_materials.config_actuator.polling_enabled` | bool | false | Runtime gate for the §50 config actuator daemon (applies approved workstream-config changes on the Mac). | po_materials.config_actuator |
 | `po_materials.estimate_extract.confidence_threshold` | float | 0.75 | Minimum extraction confidence to post 'extracted'; below it the doc degrades to needs_review (the disposition screen's manual Tier-3). | po_materials.estimate_poll |
 | `po_materials.estimate_extract.model` | str | qwen3.5:9b | Pinned local Ollama model for Tier-2 extraction; swapping it re-runs the offline corpus eval to re-qualify (ADR-0004 decision 1). | po_materials.estimate_poll |
@@ -109,7 +110,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
 | `progress_reports.intake_enabled` | bool | false | FOOTGUN: the progress-intake gate is read under Workstream='safety_reports' (intake's own workstream), NOT 'progress_reports' — seed it there. | safety_reports.intake |
-| `safety_reports.box.portal_root_folder_id` | str | *(unset)* | Shared Box mirror-tree root; owned by safety_reports. Unset means the filing folder cannot resolve and rows stay claimed until it is configured. | field_ops.job_archive, field_ops.manifest_poll, po_materials.estimate_poll, po_materials.po_poll, po_materials.rfq_poll, safety_reports.intake, safety_reports.portal_poll, safety_reports.weekly_generate, subcontracts.subcontract_poll |
+| `safety_reports.box.portal_root_folder_id` | str | *(unset)* | Shared Box mirror-tree root; owned by safety_reports. Unset means the filing folder cannot resolve and rows stay claimed until it is configured. | field_ops.job_archive, field_ops.manifest_poll, safety_reports.intake, safety_reports.portal_poll, safety_reports.weekly_generate, subcontracts.subcontract_poll |
 | `safety_reports.compile_now_poll.polling_enabled` | bool | true | Runtime on/off gate for the safety_reports.compile_now_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | safety_reports.compile_now_poll |
 | `safety_reports.evergreen_contact_name` | str | the Evergreen Renewables office | The name ITS uses for the Evergreen Renewables office/contact in this workstream's report copy. | safety_reports.weekly_generate |
 | `safety_reports.intake.allowed_senders` | str | *(unset)* | Comma-separated sender allowlist for the intake extraction path (the retired email-PDF intake; the live path is the portal PULL). Empty = none set. | safety_reports.intake |

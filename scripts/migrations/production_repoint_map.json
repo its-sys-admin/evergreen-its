@@ -109,6 +109,15 @@
       "notes": "Production Box root folder id — resolved LIVE at commit, exact-name match, refuse ambiguity/absence. Folder name copied from standup.BOX_ROOT_CONFIG_ROWS."
     },
     {
+      "setting": "po_materials.box.portal_root_folder_id",
+      "workstream": "po_materials",
+      "from_mirror": null,
+      "to_production": null,
+      "resolve_box_root": "ITS Purchase Orders",
+      "category": "D",
+      "notes": "Production Box root id for the PO lane (its own tree since 2026-08-11: PO PDFs + RFQs/ + Vendor Quotes/ per job) — resolved LIVE at commit, exact-name match, refuse ambiguity/absence. Folder name copied from standup.BOX_ROOT_CONFIG_ROWS."
+    },
+    {
       "setting": "field_ops.box.archive_root_folder_id",
       "workstream": "field_ops",
       "from_mirror": null,

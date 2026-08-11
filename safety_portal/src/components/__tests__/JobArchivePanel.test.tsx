@@ -2,7 +2,7 @@
  * The Archive / Un-archive panel (ROADMAP Track 6).
  *
  * The behaviours under test are the ones that keep the panel HONEST about a relocation it does not
- * itself perform. Pressing Archive records intent; the Mac-side pass moves six containers across
+ * itself perform. Pressing Archive records intent; the Mac-side pass moves seven containers across
  * two external systems and reports back. So the panel must never claim completion from a 200, must
  * name which containers are stuck when only some moved, and must render nothing at all for a viewer
  * without `cap.job.archive` — the previous dropdown's sin was telling the operator a job was
@@ -30,6 +30,7 @@ const CONTAINERS = [
   { key: "smartsheet:subcontracts", label: "Subcontracts", moved: true, note: "" },
   { key: "box:safety", label: "Safety", moved: true, note: "" },
   { key: "box:progress", label: "Progress", moved: true, note: "" },
+  { key: "box:purchase_orders", label: "Purchase Orders", moved: true, note: "" },
 ];
 
 function archiveBlock(over: Partial<JobArchiveStatus> = {}): JobArchiveStatus {
@@ -77,7 +78,7 @@ describe("JobArchivePanel — who sees it at all", () => {
 
 describe("JobArchivePanel — it never claims more than it knows", () => {
   it("says 'waiting to be picked up' before the daemon has reported anything", () => {
-    // requested + zero containers = the queue row exists and nothing has run. Saying "0 of 6 moved"
+    // requested + zero containers = the queue row exists and nothing has run. Saying "0 of 7 moved"
     // here would imply the pass ran and failed.
     show(archiveBlock({ state: "requested", direction: "archive", containers: [] }));
     expect(screen.getByRole("status").textContent).toMatch(/waiting/i);
@@ -90,7 +91,7 @@ describe("JobArchivePanel — it never claims more than it knows", () => {
       containers: CONTAINERS.map((c, i) => ({ ...c, moved: i < 4 })),
     }));
     const banner = screen.getByRole("status").textContent ?? "";
-    expect(banner).toMatch(/4 of 6/);
+    expect(banner).toMatch(/4 of 7/);
     expect(banner).toMatch(/archiving/i);
   });
 
@@ -108,7 +109,7 @@ describe("JobArchivePanel — it never claims more than it knows", () => {
 
 describe("JobArchivePanel — a partial must be legible without opening logs", () => {
   it("NAMES the containers that did not move, with their reason", () => {
-    // "4 of 6 moved" alone is not actionable — a Tier-2 operator has to know WHICH folder in WHICH
+    // "4 of 7 moved" alone is not actionable — a Tier-2 operator has to know WHICH folder in WHICH
     // system is stuck. This is the whole reason the daemon reports per-container detail.
     show(archiveBlock({
       state: "partial",
@@ -117,10 +118,11 @@ describe("JobArchivePanel — a partial must be legible without opening logs", (
         ...CONTAINERS.slice(0, 4),
         { key: "box:safety", label: "Safety", moved: false, note: "BoxError" },
         { key: "box:progress", label: "Progress", moved: false, note: "BoxError" },
+        { key: "box:purchase_orders", label: "Purchase Orders", moved: false, note: "BoxError" },
       ],
     }));
     const alert = screen.getByRole("alert").textContent ?? "";
-    expect(alert).toMatch(/4 of 6/);
+    expect(alert).toMatch(/4 of 7/);
     expect(alert).toMatch(/did not move/i);
     expect(alert).toMatch(/BoxError/);
   });

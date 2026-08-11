@@ -159,7 +159,7 @@ export interface JobRoutingBlock {
  *
  *  `requested` and `in_progress` mean the Mac-side pass owns the row; `partial` means SOME
  *  containers moved and the rest are retryable; `failed` means none did. `partial` is deliberately
- *  distinct from `failed` because the operator's repair differs between "4 of 6 moved" and
+ *  distinct from `failed` because the operator's repair differs between "4 of 7 moved" and
  *  "nothing happened". */
 export type ArchiveState =
   | "none" | "requested" | "in_progress" | "complete" | "partial" | "failed";
