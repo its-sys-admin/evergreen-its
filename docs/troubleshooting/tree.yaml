@@ -382,15 +382,15 @@ workflows:
             class: daniel_solo
             runbook: docs/runbooks/fieldops_job_write.md
       - id: standing_trackers
-        title: Hours / equipment / materials / incidents mirror passes
+        title: Hours / equipment / materials / incidents / receipts mirror passes
         what_happens:
           daemon: fieldops-sync
-          config_gates: [field_ops.fieldops_sync.hours_enabled, field_ops.fieldops_sync.equipment_enabled, field_ops.fieldops_sync.materials_enabled, field_ops.fieldops_sync.incidents_enabled]
+          config_gates: [field_ops.fieldops_sync.hours_enabled, field_ops.fieldops_sync.equipment_enabled, field_ops.fieldops_sync.materials_enabled, field_ops.fieldops_sync.incidents_enabled, field_ops.fieldops_sync.receipts_enabled]
         healthy_signals:
           - Each enabled pass mirrors its records; the Hours Log is one-way-up (§51).
         failure_modes:
           - id: tracker_pass_dark
-            symptom: A tracker (hours/equipment/materials/incidents) is not mirroring.
+            symptom: A tracker (hours/equipment/materials/incidents/receipts) is not mirroring.
             signals: ["per-pass gate off", "designed-dark", "materials gate has a rider precondition"]
             checks:
               - Read the per-pass gate row's FULL Description before flipping — some carry an explicit precondition (e.g. materials_enabled's §51-rider block). A dark pass is not a fault.
@@ -398,6 +398,18 @@ workflows:
               - Flip the gate only if its documented precondition is met; a doctrine-preconditioned flip is a §44 high-class action — confirm with Seth.
             class: seth_coresolve
             runbook: docs/runbooks/hours_log_sync.md
+          - id: receipts_ledger_stale
+            symptom: A delivery mark made in the portal never appears on the job's Material Receipts sheet, or a line's Line Qty Received / Line Status stops moving.
+            signals: ["material_receipts_perjob_failed", "material_receipts_row_cap_check_failed", "material_receipts_sheet_race_duplicate", "receipts pass gate off"]
+            checks:
+              - The ledger re-projects IN FULL every cycle (no watermark), so a transient fault self-heals on the next cycle — wait one 90s cycle before treating it as a fault.
+              - Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption.
+              - Check field_ops.fieldops_sync.receipts_enabled, then the error journal for the codes above.
+            resolutions:
+              - Gate off → flip it back on (no documented precondition); rows catch up on the first cycle back. A permanent per-event failure opens a Review Queue row naming the job — follow it.
+              - Duplicate rows after a create race → keep the daemon's row (the one that keeps updating); the duplicate is inert. Escalate only if duplicates keep appearing.
+            class: daniel_solo
+            runbook: docs/runbooks/fieldops_sync.md
           - id: crew_time_correction
             symptom: A crew time entry needs an office-side correction/amendment.
             signals: ["time amendment needed", "crew correction"]
@@ -435,6 +447,17 @@ workflows:
               - A security_flag row is not a readability problem; an integrity failure means the bytes disagree with what was signed.
             resolutions:
               - For a readability refusal only, clear that manifest's id from state/manifest_poll_flagged.json to retry. NEVER clear a flag for a MALICIOUS verdict or an integrity failure — both escalate, and the bytes are retained for investigation.
+            class: seth_coresolve
+            runbook: docs/runbooks/material_manifest_import.md
+          - id: manifest_commit_refused
+            symptom: The office's import from the validate screen errors, or the manifest is stuck showing "committing".
+            signals: ["not_committable", "line_cap_exceeded", "invalid_material_id", "invalid_mode"]
+            checks:
+              - These are Worker refusals of the COMMIT half (the human dispose), not daemon faults — the daemon's work already finished when the grid appeared.
+              - line_cap_exceeded means the job would exceed its expected-materials line cap; the preview's projected total can under-count, so a green preview does not rule this out mid-import.
+            resolutions:
+              - not_committable / invalid_mode / invalid_material_id → re-open the validate screen and retry from a fresh load; if it persists, the manifest's status no longer allows a commit — escalate rather than forcing it.
+              - A manifest stranded in "committing" after a mid-import refusal currently has NO discard path (known gap) — some pages may already be imported; check the job's Materials page before re-importing anything, and escalate to Seth.
             class: seth_coresolve
             runbook: docs/runbooks/material_manifest_import.md
       - id: job_archive

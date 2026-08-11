@@ -272,6 +272,9 @@ NODES: tuple[MapNode, ...] = (
             "field_ops.fieldops_sync.equipment_enabled",
             "field_ops.fieldops_sync.materials_enabled",
             "field_ops.fieldops_sync.incidents_enabled",
+            # The §51 receipts-ledger pass (#38). Same phantom-pass miss as archive below —
+            # absent here until 2026-08-10, so the pass existed with no `/config?f=` deep link.
+            "field_ops.fieldops_sync.receipts_enabled",
             # The Track 6 archive pass. Missing until 2026-08-10, which left it the ONLY pass with
             # no "pass gate" row and no `/config?f=` deep link on the node rail — a phantom pass an
             # operator could not find a switch for.
@@ -284,11 +287,12 @@ NODES: tuple[MapNode, ...] = (
     ),
     MapNode(
         id="trackers", label="standing trackers", kind="script", lane="generation", band="fieldops",
-        blurb="Hours · equipment · materials · incidents: the §51 one-way-up mirrors "
+        blurb="Hours · equipment · materials · incidents · receipts: the §51 one-way-up mirrors "
               "fieldops_sync drives into their tracker sheets each pass.",
         error_scripts=(
             "progress_reports.hours_log", "progress_reports.equipment_status",
             "progress_reports.material_list", "progress_reports.material_incidents",
+            "progress_reports.material_receipts",
         ),
         script_path="progress_reports/hours_log.py",
         runbook="docs/runbooks/hours_log_sync.md",
@@ -296,7 +300,7 @@ NODES: tuple[MapNode, ...] = (
     MapNode(
         id="sheet_trackers", label="tracker sheets", kind="sheet", lane="records", band="fieldops",
         blurb="The standing tracker sheets: Hours Log, equipment status, material list, "
-              "material incidents — ITS-owned structured stores (§51).",
+              "material incidents, material receipts — ITS-owned structured stores (§51).",
         runbook="docs/runbooks/hours_log_sync.md",
     ),
     # ── purchase-order band ──────────────────────────────────────────────
@@ -689,8 +693,17 @@ EDGES: tuple[MapEdge, ...] = (
             port="HMAC"),
     MapEdge("fieldops_sync", "sheet_active_jobs", "mirror portal jobs UP", "write"),
     MapEdge("fieldops_sync", "sheet_active_jobs_progress", "mirror portal jobs UP", "write"),
-    MapEdge("fieldops_sync", "trackers", "drive the four passes", "trigger"),
+    MapEdge("fieldops_sync", "trackers", "drive the five passes", "trigger"),
     MapEdge("trackers", "sheet_trackers", "§51 one-way-up writes", "write"),
+    # materials-manifest import (PR3b / ADR-0005). Until 2026-08-10 manifest_poll was the map's
+    # only EDGE-LESS daemon — it rendered as an orphan box implying it talked to nothing, while
+    # live it pulls the pool, files to Box, posts the grid back, and tickets refusals.
+    MapEdge("worker", "manifest_poll", "pull uploaded manifests — manifest:v1 HMAC + digest re-verify",
+            "pull", port="HMAC"),
+    MapEdge("manifest_poll", "box", "file the ORIGINAL manifest bytes (job → Materials → Manifests)",
+            "write"),
+    MapEdge("manifest_poll", "worker", "post parsed grid + column-map proposal, result LAST", "push"),
+    MapEdge("manifest_poll", "sheet_review_queue", "§34 / integrity / parse refusals", "write"),
     # purchase orders
     MapEdge("worker", "po_poll", "pull drafts + attachments — HMAC + integer-cents re-assert", "pull",
             port="HMAC"),
