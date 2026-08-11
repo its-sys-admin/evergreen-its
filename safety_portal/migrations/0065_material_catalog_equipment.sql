@@ -19,6 +19,18 @@
 -- orders against. Every row's key_specs ends with `vendor P/N <n>` so the BOM line is always
 -- traceable from the catalogue entry, whichever form the model_id took.
 --
+-- MANUFACTURER — read this column as "who Evergreen gets it from", which for most of these
+-- rows is genuinely also the maker: the Nevados actuators/QP/QCC/wireless controls, the
+-- TerraTrak station and row-control assemblies, and the GameChange SDC/motor-control
+-- assemblies are all vendor-branded system components. Two caveats, recorded rather than
+-- papered over: (1) where the BOM description names a different maker it wins — the snow
+-- sensor is Campbell Scientific, not Nevados; (2) a small number of items are third-party
+-- parts merely RESOLD under the racking vendor's part number — WEEB-DSK14 is the clear case
+-- (a Wiley bonding washer carried as Terrasmart P/N 119940). It is recorded against the
+-- supplier because that is what the source document actually supports and what the office
+-- orders against; correcting it to the true maker is an operator edit, not a guess to make
+-- here.
+--
 -- NOT ADDED, deliberately — the Bonacci BOMs name their PV module as `VSUN###N-132BMHR-DG`
 -- at 615 W. The `###` is a literal placeholder in the source PDF, not a redaction by this
 -- migration: the vendor shipped a templated model number. Inventing the missing digits would
