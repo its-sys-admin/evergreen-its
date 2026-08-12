@@ -36,7 +36,8 @@ Per RFQ it:
 2. **Fans out per vendor** (the signed vendor list): resolves each vendor from
    ITS_Vendors (read-only), renders one **price-free** RFQ PDF per vendor (no money
    columns exist on an RFQ by design), files it to Box
-   (`<job>/Purchase Orders/RFQs/`), writes the `RFQ_Log` (rfq, vendor) row, and stages
+   (`<PO root>/<job>/RFQs/` — the PO lane's own root since 2026-08-11), writes the
+   `RFQ_Log` (rfq, vendor) row, and stages
    an `RFQ_Pending_Review` row (Send Status `PENDING`; Workstream `po_materials_rfq`).
 3. **Receipts** the RFQ back to the Worker (mark-filed) ONCE, LAST — a crash before the
    receipt simply re-serves the RFQ next cycle and every prior step re-runs

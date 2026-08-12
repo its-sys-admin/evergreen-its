@@ -83,6 +83,7 @@ FIELDOPS_MATERIAL_LIST_SNAPSHOT_PATH = "/api/internal/fieldops/material-list-sna
 FIELDOPS_MATERIAL_INCIDENTS_PATH = "/api/internal/fieldops/material-incidents"
 FIELDOPS_MATERIAL_RECEIPTS_PATH = "/api/internal/fieldops/material-receipts"
 PROGRESS_ROLLUP_PATH = "/api/internal/progress-rollup"
+PRODUCTION_REPORT_PATH = "/api/internal/production-report"
 PRUNE_STATUS_PATH = "/api/internal/prune-status"
 PO_PENDING_PATH = "/api/po/internal/pending"
 PO_MARK_FILED_PATH = "/api/po/internal/mark-filed"
@@ -935,6 +936,59 @@ def get_progress_rollup(
         raise PortalTransportError(
             f"GET {PROGRESS_ROLLUP_PATH} missing/invalid 'open_tasks' "
             f"(got {type(open_tasks).__name__})"
+        )
+    return data
+
+
+def get_production_report(
+    base_url: str, token: str, *, job_id: str,
+    week_start: str, week_end: str, week_from: int, week_to: int,
+) -> dict[str, Any]:
+    """Fetch the Weekly Production Report aggregate: GET /api/internal/production-report.
+
+    The send-free Worker route (migration 0067) that assembles the client-facing report's
+    derivable half for `job_id` over one Sat→Fri week — weather and crew narrative out of the
+    daily-report payloads, amend-collapsed labor hours, safety-meeting form codes, the material
+    delivery ledger, the curatable photo list — plus the resolved office-input record (OSHA case
+    counts, labor-by-company, pending RFIs/submittals/COs) with carry-forward already applied.
+
+    TWO windows, because the underlying rows key on two different clocks: `week_start`/`week_end`
+    are ISO dates bounding `work_date` (a daily report filed late still belongs to the day it
+    describes), while `week_from`/`week_to` are epoch seconds bounding `time_entries`. Sending one
+    and not the other is rejected by the Worker rather than silently half-applied.
+
+    A control-plane READ of OUR OWN Worker (bearer = `PORTAL_INTERNAL_API_TOKEN`, the same
+    privilege class as `get_pending` and `get_progress_rollup`), NOT a customer-facing send —
+    outside the External Send Gate (Invariant 1).
+
+    Typed-shape guard: a malformed body raises `PortalTransportError`, so the compile's fence
+    falls back to filing the packet WITHOUT a production report rather than rendering a report
+    from a shape it does not understand. `office` and `photos` are required because their absence
+    is indistinguishable from "the office filled nothing", and a report that silently drops the
+    OSHA counts is worse than no report. Same typed-error contract as `get_pending` —
+    `PortalAuthError` (401) / `PortalRateLimitError` (429/503 exhausted) / `PortalTransportError`.
+    """
+    data = _request(
+        "GET", base_url, PRODUCTION_REPORT_PATH, token,
+        params={
+            "job_id": job_id, "week_start": week_start, "week_end": week_end,
+            "from": week_from, "to": week_to,
+        },
+    )
+    for key in ("office", "photos"):
+        if not isinstance(data.get(key), dict):
+            raise PortalTransportError(
+                f"GET {PRODUCTION_REPORT_PATH} missing/invalid '{key}' object "
+                f"(got {type(data.get(key)).__name__})"
+            )
+    count = data.get("daily_report_count")
+    # bool is an int subclass — exclude it so a stray `true` is not read as a count of 1.
+    # This number decides whether the week is EMPTY and therefore HELD for the office, so a
+    # wrong type must fail loud rather than resolve to a plausible zero.
+    if not isinstance(count, int) or isinstance(count, bool):
+        raise PortalTransportError(
+            f"GET {PRODUCTION_REPORT_PATH} missing/invalid 'daily_report_count' "
+            f"(got {type(count).__name__})"
         )
     return data
 

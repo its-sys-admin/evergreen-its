@@ -70,7 +70,7 @@ docs:
     title: "Purchase Orders in the ITS Portal"
     version: v1
     source: docs/enablement/purchase_orders.md
-    sha256: 1eb9f59f1e42fe5fa24c44437679465a6de183d5c86d41db3e376055db356053
+    sha256: 0ad8018890f6f76a7aa760cfe3b6c9db7f8dd3677bdf345dd4579fef77fe3a85
 
   # ── D2-2 content (authored 2026-07-10): the owner's manual, the safety-forms + admin-
   #    dashboard guides, and the auto-generated ITS_Config data dictionary. The dictionary
@@ -98,7 +98,7 @@ docs:
     title: "ITS_Config Data Dictionary"
     version: v1
     source: docs/references/its_config_dictionary.md
-    sha256: 95beff5b027f5e8d28bb9c2db6a4da5b38be8cc8f11788ee544fb3a76c68c91d
+    sha256: acc6e310933a16accd1a6b949161dde3c47bbf8be8cca9b74f56f91f29dbc117
 
   # ── Delivery-critical guides added 2026-07-13: the operator dashboard (WS2 D1-x)
   #    and the subcontracts generator (ADR-0003). Both blockers cleared — the dashboard
@@ -132,7 +132,7 @@ docs:
     title: "ITS Daemon Reference"
     version: v1
     source: docs/references/daemon_reference.md
-    sha256: fd310d36ac6d059204ebb80caa3218767d114ee45cc00c48349c3e66b98c9da6
+    sha256: ab330d192fd0b8a69d8c62f38ede59af8b1cd8ecebd706d7b02a910f533aa263
     audience: operator
 
   - key: data_model_reference
@@ -185,5 +185,5 @@ docs:
     title: "ITS Troubleshooting Guide"
     version: v1
     source: docs/troubleshooting/troubleshooting_guide.md
-    sha256: 6b182a1768a5b7c0bf9bf73405d5a3a94c936b08d8616de582e3a71f326765af
+    sha256: f240575b9af1b664e7acea1a5810b7e95feb564bf3bcb6eebd7f9238f7b2f246
     audience: operator

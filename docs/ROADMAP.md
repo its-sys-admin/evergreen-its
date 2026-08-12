@@ -133,7 +133,7 @@ WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · 
 > migration 0058 + `cap.job.archive` · **#720** archive/unarchive routes + the `prune.ts` fence ·
 > **#721** the daemon's queue + commit point · **#722** `field_ops/job_archive.py`.
 >
-> **The Box leg LANDED** — `job_archive` now moves all six containers. `build_box_roots.py` builds a
+> **The Box leg LANDED** — `job_archive` now moves all containers (seven since the 2026-08-11 PO-root split). `build_box_roots.py` builds a
 > third root (`ITS Archive`), `field_ops.box.archive_root_folder_id` is seeded by `standup.py` and
 > enrolled in VC-03, the dashboard registry, the config dictionary, and — the trap that would have
 > been silent — `production_repoint.ALLOWED_SETTING_SUFFIXES`, which matches Setting names by
@@ -160,7 +160,7 @@ WS4 operator artifacts (landed): `docs/operations/host_migration_runbook.md` · 
 > ITS_Config for its live value; this file does not track it.
 >
 > **DRILLED LIVE 2026-08-10, attended — the precondition below is MET.** The gate is on and the
-> full cycle ran on a real job: **archive → un-archive → archive**, all six containers accounted
+> full cycle ran on a real job: **archive → un-archive → archive**, all containers accounted
 > for each time, and every folder id preserved through all three moves (so permalinks and cell
 > history survived). The re-archive additionally proved the archive folder is find-or-create
 > ADOPTED, not duplicated. What has *still* never fired is the live-folder **collision refusal** —
@@ -196,12 +196,13 @@ relocates into an archive tree, consolidated under the job with per-workstream s
 
 ```
 SMARTSHEET   ITS — Archive / <Job Name> / {Safety, Progress, Purchase Orders, Subcontracts}/
-BOX          ITS Archive   / <Job Name> / {Safety, Progress}/          ← new root
+BOX          ITS Archive   / <Job Name> / {Safety, Progress, Purchase Orders}/  ← new root
 ```
 
-**Six containers, not eleven** — `safety_reports.box.portal_root_folder_id` is the *shared* Box root
-for safety + PO + RFQ + subcontracts, so moving `<safety root>/<Job>` carries `Purchase Orders/`,
-`RFQs/`, `Vendor Quotes/` and the subcontract files with it. Retained deliberately: the flat
+**Seven containers, not eleven** — the PO lane owns its own Box root since 2026-08-11
+(`po_materials.box.portal_root_folder_id`; its per-job folder carries `RFQs/` + `Vendor Quotes/`),
+while `safety_reports.box.portal_root_folder_id` remains the *shared* Box root for safety +
+subcontracts + materials manifests, so moving `<safety root>/<Job>` still carries those. Retained deliberately: the flat
 `*_Log` / `*_Pending_Review` ledgers, WSR/WPR review rows, the `ITS_Active_Jobs*` rows (flagged
 `Archived`, never deleted), `ITS DATA/<Project>`, `ITS Photos/`, and all D1.
 

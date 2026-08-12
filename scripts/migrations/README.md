@@ -7,6 +7,29 @@ target state already in place makes zero writes and exits 0.
 
 ## Scripts
 
+### PO Box-root split (2026-08-11 family)
+
+The PO lane's Box tree moved out of the safety root onto its own
+`"ITS Purchase Orders"` root (`po_naming.CFG_BOX_PORTAL_ROOT`); the per-job folder
+now holds the PO PDFs directly with `RFQs/` + `Vendor Quotes/` children.
+
+- `relocate_po_box_folders.py` — plan-by-default, `--apply` + y/N to actuate.
+  Three passes: (1) `<safety root>/<Job>/Purchase Orders` → `<PO root>/<Job>`
+  (ONE atomic Box move+rename; a name collision under the PO root REFUSES that
+  job, never merges); (2) moves the children of id-named folders (the
+  `manifest_poll` job-id bug, e.g. `JOB-000031/Materials`) into the job's
+  project-name folder, leaving the empty husk for manual Box-UI trash
+  (`box_client` is deliberately MOVE-ONLY); (3) `<archive>/<Job>/Safety/Purchase
+  Orders` → `<archive>/<Job>/Purchase Orders`, where the new
+  `box:purchase_orders` archive slot's restore looks. Run AFTER
+  `build_box_roots.py` has created the root + the ITS_Config row is seeded,
+  BEFORE the lane files anything to the new root.
+- `backfill_po_row_attachments.py` — plan-by-default, `--apply` + y/N. Attaches
+  the already-filed Box PDFs/quote-forms inline on rows created before the
+  attach-parity change (flat PO_Log, per-job "Purchase Orders"/"RFQs" mirrors;
+  skip-if-present). Run AFTER the relocation (the quote-form lookup resolves
+  `<PO root>/<job>/RFQs/`).
+
 ### Tenant wipe + orchestrated stand-up (2026-07-22 family)
 
 The full-tenant lifecycle tools. `standup.py` supersedes the manual walk of the
@@ -80,9 +103,10 @@ records the standalone semantics:
 - `build_system_sheets.py` — the five System sheets (resolves folders by NAME).
 - `build_safety_portal_workspace.py` — the "ITS –– Safety Portal" workspace +
   `00_Safety Portal` / `00_Form Catalog`.
-- `build_box_roots.py` — the two Box roots. Its output does NOT go into
-  `shared/sheet_ids.py`: the two folder ids land in the ITS_Config
-  `*.box.portal_root_folder_id` rows — AUTO-PASTED by standup's box-roots
+- `build_box_roots.py` — the four Box roots (Safety, Progress, Purchase Orders,
+  Archive). Its output does NOT go into `shared/sheet_ids.py`: the folder ids
+  land in the ITS_Config `*.box.portal_root_folder_id` /
+  `*.box.archive_root_folder_id` rows — AUTO-PASTED by standup's box-roots
   stage when orchestrated (a standalone run pastes them by hand). Requires Box
   OAuth as the dedicated ITS identity first (`scripts/setup_box_oauth.py`).
 

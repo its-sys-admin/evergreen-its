@@ -368,14 +368,19 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
   // GET /api/fieldops/manifests/internal/pending — live pool rows oldest-first: pending +
   // claimed (claimed re-served for crash recovery — every servicing step is idempotent).
   // Serves metadata + the HMAC (the Mac's verify input); bytes ride the chunks read below.
+  // project_name is JOINED from jobs (NOT signed — display/foldering metadata only): the
+  // Mac files the manifest under the job's PROJECT-NAME Box folder, the same folder every
+  // other artifact uses. A manifest whose job row vanished serves NULL and the daemon
+  // falls back to job_id (its pre-join behavior).
   app.get("/api/fieldops/manifests/internal/pending", gates.requireManifestToken, async (c) => {
     const limit = Math.min(Math.max(parseInt(c.req.query("limit") || "25", 10) || 25, 1), MANIFEST_PENDING_CAP);
     const { results } = await c.env.DB
       .prepare(
-        "SELECT id, manifest_uuid, job_id, filename, declared_mime, size_bytes, sha256, " +
-          "status, hmac, uploaded_by, created_at " +
-          "FROM job_manifests WHERE status IN ('pending','claimed') " +
-          "ORDER BY created_at ASC, id ASC LIMIT ?1",
+        "SELECT m.id, m.manifest_uuid, m.job_id, m.filename, m.declared_mime, m.size_bytes, " +
+          "m.sha256, m.status, m.hmac, m.uploaded_by, m.created_at, j.project_name " +
+          "FROM job_manifests m LEFT JOIN jobs j ON j.job_id = m.job_id " +
+          "WHERE m.status IN ('pending','claimed') " +
+          "ORDER BY m.created_at ASC, m.id ASC LIMIT ?1",
       )
       .bind(limit)
       .all<Record<string, unknown>>();

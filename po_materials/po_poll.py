@@ -13,9 +13,11 @@ heartbeat; per-pass ITS_Config gates, ALL shipped false):
      assert vs the SIGNED values (`po_generate.totals_mismatches`) → PO_Log collision
      double-check (`numbering.check_collision` — hand-issued POs in transition) →
      ITS_Vendors SoR vendor snapshot (#494) → terms/purchaser resolution →
-     DETERMINISTIC render → Box file (§45 find-or-create ROOT→job→"Purchase Orders";
-     §47 version-on-conflict) → PO_Log append + PO_Pending_Review row (+ inline PDF
-     attach, best-effort) → mark-filed receipt WITH box_file_id. The receipt is
+     DETERMINISTIC render → Box file (§45 find-or-create the PO root's per-job
+     folder — po_naming.CFG_BOX_PORTAL_ROOT → <job>, the lane's OWN tree since
+     2026-08-11; §47 version-on-conflict) → PO_Log append + PO_Pending_Review row
+     (+ inline PDF attach on review, ledger AND per-job rows, best-effort) →
+     mark-filed receipt WITH box_file_id. The receipt is
      LAST: a crash anywhere before it re-pulls the row and every prior step is
      idempotent (version-on-conflict upload; PO_Log/review-row dedupe by d1_id /
      po_id). A bad-HMAC or totals-mismatch row is ONE-SHOT-FLAGGED (CRITICAL +
@@ -28,9 +30,9 @@ heartbeat; per-pass ITS_Config gates, ALL shipped false):
      `shared/portal_hmac.verify_po_attachment`) → §34 doc screen
      (`po_attach_screen.screen_attachment`: magic/consistency → PDF/OpenXML/image
      structural → config-gated ClamAV `po_materials.po_attach_screen.clamav_enabled`)
-     → CLEAN files the ORIGINAL bytes to the PO's Box "Purchase Orders" folder +
-     the PO_Log row (content-typed attach) + result post-back (the Worker deletes
-     the D1 chunks); SUSPICIOUS → Review-Queue row (+security flag on structural
+     → CLEAN files the ORIGINAL bytes to the PO's Box per-job folder (beside its
+     PO PDF) + the PO_Log row (content-typed attach) + result post-back (the
+     Worker deletes the D1 chunks); SUSPICIOUS → Review-Queue row (+security flag on structural
      active content) + refused; MALICIOUS → CRITICAL NAMING THE ACCOUNT +
      security-flagged Review-Queue row + refused. Integrity failures (bad HMAC /
      digest mismatch) are one-shot-flagged like a bad-HMAC PO — never screened,
@@ -140,8 +142,8 @@ from shared.required_config import ConfigKey, resolve_and_log
 SCRIPT_NAME = "po_materials.po_poll"
 WORKSTREAM = "po_materials"
 
-# ITS_Config keys (all read under Workstream='po_materials' except the two SHARED
-# safety_reports-owned keys — same ownership pattern as fieldops_sync).
+# ITS_Config keys (all read under Workstream='po_materials' except the SHARED
+# safety_reports-owned worker_base_url — same ownership pattern as fieldops_sync).
 CFG_POLLING_ENABLED = "po_materials.po_poll.polling_enabled"
 CFG_VENDORS_SYNC_ENABLED = "po_materials.po_poll.vendors_sync_enabled"
 CFG_STATUS_SYNC_ENABLED = "po_materials.po_poll.status_sync_enabled"
@@ -163,14 +165,11 @@ DEFAULT_VENDORS_SYNC_ENABLED = False  # ships dark
 DEFAULT_STATUS_SYNC_ENABLED = False   # ships dark
 POLL_INTERVAL_SECONDS = 90  # registration metadata; mirrors the launchd StartInterval
 
-# The Box subfolder every PO PDF files into, under the job's mirror-tree folder
-# (§45 find-or-create at every level; the S1 report's ROOT→job→"Purchase Orders").
-PO_BOX_SUBFOLDER = "Purchase Orders"
-
-# The per-job Smartsheet tracking sheet name (Feature A) — deliberately the SAME
-# words as the Box subfolder so the operator sees "Purchase Orders" in both trees.
-# Lives inside the job's folder under sheet_ids.FOLDER_PO_JOBS; structure-cloned
-# from the flat PO_Log by shared/job_sheet.ensure_job_sheet.
+# The per-job Smartsheet tracking sheet name (Feature A). Lives inside the job's
+# folder under sheet_ids.FOLDER_PO_JOBS; structure-cloned from the flat PO_Log by
+# shared/job_sheet.ensure_job_sheet. (The Box side needs no matching subfolder any
+# more: PO PDFs file DIRECTLY in the PO root's per-job folder —
+# po_naming.CFG_BOX_PORTAL_ROOT → <job>.)
 PERJOB_SHEET_NAME = "Purchase Orders"
 
 _PACIFIC = ZoneInfo("America/Los_Angeles")  # the PO date is operator wall-clock
@@ -194,10 +193,11 @@ REQUIRED_CONFIG: list[ConfigKey] = [
         description="Shared Worker base URL; owned by safety_reports, read here too.",
     ),
     ConfigKey(
-        safety_naming.CFG_BOX_PORTAL_ROOT, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
+        po_naming.CFG_BOX_PORTAL_ROOT, po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM, "", "str",
         description=(
-            "Shared Box mirror-tree root; owned by safety_reports. The drafts pass "
-            "files PO PDFs under ROOT→<job>→'Purchase Orders'."
+            "The PO lane's OWN Box mirror-tree root ('ITS Purchase Orders' — built by "
+            "build_box_roots.py). The drafts pass files PO PDFs under ROOT→<job>; "
+            "rfq_poll/estimate_poll file into its 'RFQs' / 'Vendor Quotes' children."
         ),
     ),
 ]
@@ -841,15 +841,15 @@ def _process_pending_po(
             state_names=tax_config["state_names"],
         )
 
-        # 8 — Box filing: §45 find-or-create ROOT→job→"Purchase Orders", §47
+        # 8 — Box filing: §45 find-or-create the PO root's per-job folder, §47
         # version-on-conflict under the deterministic name.
         folder_id = _resolve_po_box_folder(str(po.get("job_name") or ""))
         if folder_id is None:
             counters["draft_errors"] += 1
             error_log.log(
                 Severity.ERROR, SCRIPT_NAME,
-                f"Box portal root unresolved (ITS_Config "
-                f"{safety_naming.CFG_BOX_PORTAL_ROOT} unset) — PO {po_number} left "
+                f"PO Box root unresolved (ITS_Config "
+                f"{po_naming.CFG_BOX_PORTAL_ROOT} unset) — PO {po_number} left "
                 f"queued until the root is configured",
                 error_code="po_box_root_unresolved",
                 correlation_id=correlation_id,
@@ -882,16 +882,30 @@ def _process_pending_po(
             "created_at_iso": po_date.isoformat(),
             "notes": po_log.notes_for_filed_row(po_id),
         }
-        if po_log.find_row_by_po_number(po_number) is None:
-            po_log.append_filed_row(**ledger_row_kwargs)
+        pdf_filename = po_naming.po_pdf_filename(po_number, po.get("job_name"))
+        existing_ledger = po_log.find_row_by_po_number(po_number)
+        if existing_ledger is None:
+            ledger_row_id = po_log.append_filed_row(**ledger_row_kwargs)
+        else:
+            ledger_row_id = int(existing_ledger["_row_id"])
+        # Inline attach of the PO PDF on the ledger row (RFQ-ledger parity, operator
+        # ask 2026-08-11 — the review row already carried it; the ledger row now does
+        # too). On EVERY service, not fresh-append-only (the rfq_poll posture):
+        # attach_pdf_to_row REPLACES a same-filename attachment and the filename is
+        # deterministic per PO, so this is duplicate-free — and an attach that failed
+        # in a cycle whose receipt also failed SELF-HEALS on the re-serve.
+        _attach_pdf_best_effort(
+            ledger_row_id, pdf_filename, pdf, correlation_id, sheet_id=po_log.SHEET_ID,
+        )
 
         # 9b — per-job tracking sheet mirror (Feature A), BEST-EFFORT: the same
         # ledger row into "<Jobs>/<job>/Purchase Orders" (find-or-create;
-        # independently idempotent per target sheet). Fenced inside the helper — a
-        # per-job failure must NEVER fail the filing (Box + the flat PO_Log are
-        # the SoR).
+        # independently idempotent per target sheet), now WITH the inline PDF
+        # (operator ask 2026-08-11). Fenced inside the helper — a per-job failure
+        # must NEVER fail the filing (Box + the flat PO_Log are the SoR).
         _append_perjob_row_best_effort(
-            str(po.get("job_name") or ""), ledger_row_kwargs, correlation_id
+            str(po.get("job_name") or ""), ledger_row_kwargs, correlation_id,
+            pdf_filename=pdf_filename, pdf_bytes=pdf,
         )
 
         # 10 — PO_Pending_Review row (idempotent via the Notes po_id join) + the
@@ -1063,33 +1077,41 @@ def _fence_po(
 
 
 def _resolve_po_box_folder(job_name: str) -> str | None:
-    """§45 find-or-create the PO filing folder: mirror-tree ROOT → per-job folder
-    (the SAME `safety_naming.job_folder_name` as every other portal artifact) →
-    'Purchase Orders'. None when the shared root is unconfigured (the caller leaves
-    the PO queued + ERRORs — a config gap, not a per-PO defect)."""
+    """§45 find-or-create the PO filing folder: the PO lane's OWN Box ROOT
+    (`po_naming.CFG_BOX_PORTAL_ROOT`) → per-job folder (the SAME
+    `safety_naming.job_folder_name` as every other portal artifact). PO PDFs file
+    DIRECTLY in the job folder; 'RFQs' / 'Vendor Quotes' are its children
+    (rfq_poll / estimate_poll). None when the root is unconfigured (the caller
+    leaves the PO queued + ERRORs — a config gap, not a per-PO defect)."""
     root = _read_str_setting(
-        safety_naming.CFG_BOX_PORTAL_ROOT, "",
-        workstream=CFG_WORKER_BASE_URL_WORKSTREAM,
+        po_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
     ).strip()
     if not root:
         return None
-    job_folder = box_client.get_or_create_folder(
-        root, safety_naming.job_folder_name(job_name)
-    )
-    return box_client.get_or_create_folder(job_folder, PO_BOX_SUBFOLDER)
+    return box_client.get_or_create_folder(root, safety_naming.job_folder_name(job_name))
 
 
 def _attach_pdf_best_effort(
-    row_id: int, filename: str, pdf_bytes: bytes, correlation_id: str
+    row_id: int, filename: str, pdf_bytes: bytes, correlation_id: str,
+    *, sheet_id: int | None = None,
 ) -> None:
-    """Attach the rendered PDF inline on the review row, BEST-EFFORT (Box is the
-    SoR; a failure is a WARN that never fails the filing — mirror intake)."""
+    """Attach the rendered PDF inline on a Smartsheet row, BEST-EFFORT (Box is the
+    SoR; a failure is a WARN that never fails the filing — mirror intake).
+    `sheet_id` picks the target sheet: None = the review sheet (the original
+    surface); the filing pass ALSO passes the flat PO_Log's id and the per-job
+    tracking sheet's id (RFQ-lane parity, operator ask 2026-08-11 — the ledger and
+    per-job mirror rows carry the same inline copy)."""
     try:
-        smartsheet_client.attach_pdf_to_row(po_review.SHEET_ID, row_id, filename, pdf_bytes)
+        smartsheet_client.attach_pdf_to_row(
+            sheet_id if sheet_id is not None else po_review.SHEET_ID,
+            row_id, filename, pdf_bytes,
+        )
     except Exception as exc:  # noqa: BLE001 — supplementary inline copy; Box is the SoR
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
-            f"review-row PDF attach failed (row {row_id}, {filename!r}): "
+            f"row PDF attach failed (row {row_id}, {filename!r}, "
+            f"sheet {'review' if sheet_id is None else sheet_id}): "
             f"{type(exc).__name__}: {exc!r}",
             error_code="po_row_pdf_attach_failed",
             correlation_id=correlation_id,
@@ -1256,7 +1278,7 @@ def _service_one_attachment(
         )
 
         if result.disposition == "clean":
-            # 5 — file the ORIGINAL bytes: Box (job folder → "Purchase Orders", §47
+            # 5 — file the ORIGINAL bytes: Box (the PO root's per-job folder, §47
             # version-on-conflict) + the PO_Log row attachment (best-effort), then
             # the disposition post-back (the Worker deletes the D1 chunks).
             folder_id = _resolve_po_box_folder(job_name)
@@ -1491,7 +1513,8 @@ def _attach_bytes_to_po_log_best_effort(
 
 
 def _append_perjob_row_best_effort(
-    job_name: str, row_kwargs: dict[str, Any], correlation_id: str
+    job_name: str, row_kwargs: dict[str, Any], correlation_id: str,
+    *, pdf_filename: str, pdf_bytes: bytes,
 ) -> None:
     """Mirror the freshly-filed ledger row into the job's per-job tracking sheet
     (Feature A), BEST-EFFORT — a failure is a WARN that never fails the filing
@@ -1502,7 +1525,9 @@ def _append_perjob_row_best_effort(
     Orders" sheet under sheet_ids.FOLDER_PO_JOBS (structure-cloned from the flat
     Log, so `append_filed_row` writes it unchanged), then appends unless the PO
     number is already present in the TARGET sheet (independent idempotency — a
-    crash between the flat append and this mirror re-runs cleanly)."""
+    crash between the flat append and this mirror re-runs cleanly). The inline PDF
+    attach rides the SAME every-service self-heal posture as the ledger row's
+    (deterministic filename → replace, never duplicate)."""
     try:
         sid = job_sheet.ensure_job_sheet(
             sheet_ids.FOLDER_PO_JOBS,
@@ -1513,10 +1538,12 @@ def _append_perjob_row_best_effort(
             workstream=WORKSTREAM,
             correlation_id=correlation_id,
         )
-        if po_log.find_row_by_po_number(
-            str(row_kwargs["po_number"]), sheet_id=sid
-        ) is None:
-            po_log.append_filed_row(sheet_id=sid, **row_kwargs)
+        existing = po_log.find_row_by_po_number(str(row_kwargs["po_number"]), sheet_id=sid)
+        if existing is None:
+            row_id = po_log.append_filed_row(sheet_id=sid, **row_kwargs)
+        else:
+            row_id = int(existing["_row_id"])
+        _attach_pdf_best_effort(row_id, pdf_filename, pdf_bytes, correlation_id, sheet_id=sid)
     except Exception as exc:  # noqa: BLE001 — supplementary per-job mirror; never fail the filing
         error_log.log(
             Severity.WARN, SCRIPT_NAME,

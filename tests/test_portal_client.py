@@ -1070,8 +1070,11 @@ def test_manifests_pending_wire_key_parity():
         Path(__file__).resolve().parent.parent
         / "safety_portal" / "worker" / "fieldops_manifests.ts"
     ).read_text(encoding="utf-8")
-    # The pending route's success body in the Worker source.
-    route_block = worker_src.split("/api/fieldops/manifests/internal/pending", 1)[1][:1200]
+    # The pending route's success body in the Worker source. The window is measured
+    # from the route path's FIRST occurrence (its doc comment), so it must span the
+    # comment + handler up to `c.json(` — 2000 covers the 2026-08-11 project_name
+    # join commentary with room to grow.
+    route_block = worker_src.split("/api/fieldops/manifests/internal/pending", 1)[1][:2000]
     m = re.search(r"c\.json\(\{\s*(\w+):", route_block)
     assert m is not None, "pending route success body not found in fieldops_manifests.ts"
     worker_key = m.group(1)

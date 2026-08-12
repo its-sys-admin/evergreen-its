@@ -1840,7 +1840,7 @@ ROADMAP Track 6 built the job archive and it has since been exercised against li
 2026-08-10 drill on `JOB-000030` ran **archive → un-archive → archive**, with every container relocating and
 keeping its folder id, permalinks and cell history intact through all three moves. What Track 6 did **not**
 ship is the doctrine. Expanding Op Stds §51 to bless relocating a closed job's per-job *containers* (four
-Smartsheet folders + two Box folders, across workspaces — a §46 read-access change as well as a move) is a
+Smartsheet folders + three Box folders since the 2026-08-11 PO-root split, across workspaces — a §46 read-access change as well as a move) is a
 FIXED high-capability class and is Seth's to write; ROADMAP Track 6 still lists the §51 rider as REMAINING.
 
 Operator-facing behaviour — including the un-archive refusal when a live folder has re-grown the job's name,
@@ -1959,7 +1959,7 @@ Track 6 mitigates this **for the archive path only** — the archive request sna
 `archive_folder_key` at request time (migration 0058) so a rename mid-relocation cannot strand the
 daemon. The underlying defect is untouched.
 
-**Trigger:** decide whether a rename should (a) propagate to all six containers via `rename_folder`,
+**Trigger:** decide whether a rename should (a) propagate to all seven containers via `rename_folder`,
 (b) be refused once a job has artifacts, or (c) be documented as operator-beware. Also fix the stale
 comment either way. **Tag:** `field_ops`, `safety_portal`, `naming`, `seth-owned`.
 

@@ -100,8 +100,8 @@ The short version:
   unaffected — typing `Archived` into `ITS_Active_Jobs` for one of those triggers no automation,
   and never did.
 - Archive lives on the job's **Archive** card in the portal, behind a typed confirmation that names
-  exactly what moves. It relocates **six containers** — four Smartsheet folders (Safety, Progress,
-  Purchase Orders, Subcontracts) and two Box ones — into `ITS — Archive / <Job>/` and
+  exactly what moves. It relocates **seven containers** — four Smartsheet folders (Safety, Progress,
+  Purchase Orders, Subcontracts) and three Box ones — into `ITS — Archive / <Job>/` and
   `ITS Archive / <Job>/`. It is reversible with **Un-archive**.
 - Pressing Archive **records intent**; the office Mac performs the move on its next cycle and
   reports back. That is why the card says "Archiving…" instead of claiming it is done.
@@ -123,7 +123,7 @@ Nothing below is touched by **Inactive**. Retention-in-place is the current de-f
 closed job; which parts should change is exactly what the closure-policy proposal is for.
 
 > **Archiving is the exception, and this table predates it.** The Archive action relocates the
-> job's four Smartsheet per-job folders and its two Box folders — which carries the week sheets,
+> job's four Smartsheet per-job folders and its three Box folders — which carries the week sheets,
 > the standing trackers and the procurement documents inside them. The rows below still describe
 > where those surfaces live for a job that has **not** been archived; for what an archive moves and
 > what it deliberately leaves (the flat logs, the review rows, the `ITS_Active_Jobs` row, `ITS
@@ -158,7 +158,7 @@ Developer-Operator, the known footgun (HOUSE_REFLEXES §7):
 
 - **Inactive took**: the job is gone from the portal submission dropdown; the next weekly compile
   produces no new WSR/WPR row for it; its `ITS_Active_Jobs` rows read `Inactive`.
-- **Archived took**: the job's Archive card reads "Archived. All 6 folders are filed under
+- **Archived took**: the job's Archive card reads "Archived. All 7 folders are filed under
   `ITS — Archive / <Job>`", those folders are visible in the Archive workspace and in Box's
   `ITS Archive`, and `ITS_Errors` has no `job_archive` rows for the job. Anything short of six
   is [job_archive.md](job_archive.md) Symptom 2 — it does **not** resume on its own.

@@ -7,7 +7,7 @@ internal ``/Title`` metadata (`rfq_generate`). Mirrors `po_naming` — same
 `safety_naming.job_folder_name` sanitiser — with the VENDOR name in the identity
 instead of the job: one RFQ fans out to N vendors (ADR-0004 R2, one PDF per vendor),
 so the vendor is what disambiguates sibling files inside the same job's
-"Purchase Orders/RFQs" folder. The RFQ number already encodes the job family.
+per-job "RFQs" folder (the PO root's per-job tree). The RFQ number already encodes the job family.
 
 Pure naming — no I/O, no external send. A blank vendor name falls back to a
 number-only name so an edge case never crashes (the po_naming posture).
@@ -30,7 +30,7 @@ def rfq_form_filename(rfq_number: str, vendor_name: str | None = None) -> str:
     """The fillable ``.xlsx`` quote-form file name (R3/R4). With a vendor name it is the
     vendor-suffixed ``<rfq_number> - <Vendor> - Quote Form.xlsx`` (the Box file
     ``rfq_poll`` writes at filing time, where the vendor disambiguates sibling forms in
-    the same job's ``Purchase Orders/RFQs`` folder); with none it falls back to the
+    the same job's ``RFQs`` folder under the PO root); with none it falls back to the
     number-only ``RFQ <rfq_number> - Quote Form.xlsx`` (the email attachment name
     ``rfq_send`` uses at dispatch — the vendor name is not carried on the WSR-twin review
     row, and the attachment filename only needs its ``.xlsx`` extension to drive the

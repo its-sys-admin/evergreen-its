@@ -711,20 +711,26 @@ def test_perjob_failure_never_fails_the_filing(_patch, mocker):
 def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
     """The helper wires FOLDER_PO_JOBS + the flat RFQ_Log as template + the
     sanitized job folder name + the fixed "RFQs" sheet name, then appends with
-    sheet_id=<per-job> (independently idempotent per target sheet)."""
+    sheet_id=<per-job> (independently idempotent per target sheet) and attaches
+    BOTH inline files on the fresh row (2026-08-11 parity)."""
     from shared import sheet_ids as si
 
     ensure = mocker.patch(
         "po_materials.rfq_poll.job_sheet.ensure_job_sheet", return_value=666
     )
     find = mocker.patch("po_materials.rfq_log.find_row", return_value=None)
-    append = mocker.patch("po_materials.rfq_log.append_row", return_value=1)
+    append = mocker.patch("po_materials.rfq_log.append_row", return_value=91)
+    attach = mocker.patch("po_materials.rfq_poll._attach_file_best_effort")
     row_kwargs = {
         "rfq_number": "RFQ-2026.001-001", "vendor_key": "VEN-000001",
         "job_no": "2026.001", "vendor_name": "Platt", "status": "filed",
     }
 
-    rfq_poll._append_perjob_rfq_row_best_effort("Sunrise Solar", row_kwargs, "corr-1")
+    rfq_poll._append_perjob_rfq_row_best_effort(
+        "Sunrise Solar", row_kwargs, "corr-1",
+        pdf_filename="Platt_RFQ_RFQ-2026.001-001.pdf", pdf_bytes=b"%PDF-rfq",
+        form_filename="RFQ-2026.001-001 - Platt - Quote Form.xlsx", form_bytes=b"PK-xlsx",
+    )
 
     ensure.assert_called_once_with(
         si.FOLDER_PO_JOBS,
@@ -737,24 +743,80 @@ def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
     )
     find.assert_called_once_with("RFQ-2026.001-001", "VEN-000001", sheet_id=666)
     append.assert_called_once_with(sheet_id=666, **row_kwargs)
+    assert attach.call_args_list == [
+        mocker.call(91, "Platt_RFQ_RFQ-2026.001-001.pdf", b"%PDF-rfq", "corr-1",
+                    sheet_id=666),
+        mocker.call(91, "RFQ-2026.001-001 - Platt - Quote Form.xlsx", b"PK-xlsx", "corr-1",
+                    content_type=rfq_poll._XLSX_MIME, sheet_id=666),
+    ]
+
+
+def test_perjob_helper_skips_the_form_attach_when_degraded_to_pdf_only(mocker):
+    """form_bytes=None (the R4 PDF-only degrade) attaches ONLY the RFQ PDF — a
+    None form must never become a zero-byte xlsx attachment."""
+    mocker.patch("po_materials.rfq_poll.job_sheet.ensure_job_sheet", return_value=666)
+    mocker.patch("po_materials.rfq_log.find_row", return_value=None)
+    mocker.patch("po_materials.rfq_log.append_row", return_value=91)
+    attach = mocker.patch("po_materials.rfq_poll._attach_file_best_effort")
+
+    rfq_poll._append_perjob_rfq_row_best_effort(
+        "Sunrise Solar",
+        {"rfq_number": "RFQ-2026.001-001", "vendor_key": "VEN-000001"},
+        "corr-1",
+        pdf_filename="x.pdf", pdf_bytes=b"%PDF", form_filename="x.xlsx", form_bytes=None,
+    )
+
+    attach.assert_called_once_with(91, "x.pdf", b"%PDF", "corr-1", sheet_id=666)
 
 
 def test_perjob_helper_is_idempotent_against_target_sheet(mocker):
     """The (rfq, vendor) already present in the TARGET sheet → appends NOTHING —
     the duplicate guard behind the 'independently idempotent' claim (a crash
     between the flat append and the mirror re-runs cleanly). Mutation-proven:
-    dropping the None-check ships silent duplicate rows into a §51 sheet."""
+    dropping the None-check ships silent duplicate rows into a §51 sheet. The
+    inline attaches STILL run against the existing row (every-service self-heal;
+    deterministic filenames replace, never duplicate)."""
     mocker.patch("po_materials.rfq_poll.job_sheet.ensure_job_sheet", return_value=666)
     mocker.patch("po_materials.rfq_log.find_row", return_value={"_row_id": "1"})
     append = mocker.patch("po_materials.rfq_log.append_row", return_value=1)
+    attach = mocker.patch("po_materials.rfq_poll._attach_file_best_effort")
 
     rfq_poll._append_perjob_rfq_row_best_effort(
         "Sunrise Solar",
         {"rfq_number": "RFQ-2026.001-001", "vendor_key": "VEN-000001"},
         "corr-1",
+        pdf_filename="x.pdf", pdf_bytes=b"%PDF", form_filename="x.xlsx", form_bytes=b"PK",
     )
 
     append.assert_not_called()
+    assert attach.call_count == 2
+    assert attach.call_args_list[0].args[0] == 1
+
+
+def test_rfq_box_resolver_reads_the_lanes_own_root(mocker):
+    """The 2026-08-11 split: the resolver reads po_naming.CFG_BOX_PORTAL_ROOT under
+    Workstream='po_materials' and files under ROOT→<job>→'RFQs' — the intermediate
+    'Purchase Orders' level is gone."""
+    from po_materials import po_naming
+
+    read = mocker.patch(
+        "po_materials.rfq_poll._read_str_setting", return_value="root-po"
+    )
+    ensure = mocker.patch(
+        "po_materials.rfq_poll.box_client.get_or_create_folder",
+        side_effect=["job-9", "rfqs-3"],
+    )
+
+    assert rfq_poll._resolve_rfq_box_folder("Sunrise Solar") == "rfqs-3"
+
+    read.assert_called_once_with(
+        po_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
+    )
+    assert ensure.call_args_list == [
+        mocker.call("root-po", "Sunrise Solar"),
+        mocker.call("job-9", "RFQs"),
+    ]
 
 
 # ---- Fence durability: a failed Review-Queue ticket must NEVER cost the flag -------

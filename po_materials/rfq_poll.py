@@ -17,7 +17,7 @@ model (one host, one lock, one heartbeat) behind ONE gate
      ITS_Vendors SoR (`vendors.get_vendor_by_key`, READ-ONLY — ADR-0004 decision 9;
      unknown vendor → per-vendor Review-Queue fence, the OTHER vendors proceed) →
      DETERMINISTIC price-free render (`rfq_generate.render_rfq_pdf`) → Box file
-     (§45 find-or-create ROOT→job→"Purchase Orders"→"RFQs"; §47
+     (§45 find-or-create the PO ROOT→job→"RFQs" — the lane's own root; §47
      version-on-conflict under `rfq_naming.rfq_pdf_filename`) → **R4: ALSO render
      the fillable `.xlsx` quote form (`quote_form.render_quote_form`) → file it to
      the SAME Box folder (best-effort; PDF-only degrade)** → RFQ_Log (rfq, vendor)
@@ -95,6 +95,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from po_materials import (
+    po_naming,
     rfq_generate,
     rfq_log,
     rfq_naming,
@@ -128,8 +129,8 @@ from shared.required_config import ConfigKey, resolve_and_log
 SCRIPT_NAME = "po_materials.rfq_poll"
 WORKSTREAM = "po_materials"
 
-# ITS_Config keys (read under Workstream='po_materials' except the two SHARED
-# safety_reports-owned keys — the po_poll/estimate_poll ownership pattern).
+# ITS_Config keys (read under Workstream='po_materials' except the SHARED
+# safety_reports-owned worker_base_url — the po_poll/estimate_poll ownership pattern).
 CFG_POLLING_ENABLED = "po_materials.rfq_poll.polling_enabled"
 CFG_WORKER_BASE_URL = "safety_reports.portal.worker_base_url"  # shared with portal_poll
 CFG_WORKER_BASE_URL_WORKSTREAM = "safety_reports"
@@ -144,9 +145,8 @@ KC_HMAC_SECRET = "ITS_PORTAL_HMAC_SECRET"  # noqa: S105 — Keychain entry NAME,
 DEFAULT_POLLING_ENABLED = False  # ships dark; the operator flips the seeded row
 POLL_INTERVAL_SECONDS = 120  # registration metadata; mirrors the launchd StartInterval
 
-# Box filing path under the job's mirror-tree folder: the PO subfolder plus the
-# RFQ-specific leaf (§45 find-or-create at every level).
-PO_BOX_SUBFOLDER = "Purchase Orders"
+# Box filing leaf under the PO root's per-job folder (§45 find-or-create at every
+# level; the PO lane's OWN tree — po_naming.CFG_BOX_PORTAL_ROOT → <job> → "RFQs").
 RFQS_SUBFOLDER = "RFQs"
 
 # The fillable-quote-form OpenXML MIME (R4) — used for the Smartsheet inline attach so the
@@ -163,12 +163,11 @@ REQUIRED_CONFIG: list[ConfigKey] = [
         CFG_WORKER_BASE_URL, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
         description="Shared Worker base URL; owned by safety_reports, read here too.",
     ),
+    # The PO lane's OWN Box root; owned by po_naming (the config-dictionary
+    # description lives on po_poll's declaration — one owner's prose per key). RFQ
+    # PDFs + quote forms file under ROOT→<job>→'RFQs'.
     ConfigKey(
-        safety_naming.CFG_BOX_PORTAL_ROOT, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
-        description=(
-            "Shared Box mirror-tree root; owned by safety_reports. RFQ PDFs file "
-            "under ROOT→<job>→'Purchase Orders'→'RFQs'."
-        ),
+        po_naming.CFG_BOX_PORTAL_ROOT, po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM, "", "str",
     ),
 ]
 
@@ -727,7 +726,7 @@ def _process_pending_rfq(
             return True
 
     try:
-        # 3 — Box folder (§45): mirror-tree ROOT → job → "Purchase Orders" → "RFQs".
+        # 3 — Box folder (§45): the PO lane's OWN ROOT → job → "RFQs".
         folder_id = _resolve_rfq_box_folder(
             str(rfq.get("job_name") or rfq.get("job_no") or "")
         )
@@ -735,8 +734,8 @@ def _process_pending_rfq(
             counters["errors"] += 1
             error_log.log(
                 Severity.ERROR, SCRIPT_NAME,
-                f"Box portal root unresolved (ITS_Config "
-                f"{safety_naming.CFG_BOX_PORTAL_ROOT} unset) — RFQ {rfq_number} "
+                f"PO Box root unresolved (ITS_Config "
+                f"{po_naming.CFG_BOX_PORTAL_ROOT} unset) — RFQ {rfq_number} "
                 f"left queued until the root is configured",
                 error_code="rfq_box_root_unresolved",
                 correlation_id=correlation_id,
@@ -976,11 +975,15 @@ def _file_one_vendor(
 
     # Per-job tracking sheet mirror (Feature A parity, operator ask 2026-07-20):
     # the SAME ledger row into "<Jobs>/<job>/RFQs" beside the job's "Purchase
-    # Orders" sheet. BEST-EFFORT — fenced inside the helper; a per-job failure
-    # must NEVER fail the filing (Box + the flat RFQ_Log are the SoR).
+    # Orders" sheet, now WITH the same inline copies (operator ask 2026-08-11).
+    # BEST-EFFORT — fenced inside the helper; a per-job failure must NEVER fail
+    # the filing (Box + the flat RFQ_Log are the SoR).
     _append_perjob_rfq_row_best_effort(
         str(rfq.get("job_name") or "") or str(rfq.get("job_no") or ""),
         ledger_row_kwargs, correlation_id,
+        pdf_filename=filename, pdf_bytes=pdf,
+        form_filename=rfq_naming.rfq_form_filename(rfq_number, vendor_name),
+        form_bytes=form_bytes if box_form_file_id else None,
     )
 
     counters["vendors_filed"] += 1
@@ -1145,21 +1148,21 @@ def _fence_rfq(
 
 
 def _resolve_rfq_box_folder(job_name: str) -> str | None:
-    """§45 find-or-create the RFQ filing folder: mirror-tree ROOT → per-job folder
-    (the SAME `safety_naming.job_folder_name` as every other portal artifact) →
-    'Purchase Orders' → 'RFQs'. None when the shared root is unconfigured (the
-    caller leaves the RFQ queued + ERRORs — a config gap, not a per-row defect)."""
+    """§45 find-or-create the RFQ filing folder: the PO lane's OWN Box ROOT
+    (`po_naming.CFG_BOX_PORTAL_ROOT`) → per-job folder (the SAME
+    `safety_naming.job_folder_name` as every other portal artifact) → 'RFQs'.
+    None when the root is unconfigured (the caller leaves the RFQ queued +
+    ERRORs — a config gap, not a per-row defect)."""
     root = _read_str_setting(
-        safety_naming.CFG_BOX_PORTAL_ROOT, "",
-        workstream=CFG_WORKER_BASE_URL_WORKSTREAM,
+        po_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
     ).strip()
     if not root:
         return None
     job_folder = box_client.get_or_create_folder(
         root, safety_naming.job_folder_name(job_name)
     )
-    po_folder = box_client.get_or_create_folder(job_folder, PO_BOX_SUBFOLDER)
-    return box_client.get_or_create_folder(po_folder, RFQS_SUBFOLDER)
+    return box_client.get_or_create_folder(job_folder, RFQS_SUBFOLDER)
 
 
 def _attach_file_best_effort(
@@ -1195,7 +1198,9 @@ PERJOB_RFQ_SHEET_NAME = "RFQs"
 
 
 def _append_perjob_rfq_row_best_effort(
-    job_name: str, row_kwargs: dict[str, Any], correlation_id: str
+    job_name: str, row_kwargs: dict[str, Any], correlation_id: str,
+    *, pdf_filename: str, pdf_bytes: bytes,
+    form_filename: str, form_bytes: bytes | None,
 ) -> None:
     """Mirror the freshly-filed ledger row into the job's per-job "RFQs" tracking
     sheet (Feature A parity with po_poll._append_perjob_row_best_effort),
@@ -1207,7 +1212,10 @@ def _append_perjob_rfq_row_best_effort(
     under sheet_ids.FOLDER_PO_JOBS (structure-cloned from the flat RFQ_Log, so
     `append_row` writes it unchanged), then appends unless the (rfq, vendor) is
     already present in the TARGET sheet (independent idempotency — a crash between
-    the flat append and this mirror re-runs cleanly)."""
+    the flat append and this mirror re-runs cleanly). The inline attaches (RFQ PDF
+    + quote form, operator ask 2026-08-11) ride the SAME every-service self-heal
+    posture as the ledger row's — deterministic filenames → replace, never
+    duplicate. `form_bytes` is None when the form degraded to PDF-only."""
     try:
         sid = job_sheet.ensure_job_sheet(
             sheet_ids.FOLDER_PO_JOBS,
@@ -1218,10 +1226,19 @@ def _append_perjob_rfq_row_best_effort(
             workstream=WORKSTREAM,
             correlation_id=correlation_id,
         )
-        if rfq_log.find_row(
+        existing = rfq_log.find_row(
             str(row_kwargs["rfq_number"]), str(row_kwargs["vendor_key"]), sheet_id=sid
-        ) is None:
-            rfq_log.append_row(sheet_id=sid, **row_kwargs)
+        )
+        if existing is None:
+            row_id = rfq_log.append_row(sheet_id=sid, **row_kwargs)
+        else:
+            row_id = int(existing["_row_id"])
+        _attach_file_best_effort(row_id, pdf_filename, pdf_bytes, correlation_id, sheet_id=sid)
+        if form_bytes is not None:
+            _attach_file_best_effort(
+                row_id, form_filename, form_bytes, correlation_id,
+                content_type=_XLSX_MIME, sheet_id=sid,
+            )
     except Exception as exc:  # noqa: BLE001 — supplementary per-job mirror; never fail the filing
         error_log.log(
             Severity.WARN, SCRIPT_NAME,

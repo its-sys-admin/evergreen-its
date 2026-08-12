@@ -46,7 +46,8 @@ shipped `false`). Per document it:
    Mac** (scanned documents OCR first under `.ocr_enabled`). A tier success reports
    `extracted` with ADVISORY line items; every failure / off-gate / low-confidence
    document reports `needs_review` instead — never an error.
-5. **Files** clean documents to Box (`<job>/Purchase Orders/Vendor Quotes/`) + an
+5. **Files** clean documents to Box (`<PO root>/<job>/Vendor Quotes/` — the PO lane's
+   own root since 2026-08-11) + an
    `Estimate_Log` row, renders **page previews** for the disposition screen, and reports
    `extracted` or `needs_review`. Either way a human reviews/accepts every dollar in
    the portal's disposition screen — extraction is advisory only, and this daemon
@@ -201,13 +202,14 @@ ERROR rows citing `estimate_box_root_unresolved` each cycle; the estimate stays 
 and re-tries.
 
 ### What it means
-ITS_Config `safety_reports.box.portal_root_folder_id` (Workstream `safety_reports`) is
-unset — the shared Box mirror-tree root every portal artifact files under. Nothing is
-lost; the row retries every cycle.
+ITS_Config `po_materials.box.portal_root_folder_id` (Workstream `po_materials`) is
+unset — the PO lane's own Box root (the "ITS Purchase Orders" tree, split from the safety
+root 2026-08-11; also read by po_poll and rfq_poll). Nothing is lost; the row retries
+every cycle.
 
 ### The low-class Tier-2 action
-Confirm the row exists and holds the Box folder id the other daemons use (portal_poll /
-po_poll file fine when it is right). If the row is present and the error persists →
+Confirm the row exists and holds the PO Box root folder id the other PO-lane daemons
+use (po_poll / rfq_poll file fine when it is right). If the row is present and the error persists →
 escalate (Box auth is secrets-adjacent).
 
 ---
@@ -354,7 +356,7 @@ low-class.
 ## Symptom 14 — a vendor EXCEL quote lands `needs_review` with an empty disposition screen
 
 **What you see.** The office uploads a `.xlsx` vendor quote. It screens clean, files to
-Box under `<job>/Purchase Orders/Vendor Quotes/`, gets an `Estimate_Log` row — and then the
+Box under `<PO root>/<job>/Vendor Quotes/`, gets an `Estimate_Log` row — and then the
 disposition screen shows no extracted lines, so someone re-types the whole quote by hand.
 
 **First: is this the gate, or a parse failure?** They look identical to the operator.

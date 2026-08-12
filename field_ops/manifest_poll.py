@@ -688,6 +688,15 @@ def _service_one_manifest(
 
     manifest_uuid = str(row.get("manifest_uuid") or "")
     job_id = str(row.get("job_id") or "")
+    # The Worker JOINs jobs.project_name into the pending payload (display/foldering
+    # metadata, deliberately OUTSIDE the manifest:v1 signature). The Box folder keys
+    # off the PROJECT NAME — the same `safety_naming.job_folder_name` folder every
+    # other artifact (and the Track 6 archive) resolves — falling back to job_id
+    # only when the join found nothing (or the Worker predates the join). Before
+    # this, filing keyed off the raw job_id and grew an id-named folder (JOB-000031)
+    # beside the job's real folder that the archive could never see.
+    project_name = str(row.get("project_name") or "")
+    box_folder_key_source = project_name or job_id
     filename = str(row.get("filename") or "")
     declared_mime = str(row.get("declared_mime") or "")
     uploaded_by = str(row.get("uploaded_by") or "")
@@ -834,7 +843,7 @@ def _service_one_manifest(
 
         # 6. File the ORIGINAL bytes to Box. An unresolved root is a CONFIG gap — the row
         #    stays claimed and UNFLAGGED so it self-heals once the root is set.
-        folder_id = _resolve_manifests_box_folder(job_id)
+        folder_id = _resolve_manifests_box_folder(box_folder_key_source)
         if folder_id is None:
             counters["errors"] += 1
             error_log.log(
@@ -1360,11 +1369,16 @@ def _post_refused_result(
 # ---- Box folder resolution --------------------------------------------------------
 
 
-def _resolve_manifests_box_folder(job_id: str) -> str | None:
+def _resolve_manifests_box_folder(job_folder_key_source: str) -> str | None:
     """§45 find-or-create the manifest filing folder: mirror-tree ROOT → per-job folder
     (the SAME `safety_naming.job_folder_name` as every other portal artifact) →
     'Materials' → 'Manifests'. None when the shared root is unconfigured (the caller
-    leaves the row claimed + ERRORs — a config gap, not a per-row defect)."""
+    leaves the row claimed + ERRORs — a config gap, not a per-row defect).
+
+    `job_folder_key_source` MUST be the job's PROJECT NAME whenever one is known
+    (the Worker joins it into the pending payload) — the raw job_id grows an
+    id-named folder beside the real per-job folder, invisible to the Track 6
+    archive; the caller falls back to job_id only when the name is unavailable."""
     root = _read_str_setting(
         safety_naming.CFG_BOX_PORTAL_ROOT, "",
         workstream=CFG_WORKER_BASE_URL_WORKSTREAM,
@@ -1372,7 +1386,7 @@ def _resolve_manifests_box_folder(job_id: str) -> str | None:
     if not root:
         return None
     job_folder = box_client.get_or_create_folder(
-        root, safety_naming.job_folder_name(job_id)
+        root, safety_naming.job_folder_name(job_folder_key_source)
     )
     materials = box_client.get_or_create_folder(job_folder, MATERIALS_BOX_SUBFOLDER)
     return box_client.get_or_create_folder(materials, MANIFESTS_BOX_SUBFOLDER)

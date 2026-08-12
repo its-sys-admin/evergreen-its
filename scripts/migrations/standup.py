@@ -184,7 +184,9 @@ BOX_ROOT_CONFIG_ROWS: tuple[tuple[str, str, str], ...] = (
     ("ITS Safety Reports", "safety_reports.box.portal_root_folder_id", "safety_reports"),
     ("ITS Progress Reports", "progress_reports.box.portal_root_folder_id",
      "progress_reports"),
-    # Track 6 job archive destination — a sibling root, not a child of either tree.
+    # The PO lane's own root (2026-08-11) — po PDFs + RFQs/ + Vendor Quotes/ per job.
+    ("ITS Purchase Orders", "po_materials.box.portal_root_folder_id", "po_materials"),
+    # Track 6 job archive destination — a sibling root, not a child of any tree.
     ("ITS Archive", "field_ops.box.archive_root_folder_id", "field_ops"),
 )
 

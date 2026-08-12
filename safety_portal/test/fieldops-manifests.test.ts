@@ -223,6 +223,10 @@ describe("manifest internal tier (bearer)", () => {
     for (const k of ["manifest_uuid", "job_id", "filename", "declared_mime", "size_bytes", "sha256", "hmac"]) {
       expect(body.manifests[0][k], `pending row missing ${k}`).toBeTruthy();
     }
+    // project_name is JOINed from jobs (unsigned foldering metadata): the Mac keys the
+    // Box per-job folder off the PROJECT NAME, not the raw job_id — the id-named-folder
+    // bug the 2026-08-11 change fixed. A vanished job row serves NULL (daemon falls back).
+    expect(body.manifests[0].project_name).toBe("Project JOB-A");
   });
 
   it("claim is idempotent: first claim found:true, a re-claim found:false (crash recovery)", async () => {

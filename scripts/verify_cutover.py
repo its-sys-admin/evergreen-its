@@ -378,19 +378,21 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     # string; there is no `evergreenmirror` marker in it to scan, so a scan would assert
     # nothing), but it conflated that with PRESENCE — which is now both assertable and
     # worth asserting, because this PR adds scripts/migrations/build_box_roots.py: the
-    # builder is create-only and writes no config row, so its entire output is these two
+    # builder is create-only and writes no config row, so its entire output is these
     # ids and its last cutover step is a MANUAL operator paste into ITS_Config. A skipped
     # or fat-fingered paste was previously caught by nothing, and an unset root silently
     # degrades every filing path (the safety_reports copy is read by intake, portal_poll,
-    # weekly_generate, po_poll, rfq_poll, estimate_poll and subcontract_poll). `non_empty`,
-    # never a value assertion — the id is tenant-specific and not ours to pin.
+    # weekly_generate, manifest_poll and subcontract_poll; the po_materials copy by
+    # po_poll, rfq_poll and estimate_poll — the PO lane's own root since 2026-08-11).
+    # `non_empty`, never a value assertion — the id is tenant-specific and not ours to pin.
     ConfigRow("safety_reports.box.portal_root_folder_id", "safety_reports", "non_empty"),
     ConfigRow("progress_reports.box.portal_root_folder_id", "progress_reports", "non_empty"),
+    ConfigRow("po_materials.box.portal_root_folder_id", "po_materials", "non_empty"),
     # The Box ARCHIVE root (Track 6), same reasoning as the two above and the same
     # `non_empty`-never-a-value rule. Enrolled even though archiving ships dark: an unset
     # root is not inert here, it is a per-container FAILURE on every archive attempt
     # (job_archive._read_box_root refuses to read an unreadable tree as an empty one), so a
-    # missed paste surfaces to the operator as repeated 4-of-6 `partial` archives rather
+    # missed paste surfaces to the operator as repeated 4-of-7 `partial` archives rather
     # than as a quiet no-op. build_box_roots.py prints the id; standup.py seeds the row.
     ConfigRow("field_ops.box.archive_root_folder_id", "field_ops", "non_empty"),
     # Feature B (PO document attachments): the §34 screener's ClamAV gate must be

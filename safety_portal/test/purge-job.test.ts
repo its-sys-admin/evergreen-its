@@ -22,6 +22,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM filed_pdfs"),
     env.DB.prepare("DELETE FROM pdf_requests"),
     env.DB.prepare("DELETE FROM job_daily_requirements"),
+    env.DB.prepare("DELETE FROM job_weekly_report_inputs"),
     env.DB.prepare("DELETE FROM job_expected_materials"),
     env.DB.prepare("DELETE FROM time_entries"),
     env.DB.prepare("DELETE FROM task_assignments"),
@@ -32,6 +33,10 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM job_manifest_rows"),
     env.DB.prepare("DELETE FROM job_manifest_previews"),
     env.DB.prepare("DELETE FROM job_manifests"),
+    env.DB.prepare("DELETE FROM job_schedule_chunks"),
+    env.DB.prepare("DELETE FROM job_schedule_rows"),
+    env.DB.prepare("DELETE FROM job_schedule_previews"),
+    env.DB.prepare("DELETE FROM job_schedules"),
     env.DB.prepare("DELETE FROM jobs"),
     env.DB.prepare("DELETE FROM audit_log"),
   ]);
@@ -67,6 +72,14 @@ async function seedJobWithData(job: string, uuid: string): Promise<void> {
     env.DB
       .prepare("INSERT INTO job_expected_materials (job_id, description, seq) VALUES (?, 'Panels pallet', 10)")
       .bind(job),
+    // 0067: seven weeks of Weekly Production Report office inputs. SEVEN because every sibling
+    // count in this seed is distinct (1/2/3/4/5/6) — a positional-index shift in the route's
+    // results[] reads then cannot land on a value that looks correct.
+    ...[1, 2, 3, 4, 5, 6, 7].map((w) =>
+      env.DB
+        .prepare("INSERT INTO job_weekly_report_inputs (job_id, week_start) VALUES (?,?)")
+        .bind(job, `2026-0${w}-04`),
+    ),
     // PR2 (0059): the materials children. Counts are DISTINCT from every sibling (2 shipments,
     // 3 events) so a mis-shifted positional index in purge-job's results[] cannot pass by
     // accidentally reading a neighbour's count — the exact failure mode that route warns about.
@@ -137,6 +150,44 @@ async function seedJobWithData(job: string, uuid: string): Promise<void> {
         .bind(mid, p),
     ),
   ]);
+  // ADR-0006 (0066): the schedule-import pool joins the cascade the same way. Counts are
+  // 2 / 3 / 7 / 8 — distinct from each other AND from the manifest pool's 1 / 4 / 6 / 5,
+  // so the four newly-inserted DELETEs (which shift every later positional index in the
+  // route's results[] reads by four) cannot mis-report by reading a neighbour's count.
+  // Two parents (one superseded-style bare row) with distinct shas — the per-job partial
+  // UNIQUE (job_id, sha256) forbids twins.
+  const sid = (
+    await env.DB
+      .prepare(
+        "INSERT INTO job_schedules (schedule_uuid, job_id, filename, declared_mime, size_bytes, sha256, hmac, uploaded_by) " +
+          "VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+      )
+      .bind(`sch-${job}`, job, "Project Schedule.pdf", "application/pdf", 2048, `ssha-a-${job}`, `smac-${job}`, "pm")
+      .first<{ id: number }>()
+  )!.id;
+  await env.DB.batch([
+    env.DB
+      .prepare(
+        "INSERT INTO job_schedules (schedule_uuid, job_id, filename, declared_mime, size_bytes, sha256, hmac, uploaded_by) " +
+          "VALUES (?,?,?,?,?,?,?,?)",
+      )
+      .bind(`sch2-${job}`, job, "Project Schedule rev2.pdf", "application/pdf", 2049, `ssha-b-${job}`, `smac2-${job}`, "pm"),
+    ...[0, 1, 2].map((i) =>
+      env.DB
+        .prepare("INSERT INTO job_schedule_chunks (schedule_id, chunk_index, chunk_total, chunk_b64) VALUES (?,?,3,'QUJD')")
+        .bind(sid, i),
+    ),
+    ...[1, 2, 3, 4, 5, 6, 7].map((i) =>
+      env.DB
+        .prepare("INSERT INTO job_schedule_rows (schedule_id, row_index, kind, cells_json) VALUES (?,?, 'data', '[\"Pile Installation\"]')")
+        .bind(sid, i),
+    ),
+    ...[1, 2, 3, 4, 5, 6, 7, 8].map((p) =>
+      env.DB
+        .prepare("INSERT INTO job_schedule_previews (schedule_id, page, png_b64) VALUES (?,?, 'QUJD')")
+        .bind(sid, p),
+    ),
+  ]);
 }
 
 async function counts(job: string, uuid: string) {
@@ -148,6 +199,7 @@ async function counts(job: string, uuid: string) {
     pdfs: await q("SELECT COUNT(*) n FROM filed_pdfs WHERE submission_uuid=?", uuid),
     reqs: await q("SELECT COUNT(*) n FROM pdf_requests WHERE submission_uuid=?", uuid),
     dailyReqs: await q("SELECT COUNT(*) n FROM job_daily_requirements WHERE job_id=?", job),
+    weeklyReportInputs: await q("SELECT COUNT(*) n FROM job_weekly_report_inputs WHERE job_id=?", job),
     materials: await q("SELECT COUNT(*) n FROM job_expected_materials WHERE job_id=?", job),
     shipments: await q("SELECT COUNT(*) n FROM material_shipments WHERE job_id=?", job),
     receiptEvents: await q("SELECT COUNT(*) n FROM material_receipt_events WHERE job_id=?", job),
@@ -163,6 +215,13 @@ async function counts(job: string, uuid: string) {
       "SELECT COUNT(*) n FROM job_manifest_rows WHERE manifest_id IN (SELECT id FROM job_manifests WHERE job_id=?)", job),
     manifestPreviews: await q(
       "SELECT COUNT(*) n FROM job_manifest_previews WHERE manifest_id IN (SELECT id FROM job_manifests WHERE job_id=?)", job),
+    schedules: await q("SELECT COUNT(*) n FROM job_schedules WHERE job_id=?", job),
+    scheduleChunks: await q(
+      "SELECT COUNT(*) n FROM job_schedule_chunks WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id=?)", job),
+    scheduleRows: await q(
+      "SELECT COUNT(*) n FROM job_schedule_rows WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id=?)", job),
+    schedulePreviews: await q(
+      "SELECT COUNT(*) n FROM job_schedule_previews WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id=?)", job),
   };
 }
 
@@ -180,26 +239,36 @@ describe("POST /api/internal/admin/purge-job", () => {
     expect(await res.json()).toMatchObject({
       ok: true, found: true, job_id: "JOB-PURGE", job_deleted: 1, submissions: 1, pdfChunks: 1, pdfRequests: 1,
       requirements: 2, expectedMaterials: 1, // Slice 1 (R3-F4): per-job content cascades too
+      // 0067 — the client-facing report's office record (OSHA counts, pending items) goes with
+      // the job. 7 is distinct from every sibling count, so a positional shift fails loudly.
+      weeklyReportInputs: 7,
       // PR2 — asserted BY NAME with distinct values: this is what catches a positional-index
       // shift in the route's results[] reads (2 ≠ 3 ≠ 1, so a swap cannot look correct).
       shipments: 2, receiptEvents: 3,
       // PR3b — same technique for the manifest pool. manifestChunks is the one that
       // matters most: it counts the ORIGINAL untrusted document bytes leaving with the job.
       manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
+      // ADR-0006 — the schedule pool, same rule: scheduleChunks counts the untrusted
+      // schedule BYTES leaving with the job.
+      schedules: 2, scheduleChunks: 3, scheduleRows: 7, schedulePreviews: 8,
     });
 
     expect(await counts("JOB-PURGE", "u-purge")).toEqual({
       jobs: 0, subs: 0, pdfs: 0, reqs: 0, dailyReqs: 0, materials: 0,
+      weeklyReportInputs: 0,
       shipments: 0, receiptEvents: 0,
       timeEntries: 0, tasks: 0, inspections: 0, checklists: 0, equipLoc: 0,
       manifests: 0, manifestChunks: 0, manifestRows: 0, manifestPreviews: 0,
+      schedules: 0, scheduleChunks: 0, scheduleRows: 0, schedulePreviews: 0,
     });
     // The OTHER job keeps every one of them — the cascade is job-scoped, not a sweep.
     expect(await counts("JOB-KEEP", "u-keep")).toEqual({
       jobs: 1, subs: 1, pdfs: 1, reqs: 1, dailyReqs: 2, materials: 1,
+      weeklyReportInputs: 7,
       shipments: 2, receiptEvents: 3,
       timeEntries: 1, tasks: 1, inspections: 1, checklists: 1, equipLoc: 1,
       manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
+      schedules: 2, scheduleChunks: 3, scheduleRows: 7, schedulePreviews: 8,
     });
     const audit = await env.DB
       .prepare("SELECT action, target_username FROM audit_log WHERE action='purge-job'")
@@ -214,7 +283,7 @@ describe("POST /api/internal/admin/purge-job", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       ok: true, found: false, job_deleted: 0, submissions: 0, pdfChunks: 0, pdfRequests: 0,
-      requirements: 0, expectedMaterials: 0,
+      requirements: 0, expectedMaterials: 0, weeklyReportInputs: 0,
     });
   });
 

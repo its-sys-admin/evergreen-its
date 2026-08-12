@@ -94,7 +94,9 @@ commit is safe to repeat. Nothing is lost.
 
 - `manifest_transient` — Box or the Worker had a blip. Wait two cycles.
 - `manifest_box_root_unresolved` — the Box mirror-tree root is not configured
-  (`safety_reports.box.portal_root_folder_id`). The row is deliberately left unflagged so
+  (`safety_reports.box.portal_root_folder_id` — manifests stay under the SAFETY root; the
+  per-job folder keys off the job's PROJECT NAME joined into the pending payload, falling
+  back to the raw job_id). The row is deliberately left unflagged so
   it files itself the moment that is set. **Escalate** if you do not know the value.
 
 ## Symptom 3 — "The screener flagged an upload" (MALICIOUS refuses; active content imports with a warning)

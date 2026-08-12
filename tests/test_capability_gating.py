@@ -125,6 +125,18 @@ GATED_SCRIPTS: list[tuple[str, list[str]]] = [
          "anthropic", "anthropic_client"],
     ),
     (
+        # wpr_data (0067) assembles the CLIENT-FACING Weekly Production Report's data. It reads
+        # the send-free Worker aggregate and Box, and builds the narrative sections BY RULE from
+        # text the field already typed — the office's own words, reordered, never a model's.
+        # Forbidding the LLM imports HERE is what makes that structural rather than conventional:
+        # the client-facing document cannot acquire a generated narrative without this list
+        # changing in a reviewed diff. `ollama_client` joins the list because a LOCAL model is
+        # still a model — the estimate lane's Tier-2 precedent means it is a reachable import.
+        "progress_reports/wpr_data.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client"],
+    ),
+    (
         # fieldops_sync (P2.5 Slice 5) is the D1→Smartsheet job up-sync daemon: it pulls
         # dirty portal-created jobs and mirrors each UP into BOTH Active-Jobs sheets. SEND-FREE
         # + AI-FREE — the Smartsheet WRITE is the intended SoR-mirror capability, NOT a customer
@@ -148,6 +160,31 @@ GATED_SCRIPTS: list[tuple[str, list[str]]] = [
         "field_ops/manifest_poll.py",
         ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
          "anthropic", "anthropic_client"],
+    ),
+    (
+        # Schedule lane (ADR-0006) — parent-side OCR entry: hands untrusted schedule-PDF
+        # bytes to the KILLABLE sandbox child (Quartz render + rotation ladder + Apple
+        # Vision, all in-child) and shape-validates the JSON that comes back. LOCAL
+        # Vision only — the lane is cloud-AI-free by ADR decision 3, and this entry is
+        # the tripwire that keeps it that way.
+        "field_ops/schedule_ocr.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client"],
+    ),
+    (
+        # Schedule lane — PURE word-geometry → row reconstruction (no I/O at all). Gated
+        # so a future convenience import (an HTTP fetch, an LLM "column guesser") fails
+        # loudly here instead of riding a refactor in silently.
+        "field_ops/schedule_geometry.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client", "requests", "urllib"],
+    ),
+    (
+        # Schedule lane — PURE semantic extraction over reconstructed rows (dates,
+        # durations, percents, sections; flags-never-raises). Same rationale.
+        "field_ops/schedule_parse.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client", "requests", "urllib"],
     ),
     (
         # Track 6 job archive. Pure relocation of Smartsheet/Box folders — no AI, no send path.

@@ -159,7 +159,7 @@ export interface JobRoutingBlock {
  *
  *  `requested` and `in_progress` mean the Mac-side pass owns the row; `partial` means SOME
  *  containers moved and the rest are retryable; `failed` means none did. `partial` is deliberately
- *  distinct from `failed` because the operator's repair differs between "4 of 6 moved" and
+ *  distinct from `failed` because the operator's repair differs between "4 of 7 moved" and
  *  "nothing happened". */
 export type ArchiveState =
   | "none" | "requested" | "in_progress" | "complete" | "partial" | "failed";
@@ -717,4 +717,110 @@ export interface ManifestCommitResponse {
    *  never silently rewritten. */
   skipped_locked: { source_row_index: number; line_id: number; status: string }[];
   committed_through_row: number;
+}
+
+// ─── Job-schedule import (ADR-0006) ──────────────────────────────────────────────────────────
+//
+// The office uploads a project-schedule PDF (Smartsheet Gantt export); the Mac daemon renders +
+// OCRs it into a REVIEWABLE task grid plus a PROPOSED column map, and the validate screen
+// disposes. These are the read shapes that surface carries. Request/body shapes live in
+// src/lib/fieldops_schedules.ts per the scope rule.
+
+/** `job_schedules.status` (migration 0066 CHECK). `parsed` is the only state the validate screen
+ *  can act on; `committing` means a paged commit is mid-flight; `committed` means THIS upload is
+ *  the job's governing schedule (at most one per job — idx_job_schedules_one_committed);
+ *  `superseded` means a later revision's commit displaced it (the job's revision history). */
+export type ScheduleStatus =
+  | "pending"
+  | "claimed"
+  | "refused"
+  | "parsed"
+  | "committing"
+  | "committed"
+  | "superseded"
+  | "discarded";
+
+/** Proposed-row kind (0066 CHECK). `section` rows are the phase headers the Gantt export nests
+ *  tasks under — LNTP Work / Deliveries / Civil / Mechanical / Electrical / … — and are what the
+ *  committed task list stores as each task's `section`. */
+export type ScheduleRowKind = "header" | "data" | "continuation" | "section" | "meta";
+
+/** One schedule upload in the per-job list. Never carries the hmac and never the document
+ *  bytes. Discarded rows are excluded server-side; superseded rows ARE served (revision
+ *  history). */
+export interface ScheduleListRow {
+  id: number;
+  schedule_uuid: string;
+  job_id: string;
+  filename: string;
+  declared_mime: string;
+  size_bytes: number;
+  status: ScheduleStatus;
+  /** Machine reason on a refusal (e.g. `screen:malicious:L3:…`, `ocr_failed`). Never bytes. */
+  detail: string | null;
+  /** `schedule_parse` document profile — gantt_export / grid_export / … */
+  profile: string | null;
+  row_count: number | null;
+  committed_through_row: number;
+  uploaded_by: string;
+  box_file_id: string | null;
+  created_at: number;
+  parsed_at: number | null;
+  committed_at: number | null;
+  superseded_at: number | null;
+}
+
+/** GET /api/fieldops/schedules?job_id= */
+export interface ScheduleListResponse {
+  schedules: ScheduleListRow[];
+}
+
+/** The PROPOSED concept→column mapping for the OCR-reconstructed grid. `mapping` is concept →
+ *  cell index (concepts: task_name / duration / start_date / finish_date / percent_done /
+ *  predecessors); `labels` names columns the header alone cannot distinguish. JSON object keys
+ *  are strings. */
+export interface ScheduleColumnMap {
+  mapping: Record<string, number>;
+  labels: Record<string, string>;
+}
+
+/** GET /api/fieldops/schedules/:id — the header the validate screen renders its evidence from. */
+export interface ScheduleDetailResponse {
+  schedule: ScheduleListRow & {
+    column_map_json: string | null;
+    header_meta_json: string | null;
+    /** The parser's evidence + consistency flags, newline-joined — including the
+     *  plausibility warnings (implausible year, finish-before-start) that point the human
+     *  at likely OCR digit misreads, which arrive at confidence 1.0 and are otherwise
+     *  invisible. */
+    parse_notes: string | null;
+    resolutions_json: string | null;
+  };
+  preview_pages: number[];
+}
+
+/** One row of the proposed grid, stored VERBATIM. `cells_json` is a JSON array of the proposed
+ *  cells; nothing is pre-collapsed, so a duplicated task name within a section survives to get
+ *  a per-row human decision at reconcile. */
+export interface ScheduleGridRow {
+  row_index: number;
+  source_page: string | null;
+  kind: ScheduleRowKind;
+  cells_json: string;
+  /** Comma-joined consistency flags — `implausible_year`, `finish_before_start`,
+   *  `percent_out_of_range`, `duration_span_mismatch`. '' when clean. */
+  flags: string | null;
+}
+
+/** GET /api/fieldops/schedules/:id/rows?after=&limit= — cursor is `row_index`. */
+export interface ScheduleRowsResponse {
+  rows: ScheduleGridRow[];
+}
+
+/** GET /api/fieldops/schedules/:id/preview/:page — a rendered source page, base64 PNG. The ONLY
+ *  view a browser gets of the source document; the original bytes never leave the Mac-ward
+ *  tier. */
+export interface SchedulePreviewResponse {
+  page: number;
+  png_b64: string;
 }
