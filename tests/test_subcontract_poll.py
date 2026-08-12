@@ -289,7 +289,17 @@ def test_happy_path_verifies_files_and_receipts_last(_patch):
     _patch["render"].assert_called_once()
     _patch["log_append"].assert_called_once()
     _patch["review_add"].assert_called_once()
-    _patch["attach"].assert_called_once()
+    # The inline attach lands on BOTH the ledger row (2026-08-12 parity) and the
+    # review row; the per-job mirror's copy rides the (mocked) helper.
+    assert _patch["attach"].call_count == 2
+    ledger_call, review_call = _patch["attach"].call_args_list
+    assert ledger_call.kwargs.get("sheet_id") == sheet_ids.SHEET_SUBCONTRACT_LOG
+    assert review_call.args[0] == 321 and "sheet_id" not in review_call.kwargs
+    # Both surfaces carry the SAME three package files.
+    assert [n for n, _ in ledger_call.args[1]] == [n for n, _ in review_call.args[1]]
+    _patch["perjob"].assert_called_once()
+    assert [n for n, _ in _patch["perjob"].call_args.kwargs["files"]] == \
+        [n for n, _ in review_call.args[1]]
     # The receipt is LAST and carries the structural Box file id (the .docx id).
     _patch["mark_filed"].assert_called_once()
     _, mark_kwargs = _patch["mark_filed"].call_args
@@ -517,7 +527,11 @@ def test_transient_box_failure_leaves_queued_and_never_marks(_patch):
 
 def test_crash_retry_is_idempotent(_patch):
     """A re-pulled row whose Subcontract_Log + review rows already exist (a lost receipt)
-    re-uploads a byte-identical version and ONLY re-posts the receipt."""
+    re-uploads a byte-identical version and ONLY re-posts the receipt — but the inline
+    attaches STILL run against ALL THREE existing rows (every-service self-heal,
+    adversarial review 2026-08-12: the review-row attach used to be fresh-creation-only,
+    so a crash between add_sc_review_row and the attach left the approver's surface
+    permanently missing its files)."""
     _patch["log_find"].return_value = {
         "_row_id": 1, subcontract_log.COL_NOTES: subcontract_log.notes_for_filed_row(42),
     }
@@ -530,6 +544,11 @@ def test_crash_retry_is_idempotent(_patch):
     _patch["log_append"].assert_not_called()
     _patch["review_add"].assert_not_called()
     _patch["mark_filed"].assert_called_once()
+    # Self-heal: ledger row 1 (sheet_id kwarg) AND the existing review row 321 both re-attach.
+    assert _patch["attach"].call_count == 2
+    ledger_call, review_call = _patch["attach"].call_args_list
+    assert ledger_call.args[0] == 1 and "sheet_id" in ledger_call.kwargs
+    assert review_call.args[0] == 321
 
 
 def test_unresolved_box_root_leaves_queued(_patch):
@@ -835,11 +854,15 @@ def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
         "subcontracts.subcontract_log.find_row_by_sc_number", return_value=None
     )
     append = mocker.patch(
-        "subcontracts.subcontract_log.append_filed_row", return_value=1
+        "subcontracts.subcontract_log.append_filed_row", return_value=91
     )
+    attach = mocker.patch("subcontracts.subcontract_poll._attach_files_best_effort")
     row_kwargs = {"sc_number": "2026.001.2.0.0", "job_project": "2026.001 — Sunrise Solar"}
+    files = [("a.docx", b"D"), ("b.docx", b"E"), ("c.xlsx", b"X")]
 
-    subcontract_poll._append_perjob_row_best_effort("Sunrise Solar", row_kwargs, "corr-1")
+    subcontract_poll._append_perjob_row_best_effort(
+        "Sunrise Solar", row_kwargs, "corr-1", files=files
+    )
 
     ensure.assert_called_once_with(
         sheet_ids.FOLDER_SC_JOBS,
@@ -852,11 +875,15 @@ def test_perjob_helper_ensures_and_appends_to_target_sheet(mocker):
     )
     find.assert_called_once_with("2026.001.2.0.0", sheet_id=555)
     append.assert_called_once_with(sheet_id=555, **row_kwargs)
+    # The fresh per-job row carries the inline package files (2026-08-12 parity).
+    attach.assert_called_once_with(91, files, "corr-1", sheet_id=555)
 
 
 def test_perjob_helper_is_idempotent_against_target_sheet(mocker):
     """A crash between the flat append and the mirror re-runs cleanly: the SC number
-    already present in the TARGET sheet suppresses the duplicate append."""
+    already present in the TARGET sheet suppresses the duplicate append — but the
+    inline attaches STILL run against the existing row (every-service self-heal;
+    deterministic filenames replace, never duplicate)."""
     mocker.patch(
         "subcontracts.subcontract_poll.job_sheet.ensure_job_sheet", return_value=555
     )
@@ -865,12 +892,15 @@ def test_perjob_helper_is_idempotent_against_target_sheet(mocker):
         return_value={"_row_id": 1},
     )
     append = mocker.patch("subcontracts.subcontract_log.append_filed_row")
+    attach = mocker.patch("subcontracts.subcontract_poll._attach_files_best_effort")
+    files = [("a.docx", b"D")]
 
     subcontract_poll._append_perjob_row_best_effort(
-        "Sunrise Solar", {"sc_number": "2026.001.2.0.0"}, "corr-1"
+        "Sunrise Solar", {"sc_number": "2026.001.2.0.0"}, "corr-1", files=files
     )
 
     append.assert_not_called()
+    attach.assert_called_once_with(1, files, "corr-1", sheet_id=555)
 
 
 def test_perjob_helper_fences_generic_exception(mocker):
@@ -883,7 +913,8 @@ def test_perjob_helper_fences_generic_exception(mocker):
     log = mocker.patch("subcontracts.subcontract_poll.error_log.log")
 
     subcontract_poll._append_perjob_row_best_effort(
-        "Sunrise Solar", {"sc_number": "2026.001.2.0.0"}, "corr-1"
+        "Sunrise Solar", {"sc_number": "2026.001.2.0.0"}, "corr-1",
+        files=[("a.docx", b"D")],
     )  # must not raise
 
     codes = [kw.get("error_code") for _, kw in log.call_args_list]
@@ -939,3 +970,26 @@ def test_hmac_fence_flags_even_when_the_ticket_write_fails(_patch):
     codes = _logged_codes(_patch)
     assert "subcontract_hmac_failure" in codes or "sc_hmac_failure" in codes
     assert "review_queue_ticket_failed" in codes
+
+
+def test_sc_box_resolver_reads_the_lanes_own_root(mocker):
+    """The 2026-08-12 split: the resolver reads subcontract_naming.CFG_BOX_PORTAL_ROOT
+    under Workstream='subcontracts' (NOT the shared safety root) and files DIRECTLY in
+    the per-job folder — no intermediate 'Subcontracts' level survives."""
+    from subcontracts import subcontract_naming
+
+    read = mocker.patch(
+        "subcontracts.subcontract_poll._read_str_setting", return_value="root-sc"
+    )
+    ensure = mocker.patch(
+        "subcontracts.subcontract_poll.box_client.get_or_create_folder",
+        return_value="job-9",
+    )
+
+    assert subcontract_poll._resolve_subcontract_box_folder("Sunrise Solar") == "job-9"
+
+    read.assert_called_once_with(
+        subcontract_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=subcontract_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
+    )
+    ensure.assert_called_once_with("root-sc", "Sunrise Solar")
