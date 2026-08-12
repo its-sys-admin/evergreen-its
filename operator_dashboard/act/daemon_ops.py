@@ -84,6 +84,25 @@ _DAEMONS: list[IntervalDaemon] = [
     IntervalDaemon("org.solutionsmith.its.rfq-send", "po_materials.rfq_send.poll_interval_seconds", "po_materials", 900),
     IntervalDaemon("org.solutionsmith.its.manifest-poll", "field_ops.manifest_poll.poll_interval_seconds", "field_ops", 120),
     IntervalDaemon("org.solutionsmith.its.schedule-poll", "field_ops.schedule_poll.poll_interval_seconds", "field_ops", 120),
+    # DELIBERATELY ABSENT — org.solutionsmith.its.picklist-sync (DASH-11).
+    #
+    # Every daemon above resolves its cadence from an ITS_Config
+    # `*.poll_interval_seconds` row, which is what makes `edit_interval` a plain
+    # Class-B edit: write the row, reinstall the plist. picklist-sync has no such
+    # row. Its hourly cadence is a literal `<integer>3600</integer>` in
+    # `scripts/launchd/org.solutionsmith.its.picklist-sync.plist`, and it is
+    # correspondingly absent from install.sh's `poll_interval_config_key` table —
+    # so the two registries AGREE, and the parity test above passes. This is a
+    # coverage boundary, not drift.
+    #
+    # Making it retunable is therefore not a one-line allowlist add: it needs a new
+    # ITS_Config row, the install.sh table entry, and the plist switched to the
+    # config-driven form. Until someone wants that, the honest answer to "can the
+    # dashboard change daemon run intervals?" is "yes, for the fifteen above; the
+    # picklist sync is hourly by plist literal and is retuned by editing the plist."
+    # `test_picklist_sync_interval_is_deliberately_not_retunable` pins BOTH halves,
+    # so if the plist ever becomes config-driven this exclusion red-lights instead
+    # of quietly becoming stale.
 ]
 INTERVAL_DAEMONS: dict[str, IntervalDaemon] = {d.label: d for d in _DAEMONS}
 
