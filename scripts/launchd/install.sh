@@ -8,7 +8,7 @@
 # installed copies have concrete values.
 #
 # __POLL_INTERVAL_SECONDS__ (weekly-send, portal-poll, compile-now-poll, progress-send,
-# fieldops-sync, po-poll, po-send, subcontract-poll, subcontract-send, estimate-poll, rfq-poll, rfq-send, manifest-poll): these plists carry the placeholder in <integer>StartInterval</integer>.
+# fieldops-sync, po-poll, po-send, subcontract-poll, subcontract-send, estimate-poll, rfq-poll, rfq-send, manifest-poll, schedule-poll): these plists carry the placeholder in <integer>StartInterval</integer>.
 # `load`/`dry-run` resolve it from the optional [interval] arg, else a per-daemon default
 # (900 / 60 / 90 / 900 / 90 / 90 / 900 / 120 / 900 / 120 / 120 / 900 respectively, matching the daemon's ITS_Config poll-interval row
 # default — safety_reports.weekly_send / safety_reports.portal_poll /
@@ -51,7 +51,7 @@ usage: $0 {load|unload|status|dry-run} [plist] [interval]
   fieldops-sync → default 90, po-poll → default 90, po-send → default 900,
   subcontract-poll → default 120, subcontract-send → default 900,
   estimate-poll → default 120, rfq-poll → default 120, rfq-send → default 900,
-  manifest-poll → default 120).
+  manifest-poll → default 120, schedule-poll → default 120).
 EOF
     exit 1
 }
@@ -78,6 +78,7 @@ poll_interval_config_key() {
         org.solutionsmith.its.subcontract-send) echo "subcontracts.subcontract_send.poll_interval_seconds" ;;
         org.solutionsmith.its.estimate-poll)    echo "po_materials.estimate_poll.poll_interval_seconds" ;;
         org.solutionsmith.its.manifest-poll)    echo "field_ops.manifest_poll.poll_interval_seconds" ;;
+        org.solutionsmith.its.schedule-poll)    echo "field_ops.schedule_poll.poll_interval_seconds" ;;
         org.solutionsmith.its.rfq-poll)         echo "po_materials.rfq_poll.poll_interval_seconds" ;;
         org.solutionsmith.its.rfq-send)         echo "po_materials.rfq_send.poll_interval_seconds" ;;
         *) echo "" ;;
@@ -96,6 +97,7 @@ poll_interval_default() {
         org.solutionsmith.its.subcontract-send) echo "900" ;;
         org.solutionsmith.its.estimate-poll)    echo "120" ;;
         org.solutionsmith.its.manifest-poll)    echo "120" ;;
+        org.solutionsmith.its.schedule-poll)    echo "120" ;;
         org.solutionsmith.its.rfq-poll)         echo "120" ;;
         org.solutionsmith.its.rfq-send)         echo "900" ;;
         *) echo "" ;;
