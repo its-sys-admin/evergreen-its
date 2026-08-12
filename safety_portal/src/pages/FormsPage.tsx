@@ -376,7 +376,7 @@ export function FormsPage({
             )}
 
             <div className="form-editor__split">
-              <div className="form-editor__build-pane">
+              <div>
                 <FormEditor
                   def={draft}
                   onChange={setDraft}
@@ -428,7 +428,7 @@ export function FormsPage({
                   ))}
                 </ul>
               </aside>
-              <section className="forms-mgr__detail">
+              <section>
                 {viewDef ? (
                   <>
                     <header className="forms-mgr__meta">
@@ -451,7 +451,7 @@ export function FormsPage({
                         <button type="button" className="btn btn--retire" disabled={busy} onClick={() => void onRetire(viewDef.form_code)}>
                           Retire
                         </button>
-                        <label className="forms-mgr__recat" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                           <span className="muted">Workflow</span>
                           <select
                             className="field__input"

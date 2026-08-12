@@ -188,7 +188,7 @@ export function FormRequestPage({ onBack }: { onBack: () => void }) {
 
         {filed && filed.length > 0 ? (
           <>
-            <table className="filed-table">
+            <table>
               <thead>
                 <tr>
                   <th aria-label="select" />

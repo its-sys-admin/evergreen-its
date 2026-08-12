@@ -309,19 +309,19 @@ export function EquipmentDetailView({
             <table className="dash-table">
               <thead>
                 <tr>
-                  <th className="dash-header">Recorded</th>
-                  <th className="dash-header">Label / Job</th>
-                  <th className="dash-header">Lat</th>
-                  <th className="dash-header">Lon</th>
+                  <th>Recorded</th>
+                  <th>Label / Job</th>
+                  <th>Lat</th>
+                  <th>Lon</th>
                 </tr>
               </thead>
               <tbody>
                 {unit.locations.map((loc) => (
                   <tr key={loc.recorded_at + ":" + loc.id} className="dash-row">
-                    <td className="dash-cell">{fmtDateTime(loc.recorded_at)}</td>
-                    <td className="dash-cell">{loc.label ?? (loc.job_id ? `Job ${loc.job_id}` : "—")}</td>
-                    <td className="dash-cell">{loc.lat != null ? fmtNumber(loc.lat, 4) : "—"}</td>
-                    <td className="dash-cell">{loc.lon != null ? fmtNumber(loc.lon, 4) : "—"}</td>
+                    <td>{fmtDateTime(loc.recorded_at)}</td>
+                    <td>{loc.label ?? (loc.job_id ? `Job ${loc.job_id}` : "—")}</td>
+                    <td>{loc.lat != null ? fmtNumber(loc.lat, 4) : "—"}</td>
+                    <td>{loc.lon != null ? fmtNumber(loc.lon, 4) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -347,17 +347,17 @@ export function EquipmentDetailView({
             <table className="dash-table">
               <thead>
                 <tr>
-                  <th className="dash-header">Form</th>
-                  <th className="dash-header">Version</th>
-                  <th className="dash-header">Performed at</th>
+                  <th>Form</th>
+                  <th>Version</th>
+                  <th>Performed at</th>
                 </tr>
               </thead>
               <tbody>
                 {unit.inspections.map((insp) => (
                   <tr key={insp.uuid} className="dash-row">
-                    <td className="dash-cell">{insp.form_code}</td>
-                    <td className="dash-cell">v{insp.version}</td>
-                    <td className="dash-cell">{fmtDateTime(insp.performed_at)}</td>
+                    <td>{insp.form_code}</td>
+                    <td>v{insp.version}</td>
+                    <td>{fmtDateTime(insp.performed_at)}</td>
                   </tr>
                 ))}
               </tbody>

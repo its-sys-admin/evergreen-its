@@ -118,19 +118,19 @@ export function PersonnelDetailView({
             <table className="dash-table">
               <thead>
                 <tr>
-                  <th className="dash-header">Job</th>
-                  <th className="dash-header">Work started</th>
-                  <th className="dash-header">Work ended</th>
-                  <th className="dash-header">Hours</th>
+                  <th>Job</th>
+                  <th>Work started</th>
+                  <th>Work ended</th>
+                  <th>Hours</th>
                 </tr>
               </thead>
               <tbody>
                 {person.time_entries.map((e) => (
                   <tr key={e.uuid} className="dash-row">
-                    <td className="dash-cell">{e.project_name ?? e.job_id}</td>
-                    <td className="dash-cell">{fmtDateTime(e.work_started_at)}</td>
-                    <td className="dash-cell">{fmtDateTime(e.work_ended_at)}</td>
-                    <td className="dash-cell">{fmtHours(e.hours)}</td>
+                    <td>{e.project_name ?? e.job_id}</td>
+                    <td>{fmtDateTime(e.work_started_at)}</td>
+                    <td>{fmtDateTime(e.work_ended_at)}</td>
+                    <td>{fmtHours(e.hours)}</td>
                   </tr>
                 ))}
               </tbody>

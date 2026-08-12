@@ -1614,13 +1614,13 @@ export function FieldOpsJobTracker({
             <table className="dash-table dash-table--stack">
               <thead>
                 <tr>
-                  <th className="dash-header">Who</th>
-                  <th className="dash-header">Hours</th>
-                  <th className="dash-header">Task</th>
-                  <th className="dash-header">By</th>
-                  <th className="dash-header">Recorded</th>
-                  <th className="dash-header">Notes</th>
-                  {job.time_entries.some((t) => t.can_amend) && <th className="dash-header">Fix</th>}
+                  <th>Who</th>
+                  <th>Hours</th>
+                  <th>Task</th>
+                  <th>By</th>
+                  <th>Recorded</th>
+                  <th>Notes</th>
+                  {job.time_entries.some((t) => t.can_amend) && <th>Fix</th>}
                 </tr>
               </thead>
               <tbody>
@@ -1631,7 +1631,7 @@ export function FieldOpsJobTracker({
                     void is the recovery path); Void hides there (a void of a void is meaningless). */}
                 {job.time_entries.map((t) => (
                   <tr key={t.uuid} className="dash-row" style={t.voided ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
-                    <td className="dash-cell dash-table__name">
+                    <td className="dash-table__name">
                       {t.personnel_name ?? "Job-level"}
                       {t.voided ? (
                         <>
@@ -1645,13 +1645,13 @@ export function FieldOpsJobTracker({
                         </>
                       ) : null}
                     </td>
-                    <td className="dash-cell" data-cell="Hours">{fmtHours(t.hours)}</td>
-                    <td className="dash-cell" data-cell="Task">{t.task_description ?? "—"}</td>
-                    <td className="dash-cell" data-cell="By">{t.recorded_by_name ?? "—"}</td>
-                    <td className="dash-cell" data-cell="Recorded">{fmtDateTime(t.recorded_at)}</td>
-                    <td className="dash-cell" data-cell="Notes">{t.notes ?? ""}</td>
+                    <td data-cell="Hours">{fmtHours(t.hours)}</td>
+                    <td data-cell="Task">{t.task_description ?? "—"}</td>
+                    <td data-cell="By">{t.recorded_by_name ?? "—"}</td>
+                    <td data-cell="Recorded">{fmtDateTime(t.recorded_at)}</td>
+                    <td data-cell="Notes">{t.notes ?? ""}</td>
                     {job.time_entries.some((x) => x.can_amend) && (
-                      <td className="dash-cell" data-cell="Fix" style={{ textDecoration: "none" }}>
+                      <td data-cell="Fix" style={{ textDecoration: "none" }}>
                         {t.can_amend && (
                           <>
                             <button
@@ -1820,17 +1820,17 @@ export function FieldOpsJobTracker({
             <table className="dash-table dash-table--stack">
               <thead>
                 <tr>
-                  <th className="dash-header">Form</th>
-                  <th className="dash-header">Equipment</th>
-                  <th className="dash-header">Performed</th>
+                  <th>Form</th>
+                  <th>Equipment</th>
+                  <th>Performed</th>
                 </tr>
               </thead>
               <tbody>
                 {job.inspections.map((i) => (
                   <tr key={i.uuid} className="dash-row">
-                    <td className="dash-cell">{i.form_code} v{i.version}</td>
-                    <td className="dash-cell" data-cell="Equipment">{i.equipment_name ?? "—"}</td>
-                    <td className="dash-cell" data-cell="Performed">{fmtDateTime(i.performed_at)}</td>
+                    <td>{i.form_code} v{i.version}</td>
+                    <td data-cell="Equipment">{i.equipment_name ?? "—"}</td>
+                    <td data-cell="Performed">{fmtDateTime(i.performed_at)}</td>
                   </tr>
                 ))}
               </tbody>
