@@ -265,38 +265,65 @@ def test_concurrent_writers_both_writes_land(tmp_path: Path) -> None:
 
 
 def test_concurrent_writers_lock_serializes_overlap(tmp_path: Path) -> None:
-    """Second writer waits for first to exit the lock; both observe the lock contract.
+    """Two writers never hold the path lock at the same time.
 
-    Asserts the property by timing: with the first writer holding the lock
-    for ~30ms inside its body, the second writer's start-to-finish must
-    span at least that hold time (it was forced to wait).
+    Asserts MUTUAL EXCLUSION directly — a shared occupancy counter that must never
+    exceed 1 inside the critical section — rather than inferring it from wall-clock
+    end times.
+
+    The previous form staggered the second thread by 1ms and asserted
+    ``second_end >= first_end``. Both halves were load-sensitive: on a loaded machine
+    the 1ms stagger can invert, so the *second* thread takes the lock first, finishes
+    immediately, and its end time legitimately precedes the first's — a green lock
+    reported as a red test. Here the barrier makes the contended ordering
+    deterministic instead of hoped-for: the contender does not even attempt the lock
+    until the holder is provably inside it.
+
+    The hold stays at 30ms against `state_io`'s 5×50ms (~250ms) bounded retry budget,
+    so the contender is guaranteed to retry-and-win rather than raise
+    StateLockTimeoutError.
     """
     state_path = tmp_path / "state.json"
-    hold_seconds = 0.03
-    start = time.monotonic()
-    timings: dict[str, float] = {}
+    holder_is_inside = threading.Event()
+    occupancy_lock = threading.Lock()
+    occupancy = 0
+    max_occupancy = 0
+    errors: list[BaseException] = []
 
-    def first() -> None:
-        with state_io.with_path_lock(state_path):
-            time.sleep(hold_seconds)
-            state_io.atomic_write_json(state_path, {"first": True})
-        timings["first_end"] = time.monotonic() - start
+    def writer(name: str, is_holder: bool) -> None:
+        nonlocal occupancy, max_occupancy
+        try:
+            if not is_holder:
+                # Only attempt the lock once the holder is provably inside it.
+                assert holder_is_inside.wait(timeout=5.0), "holder never entered the lock"
+            with state_io.with_path_lock(state_path):
+                with occupancy_lock:
+                    occupancy += 1
+                    max_occupancy = max(max_occupancy, occupancy)
+                if is_holder:
+                    holder_is_inside.set()
+                    # Hold the lock across the contender's retry window.
+                    time.sleep(0.03)
+                state_io.atomic_write_json(state_path, {name: True})
+                with occupancy_lock:
+                    occupancy -= 1
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the main thread below
+            errors.append(exc)
 
-    def second() -> None:
-        # Tiny stagger so first reliably enters the lock first.
-        time.sleep(0.001)
-        with state_io.with_path_lock(state_path):
-            state_io.atomic_write_json(state_path, {"second": True})
-        timings["second_end"] = time.monotonic() - start
+    threads = [
+        threading.Thread(target=writer, args=("first", True)),
+        threading.Thread(target=writer, args=("second", False)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), "a writer thread never finished"
 
-    t1 = threading.Thread(target=first)
-    t2 = threading.Thread(target=second)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
-
-    # Second can only finish AFTER first releases (the lock contract).
-    assert timings["second_end"] >= timings["first_end"]
-    # Final file is whichever finished last — proves both writes ran.
+    assert not errors, f"writer raised: {errors!r}"
+    # THE lock contract: the critical section was never occupied by both writers.
+    assert max_occupancy == 1, f"lock allowed {max_occupancy} concurrent writers"
+    assert occupancy == 0
+    # Both writes ran; the survivor is whichever released last.
     assert state_path.exists()
+    assert json.loads(state_path.read_text()) in ({"first": True}, {"second": True})
