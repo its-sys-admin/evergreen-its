@@ -1771,3 +1771,262 @@ button.sched-task__prog:hover {
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--c-line);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   11 — JOB DETAIL + MATERIALS (2026-08 design pass, part two)
+   ═══════════════════════════════════════════════════════════════════════════
+   The Job Tracker's single-job view stacks NINETEEN sections in one column inside the
+   920px prose well, with the ARCHIVE danger-zone sitting ninth — above Client, Crew and
+   Tasks. It is not broken; it is undifferentiated, and the destructive control is in the
+   middle of the page. The materials surfaces have the same shape plus three classes that
+   were never defined at all.
+
+   Same devices as the schedule pass, same tokens, no new colour and no new face. */
+
+/* ── Classes the materials surfaces asked for and never got ──────────────── */
+
+/* Wraps EVERY material line on the Materials page. Undefined, so a 90-line BOM rendered
+   as one undifferentiated wall of text. It is a card: give it the card's surface. */
+.dash-card {
+  background: var(--c-white);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+/* Every SUCCESS message in the lane — including the confirmation of an irreversible
+   ledger write — resolved to nothing. It is the counterpart of .login__error. */
+.dash__msg {
+  color: var(--c-brg);
+  font-weight: 600;
+  margin: var(--space-2) 0;
+}
+
+/* The shared editor's two date labels. Undefined, so label and input ran together. */
+.field__inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-brg);
+}
+
+/* A task row is a flex line with NO wrap (global.css), so on a phone its description,
+   due date and two selects are forced onto one line and overflow. Wrapping is the whole
+   fix and it costs nothing on a wide screen. */
+.dash-tasklist li {
+  flex-wrap: wrap;
+}
+
+/* ── The job-detail hero ──────────────────────────────────────────────────
+   Answers "what IS this job" before any control: who it is for, where it is, and the
+   counts that say whether it is healthy. Deliberately NOT .dash-progress — the detail
+   view asserts that class is absent, and a job has no single completion number anyway. */
+.job-hero {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--gap);
+}
+
+.job-hero__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job-hero__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.job-hero__figure {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xl);
+  line-height: 1;
+  color: var(--c-brg);
+}
+
+.job-hero__figure--alert {
+  color: var(--c-danger);
+}
+
+.job-hero__label {
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+}
+
+/* ── The section rail ─────────────────────────────────────────────────────
+   Nineteen sections need an index. A horizontal chip scroller at EVERY width — the
+   weekly report's rail becomes a sticky column on a laptop because it sits beside a
+   form; this one sits above a single column of cards, where a vertical rail would have
+   nothing to align to. */
+.job-rail {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) 0;
+  background: var(--c-surface);
+  overflow-x: auto;
+  scrollbar-width: none;
+  list-style: none;
+}
+
+.job-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.job-rail__link {
+  flex: 0 0 auto;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  text-decoration: none;
+  padding: 9px 12px;
+  min-height: 44px;
+  line-height: 26px;
+  white-space: nowrap;
+  border: 1px solid var(--c-line);
+  border-radius: 999px;
+  background: var(--c-white);
+}
+
+.job-rail__link:hover {
+  color: var(--c-brg);
+}
+
+.job-rail__link[aria-current="true"] {
+  color: var(--c-brg);
+  border-color: var(--c-brg);
+}
+
+/* The rail is sticky, so an anchored heading would otherwise land underneath it. */
+.dash-detail__h2[id] {
+  scroll-margin-top: 76px;
+}
+
+/* ── Danger zone ──────────────────────────────────────────────────────────
+   Archiving a job relocates seven containers across two systems. That control rendered
+   NINTH of nineteen, between the routing form and the client card. It moves to the end
+   and says what it is — the one place on this page where the frame is red. */
+.job-danger {
+  margin-top: var(--space-8);
+  border-top: 2px solid var(--c-line);
+  padding-top: var(--space-4);
+}
+
+.job-danger__label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-danger);
+  margin: 0 0 var(--space-2);
+}
+
+/* ── Materials: the outstanding rollup ────────────────────────────────────
+   The lane tracked expected and received as two adjacent numbers and never subtracted
+   them, so "what is still owed to this job" was a question the page could not answer
+   even though every field needed to compute it was already on the wire. */
+.mat-rollup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  padding: var(--space-4);
+  margin-bottom: var(--gap);
+  background: var(--c-white);
+  border: 1px solid var(--c-line);
+  border-left: 3px solid var(--c-brg);
+  border-radius: var(--radius);
+}
+
+.mat-rollup__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mat-rollup__figure {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xl);
+  line-height: 1;
+  color: var(--c-brg);
+}
+
+.mat-rollup__figure--short {
+  color: var(--c-danger);
+}
+
+.mat-rollup__label {
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+}
+
+/* The per-line outstanding chip. Danger ink for short, quiet for settled — the same
+   rule as a late task: red is reserved for "someone must do something". */
+.mat-owed {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--c-danger);
+  color: var(--c-danger);
+  background: var(--c-white);
+  white-space: nowrap;
+}
+
+.mat-owed--settled {
+  border-color: var(--c-line);
+  color: var(--c-muted);
+}
+
+/* An <input size={10}> carries an INTRINSIC width in characters that ignores the viewport,
+   and a flex item's default min-width:auto refuses to shrink below it — so the materials
+   editor and mark rows pushed past the screen edge on a phone (measured: the page scrolled
+   horizontally at 390px). Both rules are needed: max-width alone cannot beat min-width:auto
+   inside a flex row. This is the kit's own .dash-row, so the fix lands wherever that row is
+   used rather than only where it was noticed. */
+div.dash-row input,
+div.dash-row select,
+form.dash-row input,
+form.dash-row select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* .dash-card__head is `display:flex; justify-content:space-between` with NO flex-wrap
+   (global.css), so a material line whose head carries a status pill, a title, a problem
+   badge and a "Resolve problem" button had nowhere to put the overflow and pushed the
+   page sideways at 390px. Wrapping is the entire fix and costs nothing wider. */
+.dash-card__head {
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
