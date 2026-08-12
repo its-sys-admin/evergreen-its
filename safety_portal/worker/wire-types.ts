@@ -1022,7 +1022,13 @@ export interface WeeklyReportOffice {
   safety: Record<string, WeeklyReportSafetyCount>;
   weather: { inclement_dates: string[]; weather_days_to_date: number };
   labor: { rows: WeeklyReportLaborRow[] };
-  narrative: { critical_items: string; upcoming_activities: string; hazard_topics: string[] };
+  /** THREE-STATE, like `photos`: null = never touched (the report uses its derived seed),
+   *  "" = deliberately cleared, text = the office's words. */
+  narrative: {
+    critical_items: string | null;
+    upcoming_activities: string | null;
+    hazard_topics: string[];
+  };
   pending: { rfis: string; submittals: string; ifc_review: string; change_orders: string };
   /** null = auto-select; [] = explicitly no photos; list = the office's ordered picks. */
   photos: WeeklyReportPhoto[] | null;

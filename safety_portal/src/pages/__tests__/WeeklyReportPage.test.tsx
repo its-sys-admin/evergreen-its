@@ -62,7 +62,7 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
       header: { site_location: "", ess_management: "", mobilization_date: "", subcontractors: [], prepared_by: "" },
       safety: {}, weather: { inclement_dates: [], weather_days_to_date: 7 },
       labor: { rows: [] },
-      narrative: { critical_items: "", upcoming_activities: "", hazard_topics: [] },
+      narrative: { critical_items: null, upcoming_activities: null, hazard_topics: [] },
       pending: { rfis: "", submittals: "", ifc_review: "", change_orders: "" },
       photos: null, saved: false, carried_from: null, updated_by: null, updated_at: null,
     },
@@ -102,7 +102,7 @@ describe("WeeklyReportPage — the narrative seed", () => {
     expect(upcoming.value).not.toContain("Drive rows 19-24");
   });
 
-  it("shows the office's own text once the week is SAVED, including a cleared section", async () => {
+  it("shows the office's own text, including a deliberately cleared section", async () => {
     const p = payload();
     p.office.saved = true;
     p.office.narrative = { critical_items: "", upcoming_activities: "Module install.", hazard_topics: [] };
@@ -145,6 +145,26 @@ describe("WeeklyReportPage — the schedule binding", () => {
     ]));
     const critical = (screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value;
     expect(critical.split("\n")[0]).toContain("Contract milestone behind schedule — Mechanical completion");
+  });
+});
+
+describe("WeeklyReportPage — narrative touched-ness is per field", () => {
+  it("seeds an UNTOUCHED field even when the row is saved", async () => {
+    const p = payload();
+    p.office.saved = true;  // they saved the OSHA counts and never opened the narrative
+    p.office.narrative = { critical_items: null, upcoming_activities: null, hazard_topics: [] };
+    await renderPage(p);
+    expect((screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value)
+      .toContain("Torque tube: Short");
+  });
+
+  it("keeps one field's text while seeding the other", async () => {
+    const p = payload();
+    p.office.saved = true;
+    p.office.narrative = { critical_items: "Tracker slipped.", upcoming_activities: null, hazard_topics: [] };
+    await renderPage(p);
+    expect((screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value).toBe("Tracker slipped.");
+    expect((screen.getByLabelText(/Upcoming activities/) as HTMLTextAreaElement).value).toBe("Pump trenches");
   });
 });
 

@@ -196,6 +196,10 @@ PROGRESS_GENERATE_CONFIG = generate_core.GenerateConfig(
     # linked from the review row's Notes). Safety binds neither and is byte-identical.
     client_report_provider=_client_report_provider,
     client_report_suffix="WPR",
+    # The internal packet is NOT a WSR — it is this job-week's filed field records. Naming it so
+    # ends the case where one Box week folder held `..._WPR.pdf` beside `..._WSR.pdf` and only
+    # file size told an operator which was the client's document.
+    packet_suffix="FieldRecords",
     # A progress week with no daily reports is HELD for the office to decide rather than
     # emailing a client a hollow document or failing quietly at send time.
     empty_week_hold=True,

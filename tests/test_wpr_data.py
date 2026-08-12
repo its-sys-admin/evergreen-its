@@ -68,7 +68,9 @@ def _payload(**over: object) -> dict:
                        "prepared_by": "", "site_location": ""},
             "safety": {}, "weather": {"inclement_dates": [], "weather_days_to_date": 9},
             "labor": {"rows": []},
-            "narrative": {"critical_items": "", "upcoming_activities": "", "hazard_topics": []},
+            # A fresh week: never touched → None (NOT ""), which is what the Worker returns and
+            # what makes the deterministic seed apply. "" would mean deliberately cleared.
+            "narrative": {"critical_items": None, "upcoming_activities": None, "hazard_topics": []},
             "pending": {}, "photos": None, "saved": False, "carried_from": None,
         },
     }
@@ -109,25 +111,52 @@ def test_saved_office_text_replaces_the_seed(monkeypatch) -> None:
     assert data["hazard_topics"] == ["Heat"]
 
 
-def test_a_saved_empty_section_stays_empty(monkeypatch) -> None:
-    """The office deliberately cleared it. Re-seeding would make clearing impossible — the
-    section would silently refill from the field text on every recompile."""
+def test_a_deliberately_cleared_section_stays_empty(monkeypatch) -> None:
+    """`""` means the office cleared it. Re-seeding would make clearing impossible — the section
+    would silently refill from the field text on every recompile."""
     payload = _payload()
-    payload["office"]["saved"] = True  # narrative already all-empty in the fixture
+    payload["office"]["saved"] = True
+    payload["office"]["narrative"] = {"critical_items": "", "upcoming_activities": "",
+                                      "hazard_topics": []}
     data = _build(monkeypatch, payload)
     assert data["progress"]["critical_items"] == ""
     assert data["progress"]["upcoming_activities"] == ""
 
 
-def test_carried_forward_values_still_get_a_fresh_seed(monkeypatch) -> None:
-    """A carried week is NOT saved: last week's narrative describes last week's job, so the
-    narrative must re-derive from THIS week's field text even though the header carried."""
+def test_an_untouched_section_still_seeds_even_on_a_saved_row(monkeypatch) -> None:
+    """THE REGRESSION THIS FIX EXISTS FOR. The office saved the OSHA counts and never opened the
+    narrative. Under the old ROW-level `saved` flag both sections rendered BLANK on a client's
+    page; the storage now carries per-field touched-ness, so they seed."""
+    payload = _payload()
+    payload["office"]["saved"] = True                      # they saved SOMETHING
+    payload["office"]["safety"] = {"near_miss": {"month": 1, "to_date": 4}}
+    payload["office"]["narrative"] = {"critical_items": None,   # never touched
+                                      "upcoming_activities": None,
+                                      "hazard_topics": []}
+    data = _build(monkeypatch, payload)
+    assert "Racking: Short" in data["progress"]["critical_items"]
+    assert data["progress"]["upcoming_activities"] == "Drive rows 10-20"
+
+
+def test_one_touched_and_one_untouched_are_independent(monkeypatch) -> None:
+    """Per-FIELD, not per-row: writing one section must not blank the other."""
+    payload = _payload()
+    payload["office"]["saved"] = True
+    payload["office"]["narrative"] = {"critical_items": "Tracker delivery slipped.",
+                                      "upcoming_activities": None, "hazard_topics": []}
+    data = _build(monkeypatch, payload)
+    assert data["progress"]["critical_items"] == "Tracker delivery slipped."
+    assert data["progress"]["upcoming_activities"] == "Drive rows 10-20"
+
+
+def test_carried_forward_narrative_is_not_carried(monkeypatch) -> None:
+    """Last week's narrative describes last week's job. The Worker's carry-forward deliberately
+    does NOT bring narrative across — it arrives as None, which seeds from THIS week's text."""
     payload = _payload()
     payload["office"]["saved"] = False
     payload["office"]["carried_from"] = "2026-08-01"
-    payload["office"]["narrative"]["critical_items"] = "LAST WEEK'S TEXT"
+    payload["office"]["narrative"]["critical_items"] = None
     data = _build(monkeypatch, payload)
-    assert "LAST WEEK" not in data["progress"]["critical_items"]
     assert "Mud on the access road." in data["progress"]["critical_items"]
 
 

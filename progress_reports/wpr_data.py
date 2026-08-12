@@ -202,15 +202,18 @@ def _resolve_photos(payload: dict[str, Any], correlation: str) -> list[tuple[str
     return out
 
 
-def _office_or_seed(office_value: Any, saved: bool, seed: str) -> str:
-    """The office's text when this week's row was SAVED, else the deterministic seed.
+def _office_or_seed(office_value: Any, seed: str) -> str:
+    """The office's text when they have written one, else the deterministic seed.
 
-    `saved` is load-bearing: a saved empty string means the office deliberately cleared the
-    section, and re-seeding it would make that impossible. An UNSAVED week (nothing written, or
-    values carried forward from an earlier week) still gets the seed, because carried narrative
-    describes last week's job.
+    THREE-STATE, per FIELD (the shape `photos` already used): `None` = never touched → seed;
+    `""` = deliberately cleared → stays cleared; text → the office's words.
+
+    This used to key off a ROW-level `saved` flag, which meant saving ANY field (the OSHA counts,
+    say) made an untouched Critical Items render BLANK on a client's page. The screen compensated
+    by pre-filling, so correctness depended on a screen behaviour and any other writer of the row
+    lost the narrative silently. The distinction now lives in storage where no writer can drop it.
     """
-    if saved and isinstance(office_value, str):
+    if isinstance(office_value, str):
         return office_value
     return seed
 
@@ -291,9 +294,9 @@ def build(job: ActiveJob, week: SafetyWeek, *, base_url: str, bearer: str,
             # Worker returns schedule: null and the renderer prints its honest empty state.
             "sections": (payload.get("schedule") or {}).get("sections") or [],
             "critical_items": _office_or_seed(
-                o_narrative.get("critical_items"), saved, _assemble_critical_items(payload)),
+                o_narrative.get("critical_items"), _assemble_critical_items(payload)),
             "upcoming_activities": _office_or_seed(
-                o_narrative.get("upcoming_activities"), saved, _assemble_upcoming(payload)),
+                o_narrative.get("upcoming_activities"), _assemble_upcoming(payload)),
         },
         "photos": _resolve_photos(payload, correlation_id),
         "materials": {

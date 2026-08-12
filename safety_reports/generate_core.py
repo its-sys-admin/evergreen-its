@@ -127,6 +127,11 @@ class GenerateConfig:
         Callable[[ActiveJob, safety_week.SafetyWeek], bytes | None] | None
     ) = None
     client_report_suffix: str = "WPR"
+    # The FIELD-RECORDS packet's Box filename suffix. Hardcoded "WSR" until now, so every PROGRESS
+    # packet filed as `<Job>_week of <Sat>_WSR.pdf` — safety's initials on a progress artifact,
+    # the exact class `cover_title` was parameterized to fix and the same pass missed. Default
+    # preserves safety's historical name byte-for-byte (§14: unset = unchanged).
+    packet_suffix: str = "WSR"
     # A week with NO submissions currently writes a PENDING review row with an empty packet link,
     # which the send later HELDs for a missing PDF. When a workstream's artifact is CLIENT-FACING
     # that is too late and too quiet: the office should consciously decide whether a no-activity
@@ -201,11 +206,18 @@ def _its_week_folder_name(week: safety_week.SafetyWeek) -> str:
     return f"ITS Week of {week.start.isoformat()} to {week.end.isoformat()}"
 
 
-def _packet_basename(project_name: str, week: safety_week.SafetyWeek) -> str:
-    """Clean per-(job, week) packet base name: `<Job>_week of <Sat>_WSR` (no version/ext)."""
+def _packet_basename(config: GenerateConfig, project_name: str,
+                    week: safety_week.SafetyWeek) -> str:
+    """Clean per-(job, week) packet base name: `<Job>_week of <Sat>_<suffix>` (no version/ext).
+
+    The suffix is the workstream's (`GenerateConfig.packet_suffix`); safety's default keeps its
+    historical `_WSR`. A workstream that changes it starts a FRESH `_vN` sequence for that week —
+    the append-only probe looks for the new basename and finds nothing — which is harmless (a
+    recompile appends rather than overwrites either way) but means one week can hold a packet
+    under both names if the change lands mid-week."""
     return (
         f"{safety_naming.job_folder_name(project_name)}_"
-        f"{safety_naming.week_label(week.start)}_WSR"
+        f"{safety_naming.week_label(week.start)}_{config.packet_suffix}"
     )
 
 
@@ -659,7 +671,7 @@ def _compile_job_week(
                                         correlation_id)
         folder_id = _ensure_box_week_folder(config, project_name, week, correlation_id)
         packet_name, file_id = _upload_packet(
-            folder_id, _packet_basename(project_name, week), compiled, stamp
+            folder_id, _packet_basename(config, project_name, week), compiled, stamp
         )
         packet_link = f"https://app.box.com/file/{file_id}"
         summary.packets_compiled += 1
