@@ -102,6 +102,14 @@ const SECTIONS: { id: string; label: string }[] = [
  *  what actually renders. */
 function seedNarrative(d: ProductionReportResponse): { critical: string; upcoming: string } {
   const lines: string[] = [];
+  // Behind-schedule tasks lead, worst slip first — the Worker already ordered them. This MUST
+  // match wpr_data._assemble_critical_items: the screen's whole job is to show what the report
+  // will render, so a divergence here would pre-fill text the compile would never have produced.
+  for (const t of d.schedule?.behind ?? []) {
+    const head = t.section ? `${t.section}: ${t.name}` : t.name;
+    const kind = t.is_contract_milestone ? "Contract milestone behind schedule" : "Behind schedule";
+    lines.push(`${kind} — ${head} (due ${t.finish_date}, ${t.percent}% complete)`);
+  }
   for (const inc of d.material_incidents) {
     const head = [inc.material, inc.issue].filter(Boolean).join(": ");
     if (head) lines.push(inc.details ? `${head} — ${inc.details}` : head);
@@ -589,8 +597,38 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
             <p className="wpr-sec__hint">
               {data.schedule === null
                 ? "No schedule is imported for this job, so the report's percent-complete table will say so. Upload and commit a project schedule to fill it."
-                : "Percentages come from the committed project schedule."}
+                : `Percentages come from the committed project schedule — ${data.schedule.task_count} active task(s)` +
+                  (data.schedule.behind.length
+                    ? `, ${data.schedule.behind.length} behind schedule as of ${data.schedule.today} (seeded into Critical Items below).`
+                    : ", none behind schedule.")}
             </p>
+
+            {/* The percent table the report's page 3 renders, shown here because this screen's
+                whole premise is that the office sees what the document will say. Read-only —
+                the numbers are the committed schedule's, marked off on the schedule page. */}
+            {data.schedule !== null && data.schedule.sections.length > 0 && (
+              <table className="wpr-table">
+                <thead>
+                  <tr>
+                    <th>Section</th>
+                    <th>Task</th>
+                    <th>Complete</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.schedule.sections.flatMap((s) =>
+                    s.items.map((it, i) => (
+                      <tr key={`${s.name}-${it.label}-${i}`}>
+                        <td data-cell="Section">{i === 0 ? <strong>{s.name}</strong> : ""}</td>
+                        <td data-cell="Task">{it.label}</td>
+                        <td data-cell="Complete">{it.percent === null ? "—" : `${it.percent}%`}</td>
+                      </tr>
+                    )),
+                  )}
+                </tbody>
+              </table>
+            )}
+
             <div className="wpr-grid">
               <label className="wpr-field wpr-grid__wide">
                 <span className="wpr-field__label">Critical items / delays</span>

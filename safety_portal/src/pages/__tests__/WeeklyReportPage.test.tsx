@@ -113,6 +113,41 @@ describe("WeeklyReportPage — the narrative seed", () => {
   });
 });
 
+describe("WeeklyReportPage — the schedule binding", () => {
+  const withSchedule = (behind: ProductionReportResponse["schedule"] extends null ? never : NonNullable<ProductionReportResponse["schedule"]>["behind"] = []) => {
+    const p = payload();
+    p.schedule = {
+      sections: [{ name: "Mechanical", items: [{ label: "Piles", percent: 95 }] }],
+      behind, today: "2026-08-14", task_count: 1,
+    };
+    return p;
+  };
+
+  it("reports the task count and that nothing is behind", async () => {
+    await renderPage(withSchedule());
+    expect(screen.getByText(/1 active task\(s\), none behind schedule/)).toBeTruthy();
+  });
+
+  it("seeds Critical Items with behind-schedule tasks, ahead of the other sources", async () => {
+    await renderPage(withSchedule([
+      { name: "Piles", section: "Mechanical", finish_date: "2026-07-01", percent: 40, is_contract_milestone: false },
+    ]));
+    const critical = (screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value;
+    // This MUST match wpr_data._assemble_critical_items — the screen shows what the report renders.
+    expect(critical.split("\n")[0]).toBe("Behind schedule — Mechanical: Piles (due 2026-07-01, 40% complete)");
+    expect(critical).toContain("Torque tube: Short");
+    expect(screen.getByText(/1 behind schedule as of 2026-08-14/)).toBeTruthy();
+  });
+
+  it("labels a slipped contract milestone", async () => {
+    await renderPage(withSchedule([
+      { name: "Mechanical completion", section: "", finish_date: "2026-06-01", percent: 10, is_contract_milestone: true },
+    ]));
+    const critical = (screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value;
+    expect(critical.split("\n")[0]).toContain("Contract milestone behind schedule — Mechanical completion");
+  });
+});
+
 describe("WeeklyReportPage — provenance and warnings", () => {
   it("says so when the values were carried forward", async () => {
     const p = payload();

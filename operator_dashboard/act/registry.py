@@ -365,11 +365,15 @@ _ENTRIES: list[ConfigEntry] = [
        note="The PO lane's own Box root ('ITS Purchase Orders'): per-job folder holds PO PDFs "
             "+ RFQs/ + Vendor Quotes/; also the archive's box:purchase_orders source. Built by "
             "build_box_roots.py"),
+    _e("subcontracts.box.portal_root_folder_id", "subcontracts", _DATA, v_id,
+       note="The subcontract lane's own Box root ('ITS Subcontracts'): per-job folder holds the "
+            ".docx/.xlsx package + send ZIP; also the archive's box:subcontracts source. Built "
+            "by build_box_roots.py"),
     _e("field_ops.box.archive_root_folder_id", "field_ops", _DATA, v_id,
        note="Box root the Track 6 job archive relocates a closed job's Safety + Progress + "
-            "Purchase Orders containers beneath; built by build_box_roots.py. Blank = the "
-            "archive's Box leg cannot resolve a destination and reports those containers as "
-            "failed"),
+            "Purchase Orders + Subcontracts containers beneath; built by build_box_roots.py. "
+            "Blank = the archive's Box leg cannot resolve a destination and reports those "
+            "containers as failed"),
     _e("system.operator_email", "global", _DATA, v_email),
     _e("system.heartbeat_url", "global", _DATA, v_url),
     _e("daemons.heartbeat_sheet_id", "global", _DATA, v_id),

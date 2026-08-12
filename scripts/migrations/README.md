@@ -103,8 +103,8 @@ records the standalone semantics:
 - `build_system_sheets.py` — the five System sheets (resolves folders by NAME).
 - `build_safety_portal_workspace.py` — the "ITS –– Safety Portal" workspace +
   `00_Safety Portal` / `00_Form Catalog`.
-- `build_box_roots.py` — the four Box roots (Safety, Progress, Purchase Orders,
-  Archive). Its output does NOT go into `shared/sheet_ids.py`: the folder ids
+- `build_box_roots.py` — the five Box roots (Safety, Progress, Purchase Orders,
+  Subcontracts, Archive). Its output does NOT go into `shared/sheet_ids.py`: the folder ids
   land in the ITS_Config `*.box.portal_root_folder_id` /
   `*.box.archive_root_folder_id` rows — AUTO-PASTED by standup's box-roots
   stage when orchestrated (a standalone run pastes them by hand). Requires Box

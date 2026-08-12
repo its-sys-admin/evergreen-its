@@ -217,9 +217,9 @@ PURPOSE_OVERRIDES: dict[str, str] = {
                                        "workstream (intake's own workstream), not progress_reports — a documented footgun.",
     "progress_reports.box.portal_root_folder_id": "Box root folder ID under which progress-report packets are filed.",
     "field_ops.box.archive_root_folder_id": "Box root folder ID the Track 6 job archive relocates a closed job's "
-                                            "Safety, Progress and Purchase Orders containers beneath "
+                                            "Safety, Progress, Purchase Orders and Subcontracts containers beneath "
                                             "(ITS Archive/<Job>/<Workstream>). "
-                                            "Unset = the archive's Box leg fails those three containers rather than "
+                                            "Unset = the archive's Box leg fails those four containers rather than "
                                             "silently reporting them moved.",
     "field_ops.fieldops_sync.sync_enabled": "Master gate for the portal→Smartsheet job mirror (fieldops_sync). "
                                             "Ships OFF; the operator flips it on at cutover after the mirror slices land.",
@@ -238,7 +238,7 @@ PURPOSE_OVERRIDES: dict[str, str] = {
                                                "Material Receipts sheet. Append-only — the ledger re-projects in "
                                                "full each cycle, so pausing loses nothing.",
     "field_ops.fieldops_sync.archive_enabled": "Gate for the Track 6 job-archive pass: drains the portal's archive queue "
-                                               "and relocates a closed job's seven Smartsheet + Box containers into the "
+                                               "and relocates a closed job's eight Smartsheet + Box containers into the "
                                                "archive (and back). Ships OFF; until it is on, the portal's Archive "
                                                "button records intent that nothing acts on.",
     "po_materials.config_actuator.polling_enabled": "Runtime gate for the §50 config actuator daemon (applies approved "

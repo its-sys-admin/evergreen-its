@@ -222,8 +222,9 @@ through Phase C go/no-go BEFORE this list starts),
   `production_rollback.md`).
   Verify: `python -c "from shared import box_client; print(box_client.get_client().user().get().login)"`
   → `its@evergreenrenewables.com`.
-- [ ] **CL-17 — production folder roots + routing reseeded.** The two
-  `*.box.portal_root_folder_id` rows are AUTO-PASTED by the stand-up's
+- [ ] **CL-17 — production folder roots + routing reseeded.** The five
+  `*.box.*_root_folder_id` rows (safety / progress / po_materials /
+  subcontracts portal roots + the field_ops archive root) are AUTO-PASTED by the stand-up's
   box-roots stage (`standup._stage_box_roots`) — this item shrinks to the
   CL-16 Box-OAuth prerequisite plus the resolve verify (plus
   `BOX_PROJECT_FOLDERS` / `ITS_Project_Routing` when the routing lane wakes).

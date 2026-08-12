@@ -720,7 +720,7 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/schedule_import_path.md`
 
-### The archive pass relocates a closed job's seven containers (and brings them back)
+### The archive pass relocates a closed job's eight containers (and brings them back)
 
 | What happens | |
 |---|---|
@@ -729,8 +729,8 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 | Config gates | `field_ops.fieldops_sync.archive_enabled`, `field_ops.box.archive_root_folder_id` |
 
 **Healthy signals:**
-- Pressing Archive in the portal records intent only; within a cycle or two the card reads "Archived. All 7 folders are filed under ITS — Archive / <Job>".
-- Four Smartsheet folders (Safety, Progress, Purchase Orders, Subcontracts) and three Box folders (Safety, Progress, Purchase Orders) are relocated — a move, never a delete; ids, permalinks and history are preserved.
+- Pressing Archive in the portal records intent only; within a cycle or two the card reads "Archived. All 8 folders are filed under ITS — Archive / <Job>".
+- Four Smartsheet folders (Safety, Progress, Purchase Orders, Subcontracts) and four Box folders (Safety, Progress, Purchase Orders, Subcontracts) are relocated — a move, never a delete; ids, permalinks and history are preserved.
 - The cycle summary reads `archive complete=N partial=0 failed=0 capped=0 errors=0`; no `job_archive` rows in ITS_Errors.
 - Watchdog Check X (daily) reports `Job archives healthy` — no job stopped at partial/failed and none aging in the queue.
 
@@ -751,7 +751,7 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/job_archive.md` · watchdog `_check_stale_job_archives`
 
-#### An archive stopped at "Partly archived — N of 7 folders moved" or "Nothing moved", and does not resume.
+#### An archive stopped at "Partly archived — N of 8 folders moved" or "Nothing moved", and does not resume.
 
 **Resolution class:** Operator-resolvable (solo)
 
@@ -760,24 +760,24 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 **Checks (in order):**
 - partial/failed are TERMINAL for the daemon (the queue serves only requested/in_progress) — NOTHING resumes it until a human presses "Try again".
 - Read ITS_Errors Script `job_archive`, code `archive_container_failed` — it names the job, the SYSTEM and the container. The panel alone cannot tell Smartsheet's "Safety"/"Progress" from Box's.
-- Three Box containers stuck (4 of 7) points at a Box root config row; all seven stuck points at something common (permissions, a system-wide outage).
+- Four Box containers stuck (4 of 8) points at a Box root config row; all eight stuck points at something common (permissions, a system-wide outage).
 
 **Resolutions (in order):**
-- For a plain transient, press Try again in the portal — it re-raises the request and resets the attempt counter. All seven are re-attempted; the already-moved ones report "nothing to move", so only the stuck ones actually do work.
+- For a plain transient, press Try again in the portal — it re-raises the request and resets the attempt counter. All eight are re-attempted; the already-moved ones report "nothing to move", so only the stuck ones actually do work.
 - Never drag the folders by hand — a folder moved out of band is invisible to the pass and to every find-or-create path, which splits the job across two folders.
 - The same container failing twice through "Try again", or a named cause (Box root, ADMIN shortfall), escalates.
 
 **See also:** runbook `docs/runbooks/job_archive.md`
 
-#### No job archives at all, or exactly the three Box folders fail while the four Smartsheet ones succeed.
+#### No job archives at all, or exactly the four Box folders fail while the four Smartsheet ones succeed.
 
 **Resolution class:** Escalate to Seth (co-resolve)
 
-**Signals:** archive_preflight_not_admin, archive_preflight_unreadable, fieldops_archive_fetch_auth_failed, Box root unset, 4 of 7 moved
+**Signals:** archive_preflight_not_admin, archive_preflight_unreadable, fieldops_archive_fetch_auth_failed, Box root unset, 4 of 8 moved
 
 **Checks (in order):**
 - archive_preflight_not_admin (Script `job_archive`) — the ITS Smartsheet identity lacks ADMIN on one of the five workspaces, so the pass skips loudly and moves NOTHING. Every queued job stays queued; no re-press needed once the share is fixed.
-- Box-only failures — read field_ops.box.archive_root_folder_id (and the three source roots, safety_reports/progress_reports/po_materials .box.portal_root_folder_id). An unset root REFUSES rather than reporting an empty tree as archived.
+- Box-only failures — read field_ops.box.archive_root_folder_id (and the four source roots, safety_reports/progress_reports/po_materials/subcontracts .box.portal_root_folder_id). An unset root REFUSES rather than reporting an empty tree as archived.
 - fieldops_archive_fetch_auth_failed (CRITICAL) — the field-ops bearer was rejected; nothing was relocated and nothing is lost.
 
 **Resolutions (in order):**

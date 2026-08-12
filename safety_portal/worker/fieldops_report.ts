@@ -3,6 +3,7 @@ import type { FieldopsApp } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
 import type { ProductionReportResponse } from "./wire-types";
 import { auditStmt } from "./audit";
+import { pacificDateString } from "./fieldops_recurrence";
 
 // Weekly Production Report — the SEND-FREE, READ-ONLY D1 aggregation behind the client-facing
 // 5-page "Evergreen Weekly Production Report", plus the office-input record that supplies the
@@ -29,11 +30,16 @@ import { auditStmt } from "./audit";
 // `buildReportData`, because the screen must show the office exactly what the report will render —
 // a second derivation would be a second truth.
 //
-// WHAT IS DELIBERATELY ABSENT: `job_schedule_tasks` (page 3's %-complete). The ADR-0006 schedule
-// lane owns that table and has not landed it. `schedule` returns null here and the renderer prints
-// "No schedule imported for this job" — never a fabricated percentage. The same discipline that
-// removed `jobs.progress` from the rollup (operator decision 2026-06-30, fieldops_rollup.ts:15-17).
-// PR-5 fills this in with no renderer change.
+// PAGE 3 (`schedule`) reads the ADR-0006 living task list (`job_schedule_tasks`, migration 0071).
+// It stays NULL for a job with no committed schedule, and the renderer prints "No schedule imported
+// for this job" — never a fabricated percentage, the discipline that removed `jobs.progress` from
+// the rollup (operator decision 2026-06-30, fieldops_rollup.ts:15-17).
+//
+// A task's percent is reported as NULL — the report prints an em dash — when NOTHING has ever
+// asserted one: no portal mark (`last_marked_by IS NULL`) AND no committed schedule value
+// (`schedule_percent IS NULL`) AND `percent_done = 0`. That combination is the table's "never
+// reported" state, because `percent_done` is NOT NULL DEFAULT 0 and so cannot represent it. Printing
+// 0% there would tell a client no work was done, which is a different and possibly false claim.
 
 // ── Row caps ────────────────────────────────────────────────────────────────────
 // Code constants, never user input. They bound a pathological job/week without changing the honest
@@ -44,6 +50,7 @@ const HAZARD_CAP = 100;    // distinct safety-meeting form codes in the week
 const DELIVERY_CAP = 300;  // delivery events in the week
 const PHOTO_CAP = 200;     // clean photos offered to the office for curation
 const INCIDENT_CAP = 100;  // material incidents in the week
+const SCHEDULE_TASK_CAP = 600; // active schedule tasks on one job (a real solar schedule is ~100-300)
 
 /** Max photos the deterministic auto-selection will place on the report's photo page. */
 export const AUTO_SELECT_MAX = 8;
@@ -432,6 +439,24 @@ async function buildReportData(
      LIMIT ?4
   `;
 
+  // Page 3 — the living schedule task list (ADR-0006, migration 0071). ACTIVE tasks only (the
+  // table soft-deletes), in document order (`sort_order`, set to seq*10 at commit).
+  //
+  // `reported_percent` is NULL for the table's "never reported" state — no portal mark, no
+  // committed schedule value, and percent_done still at its NOT NULL DEFAULT 0. The renderer
+  // prints an em dash for it rather than 0%.
+  const scheduleSql = `
+    SELECT t.section, t.name, t.percent_done, t.schedule_percent, t.last_marked_by,
+           t.start_date, t.finish_date, t.baseline_finish_date,
+           t.is_milestone, t.is_contract_milestone, t.is_delivery, t.delivered_date,
+           CASE WHEN t.last_marked_by IS NULL AND t.schedule_percent IS NULL AND t.percent_done = 0
+                THEN NULL ELSE t.percent_done END AS reported_percent
+      FROM job_schedule_tasks t
+     WHERE t.job_id = ?1 AND t.active = 1
+     ORDER BY t.sort_order ASC, t.id ASC
+     LIMIT ?2
+  `;
+
   // The office record for THIS week, and — separately — the most recent EARLIER one, so a missing
   // week can resolve by carry-forward without a write. Both fetched unconditionally in the batch;
   // choosing between them is pure logic below, which keeps the round-trip count fixed.
@@ -455,7 +480,7 @@ async function buildReportData(
       FROM jobs WHERE job_id = ?1
   `;
 
-  const [jobRes, dailyRes, crewRes, laborRes, hazardRes, deliveryRes, incidentRes, photoRes, officeRes, priorRes] =
+  const [jobRes, dailyRes, crewRes, laborRes, hazardRes, deliveryRes, incidentRes, photoRes, officeRes, priorRes, schedRes] =
     await c.env.DB.batch([
       c.env.DB.prepare(jobSql).bind(w.jobId),
       c.env.DB.prepare(dailySql).bind(w.jobId, w.weekStart, w.weekEnd, DAILY_CAP),
@@ -467,6 +492,7 @@ async function buildReportData(
       c.env.DB.prepare(photoSql).bind(w.jobId, w.weekStart, w.weekEnd, PHOTO_CAP),
       c.env.DB.prepare(officeSql).bind(w.jobId, w.weekStart),
       c.env.DB.prepare(priorOfficeSql).bind(w.jobId, w.weekStart),
+      c.env.DB.prepare(scheduleSql).bind(w.jobId, SCHEDULE_TASK_CAP),
     ]);
 
   const job = (jobRes.results?.[0] ?? null) as Record<string, unknown> | null;
@@ -479,6 +505,9 @@ async function buildReportData(
   const photosAvailable = ((photoRes.results ?? []) as {
     pool_id: number; work_date: string; box_file_id: string; caption: string;
   }[]);
+
+  const scheduleTasks = (schedRes.results ?? []) as ScheduleTaskRow[];
+  const todayPacific = pacificDateString(Date.now());
 
   const ownRow = (officeRes.results?.[0] ?? null) as OfficeRow | null;
   const priorRow = (priorRes.results?.[0] ?? null) as OfficeRow | null;
@@ -566,12 +595,60 @@ async function buildReportData(
       })),
       auto_selected: office.photos === null,
     },
-    // ADR-0006 job_schedule_tasks lands here (PR-5). null → the renderer prints
-    // "No schedule imported for this job". NEVER a fabricated percentage.
-    schedule: null,
+    // The living task list (0071). NULL — not an empty object — when the job has no committed
+    // schedule, so the renderer prints its honest empty state rather than an empty table.
+    schedule: scheduleTasks.length === 0 ? null : {
+      sections: groupScheduleSections(scheduleTasks),
+      behind: behindSchedule(scheduleTasks, todayPacific),
+      today: todayPacific,
+      task_count: scheduleTasks.length,
+    },
     office,
     generated_at: Math.floor(Date.now() / 1000),
   };
+}
+
+type ScheduleTaskRow = {
+  section: string | null; name: string; percent_done: number;
+  schedule_percent: number | null; last_marked_by: string | null;
+  start_date: string | null; finish_date: string | null; baseline_finish_date: string | null;
+  is_milestone: number; is_contract_milestone: number; is_delivery: number;
+  delivered_date: string | null; reported_percent: number | null;
+};
+
+/** Group the living task list into the report's page-3 sections, preserving document order for
+ *  BOTH the sections and the tasks inside them (first appearance wins — the schedule's own order
+ *  is the one the office and the client already read on the Gantt). A task with no `section`
+ *  lands under "Other" rather than being dropped: `section` is nullable and a schedule whose
+ *  parse found no phase rows would otherwise render an empty page 3 while holding real tasks. */
+function groupScheduleSections(rows: ScheduleTaskRow[]) {
+  const order: string[] = [];
+  const byName = new Map<string, { label: string; items: { label: string; percent: number | null }[] }>();
+  for (const t of rows) {
+    const label = (t.section ?? "").trim() || "Other";
+    const key = label.toLowerCase();
+    let bucket = byName.get(key);
+    if (!bucket) { bucket = { label, items: [] }; byName.set(key, bucket); order.push(key); }
+    bucket.items.push({ label: t.name, percent: t.reported_percent });
+  }
+  return order.map((k) => ({ name: byName.get(k)!.label, items: byName.get(k)!.items }));
+}
+
+/** Tasks a client would call late: a finish date in the past and not complete. Ordered oldest
+ *  finish first so the worst slip reads at the top of Critical Items. Contract milestones are
+ *  flagged inline because a slipped one is a different conversation from a slipped task.
+ *  Compared as YYYY-MM-DD strings, which sort chronologically — no date parsing in the path. */
+function behindSchedule(rows: ScheduleTaskRow[], todayPacific: string) {
+  return rows
+    .filter((t) => t.finish_date !== null && t.finish_date < todayPacific && t.percent_done < 100)
+    .sort((a, b) => (a.finish_date! < b.finish_date! ? -1 : a.finish_date! > b.finish_date! ? 1 : 0))
+    .map((t) => ({
+      name: t.name,
+      section: (t.section ?? "").trim(),
+      finish_date: t.finish_date!,
+      percent: t.percent_done,
+      is_contract_milestone: t.is_contract_milestone === 1,
+    }));
 }
 
 /** Peak headcount per crew name across the week. Names are the foreman's free text, so they are

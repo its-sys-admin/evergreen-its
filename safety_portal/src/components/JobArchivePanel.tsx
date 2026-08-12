@@ -7,7 +7,7 @@ import { ConfirmTypedModal } from "./ConfirmTypedModal";
  * The Archive / Un-archive control (ROADMAP Track 6).
  *
  * Pressing Archive does NOT move anything — it records intent. The Mac-side pass relocates the
- * job's seven containers (four Smartsheet folders, three Box) on its next cycle and reports back,
+ * job's eight containers (four Smartsheet folders, four Box) on its next cycle and reports back,
  * which is why this polls `job.archive.state` instead of treating the 200 as "done". Claiming a job
  * is archived the instant a flag flipped is precisely the lie the old dropdown told.
  *
@@ -24,7 +24,7 @@ const POLL_ACTIVE_MS = 4000;
  *  something to spin the browser on forever. */
 const POLL_CEILING_MS = 10 * 60 * 1000;
 
-const CONTAINER_COUNT = 7;
+const CONTAINER_COUNT = 8;
 
 function label(direction: string): string {
   return direction === "unarchive" ? "Un-archiving" : "Archiving";
@@ -136,7 +136,7 @@ export function JobArchivePanel({
       {state === "none" && (
         <>
           <p className="dash-card__sub muted">
-            Moves this job&apos;s seven folders into the ITS — Archive area. Reversible.
+            Moves this job&apos;s eight folders into the ITS — Archive area. Reversible.
           </p>
           <div className="dash-row">
             <button type="button" className="btn btn--retire" onClick={() => setModal("archive")}>
