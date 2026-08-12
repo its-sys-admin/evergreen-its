@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/fieldops_schedules";
-import type {
-  ScheduleColumnMap,
-  ScheduleCommitRow,
-  ScheduleGridRow,
-  ScheduleListRow,
-} from "../lib/fieldops_schedules";
+import type { ScheduleCommitRow, ScheduleListRow } from "../lib/fieldops_schedules";
+import {
+  deriveGrid,
+  draftProblem,
+  toDurationDays,
+  toPercent,
+  type DerivedGridItem,
+} from "../lib/schedule_grid";
 import { errorText } from "../lib/errorCopy";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,14 +29,15 @@ import { errorText } from "../lib/errorCopy";
 //   • the PREVIEW-EVIDENCE GATE: commit stays disabled until at least one source page has
 //     actually rendered (an <img> onLoad fired) OR the office explicitly acknowledges
 //     reviewing the PDF elsewhere — the estimate lane's no_preview_verified pattern.
-//     UX-ONLY here; the Worker-side gate arrives with the PR-6 reconcile hardening.
+//     UX-ONLY (both faces; a Worker-side acknowledgment column stays future work).
 //
-// PR-4 is the DEGENERATE commit: first upload only. A job that already has a task list
-// gets the honest "revision reconcile arrives in a later update" banner (the Worker plan
-// answers 200 with degenerate:false; the commit 409s revision_reconcile_not_available).
+// This face is the FIRST-IMPORT commit (the diff's degenerate arm). A job that already
+// has a task list is routed by JobSchedulePage to the RECONCILE face instead
+// (ScheduleReconcilePage, PR-6); if a task list appears between routing and the plan
+// (a race), the non-degenerate plan here keeps commit disabled and points at the
+// reconcile screen — this face collects no resolutions, so committing from it would
+// hit the Worker's blocking-removal / ambiguity refusals anyway.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** `schedule_parse` consistency flag → what a human should do about it. */
 const FLAG_COPY: Record<string, string> = {
@@ -45,14 +48,6 @@ const FLAG_COPY: Record<string, string> = {
   missing_dates: "no dates were read for this task",
   percent_conflict: "the table % and the Gantt-bar label disagree — check which is right",
   low_confidence: "the OCR read this row with low confidence — check every cell",
-};
-
-// CANONICAL_COLUMNS order (field_ops/schedule_parse.py) — the fallback indices when the
-// detail's column_map is absent/malformed. The column_map in the detail response confirms
-// the real indices; the parser currently emits exactly this order.
-const DEFAULT_MAPPING: Record<string, number> = {
-  row_number: 0, task_name: 1, duration: 2, start_date: 3,
-  finish_date: 4, percent_done: 5, predecessors: 6, phase: 7,
 };
 
 /** One editable data row of the proposal. Strings while typing; validated at plan/commit. */
@@ -83,29 +78,9 @@ type AddedTask = {
   percent: string;
 };
 
-/** Display order interleaves section DIVIDERS with the editable tasks. */
-type DisplayItem =
-  | { type: "section"; row_index: number; label: string }
-  | { type: "task"; row_index: number }
-  | { type: "other"; row_index: number; kind: string; text: string };
-
-function parseCells(raw: string): string[] {
-  try {
-    const v = JSON.parse(raw) as unknown;
-    return Array.isArray(v) ? v.map((c) => String(c ?? "")) : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseColumnMap(raw: string | null): ScheduleColumnMap | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as ScheduleColumnMap;
-  } catch {
-    return null;
-  }
-}
+/** Display order interleaves section DIVIDERS with the editable tasks (the shared
+ *  schedule_grid derivation's item shape). */
+type DisplayItem = DerivedGridItem;
 
 function errText(e: unknown, fallback: string): string {
   if (e && typeof e === "object" && "code" in e) {
@@ -113,36 +88,6 @@ function errText(e: unknown, fallback: string): string {
     if (code) return errorText(code);
   }
   return e instanceof Error && e.message ? e.message : fallback;
-}
-
-/** "137d" / "137" → 137; anything else null. */
-function toDurationDays(text: string): number | null {
-  const m = /^(\d{1,4})d?$/.exec(text.trim());
-  if (!m) return null;
-  return parseInt(m[1], 10);
-}
-
-function toPercent(text: string): number | null {
-  const m = /^(\d{1,3})%?$/.exec(text.trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  return n >= 0 && n <= 100 ? n : null;
-}
-
-/** The blocking problem on a draft, or null when it would commit cleanly. Validated HERE
- *  so one bad OCR cell blocks with a named row instead of a whole-commit Worker 400. */
-function draftProblem(d: { name: string; section: string; duration: string; start: string; finish: string; percent: string; predecessors?: string }): string | null {
-  if (!d.name.trim()) return "no task name";
-  if (d.name.trim().length > 300) return "name too long (300 max)";
-  if (d.section.trim().length > 120) return "section too long (120 max)";
-  if (d.start.trim() && !DATE_RE.test(d.start.trim())) return "start date isn't YYYY-MM-DD";
-  if (d.finish.trim() && !DATE_RE.test(d.finish.trim())) return "finish date isn't YYYY-MM-DD";
-  if (d.percent.trim() && toPercent(d.percent) === null) return "% must be a whole number 0–100";
-  if (d.duration.trim() && (toDurationDays(d.duration) === null || toDurationDays(d.duration)! > 5000)) {
-    return "duration must be a number of days (0–5000)";
-  }
-  if ((d.predecessors ?? "").trim().length > 200) return "predecessors too long (200 max)";
-  return null;
 }
 
 export function ScheduleValidatePage({
@@ -179,69 +124,22 @@ export function ScheduleValidatePage({
     setLoadError(null);
     Promise.all([api.fetchSchedule(scheduleId), api.fetchAllScheduleRows(scheduleId)])
       .then(([d, rows]) => {
-        const cmap = parseColumnMap(d.schedule.column_map_json);
-        const mapping = { ...DEFAULT_MAPPING, ...(cmap?.mapping ?? {}) };
-        const col = (r: ScheduleGridRow, concept: string): string => {
-          const idx = mapping[concept];
-          if (idx === undefined) return "";
-          return parseCells(r.cells_json)[idx] ?? "";
-        };
         // Seed the human decisions FROM the parser's proposal — the "proposes" half.
-        // Section rows feed the RUNNING section context of the data rows below them;
-        // a data row whose own phase cell is non-empty keeps it (the parser already
-        // resolved grid-view phase tags there).
+        // The derivation (running sections, column map, milestone/delivery pre-checks)
+        // is SHARED with the reconcile face (src/lib/schedule_grid.ts) so the two
+        // sub-faces cannot disagree about what a grid row means. Proposals only:
+        // every toggle is editable, nothing auto-commits (§4). Contract-milestone has
+        // no OCR signal — always a human decision, seeded false here.
+        const grid = deriveGrid(rows, d.schedule.column_map_json);
         const seeded: Record<number, TaskDraft> = {};
-        const items: DisplayItem[] = [];
-        let runningSection = "";
-        for (const r of rows) {
-          if (r.kind === "section") {
-            const label = col(r, "task_name") || parseCells(r.cells_json).find((c) => c.trim()) || "";
-            runningSection = label;
-            items.push({ type: "section", row_index: r.row_index, label });
-            continue;
-          }
-          if (r.kind !== "data" && r.kind !== "continuation") {
-            const text = parseCells(r.cells_json).filter((c) => c.trim()).join(" · ");
-            items.push({ type: "other", row_index: r.row_index, kind: r.kind, text });
-            continue;
-          }
-          const name = col(r, "task_name");
-          const section = col(r, "phase") || runningSection;
-          const start = col(r, "start_date");
-          const finish = col(r, "finish_date");
-          const duration = col(r, "duration");
-          // Pre-checks mirror the parser's own proposal heuristics (schedule_parse.py):
-          // a same-day or zero/one-day task proposes milestone; a Deliveries-phase task
-          // (or one literally named "… delivery") proposes delivery. Contract-milestone
-          // has no OCR signal — always a human decision. Proposals only: every toggle
-          // is editable, nothing auto-commits (§4).
-          const milestone =
-            (!!start && !!finish && start === finish) || duration === "0d" || duration === "1d";
-          const delivery =
-            section.trim().toLowerCase() === "deliveries" ||
-            name.trim().toLowerCase().endsWith("delivery");
-          seeded[r.row_index] = {
-            row_index: r.row_index,
-            keep: true,
-            name,
-            section,
-            duration,
-            start,
-            finish,
-            percent: col(r, "percent_done"),
-            predecessors: col(r, "predecessors"),
-            milestone,
-            contractMilestone: false,
-            delivery,
-            flags: (r.flags ?? "").split(",").filter(Boolean),
-          };
-          items.push({ type: "task", row_index: r.row_index });
+        for (const [rowIndex, task] of grid.tasks) {
+          seeded[rowIndex] = { ...task, keep: true, contractMilestone: false };
         }
         setSchedule(d.schedule);
         setPreviewPages(d.preview_pages);
         setNotes((d.schedule.parse_notes ?? "").split("\n").filter(Boolean));
         setDrafts(seeded);
-        setDisplay(items);
+        setDisplay(grid.items);
         if (d.preview_pages.length > 0) setPage(d.preview_pages[0]);
       })
       .catch((e) => setLoadError(errText(e, "Could not load this schedule.")));
@@ -340,8 +238,7 @@ export function ScheduleValidatePage({
   const status = schedule?.status;
   const committable = status === "parsed" || status === "committing";
   // The evidence gate (module header): a rendered source page, or the explicit
-  // "reviewed elsewhere" acknowledgment. UX-only in PR-4 — the Worker-side gate
-  // arrives with the PR-6 reconcile hardening.
+  // "reviewed elsewhere" acknowledgment. UX-only (module header).
   const previewEvidence = previewLoaded || reviewedElsewhere;
 
   function setDraft(rowIndex: number, patch: Partial<TaskDraft>) {
@@ -369,9 +266,9 @@ export function ScheduleValidatePage({
     setMsg(null);
     setProgress(null);
     try {
-      const res = await api.commitAllSchedule(scheduleId, resolvedRows, (landed, total) =>
-        setProgress(`${landed} of ${total} tasks…`),
-      );
+      const res = await api.commitAllSchedule(scheduleId, resolvedRows, {
+        onProgress: (landed, total) => setProgress(`${landed} of ${total} tasks…`),
+      });
       onClose(
         {
           ok: true,
@@ -838,9 +735,9 @@ export function ScheduleValidatePage({
                 ) : (
                   <p className="dash-error" role="note">
                     This job already has a task list ({plan.counts.existing} task
-                    {plan.counts.existing === 1 ? "" : "s"}). Reconciling a schedule revision
-                    arrives in a later update — the current list stays as it is, and this upload
-                    can wait or be discarded.
+                    {plan.counts.existing === 1 ? "" : "s"}), so this upload is a revision — go
+                    back and open it again to review its changes on the reconcile screen. The
+                    current list stays as it is.
                   </p>
                 )
               ) : (

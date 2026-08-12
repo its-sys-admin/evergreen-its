@@ -870,30 +870,71 @@ export interface ScheduleTasksResponse {
   truncated: boolean;
 }
 
-/** POST /api/fieldops/schedules/:id/plan — a DRY RUN. PR-4 ships the DEGENERATE case only:
- *  `degenerate` true means the job has no existing task list and every incoming data row
- *  classifies as `new`; false means a task list already exists — the plan still answers 200
- *  (a read never 409s) and `revision_reconcile_available` stays false until the PR-6 diff
- *  engine lands, so the SPA says "revision reconcile arrives in a later update". */
+// The reconcile classification shapes (PR-6) are defined beside the diff engine itself —
+// worker/schedule_diff.ts is pure, so a type-only re-export keeps one source of truth
+// without giving this file a runtime dependency.
+export type {
+  ScheduleAmbiguityReason,
+  ScheduleInfoChange,
+  SchedulePercentRule,
+  SchedulePlanAmbiguous,
+  SchedulePlanDateChange,
+  SchedulePlanFresh,
+  SchedulePlanMatched,
+  SchedulePlanPercent,
+  SchedulePlanRemoved,
+  ScheduleRemovalReason,
+} from "./schedule_diff";
+import type {
+  SchedulePlanAmbiguous as PlanAmbiguous,
+  SchedulePlanFresh as PlanFresh,
+  SchedulePlanMatched as PlanMatched,
+  SchedulePlanRemoved as PlanRemoved,
+} from "./schedule_diff";
+
+/** POST /api/fieldops/schedules/:id/plan — a DRY RUN, now the full three-way reconcile
+ *  classification (ADR-0006 decision 9, PR-6). `degenerate` true means the job has no
+ *  existing task list — every data row classifies `fresh` and the commit is a plain
+ *  first import. Otherwise the four arrays carry the classified plan: matched pairs with
+ *  their per-pair field diffs (dates two-way, the three-way % rule, silent-informational
+ *  changes), BLOCKING ambiguities, fresh rows, and removed tasks flagged blocking
+ *  (marked / delivered / contract-milestone — never silently destroyed). The plan writes
+ *  nothing and never 409s; the COMMIT re-derives this same diff server-side. */
 export interface SchedulePlanResponse {
   ok: true;
   degenerate: boolean;
-  revision_reconcile_available: false;
+  /** Always true since PR-6 — kept so a stale bundle's check keeps working. */
+  revision_reconcile_available: boolean;
   counts: {
     incoming: number;
     new: number;
     existing: number;
+    matched: number;
+    ambiguous: number;
+    removed: number;
+    blocking_removals: number;
+    percent_conflicts: number;
   };
+  matched: PlanMatched[];
+  ambiguous: PlanAmbiguous[];
+  fresh: PlanFresh[];
+  removed: PlanRemoved[];
 }
 
 /** POST /api/fieldops/schedules/:id/commit — ONE page of the 0066-watermark commit. `done`
- *  false means re-post the same full payload; every row at or below `committed_through_row`
- *  is dropped before any write, so a replayed page (a lost final response's retry) is an
- *  idempotent no-op rather than a duplicate task list. */
+ *  false means re-post the same full payload (and the same `resolutions`); every row at or
+ *  below `committed_through_row` is dropped before any write, so a replayed page (a lost
+ *  final response's retry) is an idempotent no-op rather than a duplicate task list.
+ *  `inserted` counts fresh INSERTs, `updated` matched-pair UPDATEs, `linked` human-linked
+ *  (rename) UPDATEs; `removed` counts the soft-deactivations, which land only on the FINAL
+ *  page (removals are defined against the whole document). */
 export interface ScheduleCommitResponse {
   ok: true;
   done: boolean;
   inserted: number;
+  updated: number;
+  linked: number;
+  removed: number;
   committed_through_row: number;
 }
 

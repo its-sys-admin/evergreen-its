@@ -9,7 +9,7 @@
 //
 // (R1) Errors: getJson/postJson throw ApiError (src/lib/errorCopy.ts) — err.message is HUMAN
 // copy, err.code is the raw wire code pages branch on (e.g. 'duplicate_schedule',
-// 'revision_reconcile_not_available').
+// 'ambiguous_unresolved', 'blocking_removals_unresolved').
 
 import { ApiError, raiseApiError } from "./errorCopy";
 import type {
@@ -38,8 +38,14 @@ export type {
   ScheduleMarkDeliveredResponse,
   ScheduleMarkMilestoneDoneResponse,
   ScheduleMarkProgressResponse,
+  SchedulePlanAmbiguous,
+  SchedulePlanFresh,
+  SchedulePlanMatched,
+  SchedulePlanPercent,
+  SchedulePlanRemoved,
   SchedulePlanResponse,
   SchedulePreviewResponse,
+  ScheduleRemovalReason,
   ScheduleRowKind,
   ScheduleRowsResponse,
   ScheduleStatus,
@@ -178,9 +184,24 @@ export interface ScheduleCommitRow {
   predecessors_raw?: string | null;
 }
 
-/** DRY RUN. Writes nothing; PR-4 answers the DEGENERATE question — "is this a first import,
- *  and how many tasks would it create?" A non-degenerate answer means the job already has a
- *  task list and the commit will refuse (revision reconcile is a later update). */
+/** The human's reconcile decisions (PR-6) — sent alongside the rows on EVERY commit page
+ *  (the server validates them against its own re-derived diff each round):
+ *    • links     — fresh source_row_index → removed task id (a rename; preserves the
+ *                  task's uuid, baselines and portal %).
+ *    • removals  — removed task id → 'remove' | 'keep'. Every BLOCKING removal (marked /
+ *                  delivered / contract milestone) REQUIRES an entry; non-blocking ones
+ *                  default to remove.
+ *    • percents  — matched/linked source_row_index → 'portal' | 'revision' on a percent
+ *                  CONFLICT (default portal). */
+export interface ScheduleResolutions {
+  links?: Record<number, number>;
+  removals?: Record<number, "remove" | "keep">;
+  percents?: Record<number, "portal" | "revision">;
+}
+
+/** DRY RUN. Writes nothing; answers the full three-way classification (matched pairs with
+ *  their date/percent diffs, BLOCKING ambiguities, fresh rows, removed tasks with blocking
+ *  reasons). `degenerate` true means the job has no task list yet — a plain first import. */
 export async function planSchedule(
   id: number,
   rows: ScheduleCommitRow[],
@@ -192,12 +213,17 @@ export async function planSchedule(
 export async function commitSchedule(
   id: number,
   rows: ScheduleCommitRow[],
+  resolutions?: ScheduleResolutions,
 ): Promise<ScheduleCommitResponse> {
-  return postJson<ScheduleCommitResponse>(`/api/fieldops/schedules/${id}/commit`, { rows });
+  return postJson<ScheduleCommitResponse>(
+    `/api/fieldops/schedules/${id}/commit`,
+    resolutions ? { rows, resolutions } : { rows },
+  );
 }
 
 /**
- * Drive the paged commit to completion, re-posting the SAME full payload each round.
+ * Drive the paged commit to completion, re-posting the SAME full payload (rows AND
+ * resolutions) each round.
  *
  * Deliberate (the manifest commitAll contract): the server drops every row at or below
  * `committed_through_row` before writing, so re-sending the whole set is a no-op for pages
@@ -208,20 +234,29 @@ export async function commitSchedule(
 export async function commitAllSchedule(
   id: number,
   rows: ScheduleCommitRow[],
-  onProgress?: (landed: number, total: number) => void,
-): Promise<{ inserted: number; pages: number }> {
+  opts: {
+    resolutions?: ScheduleResolutions;
+    onProgress?: (landed: number, total: number) => void;
+  } = {},
+): Promise<{ inserted: number; updated: number; linked: number; removed: number; pages: number }> {
   let inserted = 0;
+  let updated = 0;
+  let linked = 0;
+  let removed = 0;
   let pages = 0;
   const total = rows.filter((r) => r.kind === "data").length;
   // Bound the loop: each page must strictly advance the watermark, so at most one page per
   // row is possible. A server that stopped advancing would otherwise spin here forever.
   const maxPages = Math.ceil(Math.max(total, 1) / COMMIT_PAGE_TASKS) + 2;
   for (;;) {
-    const res = await commitSchedule(id, rows);
+    const res = await commitSchedule(id, rows, opts.resolutions);
     inserted += res.inserted;
+    updated += res.updated ?? 0;
+    linked += res.linked ?? 0;
+    removed += res.removed ?? 0;
     pages += 1;
-    onProgress?.(inserted, total);
-    if (res.done) return { inserted, pages };
+    opts.onProgress?.(inserted + updated + linked, total);
+    if (res.done) return { inserted, updated, linked, removed, pages };
     if (pages >= maxPages) {
       throw new Error(
         `commit did not finish after ${pages} pages (watermark ${res.committed_through_row}) — reload and check the schedule`,
