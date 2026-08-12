@@ -861,6 +861,21 @@ def get_file_metadata(file_id: str) -> dict[str, Any]:
     }
 
 
+@_retry_once_on_rejected_refresh_token
+def get_folder_name(folder_id: str) -> str:
+    """Return a folder's current display name — a READ, the folder twin of
+    `get_file_metadata` (the folder GET is forced INSIDE `_call`'s translation
+    frame, so an expired/consumed refresh token surfaces as the typed error, not
+    a raw boxsdk exception). First consumer: the operator dashboard's Box-roots
+    validity panel, which resolves each configured `*_root_folder_id` and compares
+    the live name to the canonical root name. Raises `BoxNotFoundError` (via
+    `_translate`) when the id resolves to nothing — the caller renders that as an
+    invalid root, never as an empty tree."""
+    client = get_client()
+    info = _call(client.folder(folder_id).get)
+    return str(info.name)
+
+
 def canonical_job_path(
     customer: str, job_number: str, job_name: str, year: int
 ) -> str:
