@@ -96,12 +96,19 @@ Failure modes
     and additionally nets the raw boxsdk exception types, so an unhandled traceback
     is impossible at the cutover console.
 
-    This lazy-iteration/translation gap is a property of ``shared/box_client.py``
-    GENERALLY — every daemon calling ``list_folder`` / ``search`` has the same hole,
-    and it is a candidate tech-debt entry. Fixing the shared module is DELIBERATELY
-    out of scope for this migration PR: it is a live module consumed by running
-    daemons, and a one-time cutover builder is the wrong blast radius to change it
-    from. The workaround is local to this file.
+    CLOSED for ``list_folder`` / ``search`` (PR #57, 2026-08-11). Both now materialize
+    the boxsdk iterator INSIDE ``_call`` — ``_call(lambda: list(...))`` at
+    ``shared/box_client.py`` ``list_folder`` and ``search`` — so the gap this probe
+    works around no longer exists for the two functions originally named here. The
+    local workaround is kept anyway: it is correct, it costs nothing, and it keeps the
+    cutover console's auth path provable without depending on the shared module.
+
+    The GENERAL lesson still stands and is the reusable part: a boxsdk collection is
+    lazy, so ``_call(client.foo().get_items)`` guards only the CONSTRUCTION and the real
+    HTTP — including the refresh-token exchange — happens one frame OUTSIDE the
+    translation/retry wrapper, where a rejected token escapes as a RAW
+    ``BoxOAuthException``. Any FUTURE addition to ``shared/box_client.py`` that returns
+    an iterator must force materialization inside ``_call`` the same way.
   - Box 429/5xx: ``shared.box_client`` retries internally; on exhaustion this
     script prints the typed error and exits 3, having created at most the folders
     already reported ``[ok]`` (each create is independently idempotent on re-run).

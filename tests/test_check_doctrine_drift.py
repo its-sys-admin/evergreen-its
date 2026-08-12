@@ -106,3 +106,28 @@ def test_m7_blocks_on_out_of_range_citation(tmp_path, monkeypatch):
     # §3 (<= 49) must NOT be flagged.
     assert not any("§3 " in f.detail for f in findings)
     assert "M7" in cdd.STRICT_BLOCKING_CHECKS
+
+
+def test_workstream_count_matches_the_slug_list():
+    """`workstreams.count` must equal `len(workstreams.slugs)`.
+
+    Nothing in the checker reads `count` — M5 iterates `slugs` alone — so the field
+    is pure documentation with no enforcement, and it drifted exactly as unenforced
+    documentation does: it read 6 while the blueprint had 10 workstreams, omitting
+    field_ops, progress_reports and operator_dashboard (all built and live) plus
+    urs_marine_portal. Someone reading the manifest to answer "how many workstreams
+    are there" got the wrong answer for months.
+
+    This cannot detect the list falling behind the BLUEPRINT — that needs a
+    cross-repo read the checker deliberately avoids so it works in a fresh CI clone.
+    What it does guarantee is that the two halves of this one block can never
+    disagree, so a slug added without bumping the count fails here.
+    """
+    manifest = cdd._load_manifest()
+    slugs = manifest["workstreams"]["slugs"]
+    count = manifest["workstreams"]["count"]
+    assert count == len(slugs), (
+        f"doctrine_manifest.yaml workstreams.count={count} but the slugs list has "
+        f"{len(slugs)} entries: {slugs}"
+    )
+    assert len(set(slugs)) == len(slugs), f"duplicate workstream slugs: {slugs}"
