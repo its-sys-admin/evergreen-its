@@ -24,7 +24,7 @@ tailscale serve 8484
 
 | Page | What it is |
 |------|------------|
-| `/` | The status grid: pulse strip + eleven fail-soft panels (htmx, 15s refresh) |
+| `/` | The status grid: pulse strip + the fail-soft panels (htmx, 15s refresh) |
 | `/system` | The live system map — trust-gradient lanes, the two walls (untrusted ingress · External Send Gate), per-node live state, deep-linked from error rows / panels / the troubleshooting tree (`?focus=<node>`, `?wf=<workflow>`) |
 | `/view/{panel}` | A panel's full drill-down (more rows; optional `?col=&eq=` display filter) |
 | `/config` | The ACT surface: config editor + operational verbs (section rail + live filter, `?f=` prefill) |
