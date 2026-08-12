@@ -34,6 +34,9 @@ export type EstimateDocType =
 
 /** One row of GET /api/po/estimates — metadata only (never bytes, never the hmac). */
 export interface EstimateRow {
+  /** 0069 — the UNAMBIGUOUS job identity ('' when the estimate predates it). job_no alone
+   *  cannot resolve the site: 2026.384 is both MH405 (site 1) and OG593 (site 2). */
+  job_id: string;
   id: number;
   est_uuid: string;
   job_no: string;
@@ -163,6 +166,8 @@ export async function fetchEstimate(id: number): Promise<EstimateDetail> {
  *  est:v1, and pools the bytes in D1 for the Mac-side §34 screen + classification;
  *  an exact-byte replay of a live doc comes back 409 `duplicate_estimate`. */
 export async function uploadEstimate(args: {
+    /** 0069 — carried so the disposition screen can seed the PO's Site/phase. */
+    job_id?: string;
   job_no: string;
   job_name?: string;
   vendor_key?: string;

@@ -38,6 +38,8 @@ const VENDOR_PILL: Record<rfq.RfqVendorStatus, string> = {
 };
 
 const JOB_NO_RE = /^\d{4}\.\d{3}$/;
+// 0070 — Site/phase is a plain non-negative integer, same shape the PO builder uses.
+const INT_RE = /^\d+$/;
 // UI hint only — worker/po.ts parseVendorFields re-validates with the same shape (Invariant 2).
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -68,6 +70,9 @@ export function RfqBuilderPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [jobId, setJobId] = useState("");
   const [jobNo, setJobNo] = useState("");
+  // 0070 — the Evergreen identifier's site segment. Auto-filled from the job on select; stays
+  // operator-editable, matching the PO builder. 0 = no site, and the number then omits it.
+  const [sitePhase, setSitePhase] = useState("0");
   const [jobName, setJobName] = useState("");
   const [shipTo, setShipTo] = useState({
     ship_to_name: "", ship_to_address: "", ship_to_city: "", ship_to_state: "", ship_to_zip: "",
@@ -118,6 +123,7 @@ export function RfqBuilderPage() {
   function resetBuilder() {
     setJobId("");
     setJobNo("");
+    setSitePhase("0");
     setJobName("");
     setShipTo({
       ship_to_name: "", ship_to_address: "", ship_to_city: "", ship_to_state: "", ship_to_zip: "",
@@ -212,14 +218,25 @@ export function RfqBuilderPage() {
     const job = jobs.find((j) => j.job_id === id);
     if (job) {
       setJobName(job.project_name);
-      // Stored Evergreen number (0057) first; name-prefix parse stays the fallback.
-      const m = /^(\d{4}\.\d{3})/.exec((job.project_name ?? "").trim());
-      setJobNo(job.job_no || (m ? m[1] : ""));
+      // Stored Evergreen number (0057) + site (0064) first; the name-prefix parse stays the
+      // fallback. Anchored at the END OF THE NUMBER (`(?![\d.])`, not `$` — the name continues):
+      // the old open-tailed form matched "2026.384.1 Coker" and returned the truncated
+      // "2026.384", i.e. a DIFFERENT site of the same project. Both parts come from the SAME
+      // source — stored or parsed, never one of each — or the RFQ numbers a site nobody chose.
+      const m = /^(\d{4}\.\d{3})(?:\.(\d+))?(?![\d.])/.exec((job.project_name ?? "").trim());
+      const storedJobNo = job.job_no || "";
+      setJobNo(storedJobNo || (m ? m[1] : ""));
+      setSitePhase(String(storedJobNo ? (job.site_phase ?? 0) : m && m[2] !== undefined ? parseInt(m[2], 10) : 0));
     }
     if (!id) return;
     fetchJobShipTo(id)
       .then((s) => {
-        if (s.job_no) setJobNo(s.job_no);
+        // The ship-to read is the authoritative echo of the job record; take job_no and the
+        // site together so they can never be mixed from different sources.
+        if (s.job_no) {
+          setJobNo(s.job_no);
+          setSitePhase(String(s.site_phase ?? 0));
+        }
         setShipTo({
           ship_to_name: s.ship_to_name, ship_to_address: s.ship_to_address,
           ship_to_city: s.ship_to_city, ship_to_state: s.ship_to_state, ship_to_zip: s.ship_to_zip,
@@ -239,6 +256,9 @@ export function RfqBuilderPage() {
         setEditingId(id);
         setJobId("");
         setJobNo(d.rfq.job_no);
+        // Restore the site too — without this, re-saving an existing draft silently resets it
+        // to 0 and the RFQ generates against the wrong site of the project.
+        setSitePhase(String(d.rfq.site_phase ?? 0));
         setJobName(d.rfq.job_name);
         setShipTo({
           ship_to_name: d.rfq.ship_to_name, ship_to_address: d.rfq.ship_to_address,
@@ -267,6 +287,9 @@ export function RfqBuilderPage() {
   /** Build the draft body, or return a human problem string. */
   function buildBody(): rfq.RfqDraftBody | string {
     if (!JOB_NO_RE.test(jobNo.trim())) return "Enter the job number as YYYY.NNN.";
+    if (!INT_RE.test(sitePhase.trim()) || parseInt(sitePhase, 10) > 9999) {
+      return "Site / phase must be a whole number from 0 to 9999.";
+    }
     const items: rfq.RfqDraftBody["line_items"] = [];
     for (const l of lines) {
       const description = l.description.trim();
@@ -292,6 +315,7 @@ export function RfqBuilderPage() {
     if (vendorKeys.length === 0) return "Pick at least one vendor.";
     return {
       job_no: jobNo.trim(),
+      site_phase: parseInt(sitePhase, 10),
       job_name: jobName.trim() || undefined,
       ...shipTo,
       scope_text: scopeText.trim() || undefined,
@@ -401,6 +425,16 @@ export function RfqBuilderPage() {
             <label className="field">
               <span className="field__label">Job number (YYYY.NNN)</span>
               <input className="field__input" value={jobNo} maxLength={8} onChange={(e) => setJobNo(e.target.value)} />
+            </label>
+            <label className="field">
+              <span className="field__label">Site / phase</span>
+              <input
+                className="field__input"
+                aria-label="Site / phase"
+                value={sitePhase}
+                maxLength={4}
+                onChange={(e) => setSitePhase(e.target.value)}
+              />
             </label>
             <label className="field">
               <span className="field__label">Job name</span>

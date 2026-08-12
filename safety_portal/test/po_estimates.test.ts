@@ -62,10 +62,13 @@ async function seedVendor(vendorKey: string): Promise<void> {
 
 function upload(
   admin: string,
-  over: Partial<{ job_no: string; job_name: string; vendor_key: string; filename: string; mime: string; data_b64: string }> = {},
+  over: Partial<{ job_no: string; job_id: string; job_name: string; vendor_key: string; filename: string; mime: string; data_b64: string }> = {},
 ): Promise<Response> {
   return p(admin, "/api/po/estimates", {
     job_no: over.job_no ?? "2026.001",
+    // 0069 — passed through only when supplied, so the default upload keeps exercising the
+    // backward-compatible path where the caller knows no job_id.
+    ...(over.job_id === undefined ? {} : { job_id: over.job_id }),
     job_name: over.job_name ?? "Sunrise Solar",
     vendor_key: over.vendor_key,
     filename: over.filename ?? "platt quote.pdf",
@@ -866,6 +869,48 @@ describe("rfq round-trip auto-bind", () => {
     const estId = await extractedWithBind({ rfq_number: otherRfqNumber, rfq_vendor_key: VENDOR_KEY });
     expect((await estRow(estId))!.rfq_id).toBeNull(); // estimate job ≠ RFQ job → no bind
     expect(await auditCount("po_estimate_rfq_bound")).toBe(0);
+  });
+
+  it("0070 REGRESSION: a SITE-BEARING rfq_number still binds — rfqs.job_no stays two-segment", async () => {
+    // This is the test that would have caught the rejected design. The auto-bind joins on
+    // `rfq_number = ? AND job_no = ?`, where job_no comes from the ESTIMATE (always two
+    // segments). Had the site been folded into rfqs.job_no instead of its own column,
+    // '2026.001' would stop matching '2026.001.1', the bind would return zero rows, and the
+    // whole R4 round-trip would die SILENTLY — 200 response, only `rfq_bound:false` in an
+    // audit row. Numbering would still look perfect.
+    const siteNumber = "RFQ-2026.001.1-001";
+    const row = await env.DB
+      .prepare(
+        "INSERT INTO rfqs (rfq_uuid, rfq_number, job_no, site_phase, status, created_by) " +
+          "VALUES (?1,?2,'2026.001',1,'generated','admin.est') RETURNING id",
+      )
+      .bind(`uuid-${siteNumber}`, siteNumber)
+      .first<{ id: number }>();
+    await env.DB
+      .prepare("INSERT INTO rfq_vendors (rfq_id, vendor_key, status) VALUES (?1,?2,'filed')")
+      .bind(row!.id, VENDOR_KEY)
+      .run();
+    const estId = await extractedWithBind({ rfq_number: siteNumber, rfq_vendor_key: VENDOR_KEY });
+    expect((await estRow(estId))!.rfq_id).toBe(row!.id); // BOUND
+    expect(await auditCount("po_estimate_rfq_bound")).toBe(1);
+  });
+
+  it("0069: an uploaded estimate carries job_id, and omitting it is still legal", async () => {
+    // job_id is what lets the disposition screen resolve the SITE — job_no alone cannot
+    // (2026.384 is both MH405 site 1 and OG593 site 2). Optional so the route stays
+    // backward-compatible with a caller that only knows the project number.
+    const withJob = await upload(admin, { job_id: "JOB-000034" });
+    expect(withJob.status, await withJob.clone().text()).toBe(201);
+    const id1 = ((await withJob.json()) as any).id as number;
+    expect((await estRow(id1))!.job_id).toBe("JOB-000034");
+
+    // Distinct bytes: identical content would hit the live-sha dedupe and 409, which is the
+    // documented upload behaviour and not what this case is about.
+    const other = new Uint8Array([...PDF_BYTES, 0x0a, 0x25, 0x25, 0x45, 0x4f, 0x46]);
+    const without = await upload(admin, { data_b64: b64(other), filename: "second quote.pdf" });
+    expect(without.status).toBe(201);
+    const id2 = ((await without.json()) as any).id as number;
+    expect((await estRow(id2))!.job_id).toBe(""); // NOT NULL DEFAULT '' — never null
   });
 
   it("a shape-bad rfq_vendor_key is ignored, never a 400", async () => {
