@@ -150,6 +150,31 @@ GATED_SCRIPTS: list[tuple[str, list[str]]] = [
          "anthropic", "anthropic_client"],
     ),
     (
+        # Schedule lane (ADR-0006) — parent-side OCR entry: hands untrusted schedule-PDF
+        # bytes to the KILLABLE sandbox child (Quartz render + rotation ladder + Apple
+        # Vision, all in-child) and shape-validates the JSON that comes back. LOCAL
+        # Vision only — the lane is cloud-AI-free by ADR decision 3, and this entry is
+        # the tripwire that keeps it that way.
+        "field_ops/schedule_ocr.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client"],
+    ),
+    (
+        # Schedule lane — PURE word-geometry → row reconstruction (no I/O at all). Gated
+        # so a future convenience import (an HTTP fetch, an LLM "column guesser") fails
+        # loudly here instead of riding a refactor in silently.
+        "field_ops/schedule_geometry.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client", "requests", "urllib"],
+    ),
+    (
+        # Schedule lane — PURE semantic extraction over reconstructed rows (dates,
+        # durations, percents, sections; flags-never-raises). Same rationale.
+        "field_ops/schedule_parse.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client", "requests", "urllib"],
+    ),
+    (
         # Track 6 job archive. Pure relocation of Smartsheet/Box folders — no AI, no send path.
         # Worth gating explicitly rather than relying on its caller: this module reaches BOTH
         # external systems directly, so a future "email the operator when an archive fails" would

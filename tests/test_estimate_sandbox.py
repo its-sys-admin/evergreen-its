@@ -205,3 +205,60 @@ def test_openpyxl_is_never_imported_at_sandbox_module_level():
             assert all("openpyxl" not in a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom):
             assert "openpyxl" not in (node.module or "")
+
+
+# ---- ADR-0006: dispatch parity + the ocr_page_words contract ------------------------
+
+
+def test_every_allowed_fn_has_an_explicit_dispatch_branch():
+    """The _child_main else-branch falls through to _child_test_alloc (the
+    allocation bomb) BY DESIGN, so an _ALLOWED_FNS entry without its own dispatch
+    branch silently routes a real parse fn to a 512 MiB spin-until-reap. This AST
+    check makes that landmine structural: every allowlist name except the single
+    documented else-name must appear as an explicit `fn_name == "..."` comparison.
+
+    RED-proofed at authoring (2026-08-11): appending a fake name to _ALLOWED_FNS
+    without a branch fails this test naming it."""
+    import ast
+    import inspect
+
+    from po_materials import estimate_sandbox
+
+    tree = ast.parse(inspect.getsource(estimate_sandbox))
+    dispatched: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_child_main":
+            for cmp in ast.walk(node):
+                if (
+                    isinstance(cmp, ast.Compare)
+                    and isinstance(cmp.left, ast.Name)
+                    and cmp.left.id == "fn_name"
+                    and len(cmp.comparators) == 1
+                    and isinstance(cmp.comparators[0], ast.Constant)
+                    and isinstance(cmp.comparators[0].value, str)
+                ):
+                    dispatched.add(cmp.comparators[0].value)
+    else_name = "_test_alloc"  # the ONE name the trailing else may own
+    missing = set(estimate_sandbox._ALLOWED_FNS) - dispatched - {else_name}
+    assert not missing, (
+        f"_ALLOWED_FNS entries with NO dispatch branch (would route to the "
+        f"allocation bomb): {sorted(missing)}"
+    )
+
+
+def test_ocr_page_words_is_allowlisted_and_returns_the_contract_shape_on_garbage():
+    """A non-PDF payload exercises the real child end-to-end: Quartz refuses the
+    bytes and the fn degrades to the EMPTY contract shape — proving dispatch
+    reaches _child_ocr_page_words (not the else-bomb: the bomb never exits 0, so
+    a fall-through would surface as None after the full timeout)."""
+    import json
+
+    from po_materials import estimate_sandbox
+
+    assert "ocr_page_words" in estimate_sandbox._ALLOWED_FNS
+    out = estimate_sandbox.run_sandboxed(
+        "ocr_page_words", b"not a pdf at all", timeout_s=30, args=["2"]
+    )
+    assert out is not None, "child crashed or fell through to the allocation bomb"
+    payload = json.loads(out)
+    assert payload == {"pages": [], "page_sizes": [], "rotations": []}

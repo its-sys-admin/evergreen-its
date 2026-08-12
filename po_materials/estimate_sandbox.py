@@ -46,6 +46,17 @@ Child fn contracts (stdout JSON):
                                      "7006955.0"; datetimes are str()'d for the parser's ISO
                                      regex. Bounded by MANIFEST_XLSX_MAX_SHEETS ×
                                      MANIFEST_XLSX_MAX_ROWS_PER_SHEET × MANIFEST_XLSX_MAX_COLS_PER_ROW)
+  ocr_page_words     [max_pages] → {"pages": [[{"text","conf","x","y","w","h"}...]...],
+                                     "page_sizes": [[width_px, height_px], ...],
+                                     "rotations": [0|90|270, ...]}
+                                    (ADR-0006 schedule lane: OCR-grade Quartz render at
+                                    OCR_TARGET_WIDTH_PX + in-child Apple Vision word
+                                    extraction with a rotation ladder — Vision drops
+                                    most rotated text, so a rotated-looking page is
+                                    re-OCR'd both 90s and the richest result wins.
+                                    Normalized bboxes of the OCR'd bitmap, origin
+                                    bottom-left; the consumer flips. Bounded by
+                                    OCR_MAX_WORDS_PER_PAGE.)
   (plus four harmless _test_* fns — spin / bounded-alloc / crash / echo — dispatched
   only by tests/test_estimate_sandbox.py to prove the reap contract on REAL children)
 
@@ -80,6 +91,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import resource
 import subprocess
 import sys
@@ -108,6 +120,21 @@ MAX_CHILD_STDOUT_BYTES = 64 * 1024 * 1024
 # hard pixel-area cap per page (matches po_attach_screen.MAX_IMAGE_PIXELS posture).
 PREVIEW_TARGET_WIDTH_PX = 1100
 PREVIEW_MAX_PIXELS = 24_000_000
+
+# OCR-grade render + in-child Vision OCR (ADR-0006 — the schedule lane). The 1100px
+# preview width was chosen for on-screen human review and OCRs dense Gantt tables badly;
+# OCR gets its OWN target (≈3× a letter-landscape page — the scale the 2026-08-11
+# feasibility spike proved at confidence 1.0) rather than a bump to the shared preview
+# constant, which would push previews into the parent's downscale ladder and degrade the
+# validate screen's fidelity control. Vision runs INSIDE the child (spike-proven under
+# RLIMIT_CPU/AS) so a wedged OCR of a hostile document is reaped like any other parse —
+# this lane carries no ADR-0004 §Vision in-process deviation.
+OCR_TARGET_WIDTH_PX = 2400
+OCR_TIMEOUT_S = 240
+OCR_MAX_WORDS_PER_PAGE = 3000
+# The rotation ladder's quality discriminator (see _child_ocr_page_words): clean
+# M/D/Y tokens survive only in the correctly-oriented pass.
+_OCR_DATE_RE = re.compile(r"\d{2}/\d{2}/\d{2}")
 
 # Child-side output bounds for the E4 parse payload — a hostile PDF that fabricates
 # millions of words/table rows is truncated in the CHILD, keeping stdout bounded.
@@ -158,6 +185,7 @@ _ALLOWED_FNS = (
     "parse_native",
     "parse_xlsx_grid",
     "extract_xlsx_rows",
+    "ocr_page_words",
     *_TEST_FNS,
 )
 
@@ -553,6 +581,182 @@ def _child_parse_xlsx_grid(data: bytes, max_sheets: int) -> dict[str, Any]:
     return {"sheets": sheets, "tables": tables, "text": texts, "raw": raws}
 
 
+def _child_ocr_page_words(data: bytes, max_pages: int) -> dict[str, Any]:
+    """OCR-grade render + Apple Vision word extraction (child-side; ADR-0006).
+
+    For each PDF page: Quartz render at OCR_TARGET_WIDTH_PX (the schedule corpus is
+    vector-outline text — no text layer — so OCR is the PRIMARY extraction tier, not a
+    fallback), then `ocrmac` (Vision, `accurate`) over the rendered bitmap IN THIS
+    CHILD — with a ROTATION LADDER, because the newer Gantt-view exports draw the
+    landscape content rotated 90° inside a portrait page and Vision silently DROPS a
+    large fraction of rotated text lines (measured 2026-08-11 on Coker p2: 64 words
+    as-rendered vs 135 with the bitmap first rotated upright, the missing 71 being
+    most of the task names). Strategy: OCR as-rendered; aspect-vote the result; when
+    the boxes look rotated, re-OCR both 90° rotations and keep the richest result.
+
+    Emits per-page word dicts with the WINNING pass's normalized bboxes:
+
+        {"pages": [[{"text","conf","x","y","w","h"}, ...], ...],
+         "page_sizes": [[width_px, height_px], ...],
+         "rotations": [0 | 90 | 270, ...]}   # degrees the bitmap was rotated CCW
+                                             # before the winning OCR pass
+
+    (x, y) is the bbox origin in Vision's normalized coordinates of the OCR'D bitmap
+    (origin BOTTOM-LEFT — `field_ops/schedule_geometry.py` owns the flip). `conf` is
+    Vision's confidence — evidence for the validate screen, NOT a filter: the corpus
+    shows digit misreads at confidence 1.0.
+
+    Degrades per page ([]); a document Quartz cannot open, or a missing ocrmac/Vision
+    bridge, yields empty lists (never a hard dependency). Bounded by
+    OCR_MAX_WORDS_PER_PAGE per page.
+    """
+    try:
+        import Quartz  # noqa: PLC0415 — lazy child-only import by design
+        from ocrmac import ocrmac as _ocrmac  # noqa: PLC0415
+        from PIL import Image  # noqa: PLC0415
+    except ImportError:
+        return {"pages": [], "page_sizes": [], "rotations": []}
+
+    def _recognize(img: Any) -> list[dict[str, Any]]:
+        annotations = _ocrmac.OCR(img, recognition_level="accurate").recognize()
+        return [
+            {
+                "text": str(entry[0]),
+                "conf": round(float(entry[1]), 3),
+                "x": round(float(entry[2][0]), 5),
+                "y": round(float(entry[2][1]), 5),
+                "w": round(float(entry[2][2]), 5),
+                "h": round(float(entry[2][3]), 5),
+            }
+            for entry in (annotations or [])[:OCR_MAX_WORDS_PER_PAGE]
+            if isinstance(entry, (list, tuple)) and len(entry) >= 3 and entry[0]
+        ]
+
+    def _looks_rotated(words: list[dict[str, Any]]) -> bool:
+        rotated = upright = 0
+        for w in words:
+            if len(str(w["text"]).strip()) < 4:
+                continue
+            if w["h"] >= w["w"] * 1.5:
+                rotated += 1
+            elif w["w"] >= w["h"] * 1.5:
+                upright += 1
+        return rotated > upright
+
+    cf_data = Quartz.CFDataCreate(None, data, len(data))
+    provider = Quartz.CGDataProviderCreateWithCFData(cf_data)
+    doc = Quartz.CGPDFDocumentCreateWithProvider(provider)
+    if doc is None:
+        return {"pages": [], "page_sizes": [], "rotations": []}
+    page_count = min(int(Quartz.CGPDFDocumentGetNumberOfPages(doc)), max_pages)
+    pages: list[list[dict[str, Any]]] = []
+    page_sizes: list[list[int]] = []
+    rotations: list[int] = []
+    for page_no in range(1, page_count + 1):
+        try:
+            png = _render_one_page_at_width(Quartz, doc, page_no, OCR_TARGET_WIDTH_PX)
+        except Exception:  # noqa: BLE001 — one bad page degrades to []
+            png = None
+        if not png:
+            pages.append([])
+            page_sizes.append([0, 0])
+            rotations.append(0)
+            continue
+        try:
+            img = Image.open(io.BytesIO(png))
+            img.load()
+            candidates: list[tuple[int, list[dict[str, Any]], Any]] = []
+            base = _recognize(img)
+            candidates.append((0, base, img))
+            if _looks_rotated(base):
+                # PIL rotate() is CCW; expand=True keeps the whole bitmap. Vision
+                # ALSO reads 180°-flipped text — badly (garbled digits, reversed
+                # reading order) — so raw word count cannot pick the winner: the
+                # upside-down pass can out-count the upright one. Clean DATE tokens
+                # are the discriminator: a schedule page carries dozens, and they
+                # shred to slash-less digit soup when read upside-down.
+                for angle in (90, 270):
+                    rot = img.rotate(angle, expand=True)
+                    candidates.append((angle, _recognize(rot), rot))
+
+            def _score(words: list[dict[str, Any]]) -> tuple[int, int, int]:
+                # Vision reads 180°-flipped text almost as well as upright text, so
+                # date/word counts alone cannot split the two 90° candidates. The
+                # decisive signal is a LAYOUT invariant of every Smartsheet export:
+                # the 'Task Name' header sits in the TOP band of a correctly-oriented
+                # page (normalized y origin is bottom-left → y-center > 0.5). Falls
+                # back to date-count + word-count for a headerless continuation page.
+                header_top = 0
+                for w in words:
+                    if str(w["text"]).strip().lower() == "task name":
+                        header_top = 1 if (w["y"] + w["h"] / 2.0) > 0.5 else -1
+                        break
+                dates = sum(
+                    1
+                    for w in words
+                    if _OCR_DATE_RE.fullmatch(str(w["text"]).strip().rstrip("|").strip())
+                )
+                return (header_top, dates, len(words))
+
+            angle, words, chosen = max(candidates, key=lambda c: _score(c[1]))
+            pages.append(words)
+            page_sizes.append([int(chosen.width), int(chosen.height)])
+            rotations.append(angle)
+        except Exception:  # noqa: BLE001 — one bad page degrades to []
+            pages.append([])
+            page_sizes.append([0, 0])
+            rotations.append(0)
+    return {"pages": pages, "page_sizes": page_sizes, "rotations": rotations}
+
+
+def _render_one_page_at_width(
+    quartz: Any, doc: Any, page_no: int, target_width_px: int
+) -> bytes | None:
+    """`_render_one_page` at an arbitrary target width (the OCR-grade path).
+
+    Same white-backed RGB bitmap + PREVIEW_MAX_PIXELS bomb cap; only the target width
+    and the scale ceiling differ (OCR wants ~3×; the preview path stays at its own
+    constant so the two renders can never drift into each other's budgets).
+    """
+    page = quartz.CGPDFDocumentGetPage(doc, page_no)
+    if page is None:
+        return None
+    box = quartz.CGPDFPageGetBoxRect(page, quartz.kCGPDFMediaBox)
+    width_pts = float(box.size.width)
+    height_pts = float(box.size.height)
+    if width_pts <= 0 or height_pts <= 0:
+        return None
+    scale = target_width_px / width_pts
+    scale = max(0.1, min(scale, 4.0))
+    if width_pts * scale * height_pts * scale > PREVIEW_MAX_PIXELS:
+        scale = (PREVIEW_MAX_PIXELS / (width_pts * height_pts)) ** 0.5
+    width = max(1, int(width_pts * scale))
+    height = max(1, int(height_pts * scale))
+
+    color_space = quartz.CGColorSpaceCreateDeviceRGB()
+    ctx = quartz.CGBitmapContextCreate(
+        None, width, height, 8, 0, color_space, quartz.kCGImageAlphaPremultipliedLast
+    )
+    if ctx is None:
+        return None
+    quartz.CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0)
+    quartz.CGContextFillRect(ctx, quartz.CGRectMake(0, 0, width, height))
+    quartz.CGContextScaleCTM(ctx, scale, scale)
+    quartz.CGContextTranslateCTM(ctx, -float(box.origin.x), -float(box.origin.y))
+    quartz.CGContextDrawPDFPage(ctx, page)
+    image = quartz.CGBitmapContextCreateImage(ctx)
+    if image is None:
+        return None
+    out_data = quartz.CFDataCreateMutable(None, 0)
+    dest = quartz.CGImageDestinationCreateWithData(out_data, "public.png", 1, None)
+    if dest is None:
+        return None
+    quartz.CGImageDestinationAddImage(dest, image, None)
+    if not quartz.CGImageDestinationFinalize(dest):
+        return None
+    return bytes(out_data)
+
+
 def _child_test_echo(data: bytes) -> dict[str, Any]:
     """Happy-path round-trip probe: prove stdin bytes reached the child intact
     and the JSON-on-stdout contract works end-to-end."""
@@ -586,6 +790,8 @@ def _child_main(argv: list[str]) -> int:
     elif fn_name == "extract_xlsx_rows":
         # `max_pages` is the single int argv slot; for a workbook it means max SHEETS.
         result = _child_extract_xlsx_rows(data, max_pages)
+    elif fn_name == "ocr_page_words":
+        result = _child_ocr_page_words(data, max_pages)
     elif fn_name == "_test_echo":
         result = _child_test_echo(data)
     elif fn_name == "_test_crash":  # pragma: no cover — child exits nonzero
