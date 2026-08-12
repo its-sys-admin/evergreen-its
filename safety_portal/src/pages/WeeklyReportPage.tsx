@@ -63,6 +63,14 @@ type Draft = {
  *  what actually renders. */
 function seedNarrative(d: ProductionReportResponse): { critical: string; upcoming: string } {
   const lines: string[] = [];
+  // Behind-schedule tasks lead, worst slip first — the Worker already ordered them. This MUST
+  // match wpr_data._assemble_critical_items: the screen's whole job is to show what the report
+  // will render, so a divergence here would pre-fill text the compile would never have produced.
+  for (const t of d.schedule?.behind ?? []) {
+    const head = t.section ? `${t.section}: ${t.name}` : t.name;
+    const kind = t.is_contract_milestone ? "Contract milestone behind schedule" : "Behind schedule";
+    lines.push(`${kind} — ${head} (due ${t.finish_date}, ${t.percent}% complete)`);
+  }
   for (const inc of d.material_incidents) {
     const head = [inc.material, inc.issue].filter(Boolean).join(": ");
     if (head) lines.push(inc.details ? `${head} — ${inc.details}` : head);
@@ -331,7 +339,10 @@ export function WeeklyReportPage({ jobId, onBack }: Props) {
         <p className="wr__hint">
           {data.schedule === null
             ? "No schedule is imported for this job, so the report's percent-complete table will say so. Upload and commit a project schedule to fill it."
-            : "Percentages come from the committed project schedule."}
+            : `Percentages come from the committed project schedule — ${data.schedule.task_count} active task(s)` +
+              (data.schedule.behind.length
+                ? `, ${data.schedule.behind.length} behind schedule as of ${data.schedule.today} (seeded into Critical Items below).`
+                : ", none behind schedule.")}
         </p>
         <label className="wr__wide">Critical items / delays
           <textarea rows={5} value={draft.critical_items} onChange={(e) => set("critical_items", e.target.value)} /></label>

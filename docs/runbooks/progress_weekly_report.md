@@ -84,6 +84,29 @@ This is honest, not broken — the report will never print a percentage nobody e
 **Low-class repair:** none needed. Once the office uploads and commits a schedule on the job's
 Schedule page, the next compile fills page 3 automatically. No code change, no re-configuration.
 
+## Symptom 4b — "Page 3 shows odd task names, a section called after the project, or an 'Other' group"
+
+The report renders the committed schedule faithfully — it does not clean it up. Section names,
+task names and phases come straight from what was validated and committed on the Schedule page,
+so an OCR misread or a task the parse could not place shows through to the client. Tasks with no
+section are grouped under **Other** rather than dropped, because dropping them would hide real
+work.
+
+**Low-class repair:** fix it at the source, on the job's Schedule page — correct the grid and
+re-commit, or upload a corrected export as a revision. Then tick **Compile Now** on the week
+sheet. Nothing in the report needs changing.
+
+## Symptom 4c — "Critical Items is full of behind-schedule lines I did not write"
+
+That is the seed, not a fault. For an unsaved week the box is pre-filled from what the system
+found: schedule tasks past their finish date and short of 100% (worst slip first, capped at
+twelve lines), then material incidents, then the crews' daily comments. A slipped **contract
+milestone** is labelled as one, because it is a different conversation from a slipped task.
+
+Edit the box freely — what you save is what the client reads, and it is never re-seeded over
+once saved. A task that is genuinely fine should be corrected on the Schedule page (mark its
+percent, or fix its finish date) rather than only deleted from this box, or it returns next week.
+
 ## Symptom 5 — "The safety statistics / pending items are blank or stale"
 
 Those come from the **weekly report screen**, not from the field. Two cases:
