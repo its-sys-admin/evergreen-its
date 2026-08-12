@@ -110,6 +110,30 @@ class GenerateConfig:
     # mislabeled every PROGRESS packet cover "WEEKLY SAFETY REPORT"; each binding now
     # names its packet. Default preserves the safety wording (§14: unset = unchanged).
     cover_title: str = "WEEKLY SAFETY REPORT"
+    # ── the client-facing report seam (0067) ──────────────────────────────────────────────
+    # A workstream may produce a SECOND artifact from the same compile: a synthesized document
+    # for the CLIENT, distinct from the packet of filed field records. When bound, the returned
+    # bytes are filed to the same Box week folder under `client_report_suffix` and the REVIEW
+    # ROW's Compiled PDF points at THAT file — so the send attaches the report, not the packet.
+    # The packet is still built, still filed, still attached to the week-sheet Rollup row, and
+    # its link rides the review row's Notes: it remains the internal record, it just stops being
+    # what the client receives.
+    #
+    # Same shape and the same reasons as `rollup_page_provider` above: a `(job, week) -> bytes |
+    # None` closure bound in the workstream module, so `generate_core` gains no portal_client /
+    # keychain / renderer import and stays a pure engine (§42). Unbound (safety) → the compile is
+    # byte-identical to before.
+    client_report_provider: (
+        Callable[[ActiveJob, safety_week.SafetyWeek], bytes | None] | None
+    ) = None
+    client_report_suffix: str = "WPR"
+    # A week with NO submissions currently writes a PENDING review row with an empty packet link,
+    # which the send later HELDs for a missing PDF. When a workstream's artifact is CLIENT-FACING
+    # that is too late and too quiet: the office should consciously decide whether a no-activity
+    # week gets a note, a skip, or an investigation. Bound True (progress) the empty-week row is
+    # written HELD with the reason in Notes plus a Review-Queue item. Default False keeps safety
+    # exactly as it was.
+    empty_week_hold: bool = False
 
     @property
     def watchdog_marker_dir(self) -> Path:
@@ -121,6 +145,7 @@ class RunSummary:
     """Per-run counters returned from run_generate(); logged via @its_error_log on the caller."""
     jobs_processed: int = 0
     packets_compiled: int = 0
+    client_reports_compiled: int = 0
     skipped_no_change: int = 0
     empty_weeks: int = 0
     wsr_written: int = 0
@@ -437,6 +462,84 @@ def _write_review_row(
     return row_id
 
 
+def _hold_empty_week(
+    config: GenerateConfig, job: ActiveJob, week: safety_week.SafetyWeek,
+    review_row_id: int, summary: RunSummary, correlation_id: str,
+) -> None:
+    """Mark an empty-week review row HELD and raise a Review-Queue item (0067, opt-in).
+
+    `Send Status` takes the UPPERCASE `HELD` already in the picklist registry — the lowercase
+    `held_*` strings are RESULT codes that live in Notes (the `weekly_send._mark_held` contract).
+    Writing `held_no_activity` into the cell would raise `PicklistViolationError`.
+
+    Best-effort by design: if the status write fails the row simply stays PENDING and the send
+    HELDs it later for a missing PDF, which is the pre-0067 behaviour — a degraded outcome, not a
+    lost one, so it must never abort a compile that has already written its rows.
+    """
+    try:
+        smartsheet_client.update_rows(
+            config.review_sheet_id,
+            [{"_row_id": review_row_id, "Send Status": "HELD"}],
+        )
+    except Exception:  # noqa: BLE001 — a status write must never abort a written-through compile
+        error_log.log(
+            Severity.WARN, config.script_name,
+            f"compile: could not mark the empty-week review row HELD for {job.project_name} "
+            f"week {week.start} — it stays PENDING and the send will HELD it for a missing PDF",
+            error_code=f"{config.script_name.split(chr(46))[-1]}.empty_week_hold_failed", correlation_id=correlation_id,
+        )
+    review_queue.add(
+        workstream=config.workstream,
+        summary=(
+            f"weekly compile: job {job.job_id} ({job.project_name}) filed NO daily reports for "
+            f"week {week.start} — no client report compiled; the row is HELD for a decision"
+        ),
+        payload={"job_id": job.job_id, "project": job.project_name,
+                 "week": week.start.isoformat(), "result": "held_no_activity"},
+        sla_tier=config.sla_tier,
+        reason=review_queue.ReviewReason.OTHER,
+        severity=Severity.WARN,
+        source_file=f"{job.job_id}-{week.start.isoformat()}",
+    )
+    summary.review_queue_entries += 1
+
+
+def _maybe_client_report(
+    config: GenerateConfig, job: ActiveJob, project_name: str,
+    week: safety_week.SafetyWeek, stamp: str, summary: RunSummary, correlation_id: str,
+) -> str:
+    """Build + file the workstream's client-facing report; return its Box link, or "" .
+
+    FENCED like `_maybe_rollup_page`: any failure — provider raise, Box outage, renderer fault —
+    WARNs and returns "", and the caller falls back to putting the field-records packet in the
+    review row. A weekly cadence that quietly stops is worse than one that sends the wrong-shaped
+    document once with a WARN sitting in ITS_Errors.
+    """
+    provider = config.client_report_provider
+    if provider is None:
+        return ""
+    try:
+        report = provider(job, week)
+        if not report:
+            return ""
+        folder_id = _ensure_box_week_folder(config, project_name, week, correlation_id)
+        basename = (
+            f"{safety_naming.job_folder_name(project_name)}_"
+            f"{safety_naming.week_label(week.start)}_{config.client_report_suffix}"
+        )
+        _name, file_id = _upload_packet(folder_id, basename, report, stamp)
+        summary.client_reports_compiled += 1
+        return f"https://app.box.com/file/{file_id}"
+    except Exception:  # noqa: BLE001 — the packet fallback keeps the week deliverable
+        error_log.log(
+            Severity.WARN, config.script_name,
+            f"compile: client report FAILED for {project_name} week {week.start} — the review row "
+            f"falls back to the field-records packet; the client receives the packet this week",
+            error_code=f"{config.script_name.split(chr(46))[-1]}.client_report_failed", correlation_id=correlation_id,
+        )
+        return ""
+
+
 def _attach_pdf_best_effort(
     config: GenerateConfig, sheet_id: int, row_id: int, filename: str, pdf_bytes: bytes,
     correlation_id: str,
@@ -521,8 +624,24 @@ def _compile_job_week(
 
     if not submissions:
         summary.empty_weeks += 1
-        _write_review_row(config, job, week, packet_link="", manifest="no submissions this week",
-                          summary=summary, correlation_id=correlation_id)
+        empty_note = "no submissions this week"
+        if config.empty_week_hold:
+            # A client-facing lane: do NOT leave a PENDING row that only fails at send time for a
+            # missing PDF. Nothing was filed this week — crew demobilized, weather shutdown, or
+            # nobody filed — and only a human can tell those apart, so the row is HELD with the
+            # reason visible and a Review-Queue item raised. `progress_send_poll` dispatches only
+            # {PENDING, FAILED}, so a HELD row can never go out on its own.
+            empty_note = (
+                "held_no_activity: no daily reports were filed for this week — no client report "
+                "was compiled. Decide whether to send a no-activity note, skip the week, or find "
+                "out why nothing was filed."
+            )
+        review_row_id = _write_review_row(
+            config, job, week, packet_link="", manifest=empty_note,
+            summary=summary, correlation_id=correlation_id,
+        )
+        if config.empty_week_hold:
+            _hold_empty_week(config, job, week, review_row_id, summary, correlation_id)
         week_sheet.append_rollup_row(
             sheet_id, packet_link="", compiled_at=compiled_at,
             manifest_note="0 submissions this week (empty-week placeholder)",
@@ -556,8 +675,22 @@ def _compile_job_week(
         f"{len(submissions)} submissions ({len(pdfs)} in packet): "
         f"{', '.join(manifest_parts)}; compiled {compiled_at}"
     )
+
+    # The client-facing report (0067), when the workstream binds one. Fenced: a failure here
+    # degrades to today's behaviour — the field-records packet in Compiled PDF — and is LOUD.
+    # Sending the packet is not ideal, but it is a document the client can read; sending nothing
+    # would silently break the weekly cadence.
+    report_link = ""
+    if config.client_report_provider is not None:
+        report_link = _maybe_client_report(config, job, project_name, week, stamp,
+                                           summary, correlation_id)
+    if report_link:
+        # The packet stops being the client's attachment and becomes the internal record. Its
+        # link rides Notes so the operator can still reach it from the same row in one click.
+        manifest_note = f"{manifest_note}; field-records packet: {packet_link or '(none)'}"
+
     # Commit-point ordering (A6 resumable watermark, §42): review row FIRST, Rollup LAST.
-    review_row_id = _write_review_row(config, job, week, packet_link=packet_link,
+    review_row_id = _write_review_row(config, job, week, packet_link=report_link or packet_link,
                                       manifest=manifest_note, summary=summary,
                                       correlation_id=correlation_id)
     rollup_row_id = week_sheet.append_rollup_row(

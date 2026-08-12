@@ -1,0 +1,115 @@
+---
+type: operations
+date: 2026-08-11
+status: active
+related_prs: []
+workstream: progress_reports
+tags: [runbook, successor-remediation, progress_weekly_generate, weekly-production-report, tier-2]
+---
+
+# Runbook — the client-facing Weekly Production Report (Successor-Remediation, Op Stds §43)
+
+A §43 entry for the **Successor-Operator** (reads Smartsheet rows, flips an `ITS_Config` value,
+re-runs a daemon — writes no code, touches no secrets). The compile daemon itself has its own
+runbook: [`progress_weekly_generate.md`](progress_weekly_generate.md). This one covers the
+**document** that compile now produces and the office screen that feeds it.
+
+## What it is
+
+Every Friday the progress compile builds TWO artifacts for each active progress job:
+
+| Artifact | Where it goes | Who sees it |
+|---|---|---|
+| **Weekly Production Report** (5 pages, branded) | Box `…/<Job>/week of <Sat>/<Job>_week of <Sat>_WPR.pdf`, and the `WPR_human_review` row's **Compiled PDF** | **The client**, after a human approves the row |
+| **Field-records packet** (cover + rollup + every daily report) | the same Box week folder, the week-sheet **Rollup** row, and the review row's **Notes** | internal only — it is the record, no longer the client's attachment |
+
+The report's content comes from three places: what the field filed (weather, crew progress,
+deliveries, photos), what the job schedule says (page 3 percentages), and what the office typed on
+the **weekly report screen** in the portal (OSHA case counts, labor-by-company, pending
+RFIs/submittals/COs, inclement-weather days, photo curation).
+
+---
+
+## Symptom 1 — "The client got the big stack of daily reports again, not the 5-page report"
+
+The report failed to build and the compile fell back to attaching the packet, on purpose: a
+weekly cadence that quietly stops is worse than one wrong-shaped document.
+
+**Look for** an `ITS_Errors` row from `progress_reports.progress_weekly_generate` with
+`error_code = progress_weekly_generate.client_report_failed`. It names the job and week.
+
+**Low-class repair:** re-run the compile for that job — tick **Compile Now** on the job's week
+sheet Rollup row and wait for the 90-second `compile_now_poll` cycle. A recompile appends a NEW
+review row; the old one can be left PENDING or ignored (nothing is overwritten).
+
+**Escalate to Seth** if it fails again with the same code — that is a wired-but-broken report
+(Worker route, Box, or renderer), not a transient.
+
+## Symptom 2 — "There is no WPR row at all for this week"
+
+That is the compile not running, not the report. Go to
+[`progress_weekly_generate.md`](progress_weekly_generate.md) Fault A.
+
+## Symptom 3 — A review row sits at `Send Status = HELD` with "held_no_activity" in Notes
+
+**This is working as designed.** No daily reports were filed for that job that week, so no client
+report was compiled and nothing will be sent. The system cannot tell "crew demobilized" from
+"nobody filed", so it stops and asks.
+
+**Your decision, one of three:**
+
+1. **The job really was idle** (demobilized, weather shutdown, not yet mobilized) — leave the row
+   HELD, or write a short note in `Email Body` and set `Send Status` back to `PENDING` if the
+   client expects a no-activity note. It will then send on the normal approval path.
+2. **The crew forgot to file** — get the daily reports filed, then tick **Compile Now** on the week
+   sheet. A new review row appears with a real report.
+3. **The job should not be reporting at all** — set the job's `Active` to Inactive in
+   `ITS_Active_Jobs_Progress` so it stops generating weeks.
+
+A matching `ITS_Review_Queue` item is raised at WARN so the week is visible even if nobody opens
+the WPR sheet. Watchdog **Check T** WARNs again if a HELD row sits past 24h.
+
+## Symptom 4 — "Page 3 says 'No schedule imported for this job'"
+
+No project schedule has been committed for that job yet, so there are no percentages to report.
+This is honest, not broken — the report will never print a percentage nobody entered.
+
+**Low-class repair:** none needed. Once the office uploads and commits a schedule on the job's
+Schedule page, the next compile fills page 3 automatically. No code change, no re-configuration.
+
+## Symptom 5 — "The safety statistics / pending items are blank or stale"
+
+Those come from the **weekly report screen**, not from the field. Two cases:
+
+- **Blank** — nobody has opened the screen for this job yet. Fill it once; from then on each week
+  starts pre-filled from the previous week (the screen shows which values were carried).
+- **Stale** — the values carried forward and nobody adjusted them. Open the screen, correct the
+  numbers, save, then tick **Compile Now** to regenerate the PDF.
+
+The office's typed values always win over anything the system assembled. A section the office
+**clears on purpose stays cleared** — it is not re-filled on the next compile.
+
+## Symptom 6 — "A photo I did not want is on the report" / "the photo page is empty"
+
+The report auto-picks up to 8 photos spread across the week's days. On the weekly report screen you
+can deselect, reorder and re-caption; your selection then wins on every future compile of that
+week, including an explicitly empty one.
+
+Only photos that passed screening and reached Box are ever offered — an unscreened or refused photo
+cannot appear. If the page is empty and you expected photos, the crew's uploads have not been
+screened yet (see `portal_poll` health) or none were uploaded.
+
+**Recompile after curating:** tick **Compile Now**.
+
+---
+
+## Boundary — escalate to the Developer-Operator (Seth)
+
+Everything above is Tier-2. Escalate, do not attempt:
+
+- Any change to **who receives** the report, or turning the send lane on/off — the External Send
+  Gate is a FIXED high-capability class.
+- `client_report_failed` repeating after a clean re-run (a wired-but-broken report).
+- A report that renders **wrong numbers** rather than blank ones — that is a data-correctness
+  question, not a re-run.
+- Anything requiring a code change, a secret, or a doctrine call.
