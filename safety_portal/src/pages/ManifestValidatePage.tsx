@@ -536,7 +536,7 @@ export function ManifestValidatePage({
                   key={page}
                   src={previewSrc}
                   alt={`${manifest.filename} page ${page}`}
-                  style={{ maxWidth: "100%", border: "1px solid var(--c-border, #ccc)" }}
+                  className="sched-check__page"
                 />
               ) : (
                 <p className="dash__intro">Loading page {page}…</p>

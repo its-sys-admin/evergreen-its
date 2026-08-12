@@ -352,15 +352,11 @@ export function ScheduleReconcilePage({
       ) : null}
 
       {committable ? (
-        <div
-          className="schedule-reconcile__split"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)",
-            gap: "1rem",
-            alignItems: "start",
-          }}
-        >
+        // The split lives in CSS now (schedule-report.css) — see the note in
+        // ScheduleValidatePage. An inline grid-template-columns cannot carry a media query,
+        // so this pane held one ratio at every width and the source preview collapsed to
+        // roughly 114px on a phone.
+        <div className="schedule-reconcile__split">
           {/* ── LEFT: the source pages — the lane's fidelity control ────────────────── */}
           <section className="card dash-section" style={{ minWidth: 0 }} aria-label="Source document">
             <h4>Source</h4>
@@ -402,7 +398,7 @@ export function ScheduleReconcilePage({
                     src={previewSrc}
                     alt={`${schedule.filename} page ${page}`}
                     onLoad={() => setPreviewLoaded(true)}
-                    style={{ maxWidth: "100%", border: "1px solid var(--c-border, #ccc)" }}
+                    className="sched-check__page"
                   />
                 ) : (
                   <p className="dash__intro">Loading page {page}…</p>

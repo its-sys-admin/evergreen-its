@@ -15,9 +15,14 @@ vi.mock("../../lib/fieldops_report", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/fieldops_report")>();
   return { ...actual, fetchWeeklyReport: vi.fn(), saveWeeklyReport: vi.fn() };
 });
+// The page renders through PageShell (2026-08 design pass) so it carries the Evergreen header
+// and sign-out like every other page. PageShell calls useAuth, which throws outside a provider —
+// mocking it is the JobSchedulePage / JobMaterialsPage convention.
+vi.mock("../../lib/auth", () => ({ useAuth: vi.fn() }));
 
 import { fetchWeeklyReport, saveWeeklyReport } from "../../lib/fieldops_report";
 import type { ProductionReportResponse } from "../../lib/fieldops_report";
+import { useAuth } from "../../lib/auth";
 import { WeeklyReportPage } from "../WeeklyReportPage";
 
 function payload(over: Partial<ProductionReportResponse> = {}): ProductionReportResponse {
@@ -69,6 +74,12 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(saveWeeklyReport).mockResolvedValue(undefined);
+  vi.mocked(useAuth).mockReturnValue({
+    user: { username: "office.admin", role: "admin", capabilities: ["cap.jobtracker.manage"] },
+    loading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+  });
 });
 afterEach(cleanup);
 
@@ -170,6 +181,20 @@ describe("WeeklyReportPage — the office fields D1 cannot derive", () => {
     );
     // The labor table seeded from the crews the field reported, hours left for the office.
     expect(body.labor?.rows?.[0]).toMatchObject({ company: "Pro Panel", man_hours: "" });
+  });
+
+  it("PRESERVES hazard_topics, which this screen cannot edit and used to wipe on every save", async () => {
+    const p = payload();
+    p.office.narrative = {
+      critical_items: "", upcoming_activities: "", hazard_topics: ["Ladder safety", "Heat illness"],
+    };
+    await renderPage(p);
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    // The page has no editor for this field, so a save from here must round-trip it. It used
+    // to send a literal [] — silently clearing a field nothing on screen even displayed.
+    expect(vi.mocked(saveWeeklyReport).mock.calls[0][0].narrative?.hazard_topics)
+      .toEqual(["Ladder safety", "Heat illness"]);
   });
 
   it("marks a weather day only when the office ticks it", async () => {

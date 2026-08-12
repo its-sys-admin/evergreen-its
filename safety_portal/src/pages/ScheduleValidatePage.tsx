@@ -364,15 +364,12 @@ export function ScheduleValidatePage({
       ) : null}
 
       {committable ? (
-        <div
-          className="schedule-validate__split"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.6fr)",
-            gap: "1rem",
-            alignItems: "start",
-          }}
-        >
+        // The split lives in CSS now (schedule-report.css), where a media query can reach
+        // it. It used to be an inline grid-template-columns, which one structurally cannot:
+        // the 1 : 1.6 ratio held at 320px as firmly as at 3440px, so the source preview —
+        // this screen's only defence against an OCR misread — rendered about 100px wide on
+        // a phone. It now stacks below 1024px and sticks beside the grid above it.
+        <div className="schedule-validate__split">
           {/* ── LEFT: the source — the ONLY fidelity control this lane has ─────────── */}
           <section className="card dash-section" style={{ minWidth: 0 }} aria-label="Source document">
             <h4>Source</h4>
@@ -415,7 +412,7 @@ export function ScheduleValidatePage({
                     src={previewSrc}
                     alt={`${schedule.filename} page ${page}`}
                     onLoad={() => setPreviewLoaded(true)}
-                    style={{ maxWidth: "100%", border: "1px solid var(--c-border, #ccc)" }}
+                    className="sched-check__page"
                   />
                 ) : (
                   <p className="dash__intro">Loading page {page}…</p>

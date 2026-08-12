@@ -1,0 +1,1631 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Schedule + Weekly Production Report — layout layer
+   ─────────────────────────────────────────────────────────────────────────────
+
+   WHY A SECOND SHEET. global.css is the portal-wide kit (2138 lines). These two
+   surfaces are the only ones in the product that render TIME AS SPACE (the schedule
+   timeline) and a LONG AUTHORED DOCUMENT (the weekly report), so they carry layout
+   machinery nothing else needs. Keeping it here means global.css stays the shared kit
+   and this file can be read as one idea. Loaded AFTER global.css in main.tsx; every
+   selector is namespaced `.sched-*` / `.wpr-*` so it never competes with the kit.
+
+   NO NEW BRAND COLOR, NO NEW TYPEFACE. Every value below resolves to an existing
+   token. The palette does exactly four jobs:
+
+     --c-brg          every meter fill, every schedule bar, every rail
+     --c-gold         THE NOW-MARKER, and nothing else on these pages
+     --c-danger       late / overdue, as ink and a hairline accent — never as a ground
+     --c-surface-2    meter tracks, and the ground of machine-derived sections
+
+   THE ONE IDEA. The portal already has a signature element: the day-rail
+   (`.fr__guidance--rail`), a BRG rail down the daily SOP with a gold tick marking the
+   phase of the day you are in. The schedule timeline is that same device at project
+   scale — a rail of time with a gold tick on today. So across the whole product, gold
+   means "where you are in time." That is why the today-marker is gold and why nothing
+   else here is: the boldness is spent once, on the page's reason for existing.
+
+   Gold stays DECORATION (tokens.css: gold-on-white is 2.46:1 and fails the 3:1 UI
+   floor). Every gold mark on these pages is a rule, a tick or a border whose MEANING is
+   also carried by BRG or black text beside it — the "TODAY" label, the "Carried
+   forward" wording. A user who cannot see the gold loses nothing.
+
+   LATE is the other honest signal, and it is new information: a task past its finish
+   date and under 100% is behind, and the old table said so nowhere. It reads as
+   --c-danger ink plus a hairline row accent. It deliberately does NOT get a red
+   ground — global.css reserves the tinted-red ground (#fdf1f1) for life-safety
+   callouts, "boldness spent once", and a late task is not a hazard.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   0 — SHARED: a wider well for these two pages
+   ═══════════════════════════════════════════════════════════════════════════
+   --maxw (920px) is tuned for forms and reading. A 40-row schedule and a
+   two-column report both have more to say than 920px holds on a laptop, so
+   PageShell takes an opt-in `wide` prop that adds this class. Every other page
+   is untouched. */
+.page__main--wide {
+  max-width: 1240px;
+}
+
+/* Visually hidden, still read aloud and still found by a text search. The schedule's
+   block-character progress bar (█████░░░░░ 50%) lives in one of these: it is the page's
+   real accessible rendering of progress and its print fallback, so it stays in the DOM
+   while the CSS meter carries the visual. */
+.u-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media print {
+  .u-sr-only {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   0b — CLASSES THE APP ALREADY ASKED FOR AND NEVER GOT
+   ═══════════════════════════════════════════════════════════════════════════
+   An audit of every className token in src/**.tsx against the stylesheets found 68
+   classes referenced with NO definition anywhere. The weekly report was the worst case
+   (fifteen on one page, which is why it rendered as raw HTML) but not the only one.
+   Defined here are the ones the schedule lane depends on; the rest are reported rather
+   than changed blind, because a page whose look nobody has verified is not a page to
+   restyle sight-unseen.
+
+   These are deliberately CONSERVATIVE — each gets the appearance its call sites already
+   assume, and nothing more. */
+
+/* Used 11× (payments, materials, manifest, both schedule sub-faces) to mean "this button
+   shares a row with other controls". SMALL MEANS NARROWER, NOT SHORTER: the height stays
+   on --tap because every one of those rows is reachable from a phone in the field, and
+   shrinking the target is the opposite of what this pass is for. */
+.btn--sm {
+  padding: 0 12px;
+  font-size: var(--fs-sm);
+}
+
+/* Used 12× for a blocking inline error, once for its resolved twin. Ink and weight only,
+   no ground: the tinted red ground is reserved for the life-safety callout
+   (.fr__callout--critical — "boldness spent once"), and an unresolved import row is not
+   a hazard. */
+.dash-error {
+  color: var(--c-danger);
+  font-weight: 600;
+}
+
+.dash-ok {
+  color: var(--c-brg);
+  font-weight: 600;
+}
+
+.dash-hint {
+  color: var(--c-muted);
+  font-size: var(--fs-sm);
+}
+
+/* ── The check-screen split ────────────────────────────────────────────────
+   Three screens show a SOURCE PAGE beside an EDITABLE GRID: the schedule first-import
+   check, the schedule revision reconcile, and the manifest validate. All three declared
+   a split class, none was ever defined, and all three fell back to an inline
+   `grid-template-columns` with no media query — so on a phone the source preview
+   resolved to about 100px wide.
+
+   That is worse than ordinary layout debt: each screen states in its own header that the
+   side-by-side source is the ONLY control against an OCR misread, and a fidelity control
+   you cannot read is not a control. So: ONE COLUMN until there is real room for two, and
+   the source pane sticks once it is beside the grid, because it is useless if it scrolls
+   away at row ten. Same device, same 1024px breakpoint, as .wpr__rail. */
+.schedule-validate__split,
+.schedule-reconcile__split,
+.manifest-validate__split {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .schedule-validate__split,
+  .schedule-reconcile__split,
+  .manifest-validate__split {
+    grid-template-columns: minmax(320px, 2fr) minmax(0, 3fr);
+    column-gap: var(--space-6);
+  }
+
+  .schedule-validate__split > :first-child,
+  .schedule-reconcile__split > :first-child,
+  .manifest-validate__split > :first-child {
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100dvh - var(--space-8));
+    overflow-y: auto;
+  }
+}
+
+/* The source page render itself. It is evidence, so it takes the full width of its
+   column and sits on a ground that makes a white page edge visible. */
+.sched-check__page {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1 — SCHEDULE: the hero strip
+   ═══════════════════════════════════════════════════════════════════════════
+   The first thing a schedule must answer is "are we on time," so the page opens
+   with the answer, not with a toolbar. One dominant meter, then the counts that
+   qualify it. The percentage is the display face at display size — the one place
+   on the page where a number is allowed to be big. */
+.sched-hero {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 1fr;
+  align-items: center;
+  margin-bottom: var(--gap);
+}
+
+@media (min-width: 640px) {
+  .sched-hero {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-6);
+  }
+}
+
+.sched-hero__figure {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.sched-hero__pct {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(2.5rem, 9vw, 3.5rem);
+  line-height: 0.9;
+  color: var(--c-brg);
+  letter-spacing: -0.01em;
+}
+
+.sched-hero__pct-unit {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  color: var(--c-muted);
+}
+
+/* The hero meter is the page's one heavy rule: 12px against the kit's 8px, because
+   it reports the whole job rather than one task. */
+.sched-hero__meter {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-line);
+  overflow: hidden;
+}
+
+.sched-hero__meter-fill {
+  height: 100%;
+  background: var(--c-brg);
+  border-radius: 999px;
+}
+
+.sched-hero__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--c-muted);
+}
+
+.sched-hero__stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.sched-hero__stat b {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--c-black);
+}
+
+.sched-hero__stat--late b {
+  color: var(--c-danger);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 — SCHEDULE: toolbar (search · filters · view switch)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.sched-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--c-line);
+  border-bottom: 1px solid var(--c-line);
+  margin-bottom: var(--gap);
+}
+
+.sched-toolbar__search {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: var(--tap);
+  font: inherit;
+  color: var(--c-black);
+  background: var(--c-white);
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+.sched-toolbar__search:focus-visible {
+  border-color: var(--c-brg);
+  outline: 3px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+.sched-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Filter chips are buttons that look like the kit's status pills, so a filter reads as
+   "show me these ones" in the same visual language the rows answer in. 44px keeps them
+   thumb-sized without the full 48px button bulk — they sit six-across on a phone. */
+.sched-chip {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--c-line);
+  background: var(--c-white);
+  color: var(--c-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sched-chip:hover {
+  border-color: var(--c-brg);
+  color: var(--c-brg);
+}
+
+.sched-chip[aria-pressed="true"] {
+  background: var(--c-brg);
+  border-color: var(--c-brg);
+  color: var(--c-on-brg);
+}
+
+.sched-chip__count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* View switch reuses the kit's tab idiom (BRG label, gold underline when active) so it
+   reads as the same control the admin strip and My Tasks already use. */
+.sched-views {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 — SCHEDULE: section groups
+   ═══════════════════════════════════════════════════════════════════════════
+   Sections are the schedule's own phases in document order — a real sequence, so
+   grouping them and rolling up their progress is structure, not decoration. The
+   header is a button: the whole bar is the hit target, not a caret. */
+.sched-group {
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-white);
+  box-shadow: var(--shadow);
+  margin-bottom: var(--space-3);
+  overflow: hidden;
+}
+
+.sched-group__head {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--tap);
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: none;
+  border-left: 3px solid var(--c-brg); /* the rail, at section scale */
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.sched-group__head:hover {
+  background: var(--c-surface);
+}
+
+.sched-group__caret {
+  color: var(--c-brg);
+  font-size: 0.7rem;
+  transition: transform 120ms ease-out;
+}
+
+.sched-group__head[aria-expanded="true"] .sched-group__caret {
+  transform: rotate(90deg);
+}
+
+.sched-group__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-base);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-brg);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sched-group__count {
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-muted);
+}
+
+.sched-group__roll {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.sched-group__roll-meter {
+  width: 72px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+
+.sched-group__roll-fill {
+  height: 100%;
+  background: var(--c-brg);
+  border-radius: 999px;
+}
+
+.sched-group__roll-pct {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--c-brg);
+  min-width: 3ch;
+  text-align: right;
+}
+
+@media (max-width: 480px) {
+  .sched-group__roll-meter {
+    width: 44px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 — SCHEDULE: the task row
+   ═══════════════════════════════════════════════════════════════════════════
+   Desktop is a four-track grid, phone is a stacked card. It is NOT a <table>: the
+   mark-off controls that used to be crammed into a cell now get their own full-width
+   strip under the row, which a table cell cannot give them without colspan gymnastics.
+   Semantics are carried by a list + aria, not by <tr>. */
+.sched-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sched-task {
+  display: grid;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--c-line);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 860px) {
+  .sched-task {
+    grid-template-columns: minmax(0, 1fr) 168px 62px 210px;
+    align-items: center;
+  }
+}
+
+/* Late is a hairline on the row edge plus red ink in the badge — never a red ground. */
+.sched-task--late {
+  box-shadow: inset 3px 0 0 var(--c-danger);
+}
+
+/* A finished task recedes so the unfinished ones read first. The name stays full
+   contrast — only the supporting metadata dims, so nothing becomes unreadable. */
+.sched-task--done .sched-task__dates,
+.sched-task--done .sched-task__dur {
+  opacity: 0.6;
+}
+
+.sched-task__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.sched-task__name {
+  font-weight: 600;
+  color: var(--c-black);
+  overflow-wrap: anywhere;
+}
+
+/* Milestones and deliveries are different OBJECTS, not just rows with a flag, so they
+   get a glyph in the margin the way a drawing set marks a control point. Decorative
+   only — the pill beside it says the word. */
+.sched-task__glyph {
+  color: var(--c-brg);
+  font-size: 0.8em;
+  flex: 0 0 auto;
+}
+
+.sched-task__dates {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-muted);
+  white-space: nowrap;
+}
+
+.sched-task__dur {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-muted);
+}
+
+@media (min-width: 860px) {
+  .sched-task__dur {
+    text-align: right;
+  }
+}
+
+/* The progress cell is the row's control when the session can mark. As a button it
+   carries the meter, the number and the affordance in one 48px target — the old design
+   put five 28px chips and a number input in a table cell. */
+.sched-task__prog {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+}
+
+button.sched-task__prog {
+  cursor: pointer;
+}
+
+button.sched-task__prog:hover {
+  border-color: var(--c-brg);
+  background: var(--c-surface);
+}
+
+.sched-task__prog-meter {
+  flex: 1 1 auto;
+  height: 8px;
+  min-width: 60px;
+  border-radius: 999px;
+  background: var(--c-surface-2);
+  overflow: hidden;
+}
+
+.sched-task__prog-fill {
+  height: 100%;
+  background: var(--c-brg);
+  border-radius: 999px;
+}
+
+.sched-task__prog-pct {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-brg);
+  min-width: 4ch;
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+.sched-task__prog-hint {
+  font-size: 0.72rem;
+  color: var(--c-muted);
+  flex: 0 0 auto;
+}
+
+/* ── The mark-off strip ────────────────────────────────────────────────────
+   Opens under one row at a time, full width, with real 48px targets. This is the
+   page's job on a phone, so it is generous rather than clever. */
+.sched-mark {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin-top: var(--space-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-sm);
+}
+
+.sched-mark__label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  flex: 1 0 100%;
+}
+
+.sched-mark__chip {
+  min-height: var(--tap);
+  min-width: 60px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-base);
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--c-brg);
+  background: var(--c-white);
+  color: var(--c-brg);
+  cursor: pointer;
+}
+
+.sched-mark__chip:hover:not(:disabled) {
+  background: var(--c-surface-2);
+}
+
+.sched-mark__chip[aria-pressed="true"] {
+  background: var(--c-brg);
+  border-color: var(--c-gold);
+  color: var(--c-on-brg);
+}
+
+.sched-mark__chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sched-mark__exact {
+  width: 5.5rem;
+  min-height: var(--tap);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--c-white);
+}
+
+.sched-mark__date {
+  min-height: var(--tap);
+  font: inherit;
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--c-white);
+}
+
+/* Milestone done-mark: a real switch-sized control, not a 13px checkbox. */
+.sched-mark__done {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: 0 var(--space-3);
+  border: 1.5px solid var(--c-brg);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--c-brg);
+}
+
+.sched-mark__done input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--c-brg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 — SCHEDULE: the timeline (the signature)
+   ═══════════════════════════════════════════════════════════════════════════
+   A construction schedule's native form is a bar of time; the old page rendered it as a
+   spreadsheet and threw that away. Here the horizontal axis IS the job's date span:
+   every bar's `--x` / `--w` are percentages of it, so two tasks that overlap look
+   overlapping. Pure CSS grid + absolute positioning — the project depends on react and
+   react-dom only, and a chart library would be a heavier answer than the question. */
+.sched-tl {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-white);
+  box-shadow: var(--shadow);
+  -webkit-overflow-scrolling: touch;
+}
+
+.sched-tl__inner {
+  min-width: 720px;
+  position: relative;
+}
+
+@media (max-width: 640px) {
+  .sched-tl__inner {
+    min-width: 560px;
+  }
+}
+
+/* Every row shares one grid so the name gutter and the canvas stay locked as the
+   canvas scrolls under the sticky names. */
+.sched-tl__row {
+  display: grid;
+  grid-template-columns: var(--tl-gutter, 200px) minmax(0, 1fr);
+  align-items: center;
+  border-top: 1px solid var(--c-line);
+  min-height: 34px;
+}
+
+@media (max-width: 640px) {
+  .sched-tl__row {
+    --tl-gutter: 112px;
+  }
+}
+
+.sched-tl__row:first-child {
+  border-top: none;
+}
+
+.sched-tl__name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--c-white);
+  border-right: 1px solid var(--c-line);
+  padding: 6px var(--space-3);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sched-tl__row--section .sched-tl__name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-brg);
+  background: var(--c-surface);
+}
+
+.sched-tl__row--section {
+  background: var(--c-surface);
+}
+
+.sched-tl__canvas {
+  position: relative;
+  height: 100%;
+  min-height: 34px;
+}
+
+/* Month ruler. Hairlines only — the bars are the ink. */
+.sched-tl__ruler {
+  position: relative;
+  height: 30px;
+  background: var(--c-surface);
+}
+
+.sched-tl__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  border-left: 1px solid var(--c-line);
+  padding-left: 5px;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.sched-tl__gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  border-left: 1px solid var(--c-line);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* THE NOW-MARKER. Gold, matching the day-rail's phase tick — the one place gold appears
+   on this page. Its MEANING is carried by the BRG "TODAY" label at its head, so the
+   information survives for anyone who cannot resolve gold on white. */
+.sched-tl__today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--x);
+  width: 2px;
+  background: var(--c-gold);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sched-tl__today-flag {
+  position: absolute;
+  top: 4px;
+  left: var(--x);
+  transform: translateX(-50%);
+  z-index: 3;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-on-brg);
+  background: var(--c-brg);
+  border: 1px solid var(--c-gold);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The bar: planned extent as a bordered track, work done as a solid fill. Plan and
+   actual in one mark — the thing a schedule exists to show. */
+.sched-tl__bar {
+  position: absolute;
+  left: var(--x);
+  width: var(--w);
+  top: 50%;
+  transform: translateY(-50%);
+  height: 16px;
+  min-width: 3px;
+  border-radius: 3px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-line);
+  overflow: hidden;
+}
+
+.sched-tl__bar-fill {
+  height: 100%;
+  background: var(--c-brg);
+}
+
+.sched-tl__bar--late {
+  border-color: var(--c-danger);
+  border-width: 1.5px;
+}
+
+/* A milestone has no duration, so it is a point, drawn the way a drawing set draws
+   one. Filled = reached. */
+.sched-tl__diamond {
+  position: absolute;
+  left: var(--x);
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  border: 2px solid var(--c-brg);
+  background: var(--c-white);
+}
+
+.sched-tl__diamond--done {
+  background: var(--c-brg);
+}
+
+.sched-tl__diamond--late {
+  border-color: var(--c-danger);
+}
+
+.sched-tl__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--c-line);
+  font-size: var(--fs-sm);
+  color: var(--c-muted);
+  background: var(--c-surface);
+}
+
+.sched-tl__legend-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sched-tl__legend-swatch {
+  width: 22px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--c-line);
+  background: var(--c-surface-2);
+  flex: 0 0 auto;
+}
+
+.sched-tl__legend-swatch--done {
+  background: var(--c-brg);
+  border-color: var(--c-brg);
+}
+
+.sched-tl__legend-swatch--late {
+  border-color: var(--c-danger);
+  border-width: 1.5px;
+}
+
+.sched-tl__legend-swatch--today {
+  width: 3px;
+  background: var(--c-gold);
+  border: none;
+  height: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6 — SHARED: empty / loading states
+   ═══════════════════════════════════════════════════════════════════════════
+   An empty screen is an invitation to act, so it states the next move rather than
+   apologising for having nothing. */
+.sched-empty {
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  color: var(--c-muted);
+}
+
+.sched-empty__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  color: var(--c-brg);
+  margin: 0 0 var(--space-2);
+}
+
+.sched-skel {
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--c-surface-2) 25%, var(--c-surface) 50%, var(--c-surface-2) 75%);
+  background-size: 400% 100%;
+  animation: sched-shimmer 1.4s ease-in-out infinite;
+  margin-bottom: var(--space-2);
+}
+
+@keyframes sched-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sched-skel {
+    animation: none;
+  }
+  .sched-group__caret {
+    transition: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 — SCHEDULE: the office drawers (import · payments)
+   ═══════════════════════════════════════════════════════════════════════════
+   The task list is the job-site face and comes first; the office surfaces open on
+   demand under it. <details> keeps that dependency-free and keyboard-native — the
+   payments section already worked this way, so the import drawer matches it. */
+.sched-drawer {
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-white);
+  box-shadow: var(--shadow);
+  margin-top: var(--gap);
+  padding: 0;
+  overflow: hidden;
+}
+
+.sched-drawer > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-base);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-brg);
+  border-left: 3px solid var(--c-brg);
+  list-style: none;
+}
+
+.sched-drawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sched-drawer > summary::before {
+  content: "▸";
+  font-size: 0.7rem;
+  transition: transform 120ms ease-out;
+}
+
+.sched-drawer[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sched-drawer > summary::before {
+    transition: none;
+  }
+}
+
+.sched-drawer__note {
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: var(--fs-sm);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-muted);
+  margin-left: auto;
+}
+
+.sched-drawer__body {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 — WEEKLY PRODUCTION REPORT
+   ═══════════════════════════════════════════════════════════════════════════
+   This page's real job is a DIVISION OF AUTHORSHIP. Some of the report is derived from
+   what the crews filed and the office must not retype it; some of it only the office
+   knows (OSHA case classes, man-hours by employer, pending RFIs) and the machine must
+   not invent it; and a week nobody has touched inherits last week's answers, which must
+   never pass for a fresh review.
+
+   The layout encodes that in three marks, and they are the page's whole design:
+     • an authorship tag on every section head — YOURS TO FILL vs FROM THE FIELD
+     • a receding ground on derived sections, so read-only LOOKS read-only
+     • a carried-forward badge in the established advisory idiom (#fff8e8 + gold rule) */
+.wpr {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .wpr {
+    grid-template-columns: 196px minmax(0, 1fr);
+    column-gap: var(--space-6);
+  }
+}
+
+/* ── Section rail ──────────────────────────────────────────────────────────
+   On a laptop it is a sticky vertical index; on a phone it collapses to a
+   horizontal chip scroller pinned under the header. Same markup, same order. */
+.wpr__rail {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--c-surface);
+  padding: var(--space-2) 0;
+  margin: 0;
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  list-style: none;
+}
+
+.wpr__rail::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .wpr__rail {
+    top: var(--space-4);
+    flex-direction: column;
+    overflow: visible;
+    padding: 0;
+    border-left: 2px solid var(--c-line);
+  }
+}
+
+.wpr__rail-link {
+  flex: 0 0 auto;
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  text-decoration: none;
+  padding: 10px 12px;
+  min-height: 44px;
+  line-height: 24px;
+  white-space: nowrap;
+  border-radius: 999px;
+  border: 1px solid var(--c-line);
+  background: var(--c-white);
+}
+
+@media (min-width: 1024px) {
+  .wpr__rail-link {
+    border: none;
+    background: transparent;
+    border-radius: 0;
+    margin-left: -2px;
+    border-left: 2px solid transparent;
+    white-space: normal;
+  }
+}
+
+.wpr__rail-link:hover {
+  color: var(--c-brg);
+}
+
+/* Active section: BRG ink carries it; the gold rule is the decoration, exactly as the
+   eyebrow heading and the tab strip already do it. */
+.wpr__rail-link[aria-current="true"] {
+  color: var(--c-brg);
+  border-color: var(--c-brg);
+}
+
+@media (min-width: 1024px) {
+  .wpr__rail-link[aria-current="true"] {
+    border-left-color: var(--c-gold);
+    background: var(--c-white);
+  }
+}
+
+.wpr__body {
+  min-width: 0;
+}
+
+/* ── Week navigator ───────────────────────────────────────────────────────
+   Prev/next are how a person actually moves through weeks; the date field stays for
+   jumping. The Saturday snap is the report's rule, so the control does it silently. */
+.wpr-week {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--gap);
+}
+
+.wpr-week__range {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-brg);
+}
+
+.wpr-week__input {
+  min-height: var(--tap);
+  font: inherit;
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--c-white);
+}
+
+.wpr-week__nav {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  border: 1.5px solid var(--c-brg);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+  color: var(--c-brg);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wpr-week__nav:hover {
+  background: var(--c-surface-2);
+}
+
+/* ── Sections ─────────────────────────────────────────────────────────────── */
+.wpr-sec {
+  background: var(--c-white);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: clamp(16px, 4vw, 24px);
+  margin-bottom: var(--gap);
+  scroll-margin-top: 72px; /* the rail is sticky; don't land under it */
+}
+
+/* Machine-derived sections recede: the page ground instead of a white card, so
+   "nothing for you to do here" is legible before a word is read. */
+.wpr-sec--derived {
+  background: var(--c-surface-2);
+  box-shadow: none;
+}
+
+.wpr-sec__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-2);
+}
+
+.wpr-sec__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  letter-spacing: 0.02em;
+  color: var(--c-brg);
+  margin: 0;
+}
+
+/* The authorship tag. Two states, and the words do the work. */
+.wpr-sec__tag {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.wpr-sec__tag--yours {
+  background: var(--c-brg);
+  color: var(--c-on-brg);
+  border: 1px solid var(--c-gold);
+}
+
+.wpr-sec__tag--derived {
+  background: transparent;
+  color: var(--c-muted);
+  border: 1px solid var(--c-line);
+}
+
+.wpr-sec__hint {
+  color: var(--c-muted);
+  font-size: var(--fs-sm);
+  margin: 0 0 var(--gap);
+}
+
+/* ── Carried-forward badge ────────────────────────────────────────────────
+   Reuses the portal's established advisory idiom (#fff8e8 ground + gold rule, as the
+   guidance callouts already do). BRG ink, so the meaning never rides on the gold. */
+.wpr-carried {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-brg);
+  background: #fff8e8;
+  border: 1px solid var(--c-gold);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.wpr-banner {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  background: #fff8e8;
+  border: 1px solid var(--c-gold);
+  border-left: 4px solid var(--c-gold);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin: 0 0 var(--gap);
+  font-size: var(--fs-sm);
+  color: var(--c-black);
+}
+
+.wpr-banner--warn {
+  background: #fdecea;
+  border-color: var(--c-danger);
+  border-left-color: var(--c-danger);
+  color: var(--c-danger);
+  font-weight: 600;
+}
+
+.wpr-banner--ok {
+  background: #e8f5ea;
+  border-color: var(--c-brg);
+  border-left-color: var(--c-brg);
+  color: var(--c-brg);
+  font-weight: 600;
+}
+
+/* ── Field grid ───────────────────────────────────────────────────────────── */
+.wpr-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .wpr-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.wpr-grid__wide {
+  grid-column: 1 / -1;
+}
+
+.wpr-field {
+  display: block;
+  margin: 0;
+}
+
+.wpr-field__label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-brg);
+  margin-bottom: 6px;
+}
+
+.wpr-field__input,
+.wpr-field__textarea {
+  width: 100%;
+  min-height: var(--tap);
+  font: inherit;
+  color: var(--c-black);
+  background: var(--c-white);
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.wpr-field__textarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: var(--lh);
+}
+
+.wpr-field__input:focus-visible,
+.wpr-field__textarea:focus-visible {
+  border-color: var(--c-brg);
+  outline: 3px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+/* ── Count tables (safety, labor, weather) ────────────────────────────────
+   Two number columns on a laptop; on a phone each row becomes a labelled block, using
+   the kit's `data-cell` stacking convention so it behaves like every other portal
+   table a field user has already met. */
+.wpr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.wpr-table th,
+.wpr-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--c-line);
+  vertical-align: middle;
+}
+
+.wpr-table thead th {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-brg);
+  white-space: nowrap;
+}
+
+.wpr-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.wpr-num {
+  width: 100%;
+  max-width: 6.5rem;
+  min-height: 44px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--c-white);
+}
+
+.wpr-num:focus-visible {
+  border-color: var(--c-brg);
+  outline: 3px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+@media (max-width: 640px) {
+  .wpr-table thead {
+    display: none;
+  }
+  .wpr-table,
+  .wpr-table tbody,
+  .wpr-table tr,
+  .wpr-table td {
+    display: block;
+  }
+  .wpr-table tr {
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--c-line);
+  }
+  .wpr-table tr:last-child {
+    border-bottom: none;
+  }
+  .wpr-table td {
+    border: none;
+    padding: 3px 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .wpr-table td[data-cell]::before {
+    content: attr(data-cell);
+    flex: 0 0 42%;
+    color: var(--c-muted);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+  }
+  .wpr-num {
+    max-width: none;
+    flex: 1 1 auto;
+  }
+}
+
+/* A weather day is a delay CLAIM, so its control is a deliberate switch with a word
+   beside it, not a bare checkbox in a cell. */
+.wpr-daymark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-muted);
+}
+
+.wpr-daymark input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--c-brg);
+}
+
+.wpr-daymark:has(input:checked) {
+  border-color: var(--c-brg);
+  color: var(--c-brg);
+  box-shadow: inset 3px 0 0 var(--c-gold);
+}
+
+/* ── Photo picker ─────────────────────────────────────────────────────────── */
+.wpr-photos {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wpr-photo {
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.wpr-photo.is-on {
+  border-color: var(--c-brg);
+  box-shadow: inset 3px 0 0 var(--c-gold);
+}
+
+.wpr-photo__pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--c-black);
+  border-bottom: 1px solid var(--c-line);
+}
+
+.wpr-photo__pick input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--c-brg);
+  flex: 0 0 auto;
+}
+
+.wpr-photo__meta {
+  color: var(--c-muted);
+  font-weight: 400;
+  margin-left: auto;
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wpr-photo__caption {
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  border-top: 1px solid transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 8px var(--space-3);
+  background: transparent;
+}
+
+.wpr-photo__caption:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+/* ── Sticky save bar ──────────────────────────────────────────────────────
+   The old page hid a lone Save button below eight sections of scroll. The bar follows
+   the reader, states plainly whether anything is unsaved, and keeps the iPhone home
+   indicator out of the button. */
+.wpr-save {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  margin-top: var(--gap);
+  background: var(--c-white);
+  border: 1px solid var(--c-line);
+  border-top: 3px solid var(--c-brg);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 -6px 18px rgba(1, 61, 43, 0.10);
+}
+
+.wpr-save__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--c-muted);
+}
+
+.wpr-save__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--c-line);
+  flex: 0 0 auto;
+}
+
+.wpr-save__state--dirty {
+  color: var(--c-brg);
+}
+
+.wpr-save__state--dirty .wpr-save__dot {
+  background: var(--c-gold);
+  box-shadow: 0 0 0 3px rgba(198, 164, 78, 0.28);
+}
+
+.wpr-save__spacer {
+  margin-left: auto;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9 — PRINT
+   ═══════════════════════════════════════════════════════════════════════════
+   Both surfaces are working papers a PM takes to a meeting. Printing drops the
+   controls and lets the timeline and the sections break naturally. */
+@media print {
+  .sched-toolbar,
+  .sched-views,
+  .sched-mark,
+  .sched-drawer,
+  .wpr__rail,
+  .wpr-save {
+    display: none !important;
+  }
+
+  .sched-group,
+  .sched-tl,
+  .wpr-sec {
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .sched-tl {
+    overflow: visible;
+  }
+
+  .sched-tl__inner {
+    min-width: 0;
+  }
+
+  .wpr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
