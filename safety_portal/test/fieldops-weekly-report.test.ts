@@ -677,3 +677,38 @@ describe("weekly report — narrative touched-ness is PER FIELD", () => {
     expect(r.office.narrative.upcoming_activities).toBeNull();
   });
 });
+
+// ── carry-forward carries STANDING facts, never the week's story ──────────────
+describe("weekly report — carry-forward and narrative", () => {
+  const save = async (cookie: string, week: string, payload: Record<string, unknown>): Promise<Response> =>
+    call("/api/fieldops/weekly-report", {
+      method: "PUT", cookie, body: JSON.stringify({ job_id: JOB, week_start: week, ...payload }),
+    });
+
+  it("carries the header and pending items forward but NOT the narrative", async () => {
+    const cookie = await accountCookie("adm.four", "admin");
+    await save(cookie, "2026-08-01", {
+      header: { ess_management: "Ben Finkhousen" },
+      pending: { rfis: "RFI-014 open" },
+      narrative: { critical_items: "Rain day 08/02 — crew released.",
+                   upcoming_activities: "Pump trenches." },
+    });
+    const r = await body(await internal());   // the 08-08 week has no row of its own
+    expect(r.office.carried_from).toBe("2026-08-01");
+    // Standing facts follow the job.
+    expect(r.office.header.ess_management).toBe("Ben Finkhousen");
+    expect(r.office.pending.rfis).toBe("RFI-014 open");
+    // The week's STORY does not. Carrying it would put last week's rain day in front of a
+    // client as this week's news; NULL means the report seeds from THIS week's field text.
+    expect(r.office.narrative.critical_items).toBeNull();
+    expect(r.office.narrative.upcoming_activities).toBeNull();
+  });
+
+  it("still returns the narrative for the week that actually owns it", async () => {
+    const cookie = await accountCookie("adm.four", "admin");
+    await save(cookie, WEEK_START, { narrative: { critical_items: "This week's slip." } });
+    const r = await body(await internal());
+    expect(r.office.carried_from).toBeNull();
+    expect(r.office.narrative.critical_items).toBe("This week's slip.");
+  });
+});

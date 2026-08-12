@@ -254,7 +254,18 @@ function shapeOffice(row: OfficeRow | null, carriedFrom: string | null) {
     safety: normalizeSafety(parseBlob(row?.safety_json)),
     weather: normalizeWeather(parseBlob(row?.weather_json)),
     labor: normalizeLabor(parseBlob(row?.labor_json)),
-    narrative: normalizeNarrative(parseBlob(row?.narrative_json)),
+    // NARRATIVE IS NEVER CARRIED FORWARD. The header, the running safety totals and the pending
+    // items are STANDING facts that persist week to week — carrying them is the point. The
+    // narrative is the opposite: it describes ONE week's work, so inheriting it would seed next
+    // week's Critical Items with last week's rain day and put stale text in front of a client.
+    //
+    // This has to happen HERE rather than in the reader. Until the narrative became three-state
+    // the row-level `saved` flag masked it (carried ⇒ not saved ⇒ seed wins); making touched-ness
+    // per-field removed that accident and exposed the real behaviour, which a live read on a
+    // carried week caught. Nulling it restores the intent explicitly instead of by side effect.
+    narrative: carriedFrom === null
+      ? normalizeNarrative(parseBlob(row?.narrative_json))
+      : { critical_items: null, upcoming_activities: null, hazard_topics: [] },
     pending: normalizePending(parseBlob(row?.pending_json)),
     photos: row ? normalizePhotos(parseBlob(row.photos_json ?? null)) : null,
     // `saved` distinguishes "the office reviewed this week" from "these values were inherited".
