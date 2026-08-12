@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import * as api from "../lib/fieldops_expected_materials";
+import { lineOwed, owedLabel } from "../lib/materials_view";
 import { fetchMaterials, type CatalogRow } from "../lib/fieldops_materials";
 import { useAuth } from "../lib/auth";
 import { ConfirmDelete, planRenumber, nextSeq } from "./ChecklistItemForm";
@@ -414,6 +415,21 @@ export function ExpectedMaterialsSection({
                   <span className="dash-chip">{r.unit}</span>
                 ) : null}
                 {r.expected_date ? <span className="dash-chip">expected {r.expected_date}</span> : null}
+                {/* What this line still OWES. NOT a .dash-pill: the first .dash-pill--ok
+                    and .dash-pill--danger on a row are pinned by test to carry the status
+                    pill's own copy, so a second pill here would shadow them. */}
+                {(() => {
+                  const label = owedLabel(r);
+                  if (label === null) return null;
+                  return (
+                    <>
+                      {" "}
+                      <span className={`mat-owed${lineOwed(r).settled ? " mat-owed--settled" : ""}`}>
+                        {label}
+                      </span>
+                    </>
+                  );
+                })()}
                 {r.status !== "expected" && (
                   <div className="dash-card__sub muted">
                     {r.status === "received" ? "Received" : "Flagged"} {fmtDateTime(r.received_at)}

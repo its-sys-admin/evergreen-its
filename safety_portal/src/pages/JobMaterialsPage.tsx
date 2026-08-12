@@ -18,6 +18,7 @@ import {
   type FormState,
 } from "../components/ExpectedMaterialsSection";
 import { pacificToday } from "../components/myTasksShared";
+import { owedLabel, rollupMaterials, lineOwed } from "../lib/materials_view";
 
 // Per-job MATERIALS TRACKING page (PR2) — the deep-link target from the Job Tracker's
 // "Materials tracking →" and from the daily field report's material-receipt region.
@@ -340,7 +341,7 @@ export function JobMaterialsPage({
   }
 
   return (
-    <PageShell onHome={onHome}>
+    <PageShell onHome={onHome} wide>
       <div className="dash-back-btn">
         <button type="button" className="btn btn--secondary" onClick={() => onOpenJob(jobId)}>
           ← Back to job
@@ -349,6 +350,50 @@ export function JobMaterialsPage({
       {/* The job NAME, not the JOB-###### key (operator request 2026-08-11) — the key is a
           system identifier the field never speaks; the id falls back only while loading. */}
       <h1 className="page__heading">Materials — {data?.project_name ?? jobId}</h1>
+
+      {/* WHAT IS STILL OWED. The lane recorded expected and received and never subtracted
+          them, so this — the question the page exists for — was unanswerable. Derived in
+          lib/materials_view.ts from fields already on the wire; no Worker change. */}
+      {data !== null && data.lines.length > 0 ? (() => {
+        const roll = rollupMaterials(data.lines);
+        return (
+          <div className="mat-rollup" aria-label="Materials summary">
+            <span className="mat-rollup__stat">
+              <span className={`mat-rollup__figure${roll.short > 0 ? " mat-rollup__figure--short" : ""}`}>
+                {roll.short}
+              </span>
+              <span className="mat-rollup__label">Lines still owed</span>
+            </span>
+            <span className="mat-rollup__stat">
+              <span className="mat-rollup__figure">{roll.settled}</span>
+              <span className="mat-rollup__label">Settled</span>
+            </span>
+            <span className="mat-rollup__stat">
+              <span className="mat-rollup__figure">{roll.lines}</span>
+              <span className="mat-rollup__label">Lines total</span>
+            </span>
+            {roll.incidents > 0 ? (
+              <span className="mat-rollup__stat">
+                <span className="mat-rollup__figure mat-rollup__figure--short">{roll.incidents}</span>
+                <span className="mat-rollup__label">Problems</span>
+              </span>
+            ) : null}
+            {roll.over > 0 ? (
+              <span className="mat-rollup__stat">
+                <span className="mat-rollup__figure">{roll.over}</span>
+                <span className="mat-rollup__label">Over-delivered</span>
+              </span>
+            ) : null}
+            {roll.unquantified ? (
+              <span className="mat-rollup__stat">
+                <span className="mat-rollup__label" style={{ textTransform: "none", letterSpacing: 0 }}>
+                  Some lines carry no expected quantity, so the owed count is not the whole picture.
+                </span>
+              </span>
+            ) : null}
+          </div>
+        );
+      })() : null}
       <p className="dash__intro">
         What this job is expecting, when each part is due to ship and arrive, and what has actually
         turned up. {canMark ? "Mark each line as loads arrive — a line can be marked more than once." : null}
@@ -515,6 +560,20 @@ export function JobMaterialsPage({
                 <div className="dash-card__head">
                   <span className={pill.className}>{pill.label}</span>{" "}
                   <strong>{rowTitle(line)}</strong>
+                  {(() => {
+                    // Deliberately NOT a .dash-pill: the first .dash-pill--ok / --danger on
+                    // a line is pinned by test to be the status pill's own copy.
+                    const label = owedLabel(line);
+                    if (label === null) return null;
+                    return (
+                      <>
+                        {" "}
+                        <span className={`mat-owed${lineOwed(line).settled ? " mat-owed--settled" : ""}`}>
+                          {label}
+                        </span>
+                      </>
+                    );
+                  })()}
                   {line.status === "incident" && (
                     <>
                       {" "}
