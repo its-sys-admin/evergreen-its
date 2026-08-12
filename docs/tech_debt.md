@@ -16,6 +16,33 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## Safari/WebKit ignores `min-height` on native `<select>` — the kit's 44px tap-target floor silently fails portal-wide in the operator's own browser [OPEN 2026-08-12, low]
+
+The kit's inline-row rule (`global.css` `div.dash-row select { min-height: 44px; … }`) and the
+job-detail shell's part-three floor (`schedule-report.css` `.job-shell__body :is(input…, select)`)
+both declare the 44px minimum — and WebKit lays native menulist selects out at ~19–25px anyway,
+because Safari does not honour height/min-height on `appearance: auto` selects. Text inputs are
+fine (they measure ≥44px); ONLY selects fall short, and only in Safari/WebKit — Chrome honours the
+rule. Measured 2026-08-12 during the part-three headless WebKit render pass (Playwright,
+`verify_jobdetail.js`): every select on the job detail (assign-to, lifecycle, crew picker,
+log-time pickers, equipment picker, daily-requirements kind) at 19–25px tall while every input and
+button cleared 44px. The operator browses in Safari, so the "zero tap targets under 44px" bar from
+the #99/#109 commit messages holds in Chrome and quietly fails on the operator's own machine.
+
+**Fix shape** (deliberate, kit-level — not a per-page patch): a portal-wide select treatment with
+`appearance: none` + explicit padding + a custom chevron (background SVG data-URI), which makes
+height rules bind in WebKit. That restyles EVERY select in the app at once, so it wants its own
+pass with the four-width measurement, not a rider on a page PR. The related `ChipX` remove control
+(17×14px, shared component, deliberate two-step-confirm micro-control) is a separate judgment call
+for the same pass.
+
+**Revisit when:** the next design pass touches form controls kit-wide, or field users report
+mis-taps on selects in Safari.
+
+Surfaced: 2026-08-12 job-detail design pass (part three) headless WebKit verification.
+
+**Tag:** `safety-portal`, `frontend`, `css`, `design`.
+
 ## Manifest-import merge-mode and shipping-log-commit live-fires deferred [OPEN 2026-08-11, medium]
 
 The 2026-08-11 day session finished the manifest lane's real merge (server-enforced ambiguity

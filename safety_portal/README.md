@@ -113,7 +113,7 @@ safety_portal/
     pages/                # LoginPage, HomePage, JhaStubPage
     components/           # AppHeader, SignaturePad (SVG-vector capture)
     lib/                  # api.ts (fetch wrappers), auth.tsx (AuthContext)
-    styles/               # tokens.css (design system), global.css
+    styles/               # tokens.css (design system), global.css, schedule-report.css (design-pass layer)
   worker/                 # Cloudflare Worker (Hono): /api/login, /api/session, /api/logout
   migrations/             # D1 schema + seed (0001 users, 0002 validation user)
   public/                 # static assets (evergreen-logo.svg)

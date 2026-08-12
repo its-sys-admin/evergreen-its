@@ -412,6 +412,15 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
               className="wpr__rail-link"
               href={`#${s.id}`}
               aria-current={active === s.id ? "true" : undefined}
+              onClick={(e) => {
+                // A fragment navigation fires popstate, and App's popstate handler
+                // REMOUNTS the routed page — which here DISCARDS an unsaved draft with
+                // no confirm (the beforeunload guard only covers real unloads). So the
+                // rail scrolls directly and never touches history. Live-verified: the
+                // bare-anchor version remounted the report on every chip tap.
+                e.preventDefault();
+                document.getElementById(s.id)?.scrollIntoView();
+              }}
             >
               {s.label}
             </a>
