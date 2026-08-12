@@ -159,9 +159,69 @@ def test_inclement_comes_from_the_office_not_the_conditions_text(monkeypatch) ->
     assert data["weather"]["to_date"] == 9  # the office's running total, not the week's count
 
 
-def test_schedule_stays_empty_until_the_adr_0006_lane_lands(monkeypatch) -> None:
+def test_schedule_stays_empty_when_no_schedule_is_committed(monkeypatch) -> None:
     data = _build(monkeypatch, _payload())
     assert data["progress"]["sections"] == []
+
+
+def _with_schedule(**over):
+    p = _payload()
+    p["schedule"] = {
+        "sections": [{"name": "Mechanical", "items": [
+            {"label": "Piles", "percent": 95}, {"label": "QA/QC", "percent": None}]}],
+        "behind": [], "today": "2026-08-14", "task_count": 2,
+    }
+    p["schedule"].update(over)
+    return p
+
+
+def test_schedule_sections_reach_the_renderer(monkeypatch) -> None:
+    data = _build(monkeypatch, _with_schedule())
+    assert data["progress"]["sections"][0]["name"] == "Mechanical"
+    # A never-reported task stays None so the renderer prints an em dash, not 0%.
+    assert [i["percent"] for i in data["progress"]["sections"][0]["items"]] == [95, None]
+
+
+def test_behind_schedule_tasks_lead_the_critical_items_seed(monkeypatch) -> None:
+    """Worst slip first, ahead of material incidents and daily comments — the Worker already
+    ordered them oldest-finish-first and the assembler must preserve that."""
+    data = _build(monkeypatch, _with_schedule(behind=[
+        {"name": "Piles", "section": "Mechanical", "finish_date": "2026-07-01",
+         "percent": 40, "is_contract_milestone": False},
+    ]))
+    lines = data["progress"]["critical_items"].splitlines()
+    assert lines[0] == "Behind schedule — Mechanical: Piles (due 2026-07-01, 40% complete)"
+    # The pre-existing sources still follow.
+    assert any("Racking: Short" in ln for ln in lines)
+    assert any("Mud on the access road." in ln for ln in lines)
+
+
+def test_a_slipped_contract_milestone_is_labelled_as_one(monkeypatch) -> None:
+    """A client reading the line should not need the schedule to tell a slipped milestone from a
+    slipped task."""
+    data = _build(monkeypatch, _with_schedule(behind=[
+        {"name": "Mechanical completion", "section": "", "finish_date": "2026-06-01",
+         "percent": 10, "is_contract_milestone": True},
+    ]))
+    first = data["progress"]["critical_items"].splitlines()[0]
+    assert first.startswith("Contract milestone behind schedule — Mechanical completion")
+
+
+def test_a_saved_week_still_wins_over_the_behind_schedule_seed(monkeypatch) -> None:
+    """The office's word beats the assembly, schedule or not."""
+    p = _with_schedule(behind=[{"name": "Piles", "section": "", "finish_date": "2026-07-01",
+                                "percent": 40, "is_contract_milestone": False}])
+    p["office"]["saved"] = True
+    p["office"]["narrative"]["critical_items"] = "Handled — see the 08/12 note."
+    data = _build(monkeypatch, p)
+    assert data["progress"]["critical_items"] == "Handled — see the 08/12 note."
+
+
+def test_malformed_behind_entries_degrade_rather_than_raise(monkeypatch) -> None:
+    data = _build(monkeypatch, _with_schedule(behind=["junk", None, {}, {"name": ""}]))
+    # Nothing from the malformed set; the other sources still seed.
+    assert "Behind schedule" not in data["progress"]["critical_items"]
+    assert "Racking: Short" in data["progress"]["critical_items"]
 
 
 # ── photos: the screening control ─────────────────────────────────────────────

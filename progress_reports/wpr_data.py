@@ -96,12 +96,27 @@ def _joined(items: list[str]) -> str:
 def _assemble_critical_items(payload: dict[str, Any]) -> str:
     """Seed for "Critical Items / Delays" — deterministic, from what the field reported.
 
-    Material incidents first (a delivery problem IS the delay), then the daily `comments` field,
-    which is where a foreman records what went wrong. Once the ADR-0006 schedule lane lands, the
-    behind-schedule tasks join at the top (PR-5) — the assembly is ordered so that addition needs
-    no reordering.
+    Order is deliberate and reads worst-first: behind-schedule tasks (the Worker returns them
+    oldest-slip-first), then material incidents (a delivery problem IS the delay), then the daily
+    `comments` field, which is where a foreman records what went wrong.
+
+    A slipped CONTRACT milestone is labelled as one. It is a different conversation from a slipped
+    task, and a client reading the line should not have to know the schedule to tell them apart.
     """
     lines: list[str] = []
+    schedule = payload.get("schedule") or {}
+    for t in (schedule.get("behind") or []):
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "").strip()
+        if not name:
+            continue
+        where = str(t.get("section") or "").strip()
+        head = f"{where}: {name}" if where else name
+        kind = "Contract milestone behind schedule" if t.get("is_contract_milestone") else "Behind schedule"
+        lines.append(
+            f"{kind} — {head} (due {t.get('finish_date', '')}, {int(t.get('percent') or 0)}% complete)"
+        )
     for inc in payload.get("material_incidents") or []:
         if not isinstance(inc, dict):
             continue

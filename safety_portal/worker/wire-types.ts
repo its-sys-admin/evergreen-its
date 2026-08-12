@@ -1063,7 +1063,20 @@ export interface ProductionReportResponse {
   }[];
   material_incidents: { work_date: string; material: string; issue: string; details: string }[];
   photos: { available: WeeklyReportPhoto[]; selected: WeeklyReportPhoto[]; auto_selected: boolean };
-  schedule: null | { sections: { name: string; items: { label: string; percent: number | null }[] }[] };
+  /** Page 3. NULL when the job has no committed schedule (0071) — the renderer prints its
+   *  honest empty state. `percent: null` on an item is the table's "never reported" state (no
+   *  portal mark, no committed schedule value), which prints as an em dash, never 0%. */
+  schedule: null | {
+    sections: { name: string; items: { label: string; percent: number | null }[] }[];
+    /** Tasks past their finish date and short of 100%, oldest slip first — the Critical Items seed. */
+    behind: {
+      name: string; section: string; finish_date: string; percent: number;
+      is_contract_milestone: boolean;
+    }[];
+    /** The server's Pacific date the behind-schedule set was derived against. */
+    today: string;
+    task_count: number;
+  };
   office: WeeklyReportOffice;
   generated_at: number;
 }
