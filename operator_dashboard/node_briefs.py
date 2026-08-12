@@ -293,15 +293,16 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
     "progress_weekly_generate": NodeBrief(
         what=(
             "The progress twin of the safety compile, staggered half an hour behind it, on its "
-            "own job roster. Per active job it merges the week's Saturday-to-Friday progress PDFs "
-            "into one Box packet, then writes a Rollup snapshot and a PENDING approval row on "
-            "WPR_human_review, empty weeks included. Jobs with the rollup feed wired also get a "
-            "numbers page."
+            "own job roster. Per active job it builds two things: the five-page Weekly "
+            "Production Report the client receives, and an internal packet of the filed daily "
+            "reports. The approval row on WPR_human_review points at the report; the packet's "
+            "link rides its Notes. A week with no dailies filed is written HELD, because only a "
+            "person can tell a demobilized crew from one that forgot."
             "\n\n"
-            "Day-to-day this is watch-only. If a week's approval row never appears, check "
-            "ITS_Errors; a missed Friday re-fires on its own. A job that times out or errors "
-            "routes to the Review Queue while the rest compile; ask for that week to be re-run. "
-            "Raising its timeout or memory ceiling is ordinary; a code change escalates."
+            "Watch-only. If a week's row never appears, check ITS_Errors — a missed "
+            "Friday re-fires on its own. If a client got the daily-report stack instead of the "
+            "report, the build failed and the compile fell back deliberately: look for "
+            "client_report_failed and re-run that job."
         ),
         key_label="Key signals",
         key_line=(
