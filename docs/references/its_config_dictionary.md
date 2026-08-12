@@ -47,8 +47,8 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
-| `field_ops.box.archive_root_folder_id` | str | *(unset)* | Box root the Track 6 job archive relocates a closed job's Safety, Progress and Purchase Orders containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py. | field_ops.job_archive |
-| `field_ops.fieldops_sync.archive_enabled` | bool | false | Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's seven Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on. | field_ops.fieldops_sync |
+| `field_ops.box.archive_root_folder_id` | str | *(unset)* | Box root the Track 6 job archive relocates a closed job's Safety, Progress, Purchase Orders and Subcontracts containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py. | field_ops.job_archive |
+| `field_ops.fieldops_sync.archive_enabled` | bool | false | Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's eight Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.equipment_enabled` | bool | false | Per-stream gate: mirror equipment status from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.hours_enabled` | bool | false | Per-stream gate: mirror crew hours from the portal into Smartsheet. | field_ops.fieldops_sync |
 | `field_ops.fieldops_sync.incidents_enabled` | bool | false | Per-stream gate: mirror material incidents from the portal into Smartsheet. | field_ops.fieldops_sync |
@@ -111,7 +111,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
 | `progress_reports.intake_enabled` | bool | false | FOOTGUN: the progress-intake gate is read under Workstream='safety_reports' (intake's own workstream), NOT 'progress_reports' — seed it there. | safety_reports.intake |
-| `safety_reports.box.portal_root_folder_id` | str | *(unset)* | Shared Box mirror-tree root; owned by safety_reports. Unset means the filing folder cannot resolve and rows stay claimed until it is configured. | field_ops.job_archive, field_ops.manifest_poll, field_ops.schedule_poll, safety_reports.intake, safety_reports.portal_poll, safety_reports.weekly_generate, subcontracts.subcontract_poll |
+| `safety_reports.box.portal_root_folder_id` | str | *(unset)* | Shared Box mirror-tree root; owned by safety_reports. Unset means the filing folder cannot resolve and rows stay claimed until it is configured. | field_ops.job_archive, field_ops.manifest_poll, field_ops.schedule_poll, safety_reports.intake, safety_reports.portal_poll, safety_reports.weekly_generate |
 | `safety_reports.compile_now_poll.polling_enabled` | bool | true | Runtime on/off gate for the safety_reports.compile_now_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | safety_reports.compile_now_poll |
 | `safety_reports.evergreen_contact_name` | str | the Evergreen Renewables office | The name ITS uses for the Evergreen Renewables office/contact in this workstream's report copy. | safety_reports.weekly_generate |
 | `safety_reports.intake.allowed_senders` | str | *(unset)* | Comma-separated sender allowlist for the intake extraction path (the retired email-PDF intake; the live path is the portal PULL). Empty = none set. | safety_reports.intake |
@@ -134,6 +134,7 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 
 | Setting | Type | Default | Purpose | Read by |
 |---|---|---|---|---|
+| `subcontracts.box.portal_root_folder_id` | str | *(unset)* | The subcontract lane's OWN Box mirror-tree root ('ITS Subcontracts' — built by build_box_roots.py). The drafts pass files the .docx/.xlsx package + the send ZIP under ROOT→<job>; also the archive's box:subcontracts source. | field_ops.job_archive, subcontracts.subcontract_poll |
 | `subcontracts.subcontract_poll.polling_enabled` | bool | false | Runtime on/off gate for the subcontracts.subcontract_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox). | subcontracts.subcontract_poll |
 | `subcontracts.subcontract_poll.status_sync_enabled` | bool | false | Sub-gate for subcontracts.subcontract_poll: sync statuses back to the portal. | subcontracts.subcontract_poll |
 | `subcontracts.subcontract_poll.subcontractors_sync_enabled` | bool | false | Gate for subcontract_poll's §51 subcontractor-sync passes: the ITS_Subcontractors full-replace down-sync into the Worker's D1 cache AND the dirty-subcontractor up-sync back into ITS_Subcontractors (bridge-key find-or-create by Sub Key). Ships dark. | subcontracts.subcontract_poll |

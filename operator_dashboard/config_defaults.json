@@ -7,7 +7,7 @@
       "workstream": "field_ops",
       "kind": "str",
       "default": "",
-      "purpose": "Box root the Track 6 job archive relocates a closed job's Safety, Progress and Purchase Orders containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py.",
+      "purpose": "Box root the Track 6 job archive relocates a closed job's Safety, Progress, Purchase Orders and Subcontracts containers beneath (ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py.",
       "read_by": [
         "field_ops.job_archive"
       ],
@@ -18,7 +18,7 @@
       "workstream": "field_ops",
       "kind": "bool",
       "default": false,
-      "purpose": "Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's seven Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on.",
+      "purpose": "Gate for the Track 6 job-archive pass: drains the portal's archive queue and relocates a closed job's eight Smartsheet + Box containers into the archive (and back). Ships OFF; until it is on, the portal's Archive button records intent that nothing acts on.",
       "read_by": [
         "field_ops.fieldops_sync"
       ],
@@ -741,8 +741,7 @@
         "field_ops.schedule_poll",
         "safety_reports.intake",
         "safety_reports.portal_poll",
-        "safety_reports.weekly_generate",
-        "subcontracts.subcontract_poll"
+        "safety_reports.weekly_generate"
       ],
       "origin": "daemon"
     },
@@ -941,6 +940,18 @@
       "purpose": "Local-time window (e.g. `MON 07:00`) at/after which a row approved with **Approve for Scheduled Send** may dispatch on the safety_reports.weekly_send path.",
       "read_by": [
         "safety_reports.weekly_send_poll"
+      ],
+      "origin": "daemon"
+    },
+    {
+      "setting": "subcontracts.box.portal_root_folder_id",
+      "workstream": "subcontracts",
+      "kind": "str",
+      "default": "",
+      "purpose": "The subcontract lane's OWN Box mirror-tree root ('ITS Subcontracts' — built by build_box_roots.py). The drafts pass files the .docx/.xlsx package + the send ZIP under ROOT→<job>; also the archive's box:subcontracts source.",
+      "read_by": [
+        "field_ops.job_archive",
+        "subcontracts.subcontract_poll"
       ],
       "origin": "daemon"
     },

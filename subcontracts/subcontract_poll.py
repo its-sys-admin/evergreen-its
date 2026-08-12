@@ -16,9 +16,11 @@ shipped false):
      subcontracts in transition) → ITS_Subcontractors SoR subcontractor snapshot (#494) →
      DETERMINISTIC render (`subcontract_docx.render_package` → **three** files: the
      Subcontract body `.docx` + the Exhibit A `.docx` + the Annex C Schedule-of-Values
-     `.xlsx`) → Box (**three** uploads; §45 find-or-create ROOT→job→"Subcontracts"; §47
-     version-on-conflict) → Subcontract_Log append + Subcontract_Pending_Review row (+ inline
-     attach of all three files, best-effort) → mark-filed receipt WITH box_file_id (the
+     `.xlsx`) → Box (**three** uploads; §45 find-or-create the subcontract root's per-job
+     folder — subcontract_naming.CFG_BOX_PORTAL_ROOT → <job>, the lane's OWN tree since
+     2026-08-12; §47 version-on-conflict) → Subcontract_Log append +
+     Subcontract_Pending_Review row (+ inline attach of all three files on review, ledger
+     AND per-job rows, best-effort) → mark-filed receipt WITH box_file_id (the
      contract `.docx` id). The
      receipt is LAST: a crash anywhere before it re-pulls the row and every prior step
      is idempotent (version-on-conflict upload; Subcontract_Log/review-row dedupe by
@@ -164,14 +166,11 @@ POLL_INTERVAL_SECONDS = 120  # registration metadata; mirrors the launchd StartI
 # 120s (vs po_poll 90, portal_poll 60) both staggers off the sibling daemons and suits
 # the low subcontract volume.
 
-# The Box subfolder every subcontract package files into, under the job's mirror-tree
-# folder (§45 find-or-create at every level; the S1 report's ROOT→job→"Subcontracts").
-SUBCONTRACT_BOX_SUBFOLDER = "Subcontracts"
-
-# The per-job Smartsheet tracking sheet name (Feature A) — deliberately the SAME word
-# as the Box subfolder so the operator sees "Subcontracts" in both trees. Lives inside
-# the job's folder under sheet_ids.FOLDER_SC_JOBS; structure-cloned from the flat
-# Subcontract_Log by shared/job_sheet.ensure_job_sheet.
+# The per-job Smartsheet tracking sheet name (Feature A). Lives inside the job's
+# folder under sheet_ids.FOLDER_SC_JOBS; structure-cloned from the flat
+# Subcontract_Log by shared/job_sheet.ensure_job_sheet. (The Box side needs no
+# matching subfolder any more: subcontract documents file DIRECTLY in the
+# subcontract root's per-job folder — subcontract_naming.CFG_BOX_PORTAL_ROOT → <job>.)
 PERJOB_SHEET_NAME = "Subcontracts"
 
 _PACIFIC = ZoneInfo("America/Los_Angeles")  # the agreement date is Pacific wall-clock
@@ -188,10 +187,12 @@ REQUIRED_CONFIG: list[ConfigKey] = [
         description="Shared Worker base URL; owned by safety_reports, read here too.",
     ),
     ConfigKey(
-        safety_naming.CFG_BOX_PORTAL_ROOT, CFG_WORKER_BASE_URL_WORKSTREAM, "", "str",
+        subcontract_naming.CFG_BOX_PORTAL_ROOT,
+        subcontract_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM, "", "str",
         description=(
-            "Shared Box mirror-tree root; owned by safety_reports. The drafts pass "
-            "files subcontract docs under ROOT→<job>→'Subcontracts'."
+            "The subcontract lane's OWN Box mirror-tree root ('ITS Subcontracts' — built "
+            "by build_box_roots.py). The drafts pass files the .docx/.xlsx package + the "
+            "send ZIP under ROOT→<job>; also the archive's box:subcontracts source."
         ),
     ),
 ]
@@ -832,16 +833,17 @@ def _process_pending_subcontract(
         exhibit_bytes = package["Exhibit A.docx"]
         xlsx_bytes = package["Annex C - Schedule of Values.xlsx"]
 
-        # 8 — Box filing: §45 find-or-create ROOT→job→"Subcontracts", §47 version-on-
-        # conflict under the deterministic name. THREE uploads (the .docx contract + the
-        # Exhibit A .docx + the .xlsx SOV); the contract .docx id is the primary receipt.
+        # 8 — Box filing: §45 find-or-create the subcontract root's per-job folder, §47
+        # version-on-conflict under the deterministic name. THREE uploads (the .docx
+        # contract + the Exhibit A .docx + the .xlsx SOV); the contract .docx id is the
+        # primary receipt.
         folder_id = _resolve_subcontract_box_folder(str(subcontract.get("job_name") or ""))
         if folder_id is None:
             counters["draft_errors"] += 1
             error_log.log(
                 Severity.ERROR, SCRIPT_NAME,
-                f"Box portal root unresolved (ITS_Config "
-                f"{safety_naming.CFG_BOX_PORTAL_ROOT} unset) — subcontract {sc_number} "
+                f"Subcontract Box root unresolved (ITS_Config "
+                f"{subcontract_naming.CFG_BOX_PORTAL_ROOT} unset) — subcontract {sc_number} "
                 f"left queued until the root is configured",
                 error_code="subcontract_box_root_unresolved",
                 correlation_id=correlation_id,
@@ -891,20 +893,45 @@ def _process_pending_subcontract(
             "created_at_iso": sc_date.isoformat(),
             "notes": subcontract_log.notes_for_filed_row(sc_id),
         }
-        if subcontract_log.find_row_by_sc_number(sc_number) is None:
-            subcontract_log.append_filed_row(**ledger_row_kwargs)
+        package_files = [
+            (docx_name, docx_bytes), (exhibit_name, exhibit_bytes), (xlsx_name, xlsx_bytes),
+        ]
+        existing_ledger = subcontract_log.find_row_by_sc_number(sc_number)
+        if existing_ledger is None:
+            ledger_row_id = subcontract_log.append_filed_row(**ledger_row_kwargs)
+        else:
+            ledger_row_id = int(existing_ledger["_row_id"])
+        # Inline attach of all three files on the ledger row (PO/RFQ-ledger parity,
+        # operator ask 2026-08-12 — the review row already carried them; the ledger row
+        # now does too). On EVERY service, not fresh-append-only: attach_pdf_to_row
+        # REPLACES a same-filename attachment and the names are deterministic per
+        # subcontract, so this is duplicate-free — and an attach that failed in a cycle
+        # whose receipt also failed SELF-HEALS on the re-serve.
+        _attach_files_best_effort(
+            ledger_row_id, package_files, correlation_id, sheet_id=subcontract_log.SHEET_ID,
+        )
 
         # 9b — per-job tracking sheet mirror (Feature A), BEST-EFFORT: the same
         # ledger row into "<Jobs>/<job>/Subcontracts" (find-or-create; independently
-        # idempotent per target sheet). Fenced inside the helper — a per-job failure
-        # must NEVER fail the filing (Box + the flat Subcontract_Log are the SoR).
+        # idempotent per target sheet), now WITH the inline package files (operator
+        # ask 2026-08-12). Fenced inside the helper — a per-job failure must NEVER
+        # fail the filing (Box + the flat Subcontract_Log are the SoR).
         _append_perjob_row_best_effort(
-            str(subcontract.get("job_name") or ""), ledger_row_kwargs, correlation_id
+            str(subcontract.get("job_name") or ""), ledger_row_kwargs, correlation_id,
+            files=package_files,
         )
 
         # 10 — Subcontract_Pending_Review row (idempotent via the Notes sc_id join) + the
-        # inline attach of ALL THREE files (best-effort — Box is the SoR).
-        if subcontract_review.find_row_by_sc_id(sc_id) is None:
+        # inline attach of ALL THREE files (best-effort — Box is the SoR). The attach runs
+        # on EVERY service, not fresh-creation-only (adversarial review 2026-08-12): a crash
+        # between add_sc_review_row and the attach used to leave the review row — the surface
+        # the approver actually reads — permanently missing its inline copies, because the
+        # re-serve found the row and skipped the whole guarded block. Same self-heal posture
+        # as the ledger/per-job rows (deterministic names → replace, never duplicate).
+        existing_review = subcontract_review.find_row_by_sc_id(sc_id)
+        if existing_review is not None:
+            review_row_id = int(existing_review["_row_id"])
+        else:
             email_body = subcontract_review.sc_email_body_template(
                 contact_name=str(subcontractor.get(subcontractors.COL_CONTACT_NAME) or ""),
                 sc_number=sc_number,
@@ -926,11 +953,7 @@ def _process_pending_subcontract(
                     else None,
                 ),
             )
-            _attach_files_best_effort(
-                review_row_id,
-                [(docx_name, docx_bytes), (exhibit_name, exhibit_bytes), (xlsx_name, xlsx_bytes)],
-                correlation_id,
-            )
+        _attach_files_best_effort(review_row_id, package_files, correlation_id)
 
         # 11 — the receipt, LAST (queued→pending_review; a crash before this line re-pulls
         # the row and every step above is idempotent).
@@ -1088,20 +1111,19 @@ def _fence_subcontract(
 
 
 def _resolve_subcontract_box_folder(job_name: str) -> str | None:
-    """§45 find-or-create the subcontract filing folder: mirror-tree ROOT → per-job folder
-    (the SAME `safety_naming.job_folder_name` as every other portal artifact) →
-    'Subcontracts'. None when the shared root is unconfigured (the caller leaves the
-    subcontract queued + ERRORs — a config gap, not a per-subcontract defect)."""
+    """§45 find-or-create the subcontract filing folder: the lane's OWN Box ROOT
+    (`subcontract_naming.CFG_BOX_PORTAL_ROOT`) → per-job folder (the SAME
+    `safety_naming.job_folder_name` as every other portal artifact). The package
+    files DIRECTLY in the job folder. None when the root is unconfigured (the
+    caller leaves the subcontract queued + ERRORs — a config gap, not a
+    per-subcontract defect)."""
     root = _read_str_setting(
-        safety_naming.CFG_BOX_PORTAL_ROOT, "",
-        workstream=CFG_WORKER_BASE_URL_WORKSTREAM,
+        subcontract_naming.CFG_BOX_PORTAL_ROOT, "",
+        workstream=subcontract_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM,
     ).strip()
     if not root:
         return None
-    job_folder = box_client.get_or_create_folder(
-        root, safety_naming.job_folder_name(job_name)
-    )
-    return box_client.get_or_create_folder(job_folder, SUBCONTRACT_BOX_SUBFOLDER)
+    return box_client.get_or_create_folder(root, safety_naming.job_folder_name(job_name))
 
 
 _ATTACH_CONTENT_TYPES = {
@@ -1111,24 +1133,30 @@ _ATTACH_CONTENT_TYPES = {
 
 
 def _attach_files_best_effort(
-    row_id: int, files: list[tuple[str, bytes]], correlation_id: str
+    row_id: int, files: list[tuple[str, bytes]], correlation_id: str,
+    *, sheet_id: int | None = None,
 ) -> None:
-    """Attach the rendered package files inline on the review row, BEST-EFFORT (Box is
+    """Attach the rendered package files inline on a Smartsheet row, BEST-EFFORT (Box is
     the SoR; a failure is a WARN that never fails the filing — mirror po_poll). All three —
     the Subcontract .docx, the Exhibit A .docx, and the Annex C .xlsx — attach with the
     correct OpenXML MIME via `attach_pdf_to_row`'s `content_type` param (the former
-    application/pdf-hardcode caveat, closed by the Feature-B attach-helper fix)."""
+    application/pdf-hardcode caveat, closed by the Feature-B attach-helper fix).
+    `sheet_id` picks the target sheet: None = the review sheet (the original surface);
+    the filing pass ALSO passes the flat Subcontract_Log's id and the per-job tracking
+    sheet's id (PO/RFQ-lane parity, operator ask 2026-08-12)."""
     for name, data in files:
         suffix = name[name.rfind("."):].lower() if "." in name else ""
         content_type = _ATTACH_CONTENT_TYPES.get(suffix, "application/pdf")
         try:
             smartsheet_client.attach_pdf_to_row(
-                subcontract_review.SHEET_ID, row_id, name, data, content_type=content_type
+                sheet_id if sheet_id is not None else subcontract_review.SHEET_ID,
+                row_id, name, data, content_type=content_type,
             )
         except Exception as exc:  # noqa: BLE001 — supplementary inline copy; Box is the SoR
             error_log.log(
                 Severity.WARN, SCRIPT_NAME,
-                f"review-row file attach failed (row {row_id}, {name!r}): "
+                f"row file attach failed (row {row_id}, {name!r}, "
+                f"sheet {'review' if sheet_id is None else sheet_id}): "
                 f"{type(exc).__name__}: {exc!r}",
                 error_code="subcontract_row_file_attach_failed",
                 correlation_id=correlation_id,
@@ -1136,7 +1164,8 @@ def _attach_files_best_effort(
 
 
 def _append_perjob_row_best_effort(
-    job_name: str, row_kwargs: dict[str, Any], correlation_id: str
+    job_name: str, row_kwargs: dict[str, Any], correlation_id: str,
+    *, files: list[tuple[str, bytes]],
 ) -> None:
     """Mirror the freshly-filed ledger row into the job's per-job tracking sheet
     (Feature A), BEST-EFFORT — a failure is a WARN that never fails the filing
@@ -1147,7 +1176,9 @@ def _append_perjob_row_best_effort(
     sheet under sheet_ids.FOLDER_SC_JOBS (structure-cloned from the flat Log, so
     `append_filed_row` writes it unchanged), then appends unless the SC number is
     already present in the TARGET sheet (independent idempotency — a crash between
-    the flat append and this mirror re-runs cleanly)."""
+    the flat append and this mirror re-runs cleanly). The inline attaches (the three
+    package files, operator ask 2026-08-12) ride the SAME every-service self-heal
+    posture as the ledger row's — deterministic filenames → replace, never duplicate."""
     try:
         sid = job_sheet.ensure_job_sheet(
             sheet_ids.FOLDER_SC_JOBS,
@@ -1158,10 +1189,14 @@ def _append_perjob_row_best_effort(
             workstream=WORKSTREAM,
             correlation_id=correlation_id,
         )
-        if subcontract_log.find_row_by_sc_number(
+        existing = subcontract_log.find_row_by_sc_number(
             str(row_kwargs["sc_number"]), sheet_id=sid
-        ) is None:
-            subcontract_log.append_filed_row(sheet_id=sid, **row_kwargs)
+        )
+        if existing is None:
+            row_id = subcontract_log.append_filed_row(sheet_id=sid, **row_kwargs)
+        else:
+            row_id = int(existing["_row_id"])
+        _attach_files_best_effort(row_id, files, correlation_id, sheet_id=sid)
     except Exception as exc:  # noqa: BLE001 — supplementary per-job mirror; never fail the filing
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
