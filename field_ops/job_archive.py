@@ -27,8 +27,10 @@ Eight, not eleven: the PO lane owns its OWN Box root since 2026-08-11
 (`po_naming.CFG_BOX_PORTAL_ROOT` — its per-job folder holds the PO PDFs plus the `RFQs/` and
 `Vendor Quotes/` subtrees, so ONE slot moves all three) and the subcontract lane since
 2026-08-12 (`subcontract_naming.CFG_BOX_PORTAL_ROOT`), while
-`safety_reports.box.portal_root_folder_id` remains the SHARED Box root for safety AND the
-materials manifests, so moving `<safety root>/<Job>` still carries those.
+`safety_reports.box.portal_root_folder_id` remains the SHARED Box root for every portal
+per-submission PDF (safety AND progress categories, plus screened photos), the materials
+manifests (`Materials/Manifests/`) AND the imported schedule PDFs (`Schedules/`,
+ADR-0006), so moving `<safety root>/<Job>` still carries all of those.
 
 THE TWO SYSTEMS FAIL DIFFERENTLY
 --------------------------------
@@ -118,10 +120,9 @@ WORKSTREAM_SAFETY = "safety_reports"
 # `scripts/generate_config_dictionary.py` discovers it by scanning for this declaration).
 #
 # Note what is NOT here: a `resolve_and_log` call. That belongs to a daemon STARTUP, and this
-# module has no entry point — it is a pass invoked per job. The startup log lands when
-# `fieldops_sync` gains the archive pass and adds these keys to its own resolve_and_log sweep;
-# until then the declaration's job is to keep the key documented and dashboard-editable rather
-# than invisible.
+# module has no entry point — it is a pass invoked per job. The startup log LANDS in
+# `fieldops_sync` (its sweep resolves REQUIRED_CONFIG + this list — wired 2026-08-12); the
+# declaration here keeps the keys documented and dashboard-editable.
 REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(
         CFG_BOX_ARCHIVE_ROOT, WORKSTREAM_FIELD_OPS, "", "str",
@@ -200,8 +201,9 @@ SLOTS: tuple[ArchiveSlot, ...] = (
                 parent_folder=sheet_ids.FOLDER_PO_JOBS),
     ArchiveSlot("smartsheet", "smartsheet:subcontracts", LABEL_SUBCONTRACTS,
                 parent_folder=sheet_ids.FOLDER_SC_JOBS),
-    # Box: FOUR containers — the safety root still carries the materials manifests inside its
-    # per-job folder (see the module docstring); the PO lane's own root (2026-08-11) carries the
+    # Box: FOUR containers — the safety root still carries every portal per-submission PDF
+    # (both categories), the materials manifests AND the schedule PDFs inside its per-job
+    # folder (see the module docstring); the PO lane's own root (2026-08-11) carries the
     # PO PDFs + RFQs/ + Vendor Quotes/ inside its per-job folder; the subcontract lane's own
     # root (2026-08-12) carries the .docx/.xlsx package + send ZIP.
     ArchiveSlot("box", "box:safety", LABEL_SAFETY,

@@ -909,8 +909,15 @@ def _process_pending_po(
         )
 
         # 10 — PO_Pending_Review row (idempotent via the Notes po_id join) + the
-        # inline PDF attach (best-effort — Box is the SoR).
-        if po_review.find_row_by_po_id(po_id) is None:
+        # inline PDF attach (best-effort — Box is the SoR). The attach runs on EVERY
+        # service, not fresh-create-only (wiring audit 2026-08-12, the #98 subcontract
+        # posture): a crash between add_po_review_row and the attach used to leave the
+        # approver's row permanently bare, because the re-serve found the row and
+        # skipped the guarded block. Deterministic filename → replace, never duplicate.
+        existing_review = po_review.find_row_by_po_id(po_id)
+        if existing_review is not None:
+            review_row_id = int(existing_review["_row_id"])
+        else:
             email_body = po_review.po_email_body_template(
                 contact_name=str(vendor.get(vendors.COL_CONTACT_NAME) or ""),
                 po_number=po_number,
@@ -934,12 +941,7 @@ def _process_pending_po(
                     else None,
                 ),
             )
-            _attach_pdf_best_effort(
-                review_row_id,
-                po_naming.po_pdf_filename(po_number, po.get("job_name")),
-                pdf,
-                correlation_id,
-            )
+        _attach_pdf_best_effort(review_row_id, pdf_filename, pdf, correlation_id)
 
         # 11 — the receipt, LAST (queued→pending_review; a crash before this line
         # re-pulls the row and every step above is idempotent).

@@ -330,8 +330,13 @@ def test_client_report_link_becomes_the_review_rows_compiled_pdf(monkeypatch) ->
     monkeypatch.setattr(generate_core, "_ensure_box_week_folder", lambda *a, **k: 1)
     monkeypatch.setattr(generate_core, "_upload_packet", lambda *a, **k: ("n.pdf", "999"))
     summary = generate_core.RunSummary()
-    link = generate_core._maybe_client_report(cfg, _job(), "Bonacci 2", WEEK, "s", summary, "cid")
+    link, filed_name, report_bytes = generate_core._maybe_client_report(
+        cfg, _job(), "Bonacci 2", WEEK, "s", summary, "cid")
     assert link == "https://app.box.com/file/999"
+    # The bytes + filed name ride back so the caller inline-attaches the CLIENT report
+    # to the review row (wiring audit 2026-08-12 — the row must carry the document it
+    # approves, not just the internal packet).
+    assert filed_name == "n.pdf" and report_bytes == b"%PDF-report"
     assert summary.client_reports_compiled == 1
 
 
@@ -347,8 +352,9 @@ def test_a_failed_client_report_falls_back_to_the_packet_and_warns(monkeypatch) 
 
     cfg = replace(pwg.PROGRESS_GENERATE_CONFIG, client_report_provider=boom)
     summary = generate_core.RunSummary()
-    link = generate_core._maybe_client_report(cfg, _job(), "Bonacci 2", WEEK, "s", summary, "cid")
-    assert link == ""  # → the caller uses the packet link
+    link, filed_name, report_bytes = generate_core._maybe_client_report(
+        cfg, _job(), "Bonacci 2", WEEK, "s", summary, "cid")
+    assert link == "" and report_bytes is None  # → the caller uses the packet link
     assert summary.client_reports_compiled == 0
     assert any("client_report_failed" in str(k.get("error_code", "")) for _, k in logged)
 
@@ -360,7 +366,7 @@ def test_a_provider_returning_none_is_a_quiet_no_op(monkeypatch) -> None:
     cfg = replace(pwg.PROGRESS_GENERATE_CONFIG, client_report_provider=lambda job, week: None)
     summary = generate_core.RunSummary()
     assert generate_core._maybe_client_report(
-        cfg, _job(), "Bonacci 2", WEEK, "s", summary, "cid") == ""
+        cfg, _job(), "Bonacci 2", WEEK, "s", summary, "cid") == ("", "", None)
     assert not any("client_report_failed" in str(k.get("error_code", "")) for _, k in logged)
 
 

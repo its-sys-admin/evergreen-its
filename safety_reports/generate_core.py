@@ -519,29 +519,36 @@ def _hold_empty_week(
 def _maybe_client_report(
     config: GenerateConfig, job: ActiveJob, project_name: str,
     week: safety_week.SafetyWeek, stamp: str, summary: RunSummary, correlation_id: str,
-) -> str:
-    """Build + file the workstream's client-facing report; return its Box link, or "" .
+) -> tuple[str, str, bytes | None]:
+    """Build + file the workstream's client-facing report; return
+    ``(box_link, filed_name, report_bytes)`` — or ``("", "", None)`` when no report.
+
+    The bytes ride back so the caller can inline-attach the CLIENT report to the
+    review row (wiring audit 2026-08-12: the row used to carry only the internal
+    field-records packet while its Compiled PDF cell — and the send — pointed at
+    the client report; under attach parity the row must carry the document it
+    approves).
 
     FENCED like `_maybe_rollup_page`: any failure — provider raise, Box outage, renderer fault —
-    WARNs and returns "", and the caller falls back to putting the field-records packet in the
+    WARNs and returns empty, and the caller falls back to putting the field-records packet in the
     review row. A weekly cadence that quietly stops is worse than one that sends the wrong-shaped
     document once with a WARN sitting in ITS_Errors.
     """
     provider = config.client_report_provider
     if provider is None:
-        return ""
+        return "", "", None
     try:
         report = provider(job, week)
         if not report:
-            return ""
+            return "", "", None
         folder_id = _ensure_box_week_folder(config, project_name, week, correlation_id)
         basename = (
             f"{safety_naming.job_folder_name(project_name)}_"
             f"{safety_naming.week_label(week.start)}_{config.client_report_suffix}"
         )
-        _name, file_id = _upload_packet(folder_id, basename, report, stamp)
+        filed_name, file_id = _upload_packet(folder_id, basename, report, stamp)
         summary.client_reports_compiled += 1
-        return f"https://app.box.com/file/{file_id}"
+        return f"https://app.box.com/file/{file_id}", filed_name, report
     except Exception:  # noqa: BLE001 — the packet fallback keeps the week deliverable
         error_log.log(
             Severity.WARN, config.script_name,
@@ -549,7 +556,7 @@ def _maybe_client_report(
             f"falls back to the field-records packet; the client receives the packet this week",
             error_code=f"{config.script_name.split(chr(46))[-1]}.client_report_failed", correlation_id=correlation_id,
         )
-        return ""
+        return "", "", None
 
 
 def _attach_pdf_best_effort(
@@ -692,10 +699,10 @@ def _compile_job_week(
     # degrades to today's behaviour — the field-records packet in Compiled PDF — and is LOUD.
     # Sending the packet is not ideal, but it is a document the client can read; sending nothing
     # would silently break the weekly cadence.
-    report_link = ""
+    report_link, report_name, report_bytes = "", "", None
     if config.client_report_provider is not None:
-        report_link = _maybe_client_report(config, job, project_name, week, stamp,
-                                           summary, correlation_id)
+        report_link, report_name, report_bytes = _maybe_client_report(
+            config, job, project_name, week, stamp, summary, correlation_id)
     if report_link:
         # The packet stops being the client's attachment and becomes the internal record. Its
         # link rides Notes so the operator can still reach it from the same row in one click.
@@ -716,6 +723,12 @@ def _compile_job_week(
         _attach_pdf_best_effort(config, sheet_id, rollup_row_id, packet_name, compiled, correlation_id)
         _attach_pdf_best_effort(config, config.review_sheet_id, review_row_id, packet_name,
                                 compiled, correlation_id)
+    # When a CLIENT report is bound (progress WPR), the review row also carries THE
+    # document it approves and sends — not just the internal packet (attach parity,
+    # wiring audit 2026-08-12). Safety binds no provider, so this is a no-op there.
+    if report_bytes is not None and report_name:
+        _attach_pdf_best_effort(config, config.review_sheet_id, review_row_id, report_name,
+                                report_bytes, correlation_id)
 
 
 def _safe_review_queue(

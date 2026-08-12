@@ -409,6 +409,11 @@ def test_replay_after_lost_receipt_appends_nothing_and_reposts_receipt(_patch):
     receipt_vendors = _patch["mark_filed"].call_args.kwargs["vendor_results"]
     assert receipt_vendors[0]["review_row_id"] == "9001"
     assert stats.filed == 1
+    # Every-service self-heal (wiring audit 2026-08-12): the replay STILL attaches
+    # the RFQ PDF on the EXISTING review row (9001) — the attach used to be
+    # fresh-append-only, so a crash between row-add and attach was permanent.
+    # (attach mock is the raw attach_pdf_to_row: args = (sheet_id, row_id, ...).)
+    assert any(c.args[1] == 9001 for c in _patch["attach"].call_args_list)
 
 
 def test_happy_path_files_ledger_review_and_receipts_last(_patch):

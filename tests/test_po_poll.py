@@ -464,7 +464,11 @@ def test_transient_box_failure_leaves_queued_and_never_marks(_patch):
 
 def test_crash_retry_is_idempotent(_patch):
     """A re-pulled row whose PO_Log + review rows already exist (a lost receipt)
-    re-uploads a byte-identical version and ONLY re-posts the receipt."""
+    re-uploads a byte-identical version and ONLY re-posts the receipt — while the
+    inline attaches STILL run on BOTH the ledger and the existing review row
+    (every-service self-heal, wiring audit 2026-08-12: the review attach used to be
+    fresh-create-only, so a crash between row-add and attach left the approver's
+    row permanently bare)."""
     _patch["log_find"].return_value = {
         "_row_id": 1, po_log.COL_NOTES: po_log.notes_for_filed_row(7),
     }
@@ -477,6 +481,10 @@ def test_crash_retry_is_idempotent(_patch):
     _patch["log_append"].assert_not_called()
     _patch["review_add"].assert_not_called()
     _patch["mark_filed"].assert_called_once()
+    assert _patch["attach"].call_count == 2
+    ledger_call, review_call = _patch["attach"].call_args_list
+    assert ledger_call.args[0] == 1 and "sheet_id" in ledger_call.kwargs
+    assert review_call.args[0] == 321 and "sheet_id" not in review_call.kwargs
 
 
 def test_unresolved_box_root_leaves_queued(_patch):

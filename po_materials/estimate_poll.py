@@ -1017,8 +1017,9 @@ def _service_one_estimate(
             ledger_status = estimate_log.STATUS_NEEDS_REVIEW
             ledger_doc_type = doc_type
             ledger_detail = f"doc_type={doc_type} confidence={confidence}"
-        if estimate_log.find_row_by_uuid(est_uuid) is None:
-            estimate_log.append_row(
+        existing_ledger = estimate_log.find_row_by_uuid(est_uuid)
+        if existing_ledger is None:
+            ledger_row_id = estimate_log.append_row(
                 est_uuid=est_uuid,
                 job_no=job_no,
                 filename=filename,
@@ -1036,6 +1037,16 @@ def _service_one_estimate(
                 vendor_name=ladder.vendor_name if ladder else None,
                 quote_number=ladder.quote_number if ladder else None,
             )
+            ledger_row_id = int(existing_ledger["_row_id"])
+        # Inline attach of the filed ORIGINAL on the ledger row (#79/#98 attach
+        # parity, wiring audit 2026-08-12 — every other procurement ledger carries
+        # its document; Estimate_Log held only a bare Box file id). Every service,
+        # self-healing: the est_uuid-prefixed name is deterministic, so a replay
+        # replaces rather than duplicates. Content-typed by the verified MIME so an
+        # xlsx quote is not mislabeled application/pdf.
+        _attach_estimate_best_effort(
+            ledger_row_id, filed_name, data, declared_mime, correlation_id
+        )
 
         # 8 — disposition-screen previews (Quartz via the sandbox; Pillow
         # re-encoded), BEST-EFFORT: a preview failure degrades the doc to the
@@ -1998,6 +2009,25 @@ def _post_previews_best_effort(
                 correlation_id=correlation_id,
             )
     return posted
+
+
+def _attach_estimate_best_effort(
+    row_id: int, filename: str, data: bytes, content_type: str, correlation_id: str
+) -> None:
+    """Attach the filed original inline on the Estimate_Log row, BEST-EFFORT (Box is
+    the SoR; a failure is a WARN that never fails the filing — the po_poll posture)."""
+    try:
+        smartsheet_client.attach_pdf_to_row(
+            estimate_log._sheet_id(), row_id, filename, data, content_type=content_type
+        )
+    except Exception as exc:  # noqa: BLE001 — supplementary inline copy; Box is the SoR
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"ledger-row attach failed (row {row_id}, {filename!r}): "
+            f"{type(exc).__name__}: {exc!r}",
+            error_code="estimate_row_attach_failed",
+            correlation_id=correlation_id,
+        )
 
 
 def _resolve_quotes_box_folder(job_name: str) -> str | None:
