@@ -185,5 +185,5 @@ docs:
     title: "ITS Troubleshooting Guide"
     version: v1
     source: docs/troubleshooting/troubleshooting_guide.md
-    sha256: 9a9056f1431e1b1d57966727b52e1e7d5f76b6ad5f7844f277f3455639e29ca1
+    sha256: f240575b9af1b664e7acea1a5810b7e95feb564bf3bcb6eebd7f9238f7b2f246
     audience: operator

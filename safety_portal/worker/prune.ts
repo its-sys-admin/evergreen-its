@@ -364,6 +364,11 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
           // are the job's revision history. Same in-step rule with purge-job's cascade as
           // the manifest guard above.
           "AND job_id NOT IN (SELECT job_id FROM job_schedules) " +
+          // 0067: a job holding Weekly Production Report office inputs has had a client-facing
+          // report prepared against it — the OSHA case counts and pending-items record are the
+          // evidence of what was reported — and that table has no time-based prune of its own
+          // (purge-job is its only exit). Same in-step rule as the manifest guard above.
+          "AND job_id NOT IN (SELECT job_id FROM job_weekly_report_inputs) " +
           "AND job_id NOT IN (SELECT job_id FROM checklist_instances WHERE job_id IS NOT NULL) " +
           "AND job_id NOT IN (SELECT job_id FROM equipment_location WHERE job_id IS NOT NULL)",
       )

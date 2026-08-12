@@ -49,7 +49,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from progress_reports import wpr_review
+from progress_reports import wpr_data, wpr_review
 from safety_reports import form_pdf, generate_core
 from safety_reports.week_sheet import PROGRESS_WEEK_SHEET_CONFIG
 from shared import active_jobs, keychain, portal_client, review_queue, smartsheet_client
@@ -144,6 +144,27 @@ def _rollup_page_provider(job: ActiveJob, week: SafetyWeek) -> bytes | None:
     )
     return form_pdf.render_progress_rollup(job.project_name, generate_core._week_label(week), numbers)
 
+def _client_report_provider(job: ActiveJob, week: SafetyWeek) -> bytes | None:
+    """The CLIENT-FACING Weekly Production Report provider (0067).
+
+    Same creds and the same fail-closed resolution as the rollup page — an unwired progress
+    workstream produces no report rather than an error. `generate_core` calls this FENCED
+    (`_maybe_client_report`), so a wired-but-broken report degrades to filing the field-records
+    packet as the client's attachment and WARNs; it never costs the week its review row.
+
+    The closure lives HERE, not in `generate_core`, for the reason the rollup provider does: the
+    shared engine must gain no portal_client / keychain / renderer coupling and stay a pure,
+    gate-clean engine (§42).
+    """
+    creds = _resolve_rollup_creds()
+    if creds is None:
+        return None
+    base_url, bearer = creds
+    return form_pdf.render_production_report(
+        wpr_data.build(job, week, base_url=base_url, bearer=bearer)
+    )
+
+
 PROGRESS_GENERATE_CONFIG = generate_core.GenerateConfig(
     script_name=SCRIPT_NAME,
     workstream="progress_reports",
@@ -170,6 +191,14 @@ PROGRESS_GENERATE_CONFIG = generate_core.GenerateConfig(
     # The progress packet's cover names itself (the shared default is the SAFETY title —
     # unbound, every progress cover was mislabeled "WEEKLY SAFETY REPORT").
     cover_title="WEEKLY PROGRESS REPORT",
+    # 0067: the client receives the synthesized 5-page Weekly Production Report; the compiled
+    # packet of daily field records stays internal (filed to Box, on the week-sheet Rollup row,
+    # linked from the review row's Notes). Safety binds neither and is byte-identical.
+    client_report_provider=_client_report_provider,
+    client_report_suffix="WPR",
+    # A progress week with no daily reports is HELD for the office to decide rather than
+    # emailing a client a hollow document or failing quietly at send time.
+    empty_week_hold=True,
 )
 
 # #336 — every ITS_Config key the progress compile resolves at RUNTIME: the four carried on the

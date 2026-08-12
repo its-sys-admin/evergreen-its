@@ -57,6 +57,7 @@ from reportlab.platypus import (
     Flowable,
     Image,
     KeepTogether,
+    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -1290,6 +1291,385 @@ def render_progress_rollup(project_name: str, week_label: str, numbers: dict[str
                             leftMargin=_MARGIN, rightMargin=_MARGIN,
                             topMargin=_MARGIN, bottomMargin=0.7 * inch)
     doc.build(flow, canvasmaker=_canvas_maker("Progress Rollup", show_page_numbers=False))
+    return buf.getvalue()
+
+
+# ── Weekly Production Report (the client-facing 5-page artifact) ───────────────
+# Structure and section names follow the Evergreen Word template the office has sent
+# clients since 2022 (`~/Desktop/WPRs`, e.g. "Pine Grove WPR 1.13.23.pdf"). The VISUAL
+# system is this module's — brand band, gold rules, pale-green table heads — not the
+# template's 2022 WordArt gradient banner and red-filled safety header, so every ITS
+# document still opens the same way.
+#
+# Pure data → bytes. NO AI, NO network (the module-wide contract). Every value is
+# interpolated as reportlab-escaped plain text via `_p`: crew names, photo captions,
+# weather conditions and every office field are field- or operator-typed free text, and
+# a hostile value must render as characters, never markup (Invariant 2).
+#
+# EVERY field is defensively coerced, because the dict arrives over untrusted JSON
+# transport from the Worker aggregate. A malformed shape degrades to a blank cell or an
+# empty-state line; it never raises. The office's weekly document must not be blocked by
+# one bad value.
+#
+# The renderer NEVER invents. A section with no source renders an explicit empty state
+# ("No schedule imported for this job"), never a plausible-looking zero — the same
+# discipline that keeps a fabricated progress-% off the rollup page.
+
+# The six OSHA case rows of the template's Project Safety Status grid, in template order.
+_SAFETY_ROWS: tuple[tuple[str, str], ...] = (
+    ("lost_time", "Lost Time Accident Cases"),
+    ("lost_work_days", "Lost Work Days"),
+    ("job_transfer", "Job Transfer or Restriction"),
+    ("near_miss", "Near Misses"),
+    ("other_recordable", "Other Recordable Cases"),
+    ("first_aid", "First Aid Cases"),
+)
+
+
+def _pr_text(v: Any) -> str:
+    """Coerce any transported value to display text. None/missing → ""."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    return str(v)
+
+
+def _pr_int(v: Any) -> int:
+    """Coerce to a non-negative int; anything unparseable → 0."""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return 0
+    return n if n >= 0 else 0
+
+
+def _pr_rows(v: Any) -> list[dict[str, Any]]:
+    """Coerce a transported list-of-objects; drops non-dict members rather than raising."""
+    return [r for r in v if isinstance(r, dict)] if isinstance(v, list) else []
+
+
+def _pr_dict(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
+def _pr_field_block(pairs: list[tuple[str, str]], st: dict) -> Flowable:
+    """The template's header meta block — two label/value columns, hairline-separated.
+    An empty value renders as an empty cell, never a placeholder that reads like data."""
+    rows: list[list[Any]] = []
+    for i in range(0, len(pairs), 2):
+        chunk = pairs[i:i + 2]
+        left_l, left_v = chunk[0]
+        right_l, right_v = chunk[1] if len(chunk) > 1 else ("", "")
+        rows.append([
+            _p(left_l, st["colhead"]), _p(left_v, st["cell"]),
+            _p(right_l, st["colhead"]), _p(right_v, st["cell"]),
+        ])
+    t = Table(rows, colWidths=[1.45 * inch, _CONTENT_W / 2 - 1.45 * inch,
+                               1.45 * inch, _CONTENT_W / 2 - 1.45 * inch])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, _LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return t
+
+
+def _pr_page_safety(data: dict, st: dict) -> list[Flowable]:
+    """Page 1 — header meta, Project Safety Status, safety-meeting topics."""
+    flow: list[Flowable] = []
+    flow.append(_pr_field_block([
+        ("ESS Management", _pr_text(data.get("ess_management"))),
+        ("Mobilization Date", _pr_text(data.get("mobilization_date"))),
+        ("Week of", _pr_text(data.get("week_label"))),
+        ("Report Submitted", _pr_text(data.get("report_submitted"))),
+        ("Subcontractors", ", ".join(
+            _pr_text(s) for s in (data.get("subcontractors") or []) if _pr_text(s)
+        )),
+        ("Prepared By", _pr_text(data.get("prepared_by"))),
+    ], st))
+
+    flow.append(_section_header("Project Safety Status", st))
+    safety = _pr_dict(data.get("safety"))
+    rows: list[list[Any]] = [[
+        _p("Site Safety Record", st["colhead"]),
+        _p("Monthly Total Incidents", st["colhead"]),
+        _p("Project Start to Date Total", st["colhead"]),
+    ]]
+    for key, label in _SAFETY_ROWS:
+        cur = _pr_dict(safety.get(key))
+        rows.append([
+            _p(label, st["cell"]),
+            _p(str(_pr_int(cur.get("month"))), st["cell"]),
+            _p(str(_pr_int(cur.get("to_date"))), st["cell"]),
+        ])
+    table = Table(rows, colWidths=[_CONTENT_W * 0.46, _CONTENT_W * 0.27, _CONTENT_W * 0.27],
+                  repeatRows=1)
+    table.setStyle(_grid_style(len(rows), 3))
+    flow.append(table)
+
+    flow.append(_section_header("Safety Hazards Addressed in Daily Safety Meetings", st))
+    topics = [_pr_text(t) for t in (data.get("hazard_topics") or []) if _pr_text(t)]
+    if topics:
+        for t in topics:
+            flow.append(Paragraph(_esc(t), st["bullet"], bulletText="•"))
+    else:
+        flow.append(_p("No safety meetings recorded for this week.", st["body"]))
+    return flow
+
+
+def _pr_page_weather_labor(data: dict, st: dict) -> list[Flowable]:
+    """Page 2 — the Weather Report and the Construction Labor Report.
+
+    The weather grid carries ONLY what the daily report captures (conditions + average
+    temp). The template's max/avg/min temperature, humidity and wind columns have no
+    source in ITS and are deliberately absent rather than rendered empty — an empty
+    measurement column reads as "we measured nothing", which is a different and false
+    claim from "we do not measure this"."""
+    flow: list[Flowable] = []
+    flow.append(_section_header("Weather Report", st))
+    weather = _pr_dict(data.get("weather"))
+    days = _pr_rows(weather.get("days"))
+    if days:
+        rows: list[list[Any]] = [[
+            _p("Date", st["colhead"]), _p("Conditions", st["colhead"]),
+            _p("Avg Temp (°F)", st["colhead"]), _p("Inclement Weather", st["colhead"]),
+        ]]
+        for d in days:
+            rows.append([
+                _p(_pr_text(d.get("date")), st["cell"]),
+                _p(_pr_text(d.get("conditions")), st["cell"]),
+                _p(_pr_text(d.get("avg_temp")), st["cell"]),
+                _p("Yes" if d.get("inclement") else "No", st["cell"]),
+            ])
+        table = Table(rows, colWidths=[_CONTENT_W * 0.16, _CONTENT_W * 0.46,
+                                       _CONTENT_W * 0.16, _CONTENT_W * 0.22], repeatRows=1)
+        table.setStyle(_grid_style(len(rows), 4))
+        flow.append(table)
+        flow.append(Spacer(1, 6))
+        flow.append(_p(
+            f"Weather days this week: {_pr_int(weather.get('week'))}"
+            f"    ·    Total weather days to date: {_pr_int(weather.get('to_date'))}",
+            st["meta"]))
+    else:
+        flow.append(_p("No daily reports were filed for this week.", st["body"]))
+
+    flow.append(_section_header("Construction Labor Report", st))
+    labor = _pr_dict(data.get("labor"))
+    lrows = _pr_rows(labor.get("rows"))
+    if lrows:
+        rows = [[_p("Company", st["colhead"]), _p("# of Workers", st["colhead"]),
+                 _p("Man Hours", st["colhead"])]]
+        for r in lrows:
+            rows.append([
+                _p(_pr_text(r.get("company")), st["cell"]),
+                _p(_pr_text(r.get("workers")), st["cell"]),
+                _p(_pr_text(r.get("man_hours")), st["cell"]),
+            ])
+        table = Table(rows, colWidths=[_CONTENT_W * 0.54, _CONTENT_W * 0.23, _CONTENT_W * 0.23],
+                      repeatRows=1)
+        table.setStyle(_grid_style(len(rows), 3))
+        flow.append(table)
+    else:
+        flow.append(_p("No crew activity recorded for this week.", st["body"]))
+    total = labor.get("total_hours")
+    if total not in (None, ""):
+        flow.append(Spacer(1, 6))
+        flow.append(_p(f"Total hours logged against the job this week: {_pr_text(total)}",
+                       st["caption"]))
+    return flow
+
+
+def _pr_page_progress(data: dict, st: dict) -> list[Flowable]:
+    """Page 3 — Construction Progress / Delays, driven by the committed job schedule.
+
+    `progress.sections` is the ADR-0006 `job_schedule_tasks` list grouped by section. Until
+    that lane lands (or for a job with no committed schedule) it is empty, and the page says
+    so. It NEVER prints a percentage ITS did not receive."""
+    flow: list[Flowable] = []
+    flow.append(_section_header("Construction Progress / Delays", st))
+    progress = _pr_dict(data.get("progress"))
+    sections = _pr_rows(progress.get("sections"))
+    rendered_any = False
+    for section in sections:
+        items = _pr_rows(section.get("items"))
+        if not items:
+            continue
+        rendered_any = True
+        flow.append(_section_header(_pr_text(section.get("name")) or "—", st, level="group"))
+        rows: list[list[Any]] = [[_p("Activity", st["colhead"]), _p("% Complete", st["colhead"])]]
+        for it in items:
+            pct = it.get("percent")
+            rows.append([
+                _p(_pr_text(it.get("label")), st["cell"]),
+                # A missing percent is an em dash, NOT 0% — "not reported" and "no work
+                # done" are different facts and a client reads the difference.
+                _p("—" if pct is None or pct == "" else f"{_pr_int(pct)}%", st["cell"]),
+            ])
+        table = Table(rows, colWidths=[_CONTENT_W * 0.76, _CONTENT_W * 0.24], repeatRows=1)
+        table.setStyle(_grid_style(len(rows), 2))
+        flow.append(table)
+    if not rendered_any:
+        flow.append(_p("No schedule imported for this job — percent-complete reporting "
+                       "begins once a project schedule is uploaded and committed.", st["body"]))
+
+    for label, key in (("Critical Items / Delays", "critical_items"),
+                       ("Upcoming Activities", "upcoming_activities")):
+        flow.append(_section_header(label, st, level="group"))
+        text = _pr_text(progress.get(key)).strip()
+        if text:
+            flow.extend(_rich_body(text, st))
+        else:
+            flow.append(_p("None reported.", st["caption"]))
+    return flow
+
+
+def _pr_page_photos(data: dict, st: dict) -> list[Flowable]:
+    """Page 4 — Progress Photos.
+
+    `photos` is a list of (caption, jpeg_bytes). The bytes are ALREADY §34-screened and
+    Box-filed — the assembler resolves them by `box_file_id`, which a pool row earns only
+    on a CLEAN disposition, so an unscreened photo cannot reach a client report. Reuses
+    `_photo_cell`'s per-photo fence: one unrenderable image is dropped and logged, never
+    fatal to the document."""
+    flow: list[Flowable] = [_section_header("Progress Photos", st)]
+    photos: list[tuple[str, bytes]] = []
+    for entry in (data.get("photos") or []):
+        if isinstance(entry, (tuple, list)) and len(entry) == 2 and isinstance(entry[1], bytes):
+            photos.append((_pr_text(entry[0]), entry[1]))
+    cells = [c for c in (_photo_cell(cap, jpeg, st) for cap, jpeg in photos) if c is not None]
+    if not cells:
+        flow.append(_p("No progress photos filed this week.", st["body"]))
+        return flow
+    grid: list[list[Any]] = [cells[i:i + 2] for i in range(0, len(cells), 2)]
+    if len(grid[-1]) == 1:
+        grid[-1].append("")
+    table = Table(grid, colWidths=[_PHOTO_COL_W, _PHOTO_COL_W])
+    table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    flow.append(table)
+    return flow
+
+
+def _pr_page_materials(data: dict, st: dict) -> list[Flowable]:
+    """Page 5 — Material Delivery Tracking Log and Pending Requests."""
+    flow: list[Flowable] = [_section_header("Material Delivery Tracking Log", st)]
+    deliveries = _pr_rows(_pr_dict(data.get("materials")).get("deliveries"))
+    if deliveries:
+        rows: list[list[Any]] = [[
+            _p("Item", st["colhead"]), _p("Vendor", st["colhead"]),
+            _p("Qty", st["colhead"]), _p("Materials Delivered", st["colhead"]),
+        ]]
+        for d in deliveries:
+            rows.append([
+                _p(_pr_text(d.get("item")), st["cell"]),
+                # Often blank: material lines carry no vendor link, only the catalog
+                # manufacturer. The source documents read "(Owner Provided)" in most of
+                # these cells, so a blank matches them rather than inventing a supplier.
+                _p(_pr_text(d.get("vendor")), st["cell"]),
+                _p(_pr_text(d.get("qty")), st["cell"]),
+                _p(_pr_text(d.get("delivered")), st["cell"]),
+            ])
+        table = Table(rows, colWidths=[_CONTENT_W * 0.40, _CONTENT_W * 0.25,
+                                       _CONTENT_W * 0.12, _CONTENT_W * 0.23], repeatRows=1)
+        table.setStyle(_grid_style(len(rows), 4))
+        flow.append(table)
+    else:
+        flow.append(_p("No material deliveries recorded this week.", st["body"]))
+
+    flow.append(_section_header("Pending Requests", st))
+    pending = _pr_dict(data.get("pending"))
+    prows: list[list[Any]] = []
+    for label, key in (("Pending RFIs", "rfis"), ("Pending Submittals", "submittals"),
+                       ("IFC Review", "ifc_review"), ("Pending Change Orders", "change_orders")):
+        prows.append([_p(label, st["colhead"]), _p(_pr_text(pending.get(key)), st["cell"])])
+    table = Table(prows, colWidths=[_CONTENT_W * 0.30, _CONTENT_W * 0.70])
+    table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, _LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    flow.append(table)
+    return flow
+
+
+def render_production_report(data: dict) -> bytes:
+    """Render the client-facing **Evergreen Weekly Production Report** to PDF bytes.
+
+    The third branded renderer in this module, beside `render_weekly_cover` and
+    `render_progress_rollup`. Five logical pages matching the office's Word template:
+
+      1. header meta · Project Safety Status · safety-meeting topics
+      2. Weather Report · Construction Labor Report
+      3. Construction Progress / Delays · Critical Items · Upcoming Activities
+      4. Progress Photos
+      5. Material Delivery Tracking Log · Pending Requests
+
+    `data` is RENDER-READY — the shape `progress_reports.wpr_data` assembles from the
+    Worker aggregate, not the Worker's wire shape. Notably `photos` here is a list of
+    `(caption, jpeg_bytes)` tuples (the assembler resolves each `box_file_id` to bytes),
+    matching `_photo_cell`'s contract:
+
+        {job_name, site_location, ess_management, mobilization_date, week_label,
+         report_submitted, prepared_by, subcontractors[],
+         safety{<case>: {month, to_date}}, hazard_topics[],
+         weather{days[{date, conditions, avg_temp, inclement}], week, to_date},
+         labor{rows[{company, workers, man_hours}], total_hours},
+         progress{sections[{name, items[{label, percent}]}],
+                  critical_items, upcoming_activities},
+         photos[(caption, jpeg_bytes)],
+         materials{deliveries[{item, vendor, qty, delivered}]},
+         pending{rfis, submittals, ifc_review, change_orders}}
+
+    Pure data → bytes: NO AI, NO network. Every value is escaped via `_p` and every field
+    defensively coerced, so a hostile or malformed value renders as characters or degrades
+    to an empty state and never raises — the office's weekly document must not be blocked
+    by one bad cell.
+
+    Page breaks are explicit so the artifact keeps the template's five-part structure; a
+    section that overflows simply flows onto another page and the footer's two-pass
+    "Page X of Y" absorbs it.
+    """
+    st = _styles()
+    job_name = _pr_text(data.get("job_name"))
+    site_location = _pr_text(data.get("site_location"))
+    week_label = _pr_text(data.get("week_label"))
+
+    flow: list[Flowable] = _brand_header(
+        "", st,
+        doc_label="WEEKLY PRODUCTION REPORT",
+        meta_lines=[
+            ("Project", job_name),
+            *([("Location", site_location)] if site_location else []),
+            ("Week of", week_label),
+        ],
+    )
+
+    pages = (
+        _pr_page_safety(data, st),
+        _pr_page_weather_labor(data, st),
+        _pr_page_progress(data, st),
+        _pr_page_photos(data, st),
+        _pr_page_materials(data, st),
+    )
+    for i, page in enumerate(pages):
+        flow.extend(page)
+        if i < len(pages) - 1:
+            flow.append(PageBreak())
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        title=f"Weekly Production Report — {job_name}" if job_name else "Weekly Production Report",
+        leftMargin=_MARGIN, rightMargin=_MARGIN, topMargin=_MARGIN, bottomMargin=0.7 * inch,
+    )
+    footer = f"{job_name} — {week_label}" if job_name and week_label else (job_name or week_label)
+    doc.build(flow, canvasmaker=_canvas_maker(footer or "Weekly Production Report"))
     return buf.getvalue()
 
 
