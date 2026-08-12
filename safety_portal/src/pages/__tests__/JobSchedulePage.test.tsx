@@ -93,6 +93,20 @@ const MANAGE = ["cap.jobtracker.read", "cap.jobtracker.manage"];
 const READ_ONLY = ["cap.jobtracker.read"];
 const MARK = ["cap.jobtracker.read", "cap.schedule.mark"];
 
+/**
+ * Open a task's mark strip (2026-08 design pass). The five percent chips, the exact-% input
+ * and the delivered-date control used to sit inside every row's progress CELL — five small
+ * targets in a table column that also had to fit a phone. They now live in a per-row
+ * disclosure with 48px targets, so the list stays scannable and the controls stay
+ * thumb-sized.
+ *
+ * Strips STAY open once opened (end-of-day marking walks several tasks at a time), which is
+ * why a test can open three rows and then assert across all of them.
+ */
+function openMark(getByLabelText: (t: string) => HTMLElement, taskName: string) {
+  fireEvent.click(getByLabelText(`Update progress for ${taskName}`));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.fetchScheduleTasks).mockResolvedValue({
@@ -271,6 +285,9 @@ describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
   it("renders the row controls per kind: quick-% chips + exact input on ordinary tasks, a Done checkbox on milestones, a date control on deliveries", async () => {
     const { container, getByLabelText } = mountAs("submitter", MARK);
     await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    openMark(getByLabelText, "Fencing");
+    openMark(getByLabelText, "Substantial Completion");
+    openMark(getByLabelText, "Pile Delivery");
     // Ordinary task (Fencing, 50%): all five chips + the exact input; the CURRENT % chip
     // is disabled (nothing to re-mark), the others live.
     for (const pct of [0, 25, 75, 100]) {
@@ -292,6 +309,7 @@ describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
   it("a quick-% chip calls the progress helper and reloads the list (optimistic then confirmed)", async () => {
     const { container, getByLabelText } = mountAs("submitter", MARK);
     await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    openMark(getByLabelText, "Fencing");
     fireEvent.click(getByLabelText("Mark Fencing 75%"));
     await waitFor(() => expect(api.markScheduleTaskProgress).toHaveBeenCalledWith(1, 75));
     await waitFor(() => expect(api.fetchScheduleTasks).toHaveBeenCalledTimes(2)); // mount + reload
@@ -300,6 +318,7 @@ describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
   it("the exact-% input marks an off-chip value; a non-integer refuses locally without a call", async () => {
     const { container, getByLabelText } = mountAs("submitter", MARK);
     await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    openMark(getByLabelText, "Fencing");
     const input = getByLabelText("Exact percent for Fencing") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "62" } });
     fireEvent.click(getByLabelText("Set exact percent for Fencing"));
@@ -316,6 +335,8 @@ describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
   it("the milestone checkbox calls milestone-done when checking, progress 0 when un-checking (a correction)", async () => {
     const { container, getByLabelText } = mountAs("submitter", MARK);
     await waitFor(() => expect(container.textContent ?? "").toContain("Substantial Completion"));
+    openMark(getByLabelText, "Substantial Completion");
+    openMark(getByLabelText, "Pile Delivery");
     fireEvent.click(getByLabelText("Done Substantial Completion")); // 0 → done
     await waitFor(() => expect(api.markScheduleTaskMilestoneDone).toHaveBeenCalledWith(3));
     fireEvent.click(getByLabelText("Done Pile Delivery")); // 100 → un-done
@@ -325,6 +346,8 @@ describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
   it("the Delivered button sends the picked date; a Worker refusal surfaces its plain-language copy", async () => {
     const { container, getByLabelText, findByRole } = mountAs("submitter", MARK);
     await waitFor(() => expect(container.textContent ?? "").toContain("Pile Delivery"));
+    openMark(getByLabelText, "Pile Delivery");
+    openMark(getByLabelText, "Fencing");
     fireEvent.change(getByLabelText("Delivered date for Pile Delivery"), {
       target: { value: "2026-09-12" },
     });
