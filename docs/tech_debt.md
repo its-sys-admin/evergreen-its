@@ -2769,3 +2769,21 @@ delete this instance, if vendor contact data shouldn't ride git history. Either 
 **Revisit when:** next `verify_cutover.py`/VC-07 touch, or when Seth makes the commit-vs-gitignore call.
 
 Surfaced: 2026-08-11 session close.
+
+## [OPEN 2026-08-11, medium] The internal-pool portal_client families have no §30 live-integration smoke — manifest, estimate, RFQ AND schedule wrappers alike
+
+Every internal-pool daemon family has grown its `shared/portal_client.py` wrapper set
+(manifest: 6 fns; estimate; RFQ; and now schedule — PR #85's `get_schedules_pending` /
+`claim_schedule` / `get_schedule_chunks` / `post_schedule_rows` / `post_schedule_preview` /
+`post_schedule_result`) with unit coverage + Worker-side vitest coverage but NO paired
+operator-run `-m integration` smoke driving the PYTHON wrappers against the real Worker —
+the §30 posture every Smartsheet/Box wrapper carries. The mocks-pass-live-rejects class §30
+exists for is only partially fenced by the vitest suites (they prove the Worker's side of
+the contract, not the Python client's request construction against the deployed instance).
+Surfaced by the PR #85 ops-stds review (WARN, family-wide precedent, not schedule-specific).
+
+**Fix:** one `tests/test_portal_client_pools_integration.py` (operator-run, `-m integration`)
+that walks each pool family end-to-end against the mirror Worker with its real bearer —
+upload via a session (or a seeded row), pending→claim→chunks→rows→result round-trip,
+asserting the daemon-visible shapes. One file for the whole family; enrolling a NEW pool
+family in it becomes part of the same-PR registry DoD.

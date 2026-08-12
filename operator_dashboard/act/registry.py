@@ -242,6 +242,16 @@ _ENTRIES: list[ConfigEntry] = [
         first_activation_gated=True,
         note="materials-manifest importer (PR3b / ADR-0005) — pause anytime; turning ON escalates",
     ),
+    # schedule_poll is the manifest importer's schedule sibling (same generation-half
+    # shape: Box filing + a grid posted back to our own Worker, no send, no AI).
+    _e(
+        "field_ops.schedule_poll.polling_enabled",
+        "field_ops",
+        _SEND_GATES,
+        v_bool,
+        first_activation_gated=True,
+        note="job-schedule importer (ADR-0006 PR-3) — pause anytime; turning ON escalates",
+    ),
     _e(
         "po_materials.rfq_poll.polling_enabled",
         "po_materials",

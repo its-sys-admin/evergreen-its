@@ -653,8 +653,11 @@ def test_required_secrets_cover_program_list():
         "ITS_BOX_REFRESH_TOKEN",
     }
     assert "ITS_PORTAL_PO_TOKEN" in vc.REQUIRED_SECRETS
-    # 21 with PR3b's ITS_PORTAL_MANIFEST_TOKEN (its own per-lane bearer).
-    assert len(vc.REQUIRED_SECRETS) == 21
+    # 21 with PR3b's ITS_PORTAL_MANIFEST_TOKEN (its own per-lane bearer);
+    # 22 with ADR-0006 PR-3's ITS_PORTAL_SCHEDULE_TOKEN (decision 5 — the schedule
+    # lane's own bearer, same per-lane separation).
+    assert "ITS_PORTAL_SCHEDULE_TOKEN" in vc.REQUIRED_SECRETS
+    assert len(vc.REQUIRED_SECRETS) == 22
 
 
 def test_dark_daemon_bearers_and_operator_pin_enrolled():
