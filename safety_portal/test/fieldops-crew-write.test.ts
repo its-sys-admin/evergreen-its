@@ -50,14 +50,17 @@ describe("migration 0027 — cap.crew.create grant + submitter key unchanged", (
     expect(set.has("manager")).toBe(false);
   });
 
-  it("the subcontractor keeps all 8 base submitter caps + gains cap.crew.create (9 total)", async () => {
+  it("the subcontractor keeps all 8 base submitter caps + gains cap.crew.create + cap.schedule.mark (10 total)", async () => {
     const rows = (await env.DB.prepare("SELECT capability_key FROM role_capabilities WHERE role_key='submitter'").all()).results as { capability_key: string }[];
     const caps = new Set(rows.map((r) => r.capability_key));
     for (const c of ["cap.form.submit", "cap.form.request", "cap.time.log", "cap.jobtracker.read", "cap.equipment.field", "cap.materials.receive", "cap.tasks.own", "cap.inspection.job"]) {
       expect(caps.has(c), `submitter must keep ${c}`).toBe(true);
     }
     expect(caps.has("cap.crew.create")).toBe(true);
-    expect(caps.size).toBe(9);
+    // Schedule lane PR-5 (migration 0072): the field PM marks schedule progress on their own
+    // job — the cap.materials.receive mirror (per-job scoped in-route).
+    expect(caps.has("cap.schedule.mark")).toBe(true);
+    expect(caps.size).toBe(10);
   });
 
   it("the role KEY stays 'submitter' + coerceRole fail-safe default is intact (garbage role → submitter, never upward)", async () => {

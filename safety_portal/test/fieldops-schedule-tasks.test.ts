@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, g, p, seedJob, seedPersonnel } from "./helpers";
 import { scheduleMatchKey } from "../worker/schedule_normalize";
+import { pacificDateString } from "../worker/fieldops_recurrence";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Living schedule task list + degenerate plan/commit (ADR-0006 PR-4) —
@@ -464,6 +465,340 @@ describe("schedule bearer cannot reach the task surface (privilege separation)",
         })
       ).status,
     ).toBe(401);
+  });
+
+  it("…and the PR-5 mark routes refuse it (and anon) too", async () => {
+    const res = await addTask({});
+    const id = ((await res.json()) as { id: number }).id;
+    for (const route of ["progress", "milestone-done", "delivered"]) {
+      expect(
+        (
+          await call(`/api/fieldops/schedule-tasks/${id}/${route}`, {
+            method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ percent: 50 }),
+          })
+        ).status,
+        route,
+      ).toBe(401);
+      expect(
+        (await call(`/api/fieldops/schedule-tasks/${id}/${route}`, { method: "POST" })).status,
+        route,
+      ).toBe(401);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR-5 — field mark-off (cap.schedule.mark, migration 0072). The properties under
+// test: the role/cap matrix + the per-job ownership scope (requireJobScope with the
+// cap.jobtracker.manage bypass — the task's OWN job_id anchors it), the from/to audit
+// history, milestone binariness, milestone-done idempotency (the deactivate
+// precedent), the delivered mark + date correction, and the last_marked_by
+// exclusivity contract (ONLY these routes stamp it — decision 9's %-conflict
+// predicate rides on that).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("field mark-off — scope + capability matrix (cap.schedule.mark)", () => {
+  it("a submitter placed on the task's job marks it; cross-job and unplaced are 403 forbidden_job; admin bypasses with no roster row", async () => {
+    await seedPersonnel("Sam Submitter", "sub.sam", "JOB-A");
+    const aId = ((await (await addTask({ name: "Fence A", percent_done: 10 })).json()) as { id: number }).id;
+    const bId = ((await (await p(admin, "/api/fieldops/schedule-tasks", { job_id: "JOB-B", name: "Fence B" })).json()) as { id: number }).id;
+
+    // Own placement → 200, and the FIELD-MARK stamps land (the submitter's account).
+    const own = await p(sub, `/api/fieldops/schedule-tasks/${aId}/progress`, { percent: 50 });
+    expect(own.status, await own.clone().text()).toBe(200);
+    expect(await own.json()).toMatchObject({ ok: true, id: aId, percent_done: 50 });
+    const marked = await env.DB
+      .prepare("SELECT percent_done, last_marked_by, last_marked_at FROM job_schedule_tasks WHERE id = ?1")
+      .bind(aId)
+      .first<Record<string, unknown>>();
+    expect(marked).toMatchObject({ percent_done: 50, last_marked_by: "sub.sam" });
+    expect(marked!.last_marked_at).not.toBeNull();
+
+    // A DIFFERENT job's task → 403 forbidden_job, row untouched.
+    const cross = await p(sub, `/api/fieldops/schedule-tasks/${bId}/progress`, { percent: 50 });
+    expect(cross.status).toBe(403);
+    expect(((await cross.json()) as { error: string }).error).toBe("forbidden_job");
+    const untouched = await env.DB
+      .prepare("SELECT percent_done, last_marked_by FROM job_schedule_tasks WHERE id = ?1")
+      .bind(bId)
+      .first<Record<string, unknown>>();
+    expect(untouched).toMatchObject({ percent_done: 0, last_marked_by: null });
+
+    // An UNPLACED manager (no personnel link) holds the cap but fails the scope.
+    const unplaced = await p(manager, `/api/fieldops/schedule-tasks/${aId}/progress`, { percent: 75 });
+    expect(unplaced.status).toBe(403);
+    expect(((await unplaced.json()) as { error: string }).error).toBe("forbidden_job");
+
+    // Admin holds cap.jobtracker.manage — the bypass set — so any job, no roster row needed.
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${bId}/progress`, { percent: 25 })).status).toBe(200);
+    // …and a PLACED manager marks their own job (0072 grants manager the cap).
+    await seedPersonnel("Mo Manager", "mgr.mike", "JOB-A");
+    expect((await p(manager, `/api/fieldops/schedule-tasks/${aId}/progress`, { percent: 75 })).status).toBe(200);
+  });
+
+  it("the cap gate is REAL — revoking cap.schedule.mark from submitter → 403 forbidden even on their own job", async () => {
+    await seedPersonnel("Sam Submitter", "sub.sam", "JOB-A");
+    const id = ((await (await addTask({})).json()) as { id: number }).id;
+    await env.DB
+      .prepare("DELETE FROM role_capabilities WHERE role_key = 'submitter' AND capability_key = 'cap.schedule.mark'")
+      .run();
+    try {
+      expect((await p(sub, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 50 })).status).toBe(403);
+    } finally {
+      // Restore the seeded grant — role_capabilities persists across this file's tests.
+      await env.DB
+        .prepare("INSERT OR IGNORE INTO role_capabilities (role_key, capability_key) VALUES ('submitter', 'cap.schedule.mark')")
+        .run();
+    }
+    expect((await p(sub, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 50 })).status).toBe(200);
+  });
+});
+
+describe("field mark-off — POST /:id/progress", () => {
+  it("happy path audits from/to (audit_log IS the progress history); a % regression is allowed; W9 name serves on read", async () => {
+    await seedPersonnel("Sam Submitter", "sub.sam", "JOB-A");
+    const res = await addTask({ name: "Fencing", percent_done: 25 });
+    const id = ((await res.json()) as { id: number }).id;
+
+    expect((await p(sub, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 75 })).status).toBe(200);
+    const first = await env.DB
+      .prepare("SELECT target_username, detail FROM audit_log WHERE action='schedule_task_progress' ORDER BY id ASC LIMIT 1")
+      .first<{ target_username: string; detail: string }>();
+    expect(first!.target_username).toBe("JOB-A");
+    const detail = JSON.parse(first!.detail) as Record<string, unknown>;
+    expect(detail).toMatchObject({ job_id: "JOB-A", from: 25, to: 75 });
+    expect(String(detail.task_uuid)).toMatch(/^[0-9a-f-]{36}$/);
+
+    // Regression (a correction) is real — allowed, and its own audit row records it.
+    expect((await p(sub, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 50 })).status).toBe(200);
+    const audits = await env.DB
+      .prepare("SELECT detail FROM audit_log WHERE action='schedule_task_progress' ORDER BY id ASC")
+      .all<{ detail: string }>();
+    expect(audits.results).toHaveLength(2);
+    expect(JSON.parse(audits.results![1].detail)).toMatchObject({ from: 75, to: 50 });
+
+    // The read serves the DISPLAY name (W9), never the account username.
+    const read = (await (await g(sub, "/api/fieldops/schedule-tasks?job_id=JOB-A")).json()) as {
+      tasks: Record<string, unknown>[];
+    };
+    expect(read.tasks[0].last_marked_by_name).toBe("Sam Submitter");
+    expect(read.tasks[0].percent_done).toBe(50);
+  });
+
+  it("bounds: 101 / -1 / 12.5 / '50' / missing → 400 invalid_percent; garbage body → 400 bad_request; unknown id → 404", async () => {
+    const id = ((await (await addTask({})).json()) as { id: number }).id;
+    for (const percent of [101, -1, 12.5, "50", undefined]) {
+      const res = await p(admin, `/api/fieldops/schedule-tasks/${id}/progress`, { percent });
+      expect(res.status, JSON.stringify(percent ?? null)).toBe(400);
+      expect(await res.json()).toMatchObject({ error: "invalid_percent" });
+    }
+    expect(
+      (
+        await call(`/api/fieldops/schedule-tasks/${id}/progress`, {
+          method: "POST", cookie: admin, body: "not json",
+        })
+      ).status,
+    ).toBe(400);
+    expect((await p(admin, "/api/fieldops/schedule-tasks/999999/progress", { percent: 10 })).status).toBe(404);
+  });
+
+  it("a milestone is BINARY — 50 refuses 400 milestone_binary and stamps nothing; 100 and 0 both land", async () => {
+    const res = await addTask({ name: "Substantial Completion", is_milestone: true });
+    const id = ((await res.json()) as { id: number }).id;
+    const half = await p(admin, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 50 });
+    expect(half.status).toBe(400);
+    expect(await half.json()).toMatchObject({ error: "milestone_binary" });
+    const row = await env.DB
+      .prepare("SELECT percent_done, last_marked_by FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 0, last_marked_by: null });
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 100 })).status).toBe(200);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 0 })).status).toBe(200);
+  });
+
+  it("milestone_binary is enforced IN-WHERE, not just at load time — the mutation itself refuses the race arm (2026-08-11 review)", async () => {
+    // The TOCTOU window (an office /:id/edit flips is_milestone AFTER the route's pre-load
+    // check passed) can't be interleaved through the single-threaded test worker, so this
+    // proves the guard at its own level: the route's exact mutation WHERE, run against a
+    // milestone row with a non-binary percent, must change ZERO rows. Mirrors the route's
+    // SQL in fieldops_schedule_tasks.ts — if that WHERE changes, change this with it.
+    const res = await addTask({ name: "Substantial Completion", is_milestone: true });
+    const id = ((await res.json()) as { id: number }).id;
+    const raced = await env.DB
+      .prepare(
+        `UPDATE job_schedule_tasks
+            SET percent_done = ?2, last_marked_by = ?3, last_marked_at = unixepoch(),
+                updated_at = unixepoch()
+          WHERE id = ?1 AND active = 1
+            AND (is_milestone = 0 OR ?2 IN (0, 100))`,
+      )
+      .bind(id, 42, "racer")
+      .run();
+    expect(raced.meta.changes).toBe(0); // the invariant held atomically
+    const row = await env.DB
+      .prepare("SELECT percent_done, last_marked_by FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 0, last_marked_by: null });
+    // …and the same statement with a BINARY percent still lands (the guard isn't a lockout).
+    const ok = await env.DB
+      .prepare(
+        `UPDATE job_schedule_tasks
+            SET percent_done = ?2, last_marked_by = ?3, last_marked_at = unixepoch(),
+                updated_at = unixepoch()
+          WHERE id = ?1 AND active = 1
+            AND (is_milestone = 0 OR ?2 IN (0, 100))`,
+      )
+      .bind(id, 100, "racer")
+      .run();
+    expect(ok.meta.changes).toBe(1);
+  });
+});
+
+describe("field mark-off — POST /:id/milestone-done", () => {
+  it("sets 100 + the field-mark stamps + ONE audit; the second call is already:true with NO re-stamp and NO second audit (the deactivate precedent)", async () => {
+    const res = await addTask({ name: "Substantial Completion", is_milestone: true });
+    const id = ((await res.json()) as { id: number }).id;
+
+    const first = await p(admin, `/api/fieldops/schedule-tasks/${id}/milestone-done`);
+    expect(first.status, await first.clone().text()).toBe(200);
+    expect(await first.json()).toMatchObject({ ok: true, id });
+    const row = await env.DB
+      .prepare("SELECT percent_done, last_marked_by, last_marked_at FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 100, last_marked_by: "admin.one" });
+    const audit = await env.DB
+      .prepare("SELECT detail FROM audit_log WHERE action='schedule_task_milestone_done'")
+      .all<{ detail: string }>();
+    expect(audit.results).toHaveLength(1);
+    expect(JSON.parse(audit.results![0].detail)).toMatchObject({ from: 0, to: 100 });
+
+    // Pin a sentinel stamp, then repeat: already:true, stamp UNTOUCHED, still one audit row.
+    await env.DB.prepare("UPDATE job_schedule_tasks SET last_marked_at = 123 WHERE id = ?1").bind(id).run();
+    const again = await p(admin, `/api/fieldops/schedule-tasks/${id}/milestone-done`);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ ok: true, id, already: true });
+    const after = await env.DB
+      .prepare("SELECT last_marked_at FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<{ last_marked_at: number }>();
+    expect(after!.last_marked_at).toBe(123);
+    const audits = await env.DB
+      .prepare("SELECT COUNT(*) n FROM audit_log WHERE action='schedule_task_milestone_done'")
+      .first<{ n: number }>();
+    expect(audits!.n).toBe(1);
+  });
+
+  it("a non-milestone task → 400 not_a_milestone; unknown id → 404", async () => {
+    const id = ((await (await addTask({})).json()) as { id: number }).id;
+    const res = await p(admin, `/api/fieldops/schedule-tasks/${id}/milestone-done`);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "not_a_milestone" });
+    expect((await p(admin, "/api/fieldops/schedule-tasks/999999/milestone-done")).status).toBe(404);
+  });
+});
+
+describe("field mark-off — POST /:id/delivered", () => {
+  async function deliveryTask(name = "Pile Delivery"): Promise<number> {
+    const res = await addTask({ name, section: "Deliveries", is_delivery: true });
+    return ((await res.json()) as { id: number }).id;
+  }
+
+  it("explicit date lands delivered_date/by/at + the field-mark stamps + audit; the read serves the W9 display name", async () => {
+    await seedPersonnel("Mo Manager", "mgr.mike", "JOB-A");
+    const id = await deliveryTask();
+    const res = await p(manager, `/api/fieldops/schedule-tasks/${id}/delivered`, { delivered_date: "2026-09-10" });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, id, delivered_date: "2026-09-10" });
+    const row = await env.DB
+      .prepare(
+        "SELECT delivered_date, delivered_by, delivered_at, last_marked_by, last_marked_at FROM job_schedule_tasks WHERE id = ?1",
+      )
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ delivered_date: "2026-09-10", delivered_by: "mgr.mike", last_marked_by: "mgr.mike" });
+    expect(row!.delivered_at).not.toBeNull();
+    expect(row!.last_marked_at).not.toBeNull();
+    const read = (await (await g(manager, "/api/fieldops/schedule-tasks?job_id=JOB-A")).json()) as {
+      tasks: Record<string, unknown>[];
+    };
+    expect(read.tasks[0].delivered_by_name).toBe("Mo Manager");
+    expect(read.tasks[0]).not.toHaveProperty("delivered_by");
+  });
+
+  it("an empty body defaults the business date to today PACIFIC (the Worker's clock, not the browser's)", async () => {
+    const id = await deliveryTask("Module Delivery");
+    const res = await p(admin, `/api/fieldops/schedule-tasks/${id}/delivered`);
+    expect(res.status, await res.clone().text()).toBe(200);
+    const body = (await res.json()) as { delivered_date: string };
+    expect(body.delivered_date).toBe(pacificDateString(Date.now()));
+  });
+
+  it("a second call UPDATES the date (a correction is real) — audited with from/to", async () => {
+    const id = await deliveryTask();
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/delivered`, { delivered_date: "2026-09-10" })).status).toBe(200);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/delivered`, { delivered_date: "2026-09-11" })).status).toBe(200);
+    const row = await env.DB
+      .prepare("SELECT delivered_date FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<{ delivered_date: string }>();
+    expect(row!.delivered_date).toBe("2026-09-11");
+    const audits = await env.DB
+      .prepare("SELECT detail FROM audit_log WHERE action='schedule_task_delivered' ORDER BY id ASC")
+      .all<{ detail: string }>();
+    expect(audits.results).toHaveLength(2);
+    expect(JSON.parse(audits.results![1].detail)).toMatchObject({ from: "2026-09-10", to: "2026-09-11" });
+  });
+
+  it("bad date → 400 invalid_delivered_date; a non-delivery task → 400 not_a_delivery; unknown id → 404", async () => {
+    const id = await deliveryTask();
+    const bad = await p(admin, `/api/fieldops/schedule-tasks/${id}/delivered`, { delivered_date: "09/10/2026" });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ error: "invalid_delivered_date" });
+    const plainId = ((await (await addTask({ name: "Not a delivery" })).json()) as { id: number }).id;
+    const wrong = await p(admin, `/api/fieldops/schedule-tasks/${plainId}/delivered`, { delivered_date: "2026-09-10" });
+    expect(wrong.status).toBe(400);
+    expect(await wrong.json()).toMatchObject({ error: "not_a_delivery" });
+    expect((await p(admin, "/api/fieldops/schedule-tasks/999999/delivered")).status).toBe(404);
+  });
+});
+
+describe("field mark-off — a removed task and the last_marked exclusivity contract", () => {
+  it("a deactivated task 404s on all three mark routes", async () => {
+    const res = await addTask({ name: "Gone", is_milestone: true, is_delivery: true });
+    const id = ((await res.json()) as { id: number }).id;
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/deactivate`)).status).toBe(200);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 100 })).status).toBe(404);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/milestone-done`)).status).toBe(404);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/delivered`)).status).toBe(404);
+  });
+
+  it("ONLY the mark routes stamp last_marked_by: an office percent edit leaves it NULL, and PRESERVES an existing field mark", async () => {
+    const res = await addTask({ name: "Fencing", percent_done: 10 });
+    const id = ((await res.json()) as { id: number }).id;
+
+    // Regression-assert (decision 9): the office edit route changes percent WITHOUT stamping.
+    expect(
+      (await p(admin, `/api/fieldops/schedule-tasks/${id}/edit`, { name: "Fencing", percent_done: 40 })).status,
+    ).toBe(200);
+    let row = await env.DB
+      .prepare("SELECT percent_done, last_marked_by, last_marked_at FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 40, last_marked_by: null, last_marked_at: null });
+
+    // A field mark stamps; a later office edit must not erase that the field marked it.
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${id}/progress`, { percent: 60 })).status).toBe(200);
+    expect(
+      (await p(admin, `/api/fieldops/schedule-tasks/${id}/edit`, { name: "Fencing", percent_done: 65 })).status,
+    ).toBe(200);
+    row = await env.DB
+      .prepare("SELECT percent_done, last_marked_by FROM job_schedule_tasks WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 65, last_marked_by: "admin.one" });
   });
 });
 

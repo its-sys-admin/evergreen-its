@@ -2,9 +2,16 @@ import type { Context } from "hono";
 import type { Env, Vars } from "./types";
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import { auditStmt, auditStmtIfChanged } from "./audit";
-import { requireJob } from "./fieldops_scope";
+import { requireJob, requireJobScope } from "./fieldops_scope";
+import { pacificDateString } from "./fieldops_recurrence";
 import { scheduleMatchKey } from "./schedule_normalize";
-import type { ScheduleTaskRow, ScheduleTasksResponse } from "./wire-types";
+import type {
+  ScheduleMarkDeliveredResponse,
+  ScheduleMarkMilestoneDoneResponse,
+  ScheduleMarkProgressResponse,
+  ScheduleTaskRow,
+  ScheduleTasksResponse,
+} from "./wire-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Living schedule task list (ADR-0006 PR-4) — worker/fieldops_schedule_tasks.ts
@@ -27,10 +34,19 @@ import type { ScheduleTaskRow, ScheduleTasksResponse } from "./wire-types";
 //     normalizer (worker/schedule_normalize.ts) — the same function the commit route
 //     and PR-6's diff engine use, so a hand-edited task keeps matching its revisions.
 //
-// PERCENT EDITS HERE DO **NOT** STAMP last_marked_by/last_marked_at. That pair is the
-// PR-5 FIELD-MARK semantics — `last_marked_by IS NOT NULL` ⇔ "a human marked this in
-// the portal", which is the reconcile %-conflict predicate (decision 9). An office
-// correction through this route is list curation, not field progress, so it must not
+//   • POST /api/fieldops/schedule-tasks/:id/{progress,milestone-done,delivered} —
+//     cap.schedule.mark (submitter + manager + admin, migration 0072) + the PER-JOB
+//     ownership scope: the task row is loaded FIRST (its job_id anchors the scope check —
+//     404 when absent/inactive), then requireJobScope confines a non-admin to their own
+//     placement (403 forbidden_job); cap.jobtracker.manage is the bypass set. These three
+//     routes are the ONLY writers of last_marked_by/last_marked_at (operator decision 8:
+//     quick-% chips + exact %, a done-mark for milestones, a delivered mark for
+//     Deliveries tasks). A % REGRESSION is allowed on purpose — corrections are real.
+//
+// PERCENT EDITS THROUGH /:id/edit DO **NOT** STAMP last_marked_by/last_marked_at. That
+// pair is the FIELD-MARK semantics — `last_marked_by IS NOT NULL` ⇔ "a human marked this
+// in the portal", which is the reconcile %-conflict predicate (decision 9). An office
+// correction through the edit route is list curation, not field progress, so it must not
 // make a task look field-marked.
 //
 // ORDER DEPENDENCY: migration 0071 must be applied to the live D1 BEFORE this Worker
@@ -42,6 +58,13 @@ type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 
 const CAP_READ = "cap.jobtracker.read";
 const CAP_MANAGE = "cap.jobtracker.manage";
+const CAP_MARK = "cap.schedule.mark";
+
+// The mark routes' per-job ownership-scope bypass set (see fieldops_scope.ts — the sets are
+// intentionally divergent per surface and always passed explicitly). ONE cap here on purpose:
+// cap.jobtracker.manage is this page's office/admin authority (the manage routes above gate on
+// it), so its holders may mark any job; everyone else marks only their own placement.
+const MARK_SCOPE_BYPASS_CAPS = [CAP_MANAGE] as const;
 
 // Bounds — shared with the commit route (fieldops_schedules.ts imports the reader below),
 // so an imported task runs the IDENTICAL validation a hand-authored one does.
@@ -64,6 +87,20 @@ async function readJsonBody(c: Ctx): Promise<Record<string, unknown> | null> {
   let body: unknown;
   try {
     body = await c.req.json();
+  } catch {
+    return null;
+  }
+  return isPlainObject(body) ? body : null;
+}
+
+// milestone-done/delivered accept an OPTIONAL body ({} / absent both fine) — read text-first
+// so an empty POST doesn't 400 on JSON.parse (the expected-materials receive shape).
+async function readOptionalJsonBody(c: Ctx): Promise<Record<string, unknown> | null> {
+  const raw = await c.req.text();
+  if (!raw.trim()) return {};
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
   } catch {
     return null;
   }
@@ -348,6 +385,202 @@ export function registerScheduleTaskRoutes(app: FieldopsApp, gates: FieldopsGate
           : c.json({ error: "not_found" }, 404);
       }
       return c.json({ ok: true, id }, 200);
+    },
+  );
+
+  // ═══ PR-5 FIELD MARK-OFF (cap.schedule.mark — migration 0072) ═══════════════════════
+  // The three routes below are the ONLY writers of last_marked_by/last_marked_at (the
+  // reconcile %-conflict predicate — see the module header). Shared shape: parse the id →
+  // load the ACTIVE task row FIRST (404 when absent/inactive; its job_id anchors the
+  // ownership scope, and its prior values feed the from/to audit detail) → requireJobScope
+  // (403 forbidden_job outside own placement; cap.jobtracker.manage bypasses) → guarded
+  // UPDATE + conditional audit in ONE batch (W4), in-WHERE active=1 re-asserted so a row
+  // deactivated between the load and the batch writes nothing.
+
+  /** The mark routes' pre-load: the ACTIVE task row's scope anchor + prior mark state. */
+  async function loadActiveTask(c: Ctx, id: number): Promise<{
+    id: number;
+    job_id: string;
+    task_uuid: string;
+    percent_done: number;
+    is_milestone: number;
+    is_delivery: number;
+    delivered_date: string | null;
+  } | null> {
+    return await c.env.DB
+      .prepare(
+        `SELECT id, job_id, task_uuid, percent_done, is_milestone, is_delivery, delivered_date
+           FROM job_schedule_tasks WHERE id = ?1 AND active = 1`,
+      )
+      .bind(id)
+      .first();
+  }
+
+  // ── POST /api/fieldops/schedule-tasks/:id/progress — the quick-%/exact-% mark. ──────
+  // body {percent: 0..100 int}. A % REGRESSION is allowed (corrections are real). A
+  // milestone is BINARY (operator decision 8 — it's done or it isn't): a non-{0,100}
+  // percent on an is_milestone row refuses 400 milestone_binary rather than storing a
+  // half-done milestone. Audit detail carries from/to so audit_log IS the progress
+  // history (decision 8 — no dedicated progress-events table).
+  app.post(
+    "/api/fieldops/schedule-tasks/:id/progress",
+    gates.requireSession,
+    gates.requireCapability(CAP_MARK),
+    async (c) => {
+      const id = parseIdParam(c.req.param("id"));
+      if (id === null) return c.json({ error: "invalid_id" }, 400);
+      const body = await readJsonBody(c);
+      if (body === null) return c.json({ error: "bad_request" }, 400);
+      if (
+        typeof body.percent !== "number" || !Number.isSafeInteger(body.percent) ||
+        body.percent < 0 || body.percent > 100
+      ) {
+        return c.json({ error: "invalid_percent" }, 400);
+      }
+      const task = await loadActiveTask(c, id);
+      if (!task) return c.json({ error: "not_found" }, 404);
+      const scopeErr = await requireJobScope(c, task.job_id, MARK_SCOPE_BYPASS_CAPS);
+      if (scopeErr) return scopeErr;
+      if (task.is_milestone === 1 && body.percent !== 0 && body.percent !== 100) {
+        return c.json({ error: "milestone_binary" }, 400);
+      }
+
+      const actor = c.get("session").username;
+      const res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            // The milestone-binary invariant is re-asserted IN-WHERE, not just against the
+            // snapshot check above: the load races an office /:id/edit flipping
+            // is_milestone, and a snapshot-only check would land a milestone at 42% with a
+            // clean 200 (2026-08-11 adversarial review). Same atomic-guard discipline as
+            // the sibling milestone-done / delivered routes.
+            `UPDATE job_schedule_tasks
+                SET percent_done = ?2, last_marked_by = ?3, last_marked_at = unixepoch(),
+                    updated_at = unixepoch()
+              WHERE id = ?1 AND active = 1
+                AND (is_milestone = 0 OR ?2 IN (0, 100))`,
+          )
+          .bind(id, body.percent, actor),
+        auditStmtIfChanged(c, actor, "schedule_task_progress", task.job_id, {
+          task_uuid: task.task_uuid, job_id: task.job_id,
+          from: task.percent_done, to: body.percent,
+        }),
+      ]);
+      if ((res[0].meta.changes ?? 0) === 0) {
+        // Lost a race since the load — re-check so the refusal is typed honestly (the
+        // milestone-done shape): became a milestone → milestone_binary; else the row is
+        // gone/deactivated → 404.
+        const now = await loadActiveTask(c, id);
+        if (now && now.is_milestone === 1 && body.percent !== 0 && body.percent !== 100) {
+          return c.json({ error: "milestone_binary" }, 400);
+        }
+        return c.json({ error: "not_found" }, 404);
+      }
+      const payload: ScheduleMarkProgressResponse = { ok: true, id, percent_done: body.percent };
+      return c.json(payload, 200);
+    },
+  );
+
+  // ── POST /api/fieldops/schedule-tasks/:id/milestone-done — the done-mark. ───────────
+  // No body needed. Milestone-only (400 not_a_milestone otherwise — a category error,
+  // not a state conflict). Sets percent_done=100 + the field-mark stamps. IDEMPOTENT on
+  // the deactivate precedent: the in-WHERE `percent_done <> 100` makes a repeat a no-op —
+  // 200 already:true, NO second stamp, NO second audit row. (Un-doing a done-mark is the
+  // progress route at 0 — milestone_binary permits exactly that.)
+  app.post(
+    "/api/fieldops/schedule-tasks/:id/milestone-done",
+    gates.requireSession,
+    gates.requireCapability(CAP_MARK),
+    async (c) => {
+      const id = parseIdParam(c.req.param("id"));
+      if (id === null) return c.json({ error: "invalid_id" }, 400);
+      const task = await loadActiveTask(c, id);
+      if (!task) return c.json({ error: "not_found" }, 404);
+      const scopeErr = await requireJobScope(c, task.job_id, MARK_SCOPE_BYPASS_CAPS);
+      if (scopeErr) return scopeErr;
+      if (task.is_milestone !== 1) return c.json({ error: "not_a_milestone" }, 400);
+
+      const actor = c.get("session").username;
+      const res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            `UPDATE job_schedule_tasks
+                SET percent_done = 100, last_marked_by = ?2, last_marked_at = unixepoch(),
+                    updated_at = unixepoch()
+              WHERE id = ?1 AND active = 1 AND is_milestone = 1 AND percent_done <> 100`,
+          )
+          .bind(id, actor),
+        auditStmtIfChanged(c, actor, "schedule_task_milestone_done", task.job_id, {
+          task_uuid: task.task_uuid, job_id: task.job_id,
+          from: task.percent_done, to: 100,
+        }),
+      ]);
+      if ((res[0].meta.changes ?? 0) === 0) {
+        // 0 changes = already done (the idempotent repeat) — or a lost race (deactivated /
+        // un-milestoned since the load). Re-check so the answer stays honest.
+        const now = await loadActiveTask(c, id);
+        if (!now) return c.json({ error: "not_found" }, 404);
+        if (now.is_milestone !== 1) return c.json({ error: "not_a_milestone" }, 400);
+        const payload: ScheduleMarkMilestoneDoneResponse = { ok: true, id, already: true };
+        return c.json(payload, 200);
+      }
+      const payload: ScheduleMarkMilestoneDoneResponse = { ok: true, id };
+      return c.json(payload, 200);
+    },
+  );
+
+  // ── POST /api/fieldops/schedule-tasks/:id/delivered — the delivered mark. ───────────
+  // Deliveries-phase tasks only (decision 5; 400 not_a_delivery otherwise). Optional body
+  // {delivered_date: YYYY-MM-DD} — defaults to today PACIFIC (the crews' day, matching
+  // every other date the daily surfaces stamp). A second call UPDATES the date — a date
+  // correction is real, and the audit's from/to records the change; the stored
+  // delivered_by is W9 display-name-resolved on read, never served raw.
+  app.post(
+    "/api/fieldops/schedule-tasks/:id/delivered",
+    gates.requireSession,
+    gates.requireCapability(CAP_MARK),
+    async (c) => {
+      const id = parseIdParam(c.req.param("id"));
+      if (id === null) return c.json({ error: "invalid_id" }, 400);
+      const body = await readOptionalJsonBody(c);
+      if (body === null) return c.json({ error: "bad_request" }, 400);
+      let deliveredDate: string;
+      if (body.delivered_date === undefined || body.delivered_date === null || body.delivered_date === "") {
+        deliveredDate = pacificDateString(Date.now());
+      } else if (typeof body.delivered_date === "string" && DATE_RE.test(body.delivered_date)) {
+        deliveredDate = body.delivered_date;
+      } else {
+        return c.json({ error: "invalid_delivered_date" }, 400);
+      }
+      const task = await loadActiveTask(c, id);
+      if (!task) return c.json({ error: "not_found" }, 404);
+      const scopeErr = await requireJobScope(c, task.job_id, MARK_SCOPE_BYPASS_CAPS);
+      if (scopeErr) return scopeErr;
+      if (task.is_delivery !== 1) return c.json({ error: "not_a_delivery" }, 400);
+
+      const actor = c.get("session").username;
+      const res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            `UPDATE job_schedule_tasks
+                SET delivered_date = ?2, delivered_by = ?3, delivered_at = unixepoch(),
+                    last_marked_by = ?3, last_marked_at = unixepoch(), updated_at = unixepoch()
+              WHERE id = ?1 AND active = 1 AND is_delivery = 1`,
+          )
+          .bind(id, deliveredDate, actor),
+        auditStmtIfChanged(c, actor, "schedule_task_delivered", task.job_id, {
+          task_uuid: task.task_uuid, job_id: task.job_id,
+          from: task.delivered_date, to: deliveredDate,
+        }),
+      ]);
+      if ((res[0].meta.changes ?? 0) === 0) {
+        // A lost race (deactivated / un-flagged since the load) — say which, honestly.
+        const now = await loadActiveTask(c, id);
+        if (!now) return c.json({ error: "not_found" }, 404);
+        return c.json({ error: "not_a_delivery" }, 400);
+      }
+      const payload: ScheduleMarkDeliveredResponse = { ok: true, id, delivered_date: deliveredDate };
+      return c.json(payload, 200);
     },
   );
 }

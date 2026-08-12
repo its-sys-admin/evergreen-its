@@ -18,10 +18,14 @@ import { ConfirmDelete } from "../components/ChecklistItemForm";
 //     Smartsheet Gantt PDF export, watch it get read on the office Mac, then check the
 //     OCR-proposed grid on the validate SUB-FACE (ScheduleValidatePage — the
 //     ManifestValidatePage pattern, remount-keyed, NOT a router entry) and commit it.
+//   • cap.schedule.mark (PR-5 — submitter/manager/admin, per-job scoped Worker-side) gets
+//     the IN-ROW mark-off controls (operator decision 8): quick-% chips + an exact-% input
+//     on ordinary tasks, a done-mark on milestones, a delivered-date control on Deliveries
+//     tasks. Optimistic row update, then a reload — the server's row is the record.
 // The Worker re-gates every call; capability checks here drive affordances only
 // (Invariant 2 — SPA gating is convenience, never the boundary).
 //
-// Progress mark-off chips arrive in PR-5 (cap.schedule.mark); revision reconcile in PR-6.
+// Revision reconcile arrives in PR-6.
 
 /** Upload-list status → chip copy. `superseded` reads as revision history on purpose —
  *  those rows are the job's prior governing schedules, kept, never a failure state. */
@@ -60,6 +64,20 @@ function errText(e: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Today as the Pacific calendar date (YYYY-MM-DD, en-CA yields ISO order) — the crews' day,
+ *  matching the Worker's own default for an omitted delivered_date. */
+function todayPacific(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/** The quick-% chips (operator decision 8). */
+const PERCENT_CHIPS = [0, 25, 50, 75, 100] as const;
+
 export function JobSchedulePage({
   jobId,
   onHome,
@@ -72,6 +90,7 @@ export function JobSchedulePage({
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
   const canManage = caps.includes("cap.jobtracker.manage");
+  const canMark = caps.includes("cap.schedule.mark");
 
   const [tasks, setTasks] = useState<ScheduleTaskRow[] | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -82,6 +101,13 @@ export function JobSchedulePage({
   const [schedules, setSchedules] = useState<ScheduleListRow[] | null>(null);
   const [openSchedule, setOpenSchedule] = useState<number | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
+
+  // Mark-off state (canMark only): one in-flight mark at a time keeps double-taps out
+  // (the materials-page busy posture); the drafts hold each row's exact-% text and
+  // delivered-date pick until its button fires.
+  const [markBusy, setMarkBusy] = useState<number | null>(null);
+  const [exactPct, setExactPct] = useState<Record<number, string>>({});
+  const [deliveredDraft, setDeliveredDraft] = useState<Record<number, string>>({});
 
   const loadTasks = useCallback(() => {
     setLoadError(null);
@@ -130,6 +156,72 @@ export function JobSchedulePage({
     }
     return out;
   }, [tasks]);
+
+  /** Optimistically patch one task row, run the mark call, then reload — the reload
+   *  confirms the server's row on success and honestly reverts the optimism on failure. */
+  async function runMark(
+    taskId: number,
+    patch: Partial<ScheduleTaskRow>,
+    callFn: () => Promise<unknown>,
+    failText: string,
+  ) {
+    if (markBusy !== null) return;
+    setMarkBusy(taskId);
+    setMsg(null);
+    setTasks((prev) => (prev ? prev.map((t) => (t.id === taskId ? { ...t, ...patch } : t)) : prev));
+    try {
+      await callFn();
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, failText) });
+    } finally {
+      setMarkBusy(null);
+      loadTasks();
+    }
+  }
+
+  function markPercent(t: ScheduleTaskRow, percent: number) {
+    return runMark(
+      t.id,
+      { percent_done: percent },
+      () => api.markScheduleTaskProgress(t.id, percent),
+      "Could not save that progress mark.",
+    );
+  }
+
+  function markExact(t: ScheduleTaskRow) {
+    const raw = (exactPct[t.id] ?? "").trim();
+    const val = Number(raw);
+    // Mirror the Worker's bound locally so a typo fails instantly, not after a round trip.
+    if (!raw.length || !Number.isInteger(val) || val < 0 || val > 100) {
+      setMsg({ ok: false, text: "Progress must be a whole number from 0 to 100." });
+      return;
+    }
+    setExactPct((prev) => ({ ...prev, [t.id]: "" }));
+    void markPercent(t, val);
+  }
+
+  function markMilestone(t: ScheduleTaskRow, done: boolean) {
+    if (done) {
+      return runMark(
+        t.id,
+        { percent_done: 100 },
+        () => api.markScheduleTaskMilestoneDone(t.id),
+        "Could not save that done mark.",
+      );
+    }
+    // Un-checking is a correction — a milestone is binary, so "not done" is 0%.
+    return markPercent(t, 0);
+  }
+
+  function markDelivered(t: ScheduleTaskRow) {
+    const date = deliveredDraft[t.id] ?? t.delivered_date ?? todayPacific();
+    return runMark(
+      t.id,
+      { delivered_date: date },
+      () => api.markScheduleTaskDelivered(t.id, date),
+      "Could not save the delivered mark.",
+    );
+  }
 
   async function uploadScheduleFile(file: File) {
     if (uploadBusy) return;
@@ -188,7 +280,10 @@ export function JobSchedulePage({
       <h1 className="page__heading">Schedule — {projectName ?? jobId}</h1>
       <p className="dash__intro">
         The job&apos;s living task list — what the project schedule says is happening, section by
-        section. Progress mark-off from the field arrives in a later update.
+        section.
+        {canMark
+          ? " Tap a percent to mark progress; milestones get a done-mark, deliveries a delivered date."
+          : ""}
       </p>
 
       {msg && (
@@ -362,12 +457,85 @@ export function JobSchedulePage({
                           </span>
                         </>
                       ) : null}
+                      {canMark && t.is_delivery ? (
+                        <span style={{ whiteSpace: "nowrap" }}>
+                          {" "}
+                          <input
+                            type="date"
+                            aria-label={`Delivered date for ${t.name}`}
+                            value={deliveredDraft[t.id] ?? t.delivered_date ?? todayPacific()}
+                            disabled={markBusy !== null}
+                            onChange={(e) =>
+                              setDeliveredDraft((prev) => ({ ...prev, [t.id]: e.target.value }))
+                            }
+                          />{" "}
+                          <button
+                            type="button"
+                            className="btn btn--secondary btn--sm"
+                            aria-label={`Mark ${t.name} delivered`}
+                            disabled={markBusy !== null}
+                            onClick={() => void markDelivered(t)}
+                          >
+                            {t.delivered_date ? "Update date" : "Delivered"}
+                          </button>
+                        </span>
+                      ) : null}
                     </td>
                     <td>{t.start_date ?? "—"}</td>
                     <td>{t.finish_date ?? "—"}</td>
                     <td>{t.duration_days != null ? `${t.duration_days}d` : "—"}</td>
-                    <td style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                      {progressBar(t.percent_done)}
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <span style={{ fontFamily: "monospace" }}>{progressBar(t.percent_done)}</span>
+                      {canMark && !t.is_milestone ? (
+                        <div className="dash-row" style={{ marginTop: "0.25rem" }}>
+                          {PERCENT_CHIPS.map((p) => (
+                            <button
+                              key={p}
+                              type="button"
+                              className="btn btn--secondary btn--sm"
+                              aria-label={`Mark ${t.name} ${p}%`}
+                              disabled={markBusy !== null || t.percent_done === p}
+                              onClick={() => void markPercent(t, p)}
+                            >
+                              {p}%
+                            </button>
+                          ))}
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            inputMode="numeric"
+                            aria-label={`Exact percent for ${t.name}`}
+                            style={{ width: "4.2rem" }}
+                            value={exactPct[t.id] ?? ""}
+                            disabled={markBusy !== null}
+                            onChange={(e) =>
+                              setExactPct((prev) => ({ ...prev, [t.id]: e.target.value }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="btn btn--secondary btn--sm"
+                            aria-label={`Set exact percent for ${t.name}`}
+                            disabled={markBusy !== null || !(exactPct[t.id] ?? "").trim().length}
+                            onClick={() => markExact(t)}
+                          >
+                            Set
+                          </button>
+                        </div>
+                      ) : null}
+                      {canMark && t.is_milestone ? (
+                        <label style={{ marginLeft: "0.5rem", whiteSpace: "nowrap" }}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Done ${t.name}`}
+                            checked={t.percent_done === 100}
+                            disabled={markBusy !== null}
+                            onChange={(e) => void markMilestone(t, e.target.checked)}
+                          />{" "}
+                          Done
+                        </label>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

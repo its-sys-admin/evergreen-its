@@ -16,6 +16,9 @@ import type {
   ScheduleCommitResponse,
   ScheduleDetailResponse,
   ScheduleListResponse,
+  ScheduleMarkDeliveredResponse,
+  ScheduleMarkMilestoneDoneResponse,
+  ScheduleMarkProgressResponse,
   SchedulePlanResponse,
   SchedulePreviewResponse,
   ScheduleRowsResponse,
@@ -32,6 +35,9 @@ export type {
   ScheduleGridRow,
   ScheduleListResponse,
   ScheduleListRow,
+  ScheduleMarkDeliveredResponse,
+  ScheduleMarkMilestoneDoneResponse,
+  ScheduleMarkProgressResponse,
   SchedulePlanResponse,
   SchedulePreviewResponse,
   ScheduleRowKind,
@@ -266,4 +272,40 @@ export async function deactivateScheduleTask(
   id: number,
 ): Promise<{ ok: boolean; id: number; already_inactive?: boolean }> {
   return postJson(`/api/fieldops/schedule-tasks/${id}/deactivate`);
+}
+
+// ── Field mark-off (PR-5 — cap.schedule.mark; the Worker re-gates + per-job scopes) ───
+
+/** Mark a task's percent done (quick-% chip or exact %). A % regression is allowed —
+ *  corrections are real. Milestone rows accept only 0 or 100 (wire code `milestone_binary`). */
+export async function markScheduleTaskProgress(
+  id: number,
+  percent: number,
+): Promise<ScheduleMarkProgressResponse> {
+  return postJson<ScheduleMarkProgressResponse>(
+    `/api/fieldops/schedule-tasks/${id}/progress`,
+    { percent },
+  );
+}
+
+/** Mark a milestone done (percent 100 + the field-mark stamps). Idempotent — a repeat
+ *  answers `already: true` without re-stamping. */
+export async function markScheduleTaskMilestoneDone(
+  id: number,
+): Promise<ScheduleMarkMilestoneDoneResponse> {
+  return postJson<ScheduleMarkMilestoneDoneResponse>(
+    `/api/fieldops/schedule-tasks/${id}/milestone-done`,
+  );
+}
+
+/** Mark a Deliveries task delivered. Omitting the date lets the Worker stamp today
+ *  (Pacific); calling again with a different date corrects the record. */
+export async function markScheduleTaskDelivered(
+  id: number,
+  deliveredDate?: string,
+): Promise<ScheduleMarkDeliveredResponse> {
+  return postJson<ScheduleMarkDeliveredResponse>(
+    `/api/fieldops/schedule-tasks/${id}/delivered`,
+    deliveredDate ? { delivered_date: deliveredDate } : {},
+  );
 }
