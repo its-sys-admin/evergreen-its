@@ -2773,7 +2773,8 @@ Surfaced: 2026-08-11 session close.
 ## [OPEN 2026-08-11, medium] The internal-pool portal_client families have no §30 live-integration smoke — manifest, estimate, RFQ AND schedule wrappers alike
 
 Every internal-pool daemon family has grown its `shared/portal_client.py` wrapper set
-(manifest: 6 fns; estimate; RFQ; and now schedule — PR #85's `get_schedules_pending` /
+(manifest: 6 fns; estimate; RFQ; the Weekly Production Report's `get_production_report`
+(PR #81); and now schedule — PR #85's `get_schedules_pending` /
 `claim_schedule` / `get_schedule_chunks` / `post_schedule_rows` / `post_schedule_preview` /
 `post_schedule_result`) with unit coverage + Worker-side vitest coverage but NO paired
 operator-run `-m integration` smoke driving the PYTHON wrappers against the real Worker —
@@ -2787,3 +2788,79 @@ that walks each pool family end-to-end against the mirror Worker with its real b
 upload via a session (or a seeded row), pending→claim→chunks→rows→result round-trip,
 asserting the daemon-visible shapes. One file for the whole family; enrolling a NEW pool
 family in it becomes part of the same-PR registry DoD.
+
+---
+
+## [OPEN 2026-08-11, low] Progress packets still file to Box as `..._WSR.pdf` — safety's suffix on a progress artifact
+
+`generate_core._packet_basename` hardcodes the `_WSR` suffix, so a PROGRESS week's
+field-records packet lands in Box as `<Job>_week of <Sat>_WSR.pdf`. This is the same class as
+the cover-title bug that WAS fixed (`cover_title` was parameterized in 2026-07-23 precisely
+because every progress cover read "WEEKLY SAFETY REPORT") — the filename was simply missed in
+that pass.
+
+It became more visible with the Weekly Production Report (0067): the client report correctly
+files as `..._WPR.pdf`, so the same Box week folder now holds one correctly-named artifact and
+one carrying the other workstream's initials. An operator opening the folder has to know which
+is which by size.
+
+**Deliberately NOT bundled** into the report PRs: renaming an existing artifact is a behaviour
+change to a live filing path (the append-only `_vN` version probe restarts at v1 under a new
+basename), and mixing it into the swap PR would have muddied a diff whose whole point was
+"which link goes in the review row."
+
+**Fix:** parameterize it the way `cover_title` was — a `packet_suffix: str = "WSR"` on
+`GenerateConfig`, progress binds `"packet"` or `"FieldRecords"`. Safety unchanged by default
+(§14). Note the version-probe restart is benign but should be stated in the commit.
+
+**Revisit when:** anyone is next in `generate_core`, or an operator asks why a progress folder
+contains a WSR file. **Tag:** `progress_reports`, `box`, `naming`, `low`.
+
+---
+
+## [OPEN 2026-08-11, medium] The weekly-report `saved` flag is ROW-level, so an untouched narrative loses its derived seed
+
+`job_weekly_report_inputs` (0067) carries one `saved` signal for the whole row. `wpr_data.
+_office_or_seed` uses it to decide, per field, whether the office's value wins over the
+deterministic assembly — which is correct for a field the office actually edited and WRONG for
+one they never touched. The moment the office saves anything (say, the OSHA counts), an
+untouched Critical Items renders BLANK on the client's page instead of the assembled text.
+
+This is currently compensated in the UI rather than the model: `WeeklyReportPage` PRE-FILLS
+both narrative textareas with the same seed, so a save captures it. That works, and it is
+tested both sides — but it means the correctness of a client-facing document depends on a
+screen behaviour rather than a storage invariant. Anything that writes the row WITHOUT the
+screen (a script, a future API client, a migration) silently produces blank narrative
+sections. It already did once: the 2026-08-11 mock render, seeded by hand, rendered both
+sections empty and that is how the coupling was found.
+
+**Fix (not scoped):** make touched-ness per FIELD rather than per row — either store NULL for
+"never touched" and distinguish it from `''` ("deliberately cleared"), or carry an explicit
+`touched: string[]`. The three-state photo contract (`NULL` / `[]` / list) is the shape that
+already works for exactly this distinction and is the natural precedent.
+
+**Revisit when:** a second writer of `job_weekly_report_inputs` appears, or an office user
+reports a narrative section going blank after a save. **Tag:** `progress_reports`,
+`weekly-production-report`, `data-model`, `medium`.
+
+---
+
+## [OPEN 2026-08-11, low] Weekly Production Report page 3 stays an empty state until the ADR-0006 living task list lands
+
+The report's Construction Progress / Delays page renders "No schedule imported for this job"
+because `worker/fieldops_report.ts` returns `schedule: null` — `job_schedule_tasks` does not
+exist yet. The ADR-0006 schedule lane has landed its intake pool (#80, migration 0066), its
+OCR/geometry/parse core (#84) and its daemon (#85); the living task list is its PR-4.
+
+Nothing is broken and nothing is blocked: the renderer already handles both states and the
+office screen already says why the page is empty, so the binding is additive when the table
+arrives.
+
+**Fix:** in `buildReportData`, add the `job_schedule_tasks` read grouped by `section` with
+`percent_done`, plus the behind-schedule derivation (`finish_date < today AND percent_done <
+100`) feeding the assembled Critical Items seed — `wpr_data._assemble_critical_items` is
+already ordered so that source slots in at the top without reordering. The renderer needs no
+change.
+
+**Revisit when:** the schedule lane merges `job_schedule_tasks`. **Tag:** `progress_reports`,
+`weekly-production-report`, `adr-0006`, `low`.
