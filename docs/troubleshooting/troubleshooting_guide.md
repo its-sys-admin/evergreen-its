@@ -382,7 +382,7 @@ The Safety-Reports twin for weekly progress packets, on its own Active-Jobs shee
 
 **See also:** runbook `docs/runbooks/progress_intake_routing.md`
 
-### progress-generate compiles the weekly progress packet
+### progress-generate compiles the client report + the internal packet
 
 | What happens | |
 |---|---|

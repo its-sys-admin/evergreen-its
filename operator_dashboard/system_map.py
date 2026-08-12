@@ -224,8 +224,8 @@ NODES: tuple[MapNode, ...] = (
     MapNode(
         id="progress_weekly_generate", label="progress_weekly_generate", kind="daemon",
         lane="generation", band="progress",
-        blurb="The safety twin for weekly progress packets: Friday 14:30 deterministic compile "
-              "against its own Active-Jobs roster.",
+        blurb="Friday 14:30 deterministic compile against its own Active-Jobs roster: builds "
+              "the client Weekly Production Report plus an internal packet of the dailies.",
         error_scripts=("progress_reports.progress_weekly_generate",),
         launchd_label="org.solutionsmith.its.progress-generate",
         watchdog_checks=("C", "I"), script_path="progress_reports/progress_weekly_generate.py",
