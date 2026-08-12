@@ -2523,27 +2523,6 @@ Surfaced: 2026-08-10 session close (PR4 completion session).
 > see `docs/handoffs/2026-08-11_morning-operator-checklist.md`. The manifest parser eval stays
 > WAIVED — the corpus is not on this host (memory: estimate-corpus-lives-on-dev-mac).
 
-## [OPEN 2026-08-10, low] Two Worker-test-suite CI timing flakes exceed the 5000ms default timeout under load
-
-`fieldops-manifests.test.ts` "refuses a commit that would push the job past the line cap" timed out at
-~6530ms this session (default timeout 5000ms) — it seeds 450+ rows before the assertion. Same class as the
-pre-existing `fieldops-daily-photo.test.ts` "the pool-wide pending backstop → 503 pool_backlogged" test,
-which runs ~7.6s seeding `POOL_PENDING_GLOBAL_MAX` rows. Neither is a code regression — both reproduce as
-a genuine timing flake under a loaded machine, the same shape as the already-tracked
-`tests/test_state_io.py::test_concurrent_writers_lock_serializes_overlap` Python-side flake above. Not
-fixed this session.
-
-**Fix (not scoped):** either raise the per-test timeout for these two tests specifically (`vitest`'s
-`it("...", { timeout: N }, fn)` form), reduce the seeded row count to the minimum that still exercises the
-cap/backstop boundary, or accept the flake and retry-on-red in CI if the tooling supports it.
-
-**Tag:** `testing`, `safety-portal`, `flaky-test`, `low`.
-
-**Revisit when:** either test is next seen red in CI, or the next touch to `fieldops_manifests.ts` /
-`fieldops_daily_photos.ts`.
-
-Surfaced: 2026-08-10 session close (PR4 completion session).
-
 ## [OPEN 2026-08-10, low] Daily report's "Confirm receipt" button remains one-click, asymmetric with the now-two-tap delivery marks
 
 PR #45 made the three delivery-mark buttons (Delivered / Partially delivered / Not delivered) two-tap
@@ -2566,66 +2545,6 @@ as intentional.
 `DailyReportTab.tsx` materials-section touch.
 
 Surfaced: 2026-08-10 session close (PR4 completion session).
-
-## [OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
-
-The 2026-08-10 end-to-end audit (adversarially verified, re-confirmed against post-PR4 HEAD the same
-night) found nine correctness defects across the manifest import lane and the expected-materials
-Worker routes. The manifest lane is **activated** (gate true since 2026-08-07) with zero documents
-processed, so nothing has hit these yet — but the first real BOM will:
-
-- **A1 — the validate screen's Quantity column mapping is inert.** `ManifestValidatePage.tsx:234-239`
-  calls `colFor` for six concepts, never `qty`; line resolution reads `cell(r, qtyCol)` (:259), and
-  `qtyCol` is set only by the load seed or a select rendered when `qty_candidates > 1` (:556-570).
-  Remapping Quantity in the Columns table changes nothing; with no qty inferred every line commits
-  `qty: null`. The test fixture pins `mapping.qty == qty_default`, so the two states never diverge
-  under test — self-confirming, on the most important field in a BOM.
-- **A2 — `mode:'merge'` is a no-op.** Validated (`fieldops_manifests.ts:818`), stored (:906-909),
-  never branched on: the commit's only write is `INSERT INTO job_expected_materials` (:875); zero
-  `UPDATE job_expected_materials` in the file; `merge_options_json` (0060:72) has NO writer. Choosing
-  "Merge onto the matching line" duplicates every already-listed part into a §51 mirror that never
-  deletes. Zero tests exercise merge.
-- **A3 — the dry run under-counts and a mid-import cap trip strands the manifest.** `/plan` uses
-  merge arithmetic (:788) while `/commit` enforces `MAX_JOB_LINES` per page against a re-read
-  (:850-855); a late-page 409 leaves `status='committing'` (:906), which `/discard` refuses
-  (:952-953) — no discard path — while the SPA says "nothing partial was left"
-  (`ManifestValidatePage.tsx:339`), false by construction. (Tree node `manifest_commit_refused`
-  now warns operators of exactly this.)
-- **A4 — ambiguity resolution is browser-only.** `unresolvedAmbiguous` is client state (:289-292);
-  the Worker never requires `/plan` ran and validates `source_row_index` only against numeric bounds
-  (:258-266), not its own parsed grid — asserted provenance lands in the audit trail.
-- **A5 — a permanent Worker 400 is classified transient and wedges forever.** `manifest_poll.py:844-848`
-  treats any `PortalTransportError` (any non-200) as transient; the Mac-side parse enforces none of
-  the Worker's row/cell bounds, so an oversized document re-serves every cycle: ~720 ERROR rows/day,
-  no CRITICAL (the sustained-failure counter watches only the pending fetch).
-- **B6 — quantities diverge once a line is flagged.** The receipt projection is guarded
-  `AND status <> 'incident'` (`fieldops_expected_materials.ts:581`) while the ledger INSERT (:544-560)
-  is not; flag-incident clobbers ledger-derived `qty_received` with a client value (:666-672); the
-  projection binds `note` with no COALESCE (:579). The two §51 sheets (Material List vs Receipts)
-  then disagree permanently. The route's own comment (:569-572) asserts the drift is impossible.
-- **B7 — `'incident'` is terminal.** Every status UPDATE is guarded `status='expected'` or
-  `status <> 'incident'` (:378/:575/:668) — no route can leave incident, yet
-  `material_incidents.py:22-26` documents Line Status flipping to `received` on a later delivery.
-  Needs a product decision (a resolve route) or a docs correction.
-- **B8 — a shipping log has no dispose path.** `manifest_parse` detects `PROFILE_SHIPPING_LOG`
-  (:125/:373) but nothing manifest-side writes `material_shipments`; the `source` CHECK's `'import'`
-  value (0059:97) has no writer; the validate screen never reads `profile`. A shipping log can only
-  commit as per-truckload duplicate LINES — the row inflation ADR-0005 decision 4 forbids.
-- **B9 — line soft-delete does not cascade to its loads** (:437-441): orphaned `material_shipments`
-  rows are fetched, count against the LIMIT, render nowhere.
-
-**Fix (ordered):** A1 first (one SPA file, blocks trusting any import), then A3+A5 (small, stop the
-strand/wedge classes), then A2 (either implement merge or refuse it server-side + hide the option —
-a silent duplicator is worse than a visible refusal), then A4, then the B-group (B6/B7 need one
-product decision each). Every Worker-touching fix is trust-boundary → adversarial review
-(`portal-worker-security-reviewer`) is definition-of-done.
-
-**Tag:** `field-ops`, `materials`, `manifest`, `correctness`, `high`.
-
-**Revisit when:** BEFORE the first real vendor manifest is imported — treat these as the
-precondition the waived parser eval was standing in for.
-
-Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).
 
 ## [OPEN 2026-08-10, medium] fieldops_sync mirror resilience — unfenced Review-Queue writes, mis-classed permanent faults, unwatched DEGRADED
 
@@ -2680,31 +2599,6 @@ Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight r
 stage belongs in the next prune.ts touch.
 
 Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).
-
-## [OPEN 2026-08-11, medium] `regen_doc_indexes.py::find_readmes` has the identical absolute-path hidden-dir bug `lint_doc_conventions.py` shipped with — #56 fixed one sibling, not this one
-
-PR #56 fixed `lint_doc_conventions.py::walk_docs`: it tested `path.parts` against `REPO_ROOT`-derived
-ABSOLUTE paths, so a checkout living under a dot-directory — exactly where `.claude/worktrees/<id>/`
-puts every workflow-agent worktree — matched `.claude` on every file and silently skipped them all,
-reporting "no violations" having linted nothing (proven: 89 warnings from a normal checkout, 0 from a
-worktree on the identical commit). `scripts/regen_doc_indexes.py:213-223` (`find_readmes`) has the SAME
-shape, unfixed: `roots = [REPO_ROOT / r for r in roots_arg]` are absolute, `root.rglob("README.md")`
-yields absolute paths, and `if any(part.startswith(".") for part in path.parts)` tests those absolute
-paths — so a workflow-agent worktree run finds zero READMEs and `--check` (the CI doc-index-freshness
-gate) reports clean having examined nothing. Same failure class the #56 docstring names: "a gate that
-passes by finding no work is worse than no gate."
-
-**Fix:** mirror the #56 shape exactly — compute `rel = path.relative_to(REPO_ROOT)` and test `rel.parts`,
-not `path.parts`. Add a regression test on the #56 pattern (assert a nonzero README count survives a
-dot-prefixed root fixture). `grep -rn 'startswith(\".\")' scripts/ shared/` confirms these two are the
-only two hidden-dir absolute-path filters in the tree — no third sibling.
-
-**Tag:** `tooling`, `ci`, `doc-conventions`, `worktree`, `medium`.
-
-**Revisit when:** next `scripts/regen_doc_indexes.py` touch, or before trusting a doc-index-freshness
-green from a workflow-agent worktree.
-
-Surfaced: 2026-08-11 session close, following the #56 fix to the sibling script.
 
 ## [OPEN 2026-08-11, low] `build_box_roots.py`'s lazy-iteration comment is now stale — #57 fixed the two functions it names
 
@@ -2900,27 +2794,6 @@ site-bearing shape applies before they're issued, rather than after.
 
 Surfaced: 2026-08-11/12 session close (PR #86).
 
-## [OPEN 2026-08-11, low] Local `wrangler d1` commands fail on this dev host (`_cf_ALARM has 3 columns but 2 values`) — remote/deploy confirmed unaffected
-
-Any **local** D1 command (`wrangler d1 migrations apply --local`, `wrangler d1 execute --local`)
-dies with `Fatal uncaught kj::Exception: … table _cf_ALARM has 3 columns but 2 values were
-supplied: SQLITE_ERROR` — a `workerd` local-runtime fault (first seen wrangler 4.105.0), not a
-project bug. It survives wiping `.wrangler/state` and reappears after `npm ci` in a fresh
-worktree. `--remote` and `npm run deploy` are confirmed NOT affected (neither starts the local
-runtime) — do not chase this as a deploy blocker or recommend a wrangler upgrade on account of it.
-
-**Fix:** no project-side fix available (upstream `workerd`/wrangler issue). Two working
-substitutes when a migration needs local validation: (1) stdlib `sqlite3`, `executescript`-ing
-every prior migration file in order then running the one under test; (2) the vitest worker suite,
-which applies every migration through real `workerd` + D1 already. See auto-memory
-`reference_wrangler-local-d1-cf-alarm-fault.md`.
-
-**Tag:** `tooling`, `wrangler`, `cloudflare`, `low`.
-
-**Revisit when:** a wrangler upgrade is taken, to check whether the upstream fault is resolved.
-
-Surfaced: 2026-08-11 session close.
-
 ## [OPEN 2026-08-11, low] BOM-corpus extraction/reconciliation tooling used for the 218-part materials analysis is not committed anywhere
 
 The 2026-08-11 reconciliation of ten vendor BOMs against `material_catalog` (666 lines → 218
@@ -2940,3 +2813,39 @@ arrives), recreate or commit a durable version of the extraction/reconciliation 
 **Revisit when:** the next BOM-corpus or materials-catalogue reconciliation.
 
 Surfaced: 2026-08-11/12 session close.
+
+## [OPEN 2026-08-12, medium] Manifest line provenance is client-asserted — `source_row_index` is bounds-checked, never matched against the Worker's own parsed grid
+
+Carved out of the nine-defect materials cluster (now RESOLVED, see `tech_debt_closed.md`) when PR #66 was
+verified defect-by-defect at HEAD: eight of the nine are genuinely closed, **A4 is only half-closed**. The
+ambiguity half is fixed — `readResolutions` re-validates a client's choices against the server's own match set
+(`safety_portal/worker/fieldops_manifests.ts:885-886`, `:911`). The provenance half is not.
+
+`readResolvedLine` (`safety_portal/worker/fieldops_manifests.ts:265-267`) still validates `source_row_index`
+only as `typeof number && Number.isSafeInteger && idx >= 1 && idx <= MAX_ROWS_TOTAL` — a bounds check, not a
+membership check. `grep -n 'job_manifest_rows' safety_portal/worker/fieldops_manifests.ts` returns exactly
+three hits (`:460` INSERT, `:757` GET /rows, `:1265` discard DELETE): **neither `/plan` nor `/commit` reads the
+Worker's own stored grid**, and nothing requires `/plan` to have run at all. So a client-asserted index lands
+verbatim in the audit trail — `auditStmtIfChanged(..., "expected_material_create", ..., { source_row_index })`
+at `:1093-1095` and `"material_shipment_import"` at `:1133-1136`.
+
+**The #66 fix widened this surface rather than narrowing it.** The same client-supplied index now also binds
+`material_shipments.seq` (`?10`) and mints the deterministic `shipment_uuid` as `mf<id>-r<source_row_index>`
+(`:1103`), so a forged index is now load-bearing for shipment identity, not just for an audit annotation.
+
+**Why the obvious fix is wrong.** A blanket "index must exist in the parsed grid" check breaks the add-row
+affordance: hand-added lines legitimately synthesize indices above `addedBase`
+(`safety_portal/src/pages/ManifestValidatePage.tsx:333`). The fix is a `hand_added` discriminator carried into
+the audit record so synthesized and document-derived indices are distinguishable, or an explicit accepted-risk
+note if the operator judges the exposure acceptable — not a membership assertion.
+
+**Trust-boundary surface:** any change here is client-fed input to a D1 write route, so adversarial review
+(`portal-worker-security-reviewer`) is definition-of-done per HOUSE_REFLEXES §2.
+
+**Tag:** `field-ops`, `materials`, `manifest`, `provenance`, `trust-boundary`, `medium`.
+
+**Revisit when:** the next `fieldops_manifests.ts` touch, or before any audit-trail claim that manifest line
+provenance is document-derived.
+
+Surfaced: 2026-08-12 tech-debt triage — carved out of the nine-defect cluster during defect-by-defect
+verification, because closing the parent entry would otherwise have dropped it.
