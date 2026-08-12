@@ -84,6 +84,18 @@ export interface Env {
    */
   PORTAL_MANIFEST_API_TOKEN: string;
   /**
+   * Bearer token the Mac-side schedule daemon (field_ops/schedule_poll.py, ADR-0006) presents
+   * to /api/fieldops/schedules/internal/* — SEPARATE from every other tier, for the same
+   * ADR-0004 decision-4 reason the manifest lane has its own: this daemon decodes hostile PDF
+   * bytes (Quartz render + Apple Vision OCR inside a killable child), so it is a
+   * highest-exposure process and its token is scoped ONLY to the schedule pool. It must NOT
+   * reach the manifest/PO/RFQ/estimate queues, the submission drain, user provisioning, the
+   * mirrors, or any send-lane control surface — and none of those tokens may read the schedule
+   * pool. Mirrored into the Keychain as ITS_PORTAL_SCHEDULE_TOKEN. Workers Secret / .dev.vars —
+   * never committed.
+   */
+  PORTAL_SCHEDULE_API_TOKEN: string;
+  /**
    * Bearer token the Mac-side config daemon (config_editor/config_poll.py, §50 — built LATER)
    * presents to /api/internal/config/* — SEPARATE from the portal_poll / admin / fieldops / PO
    * tokens (privilege separation): the config daemon's token must NOT be able to drain the
