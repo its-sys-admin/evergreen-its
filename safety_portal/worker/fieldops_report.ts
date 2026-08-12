@@ -178,11 +178,27 @@ function normalizeLabor(v: unknown) {
   };
 }
 
+/** Narrative fields are THREE-STATE, the same shape the photo selection uses and for the same
+ *  reason: `null` = never touched (the report falls back to its deterministic seed), `""` =
+ *  deliberately cleared (the report prints nothing), text = the office's words.
+ *
+ *  Before this, touched-ness was ROW-level: the moment the office saved anything — the OSHA
+ *  counts, say — an untouched Critical Items rendered BLANK on a client's page instead of the
+ *  assembled text. That was compensated in the SPA by pre-filling the textareas, which works but
+ *  makes a client-facing document's correctness depend on a SCREEN behaviour; any other writer of
+ *  this row (a script, a future client, a migration) silently produced blank narrative. It did,
+ *  once — a hand-seeded row is how the coupling was found. Now the storage carries the
+ *  distinction and no writer can lose it. */
+function cleanNarrativeField(v: unknown): string | null {
+  if (v === null || v === undefined) return null;  // never touched
+  return typeof v === "string" ? v.slice(0, MAX_TEXT) : null;
+}
+
 function normalizeNarrative(v: unknown) {
   const s = (v ?? {}) as Record<string, unknown>;
   return {
-    critical_items: cleanText(s.critical_items),
-    upcoming_activities: cleanText(s.upcoming_activities),
+    critical_items: cleanNarrativeField(s.critical_items),
+    upcoming_activities: cleanNarrativeField(s.upcoming_activities),
     hazard_topics: cleanList(s.hazard_topics),
   };
 }

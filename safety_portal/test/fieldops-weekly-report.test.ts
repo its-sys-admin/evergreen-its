@@ -61,7 +61,7 @@ type ReportBody = {
     safety: Record<string, { month: number; to_date: number }>;
     weather: { inclement_dates: string[]; weather_days_to_date: number };
     labor: { rows: { company: string; workers: string; man_hours: string }[] };
-    narrative: { critical_items: string; upcoming_activities: string; hazard_topics: string[] };
+    narrative: { critical_items: string | null; upcoming_activities: string | null; hazard_topics: string[] };
     pending: { rfis: string; submittals: string; ifc_review: string; change_orders: string };
     photos: PhotoPick[] | null;
     saved: boolean;
@@ -640,5 +640,40 @@ describe("weekly report — schedule binding", () => {
     await seedTask({ name: "Early phase", finish_date: "2020-01-01", percent_done: 100, schedule_percent: 100 });
     const r = await body(await internal());
     expect(r.schedule!.sections[0].items[0].label).toBe("Early phase");
+  });
+});
+
+// ── narrative three-state (the row-level `saved` coupling, fixed) ─────────────
+describe("weekly report — narrative touched-ness is PER FIELD", () => {
+  const save = async (cookie: string, payload: Record<string, unknown>): Promise<Response> =>
+    call("/api/fieldops/weekly-report", {
+      method: "PUT", cookie, body: JSON.stringify({ job_id: JOB, week_start: WEEK_START, ...payload }),
+    });
+
+  it("an untouched field stores NULL even when the row is saved", async () => {
+    const cookie = await accountCookie("adm.three", "admin");
+    // The office saves the OSHA counts and never opens the narrative.
+    await save(cookie, { safety: { near_miss: { month: 1, to_date: 4 } } });
+    const r = await body(await internal());
+    expect(r.office.safety.near_miss).toEqual({ month: 1, to_date: 4 });
+    // Under the old ROW-level rule these were "" and the report rendered BLANK.
+    expect(r.office.narrative.critical_items).toBeNull();
+    expect(r.office.narrative.upcoming_activities).toBeNull();
+  });
+
+  it("distinguishes deliberately-cleared from never-touched", async () => {
+    const cookie = await accountCookie("adm.three", "admin");
+    await save(cookie, { narrative: { critical_items: "", upcoming_activities: "Module install." } });
+    const r = await body(await internal());
+    expect(r.office.narrative.critical_items).toBe("");        // cleared on purpose
+    expect(r.office.narrative.upcoming_activities).toBe("Module install.");
+  });
+
+  it("writing one field leaves the other untouched", async () => {
+    const cookie = await accountCookie("adm.three", "admin");
+    await save(cookie, { narrative: { critical_items: "Tracker slipped." } });
+    const r = await body(await internal());
+    expect(r.office.narrative.critical_items).toBe("Tracker slipped.");
+    expect(r.office.narrative.upcoming_activities).toBeNull();
   });
 });

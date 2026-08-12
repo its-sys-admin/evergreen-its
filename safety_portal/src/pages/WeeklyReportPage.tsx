@@ -109,8 +109,11 @@ function toDraft(d: ProductionReportResponse): Draft {
           // Blank on purpose: hours cannot be attributed to a company (no employer column).
           man_hours: "",
         })),
-    critical_items: o.saved ? o.narrative.critical_items : seed.critical,
-    upcoming_activities: o.saved ? o.narrative.upcoming_activities : seed.upcoming,
+    // THREE-STATE, no longer row-level: null = never touched (seed it), "" = deliberately
+    // cleared (leave it cleared), text = the office's words. The pre-fill below is now a
+    // convenience rather than the thing that keeps a client's document correct.
+    critical_items: o.narrative.critical_items ?? seed.critical,
+    upcoming_activities: o.narrative.upcoming_activities ?? seed.upcoming,
     rfis: o.pending.rfis,
     submittals: o.pending.submittals,
     ifc_review: o.pending.ifc_review,
@@ -348,10 +351,12 @@ export function WeeklyReportPage({ jobId, onBack }: Props) {
           <textarea rows={5} value={draft.critical_items} onChange={(e) => set("critical_items", e.target.value)} /></label>
         <label className="wr__wide">Upcoming activities
           <textarea rows={4} value={draft.upcoming_activities} onChange={(e) => set("upcoming_activities", e.target.value)} /></label>
-        {!data.office.saved && (
+        {(data.office.narrative.critical_items === null
+          || data.office.narrative.upcoming_activities === null) && (
           <p className="wr__hint">
-            Both boxes are pre-filled from what the crews filed this week. Edit freely — what you
-            save is what the client reads.
+            Anything you have not written yet is pre-filled from what the crews filed this week.
+            Edit freely — what you save is what the client reads, and clearing a box keeps it
+            clear.
           </p>
         )}
       </section>
