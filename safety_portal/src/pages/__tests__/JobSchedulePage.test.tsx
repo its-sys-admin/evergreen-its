@@ -157,7 +157,8 @@ describe("JobSchedulePage — the import affordance split", () => {
     expect(text).toContain("Ready to check");
     expect(text).toContain("Revision history");
     expect(text).toContain("Refused — screen:malicious:L3"); // refused shows its detail
-    expect(getByLabelText("Validate Project Schedule - Kestrel 8.5.26.pdf")).toBeTruthy();
+    // The job HAS tasks, so the open button says what opening does: Reconcile.
+    expect(getByLabelText("Reconcile Project Schedule - Kestrel 8.5.26.pdf")).toBeTruthy();
     // A superseded revision is history — no Remove for it; the refused one gets one.
     expect(getByLabelText("Remove Bad Schedule.pdf")).toBeTruthy();
     expect(queryByLabelText("Remove Project Schedule - Kestrel 7.1.26.pdf")).toBeNull();
@@ -198,7 +199,10 @@ describe("JobSchedulePage — the import affordance split", () => {
     expect(queryByLabelText("Delivered date for Pile Delivery")).toBeNull();
   });
 
-  it("Validate opens the sub-face (the validate screen replaces the page body)", async () => {
+  it("a job WITHOUT tasks routes the open button to the VALIDATE face (first import)", async () => {
+    vi.mocked(api.fetchScheduleTasks).mockResolvedValue({
+      tasks: [], project_name: "Deep Lake", truncated: false,
+    });
     vi.mocked(api.fetchSchedule).mockResolvedValue({
       schedule: {
         ...PARSED,
@@ -213,11 +217,45 @@ describe("JobSchedulePage — the import affordance split", () => {
     const { container, getByLabelText } = mountAs("admin", MANAGE);
     await waitFor(() => expect(container.textContent ?? "").toContain("Ready to check"));
     fireEvent.click(getByLabelText("Validate Project Schedule - Kestrel 8.5.26.pdf"));
-    // The sub-face took over: the uploads card is gone, the grid is on screen.
+    // The sub-face took over: the uploads card is gone, the editable grid is on screen.
     await waitFor(() =>
       expect(container.textContent ?? "").not.toContain("Import a schedule"),
     );
     await waitFor(() => expect(getByLabelText("Row 1 task name")).toBeTruthy());
+  });
+
+  it("a job WITH tasks routes the open button to the RECONCILE face (PR-6)", async () => {
+    vi.mocked(api.fetchSchedule).mockResolvedValue({
+      schedule: {
+        ...PARSED,
+        column_map_json: null, header_meta_json: null,
+        parse_notes: null, resolutions_json: null,
+      },
+      preview_pages: [],
+    });
+    vi.mocked(api.fetchAllScheduleRows).mockResolvedValue([
+      { row_index: 1, source_page: "pdf:p1", kind: "data", cells_json: '["1","Fencing","5d","2026-09-01","2026-09-08","25","",""]', flags: "" },
+    ]);
+    vi.mocked(api.planSchedule).mockResolvedValue({
+      ok: true, degenerate: false, revision_reconcile_available: true,
+      counts: {
+        incoming: 1, new: 0, existing: 3,
+        matched: 1, ambiguous: 0, removed: 2, blocking_removals: 0, percent_conflicts: 0,
+      },
+      matched: [{
+        source_row_index: 1, task_id: 1, task_uuid: "tu-1", name: "Fencing", section: "Civil",
+        date_change: null,
+        percent: { rule: "keep_portal", portal: 50, revision: 25 }, info_changes: [],
+      }],
+      ambiguous: [], fresh: [], removed: [],
+    });
+    const { container, getByLabelText, getByText } = mountAs("admin", MANAGE);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Ready to check"));
+    fireEvent.click(getByLabelText("Reconcile Project Schedule - Kestrel 8.5.26.pdf"));
+    // The RECONCILE sub-face took over — its revision banner + plan summary render.
+    await waitFor(() => expect(getByText("Revision reconcile")).toBeTruthy());
+    await waitFor(() => expect(api.planSchedule).toHaveBeenCalled());
+    await waitFor(() => expect(getByLabelText("Plan summary")).toBeTruthy());
   });
 });
 

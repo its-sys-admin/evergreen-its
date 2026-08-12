@@ -239,20 +239,33 @@ describe("degenerate plan (POST /api/fieldops/schedules/:id/plan)", () => {
     });
     expect(res.status, await res.clone().text()).toBe(200);
     expect(await res.json()).toMatchObject({
-      ok: true, degenerate: true, revision_reconcile_available: false,
-      counts: { incoming: 2, new: 2, existing: 0 },
+      ok: true, degenerate: true, revision_reconcile_available: true,
+      counts: {
+        incoming: 2, new: 2, existing: 0,
+        matched: 0, ambiguous: 0, removed: 0, blocking_removals: 0, percent_conflicts: 0,
+      },
+      matched: [], ambiguous: [], removed: [],
     });
   });
 
-  it("an existing task list → 200 degenerate:false (a read must NOT 409); manager/submitter 403", async () => {
+  it("an existing task list → 200 degenerate:false with the CLASSIFIED plan (a read must NOT 409); manager/submitter 403", async () => {
     const id = await parsedSchedule("JOB-A");
     await addTask({ name: "Pre-existing" });
     const res = await p(admin, `/api/fieldops/schedules/${id}/plan`, { rows: [taskRow(1)] });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({
-      ok: true, degenerate: false, revision_reconcile_available: false,
-      counts: { incoming: 1, new: 0, existing: 1 },
+    const body = (await res.json()) as Record<string, unknown>;
+    // "Task 1" hits nothing → fresh; "Pre-existing" is claimed by no row → removed
+    // (non-blocking: never marked, no delivered date, not a contract milestone).
+    expect(body).toMatchObject({
+      ok: true, degenerate: false, revision_reconcile_available: true,
+      counts: {
+        incoming: 1, new: 1, existing: 1,
+        matched: 0, ambiguous: 0, removed: 1, blocking_removals: 0, percent_conflicts: 0,
+      },
     });
+    const removed = body.removed as Record<string, unknown>[];
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toMatchObject({ name: "Pre-existing", blocking: false, reasons: [] });
     expect((await p(manager, `/api/fieldops/schedules/${id}/plan`, { rows: [taskRow(1)] })).status).toBe(403);
     expect((await p(sub, `/api/fieldops/schedules/${id}/plan`, { rows: [taskRow(1)] })).status).toBe(403);
   });
@@ -313,22 +326,22 @@ describe("degenerate commit (POST /api/fieldops/schedules/:id/commit)", () => {
     expect(committed!.n).toBe(1);
   });
 
-  it("REFUSES 409 revision_reconcile_not_available when the job holds any active task this schedule didn't author", async () => {
+  it("a job with a foreign active task RECONCILES instead of refusing (the PR-4 revision_reconcile_not_available 409 is GONE): the unmatched task is a non-blocking removal, default remove", async () => {
     const id = await parsedSchedule("JOB-A");
     await addTask({ name: "Pre-existing" });
     const res = await p(admin, `/api/fieldops/schedules/${id}/commit`, { rows: [taskRow(1)] });
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ error: "revision_reconcile_not_available" });
-    const n = await env.DB
-      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id='JOB-A'")
-      .first<{ n: number }>();
-    expect(n!.n).toBe(1); // nothing landed
-    // …and a DEACTIVATED pre-existing task no longer blocks (the guard is active=1).
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true, done: true, inserted: 1, updated: 0, linked: 0, removed: 1,
+    });
     const pre = await env.DB
-      .prepare("SELECT id FROM job_schedule_tasks WHERE name='Pre-existing'")
-      .first<{ id: number }>();
-    await p(admin, `/api/fieldops/schedule-tasks/${pre!.id}/deactivate`);
-    expect((await p(admin, `/api/fieldops/schedules/${id}/commit`, { rows: [taskRow(1)] })).status).toBe(200);
+      .prepare("SELECT active, updated_schedule_id FROM job_schedule_tasks WHERE name='Pre-existing'")
+      .first<{ active: number; updated_schedule_id: number | null }>();
+    expect(pre).toMatchObject({ active: 0, updated_schedule_id: id }); // default remove, attributed
+    const live = await env.DB
+      .prepare("SELECT name FROM job_schedule_tasks WHERE job_id='JOB-A' AND active = 1")
+      .all<{ name: string }>();
+    expect(live.results!.map((r) => r.name)).toEqual(["Task 1"]);
   });
 
   it("a replayed final page is an idempotent no-op — done:true, inserted:0, no duplicate tasks (the lost-response retry)", async () => {
@@ -799,6 +812,476 @@ describe("field mark-off — a removed task and the last_marked exclusivity cont
       .bind(id)
       .first<Record<string, unknown>>();
     expect(row).toMatchObject({ percent_done: 65, last_marked_by: "admin.one" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR-6 — revision reconcile (ADR-0006 decision 9). The properties under test are the
+// ones the pure diff suite (schedule_diff.test.ts) structurally cannot reach: the
+// commit RE-DERIVING the diff against live D1 state, resolutions validated server-side,
+// the three-way % rule LANDING on rows (preservation + override), BASELINE IMMUTABILITY
+// across an applied revision, link preservation of task identity, blocking refusals
+// BEFORE any write, removals on the final page only, ledger persistence, the
+// one-committed supersede, and replay idempotency.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("revision reconcile (PR-6 — plan classes + resolutions + three-way %)", () => {
+  /** Schedule A committed through the REAL route (5 tasks), then field marks through the
+   *  REAL mark routes (the only last_marked_by writers): Fencing 50%, Old Fence 35%,
+   *  Pile Delivery delivered. Returns ids + per-name task rows. */
+  async function seedLivingList(): Promise<{
+    idA: number;
+    byName: Record<string, { id: number; task_uuid: string }>;
+  }> {
+    const idA = await parsedSchedule("JOB-A");
+    const rowsA = [
+      taskRow(1, { name: "Fencing", start_date: "2026-09-01", finish_date: "2026-09-05", percent_done: 25 }),
+      taskRow(2, { name: "Grading", start_date: "2026-09-06", finish_date: "2026-09-10", percent_done: 0 }),
+      taskRow(3, {
+        name: "Pile Delivery", section: "Deliveries", is_delivery: true,
+        start_date: "2026-09-15", finish_date: "2026-09-15", percent_done: 0, duration_days: 1,
+      }),
+      taskRow(4, {
+        name: "Substantial Completion", is_milestone: true, is_contract_milestone: true,
+        start_date: "2026-10-01", finish_date: "2026-10-01", percent_done: 0, duration_days: 0,
+      }),
+      taskRow(5, { name: "Old Fence", start_date: "2026-08-01", finish_date: "2026-08-05", percent_done: 10 }),
+    ];
+    const res = await p(admin, `/api/fieldops/schedules/${idA}/commit`, { rows: rowsA });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const all = await env.DB
+      .prepare("SELECT id, task_uuid, name FROM job_schedule_tasks WHERE job_id='JOB-A'")
+      .all<{ id: number; task_uuid: string; name: string }>();
+    const byName: Record<string, { id: number; task_uuid: string }> = {};
+    for (const r of all.results!) byName[r.name] = { id: r.id, task_uuid: r.task_uuid };
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${byName["Fencing"].id}/progress`, { percent: 50 })).status).toBe(200);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${byName["Old Fence"].id}/progress`, { percent: 35 })).status).toBe(200);
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${byName["Pile Delivery"].id}/delivered`, { delivered_date: "2026-09-04" })).status).toBe(200);
+    return { idA, byName };
+  }
+
+  /** Revision B: Fencing slips + 60% (CONFLICT — field-marked 50, schedule said 25),
+   *  Grading 40% (unmarked → take revision), Pile Delivery moves (0% == schedule 0 →
+   *  keep portal), "Fence Install" is Old Fence renamed (the LINK case), and BOTH
+   *  Substantial Completion (contract milestone) and Old Fence (field-marked) are
+   *  dropped → BLOCKING removals until resolved. */
+  const REVISION_ROWS = [
+    taskRow(1, { name: "Fencing", start_date: "2026-09-03", finish_date: "2026-09-08", percent_done: 60 }),
+    taskRow(2, { name: "Grading", start_date: "2026-09-06", finish_date: "2026-09-10", percent_done: 40 }),
+    taskRow(3, {
+      name: "Pile Delivery", section: "Deliveries", is_delivery: true,
+      start_date: "2026-09-20", finish_date: "2026-09-20", percent_done: 0, duration_days: 1,
+    }),
+    taskRow(4, { name: "Fence Install", start_date: "2026-08-01", finish_date: "2026-08-05", percent_done: 20 }),
+  ];
+
+  async function revisionUpload(): Promise<number> {
+    return parsedSchedule("JOB-A", PDF_B64_OTHER, "Project Schedule rev2.pdf");
+  }
+
+  it("the PLAN classifies matched (dates + all three % rules), fresh, and removed with blocking reasons", async () => {
+    const { byName } = await seedLivingList();
+    const idB = await revisionUpload();
+    const res = await p(admin, `/api/fieldops/schedules/${idB}/plan`, { rows: REVISION_ROWS });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const body = (await res.json()) as {
+      counts: Record<string, number>;
+      matched: Record<string, unknown>[];
+      removed: Record<string, unknown>[];
+      fresh: Record<string, unknown>[];
+    };
+    expect(body.counts).toMatchObject({
+      incoming: 4, new: 1, existing: 5,
+      matched: 3, ambiguous: 0, removed: 2, blocking_removals: 2, percent_conflicts: 1,
+    });
+    const fencing = body.matched.find((m) => m.name === "Fencing")!;
+    expect(fencing).toMatchObject({
+      task_id: byName["Fencing"].id,
+      date_change: {
+        start_from: "2026-09-01", start_to: "2026-09-03",
+        finish_from: "2026-09-05", finish_to: "2026-09-08",
+      },
+      percent: { rule: "conflict", portal: 50, revision: 60 },
+    });
+    expect(body.matched.find((m) => m.name === "Grading")!).toMatchObject({
+      percent: { rule: "take_revision", portal: 0, revision: 40 },
+    });
+    expect(body.matched.find((m) => m.name === "Pile Delivery")!).toMatchObject({
+      percent: { rule: "keep_portal", portal: 0, revision: 0 },
+    });
+    expect(body.fresh).toEqual([
+      expect.objectContaining({ source_row_index: 4, name: "Fence Install" }),
+    ]);
+    expect(body.removed.find((r) => r.name === "Substantial Completion")!).toMatchObject({
+      blocking: true, reasons: ["contract_milestone"],
+    });
+    expect(body.removed.find((r) => r.name === "Old Fence")!).toMatchObject({
+      blocking: true, reasons: ["marked"],
+    });
+  });
+
+  it("a commit whose BLOCKING removals lack explicit resolutions refuses 409 BEFORE any write", async () => {
+    const { idA, byName } = await seedLivingList();
+    const idB = await revisionUpload();
+    const res = await p(admin, `/api/fieldops/schedules/${idB}/commit`, { rows: REVISION_ROWS });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; task_ids: number[] };
+    expect(body.error).toBe("blocking_removals_unresolved");
+    expect([...body.task_ids].sort()).toEqual(
+      [byName["Substantial Completion"].id, byName["Old Fence"].id].sort(),
+    );
+    // NOTHING landed: pool row untouched, every task exactly as seeded.
+    const pool = await env.DB
+      .prepare("SELECT status, committed_through_row FROM job_schedules WHERE id = ?1")
+      .bind(idB)
+      .first<Record<string, unknown>>();
+    expect(pool).toMatchObject({ status: "parsed", committed_through_row: 0 });
+    const fencing = await env.DB
+      .prepare("SELECT start_date, percent_done FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Fencing"].id)
+      .first<Record<string, unknown>>();
+    expect(fencing).toMatchObject({ start_date: "2026-09-01", percent_done: 50 });
+    expect((await env.DB.prepare("SELECT status FROM job_schedules WHERE id = ?1").bind(idA).first<{ status: string }>())!.status).toBe("committed");
+  });
+
+  it("AMBIGUOUS rows (duplicate names on the living list) refuse the commit 409 naming the rows — no resolution channel", async () => {
+    await seedLivingList();
+    await addTask({ name: "Fencing", section: "Civil" }); // a duplicate (section, name) on the living list
+    const idB = await revisionUpload();
+    const plan = await p(admin, `/api/fieldops/schedules/${idB}/plan`, { rows: REVISION_ROWS });
+    const planBody = (await plan.json()) as { counts: { ambiguous: number }; ambiguous: { source_row_index: number; reason: string; candidates: number[] }[] };
+    expect(planBody.counts.ambiguous).toBe(1);
+    expect(planBody.ambiguous[0]).toMatchObject({ source_row_index: 1, reason: "duplicate_living" });
+    expect(planBody.ambiguous[0].candidates).toHaveLength(2);
+    const res = await p(admin, `/api/fieldops/schedules/${idB}/commit`, { rows: REVISION_ROWS });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "ambiguous_unresolved", rows: [1] });
+    const n = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id='JOB-A' AND active=1")
+      .first<{ n: number }>();
+    expect(n!.n).toBe(6); // nothing landed, nothing deactivated
+  });
+
+  it("the FULL reconcile: matched updates + %-preservation + BASELINE IMMUTABILITY + link + removal + supersede + ledger", async () => {
+    const { idA, byName } = await seedLivingList();
+    const idB = await revisionUpload();
+    const resolutions = {
+      links: { 4: byName["Old Fence"].id }, // Fence Install IS Old Fence (a rename)
+      removals: { [byName["Substantial Completion"].id]: "remove" },
+      // percents deliberately ABSENT: the Fencing conflict must default to 'portal'.
+    };
+    const res = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS, resolutions,
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true, done: true, inserted: 0, updated: 3, linked: 1, removed: 1,
+    });
+
+    // Fencing — dates moved to the revision, sort_order follows the revision ordinal,
+    // schedule_percent = the revision's assertion… and the CONFLICT defaulted to the
+    // PORTAL %: the field mark survives (operator decision 2).
+    const fencing = await env.DB
+      .prepare("SELECT * FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Fencing"].id)
+      .first<Record<string, unknown>>();
+    expect(fencing).toMatchObject({
+      task_uuid: byName["Fencing"].task_uuid,
+      start_date: "2026-09-03", finish_date: "2026-09-08",
+      percent_done: 50, schedule_percent: 60,
+      sort_order: 10, updated_schedule_id: idB, active: 1,
+      last_marked_by: "admin.one", // the mark stamp is NOT erased by a reconcile
+    });
+    // BASELINE IMMUTABILITY (0071): the applied revision moved the working dates but
+    // the baselines still read the task's OWN first commit — if the reconcile UPDATE
+    // ever touched them, these two literals go red.
+    expect(fencing).toMatchObject({
+      baseline_start_date: "2026-09-01", baseline_finish_date: "2026-09-05",
+    });
+
+    // Grading — unmarked, so the revision's % LANDS.
+    const grading = await env.DB
+      .prepare("SELECT percent_done, schedule_percent, last_marked_by, sort_order FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Grading"].id)
+      .first<Record<string, unknown>>();
+    expect(grading).toMatchObject({
+      percent_done: 40, schedule_percent: 40, last_marked_by: null, sort_order: 20,
+    });
+
+    // Pile Delivery — dates follow the revision; the delivered mark is untouched.
+    const pile = await env.DB
+      .prepare("SELECT start_date, delivered_date, percent_done, sort_order FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Pile Delivery"].id)
+      .first<Record<string, unknown>>();
+    expect(pile).toMatchObject({
+      start_date: "2026-09-20", delivered_date: "2026-09-04", percent_done: 0, sort_order: 30,
+    });
+
+    // The LINK — same row id, same task_uuid, same baselines, portal % kept (conflict
+    // default), new name + match_key, revision ordinal.
+    const fence = await env.DB
+      .prepare("SELECT * FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Old Fence"].id)
+      .first<Record<string, unknown>>();
+    expect(fence).toMatchObject({
+      task_uuid: byName["Old Fence"].task_uuid,
+      name: "Fence Install",
+      match_key: scheduleMatchKey("Civil", "Fence Install"),
+      baseline_start_date: "2026-08-01", baseline_finish_date: "2026-08-05",
+      percent_done: 35, schedule_percent: 20, sort_order: 40, active: 1,
+    });
+    // …and NO new task row was minted for "Fence Install" (linked, not inserted).
+    const count = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id='JOB-A'")
+      .first<{ n: number }>();
+    expect(count!.n).toBe(5);
+
+    // The RESOLVED removal — soft-deactivated, attributed, audited.
+    const sc = await env.DB
+      .prepare("SELECT active, updated_schedule_id FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Substantial Completion"].id)
+      .first<Record<string, unknown>>();
+    expect(sc).toMatchObject({ active: 0, updated_schedule_id: idB });
+    const removeAudit = await env.DB
+      .prepare("SELECT detail FROM audit_log WHERE action='schedule_task_revision_remove'")
+      .all<{ detail: string }>();
+    expect(removeAudit.results).toHaveLength(1);
+    expect(JSON.parse(removeAudit.results![0].detail)).toMatchObject({
+      schedule_id: idB, name: "Substantial Completion",
+      blocking: true, reasons: ["contract_milestone"],
+    });
+    const linkAudit = await env.DB
+      .prepare("SELECT detail FROM audit_log WHERE action='schedule_task_revision_link'")
+      .first<{ detail: string }>();
+    expect(JSON.parse(linkAudit!.detail)).toMatchObject({
+      from_name: "Old Fence", to_name: "Fence Install",
+    });
+
+    // ONE governing schedule: A superseded (stamped), B committed.
+    const a = await env.DB
+      .prepare("SELECT status, superseded_at FROM job_schedules WHERE id = ?1")
+      .bind(idA)
+      .first<Record<string, unknown>>();
+    expect(a!.status).toBe("superseded");
+    expect(a!.superseded_at).not.toBeNull();
+    const b = await env.DB
+      .prepare("SELECT status, resolutions_json FROM job_schedules WHERE id = ?1")
+      .bind(idB)
+      .first<{ status: string; resolutions_json: string | null }>();
+    expect(b!.status).toBe("committed");
+    // The resolutions LEDGER persisted on the pool row.
+    expect(JSON.parse(b!.resolutions_json!)).toMatchObject({
+      links: { "4": byName["Old Fence"].id },
+      removals: { [String(byName["Substantial Completion"].id)]: "remove" },
+      percents: {},
+    });
+
+    // REPLAY IDEMPOTENCY: the same full payload again is a no-op that still reports done.
+    const replay = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS, resolutions,
+    });
+    expect(await replay.json()).toMatchObject({
+      ok: true, done: true, inserted: 0, updated: 0, linked: 0, removed: 0,
+    });
+    const after = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id='JOB-A'")
+      .first<{ n: number }>();
+    expect(after!.n).toBe(5);
+  });
+
+  it("an explicit 'revision' percent pick OVERRIDES the conflict default and lands the revision's %", async () => {
+    const { byName } = await seedLivingList();
+    const idB = await revisionUpload();
+    const res = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS,
+      resolutions: {
+        links: { 4: byName["Old Fence"].id },
+        removals: { [byName["Substantial Completion"].id]: "remove" },
+        percents: { 1: "revision" }, // the Fencing conflict — take the schedule's 60
+      },
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const fencing = await env.DB
+      .prepare("SELECT percent_done, schedule_percent FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Fencing"].id)
+      .first<Record<string, unknown>>();
+    expect(fencing).toMatchObject({ percent_done: 60, schedule_percent: 60 });
+  });
+
+  it("a 'keep' resolution leaves the blocking task ACTIVE (and unrevised)", async () => {
+    const { byName } = await seedLivingList();
+    const idB = await revisionUpload();
+    const res = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS,
+      resolutions: {
+        links: { 4: byName["Old Fence"].id },
+        removals: { [byName["Substantial Completion"].id]: "keep" },
+      },
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, done: true, removed: 0 });
+    const sc = await env.DB
+      .prepare("SELECT active, updated_schedule_id, percent_done FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Substantial Completion"].id)
+      .first<Record<string, unknown>>();
+    expect(sc).toMatchObject({ active: 1, updated_schedule_id: null, percent_done: 0 });
+  });
+
+  it("resolution MEANING is validated server-side: a link onto a matched task, a removal of a non-removed task, a percent for an unpaired row — each 400s", async () => {
+    const { byName } = await seedLivingList();
+    const idB = await revisionUpload();
+    const base = {
+      links: { 4: byName["Old Fence"].id },
+      removals: { [byName["Substantial Completion"].id]: "remove" },
+    };
+    // Link target is MATCHED (Fencing) — not an otherwise-unclaimed removed task.
+    const badLink = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS,
+      resolutions: { ...base, links: { 4: byName["Fencing"].id } },
+    });
+    expect(badLink.status).toBe(400);
+    expect(await badLink.json()).toMatchObject({ error: "invalid_link_target" });
+    // Link SOURCE is a matched row, not a fresh one.
+    const badSource = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS,
+      resolutions: { ...base, links: { 1: byName["Old Fence"].id } },
+    });
+    expect(badSource.status).toBe(400);
+    expect(await badSource.json()).toMatchObject({ error: "invalid_link_target" });
+    // Removal of a task that is NOT removed-classified (Fencing is matched).
+    const badRemoval = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS,
+      resolutions: { ...base, removals: { ...base.removals, [byName["Fencing"].id]: "remove" } },
+    });
+    expect(badRemoval.status).toBe(400);
+    expect(await badRemoval.json()).toMatchObject({ error: "invalid_resolutions" });
+    // Percent pick for a row that is neither matched nor linked.
+    const badPercent = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS,
+      resolutions: { ...base, percents: { 99: "portal" } },
+    });
+    expect(badPercent.status).toBe(400);
+    expect(await badPercent.json()).toMatchObject({ error: "invalid_resolutions" });
+    // Malformed shape.
+    const badShape = await p(admin, `/api/fieldops/schedules/${idB}/commit`, {
+      rows: REVISION_ROWS, resolutions: { links: "not-a-map" },
+    });
+    expect(badShape.status).toBe(400);
+    expect(await badShape.json()).toMatchObject({ error: "invalid_resolutions" });
+    // Nothing landed through any of it.
+    const fencing = await env.DB
+      .prepare("SELECT start_date FROM job_schedule_tasks WHERE id = ?1")
+      .bind(byName["Fencing"].id)
+      .first<{ start_date: string }>();
+    expect(fencing!.start_date).toBe("2026-09-01");
+  });
+
+  it("the percent CASE re-reads last_marked_by AT WRITE TIME — a mark landing after classification is NOT clobbered (SQL-level mirror; 2026-08-12 review)", async () => {
+    // The TOCTOU window (a field mark lands between the commit's pre-read and its
+    // batch) can't be interleaved through the single-threaded test worker, so this
+    // proves the guard at its own level: the route's EXACT matched-update statement,
+    // run with the stale "take_revision" inputs (explicit=0, revEqualsSchedule=0)
+    // against a row that got FIELD-MARKED after that classification, must keep the
+    // mark. Mirrors pushTaskUpdate's SQL in fieldops_schedules.ts — if that statement
+    // changes, change this with it (the milestone-binary in-WHERE precedent above).
+    await env.DB
+      .prepare(
+        "INSERT INTO job_schedules (schedule_uuid, job_id, filename, declared_mime, size_bytes, sha256, hmac, uploaded_by, status, committed_through_row) " +
+          "VALUES ('mirror-uuid','JOB-A','m.pdf','application/pdf',10,'m-sha','mac','pm','committing',7)",
+      )
+      .run();
+    const sched = await env.DB
+      .prepare("SELECT id FROM job_schedules WHERE schedule_uuid='mirror-uuid'")
+      .first<{ id: number }>();
+    const UPDATE = `UPDATE job_schedule_tasks
+                  SET section = ?2, name = ?3, match_key = ?4, duration_days = ?5,
+                      start_date = ?6, finish_date = ?7,
+                      is_milestone = ?8, is_delivery = ?9,
+                      predecessors_raw = ?10, sort_order = ?11,
+                      schedule_percent = ?12,
+                      percent_done = CASE
+                        WHEN ?13 = 1 THEN ?12
+                        WHEN ?16 = 1 THEN percent_done
+                        WHEN last_marked_by IS NULL THEN ?12
+                        ELSE percent_done
+                      END,
+                      updated_schedule_id = ?14, updated_at = unixepoch()
+                WHERE id = ?1 AND active = 1
+                  AND EXISTS (SELECT 1 FROM job_schedules
+                               WHERE id = ?14 AND status = 'committing' AND committed_through_row = ?15)`;
+    const runMirror = (taskId: number, explicitRevision: 0 | 1) =>
+      env.DB
+        .prepare(UPDATE)
+        .bind(
+          taskId, "Civil", "Fencing", scheduleMatchKey("Civil", "Fencing"), 5,
+          "2026-09-03", "2026-09-08", 0, 0, null, 10,
+          60, explicitRevision, sched!.id, 7, 0,
+        )
+        .run();
+
+    // (a) The race arm: classification would have said take_revision (unmarked at
+    // read), but a REAL field mark landed first — the mark stands, the rest of the
+    // revision (dates, schedule_percent) still applies.
+    const markedId = ((await (await addTask({ name: "Fencing", section: "Civil", percent_done: 25 })).json()) as { id: number }).id;
+    expect((await p(admin, `/api/fieldops/schedule-tasks/${markedId}/progress`, { percent: 45 })).status).toBe(200);
+    const raced = await runMirror(markedId, 0);
+    expect(raced.meta.changes).toBe(1);
+    let row = await env.DB
+      .prepare("SELECT percent_done, schedule_percent, start_date, last_marked_by FROM job_schedule_tasks WHERE id = ?1")
+      .bind(markedId)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({
+      percent_done: 45, schedule_percent: 60, start_date: "2026-09-03", last_marked_by: "admin.one",
+    });
+
+    // (b) Genuinely unmarked at write time → the revision's % lands.
+    const unmarkedId = ((await (await addTask({ name: "Fencing 2", section: "Civil", percent_done: 25 })).json()) as { id: number }).id;
+    await runMirror(unmarkedId, 0);
+    row = await env.DB
+      .prepare("SELECT percent_done FROM job_schedule_tasks WHERE id = ?1")
+      .bind(unmarkedId)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 60 });
+
+    // (c) The explicit human 'revision' pick (?13=1) wins even over a marked row —
+    // the choice was informed by the surfaced conflict.
+    await runMirror(markedId, 1);
+    row = await env.DB
+      .prepare("SELECT percent_done FROM job_schedule_tasks WHERE id = ?1")
+      .bind(markedId)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ percent_done: 60 });
+  });
+
+  it("a PAGED reconcile (>100 rows) applies removals on the FINAL page only", async () => {
+    const idA = await parsedSchedule("JOB-A");
+    await p(admin, `/api/fieldops/schedules/${idA}/commit`, {
+      rows: [taskRow(1, { name: "Keep Me" }), taskRow(2, { name: "Drop Me" })],
+    });
+    const idB = await revisionUpload();
+    const rowsB = [
+      taskRow(1, { name: "Keep Me" }),
+      ...Array.from({ length: 119 }, (_, i) => taskRow(i + 2, { name: `New ${i + 2}` })),
+    ];
+    const first = await p(admin, `/api/fieldops/schedules/${idB}/commit`, { rows: rowsB });
+    expect(first.status, await first.clone().text()).toBe(200);
+    expect(await first.json()).toMatchObject({ ok: true, done: false, removed: 0 });
+    // Mid-commit: the dropped task is STILL active — removals are whole-document facts.
+    const mid = await env.DB
+      .prepare("SELECT active FROM job_schedule_tasks WHERE name='Drop Me'")
+      .first<{ active: number }>();
+    expect(mid!.active).toBe(1);
+
+    const second = await p(admin, `/api/fieldops/schedules/${idB}/commit`, { rows: rowsB });
+    expect(await second.json()).toMatchObject({ ok: true, done: true, removed: 1 });
+    const end = await env.DB
+      .prepare("SELECT active FROM job_schedule_tasks WHERE name='Drop Me'")
+      .first<{ active: number }>();
+    expect(end!.active).toBe(0);
+    const live = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id='JOB-A' AND active=1")
+      .first<{ n: number }>();
+    expect(live!.n).toBe(120); // Keep Me + 119 new
   });
 });
 

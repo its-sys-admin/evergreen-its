@@ -6,6 +6,15 @@ import { hmacHex } from "./hmac";
 import { b64DecodedLen, B64_RE } from "./photo_bounds";
 import { readScheduleTaskFields, type ScheduleTaskFields } from "./fieldops_schedule_tasks";
 import { scheduleMatchKey } from "./schedule_normalize";
+import {
+  diffSchedule,
+  percentPlan,
+  toPlanFresh,
+  toPlanMatched,
+  toPlanRemoved,
+  type DiffLivingTask,
+  type DiffMatchedPair,
+} from "./schedule_diff";
 import type { ScheduleCommitResponse, SchedulePlanResponse } from "./wire-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,8 +41,10 @@ import type { ScheduleCommitResponse, SchedulePlanResponse } from "./wire-types"
 // divergence from 0060 — schedule REVISIONS are expected (the corpus shows one job
 // re-exported up to 14 times), so exactly one upload may govern a job at a time
 // (idx_job_schedules_one_committed) and a newly-committed revision displaces the old
-// one supersede-FIRST in the commit route's final batch (PR-4/PR-6 of the lane; this
-// module ships the pool + validate-read surface, not the commit).
+// one supersede-FIRST in the commit route's final batch. Since PR-6 the commit is a
+// full REVISION RECONCILE: the three-way diff (worker/schedule_diff.ts) classifies the
+// upload against the living task list and the human's `resolutions` settle renames,
+// removals, and percent conflicts.
 //
 // Chunks die at refusal AND at parse. The proposed GRID and the page PREVIEWS outlive
 // the bytes AND the commit — they are the evidence the validate screen edits against and
@@ -243,12 +254,13 @@ function readGridRow(raw: unknown): GridRow | string {
   return { row_index: rowIndex, source_page: sourcePage, kind, cells_json: JSON.stringify(cells), flags };
 }
 
-// ── PR-4: the DEGENERATE plan/commit surface (first-upload only) ─────────────────────
-// Plan/commit is ONE surface by design (ADR-0006 decision 9) — PR-6's reconcile widens
-// these same two routes with the three-way diff. PR-4 ships the degenerate case: a job
-// with NO existing tasks classifies every incoming row as `new`; a job that already has
-// a task list gets an honest "revision reconcile arrives in a later update" — the PLAN
-// still answers 200 (a read must not 409), but the COMMIT refuses.
+// ── The plan/commit surface (PR-4 degenerate first-commit + PR-6 revision reconcile) ──
+// Plan/commit is ONE surface by design (ADR-0006 decision 9): a job with NO existing
+// tasks is simply the DEGENERATE arm of the same three-way diff (an empty living set
+// classifies every incoming row `fresh`), so first import and revision reconcile share
+// one reader, one diff engine (worker/schedule_diff.ts), one watermark protocol. The
+// PLAN is a pure read of the classification; the COMMIT re-derives it server-side every
+// page (client classes are never trusted) and applies the human's `resolutions`.
 
 type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 
@@ -295,22 +307,26 @@ function readCommitRows(body: Record<string, unknown>): CommitRow[] | { error: s
   return out;
 }
 
-/** The schedule row a plan/commit call is operating on. */
-async function loadSchedule(
-  c: Ctx,
-  id: number,
-): Promise<{ id: number; job_id: string; status: string; committed_through_row: number } | null> {
+/** The schedule row a plan/commit call is operating on. `resolutions_json` is the
+ *  accumulated reconcile ledger (merged across pages — the manifest merge_options_json
+ *  pattern). */
+type ScheduleRow = {
+  id: number;
+  job_id: string;
+  status: string;
+  committed_through_row: number;
+  resolutions_json: string | null;
+};
+async function loadSchedule(c: Ctx, id: number): Promise<ScheduleRow | null> {
   return c.env.DB
-    .prepare("SELECT id, job_id, status, committed_through_row FROM job_schedules WHERE id = ?1")
+    .prepare(
+      "SELECT id, job_id, status, committed_through_row, resolutions_json " +
+        "FROM job_schedules WHERE id = ?1",
+    )
     .bind(id)
-    .first<{ id: number; job_id: string; status: string; committed_through_row: number }>();
+    .first<ScheduleRow>();
 }
 
-/** Active tasks the job holds that did NOT come from THIS schedule's own commit.
- *  The exclusion is what keeps a PAGED commit self-consistent: page 2 must not read
- *  page 1's freshly-inserted tasks as "the job already has a task list" and refuse
- *  its own remainder. Anything else — a manual add, another schedule's commit — is a
- *  real existing list, and PR-4 has no reconcile for it. */
 /** The commit's FINALIZE — supersede-FIRST, then committing→committed, one batch (the
  *  ordering idx_job_schedules_one_committed requires; both UPDATEs no-op harmlessly when
  *  already done). IDEMPOTENT by construction, because it runs from TWO places: the happy
@@ -343,16 +359,97 @@ async function finalizeScheduleCommit(
   ]);
 }
 
-async function countForeignActiveTasks(c: Ctx, jobId: string, scheduleId: number): Promise<number> {
-  const row = await c.env.DB
+// Living tasks read for the diff — matches MAX_ROWS_TOTAL: no committable document can
+// author more tasks than this, so the living side can never outgrow what fits.
+const LIVING_TASKS_CAP = 2000;
+
+/** Active tasks the job holds that did NOT come from THIS schedule's own commit — the
+ *  LIVING side of the reconcile diff (full rows, document order). The exclusion is what
+ *  keeps a PAGED commit self-consistent: page 2 must not diff against page 1's
+ *  freshly-INSERTED fresh rows (they carry source_schedule_id = this schedule) — while a
+ *  task page 1 merely UPDATED keeps its original source_schedule_id and stays included,
+ *  where its (now below-watermark) row re-matches it idempotently. */
+async function loadForeignActiveTasks(
+  c: Ctx,
+  jobId: string,
+  scheduleId: number,
+): Promise<DiffLivingTask[]> {
+  const { results } = await c.env.DB
     .prepare(
-      "SELECT COUNT(*) AS n FROM job_schedule_tasks " +
+      "SELECT id, task_uuid, match_key, section, name, duration_days, start_date, finish_date, " +
+        "percent_done, schedule_percent, last_marked_by, delivered_date, " +
+        "is_milestone, is_contract_milestone, is_delivery, predecessors_raw, sort_order " +
+        "FROM job_schedule_tasks " +
         "WHERE job_id = ?1 AND active = 1 " +
-        "AND (source_schedule_id IS NULL OR source_schedule_id <> ?2)",
+        "AND (source_schedule_id IS NULL OR source_schedule_id <> ?2) " +
+        `ORDER BY sort_order ASC, id ASC LIMIT ${LIVING_TASKS_CAP}`,
     )
     .bind(jobId, scheduleId)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
+    .all<DiffLivingTask>();
+  return results ?? [];
+}
+
+/** The human's reconcile decisions (PR-6), validated for SHAPE here and for MEANING
+ *  against the server-derived diff in the commit route. Keys arrive as JSON object keys
+ *  (strings) and are re-validated as canonical positive integers; a shape error refuses
+ *  the whole call — a half-read resolution set is worse than none. */
+type ScheduleResolutionMaps = {
+  /** fresh source_row_index → removed task id: the human names a rename. */
+  links: Map<number, number>;
+  /** removed task id → explicit disposition. BLOCKING removals REQUIRE an entry. */
+  removals: Map<number, "remove" | "keep">;
+  /** matched/linked source_row_index → percent pick on a CONFLICT (default 'portal'). */
+  percents: Map<number, "portal" | "revision">;
+};
+
+function readResolutions(
+  body: Record<string, unknown>,
+): ScheduleResolutionMaps | { error: string } {
+  const out: ScheduleResolutionMaps = { links: new Map(), removals: new Map(), percents: new Map() };
+  const raw = body.resolutions;
+  if (raw === undefined || raw === null) return out;
+  if (!isPlainObject(raw)) return { error: "invalid_resolutions" };
+  for (const key of Object.keys(raw)) {
+    if (key !== "links" && key !== "removals" && key !== "percents") {
+      return { error: "invalid_resolutions" };
+    }
+  }
+  const readMap = (v: unknown): [number, unknown][] | null => {
+    if (v === undefined || v === null) return [];
+    if (!isPlainObject(v)) return null;
+    const entries = Object.entries(v);
+    if (entries.length > MAX_ROWS_TOTAL) return null;
+    const pairs: [number, unknown][] = [];
+    for (const [k, val] of entries) {
+      const key = parseIdParam(k);
+      if (key === null) return null;
+      pairs.push([key, val]);
+    }
+    return pairs;
+  };
+  const links = readMap(raw.links);
+  if (links === null) return { error: "invalid_resolutions" };
+  for (const [k, v] of links) {
+    if (k > MAX_ROWS_TOTAL) return { error: "invalid_resolutions" };
+    if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) {
+      return { error: "invalid_resolutions" };
+    }
+    out.links.set(k, v);
+  }
+  const removals = readMap(raw.removals);
+  if (removals === null) return { error: "invalid_resolutions" };
+  for (const [k, v] of removals) {
+    if (v !== "remove" && v !== "keep") return { error: "invalid_resolutions" };
+    out.removals.set(k, v);
+  }
+  const percents = readMap(raw.percents);
+  if (percents === null) return { error: "invalid_resolutions" };
+  for (const [k, v] of percents) {
+    if (k > MAX_ROWS_TOTAL) return { error: "invalid_resolutions" };
+    if (v !== "portal" && v !== "revision") return { error: "invalid_resolutions" };
+    out.percents.set(k, v);
+  }
+  return out;
 }
 
 export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): void {
@@ -774,12 +871,13 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
     },
   );
 
-  // POST /api/fieldops/schedules/:id/plan — DRY RUN (PR-4 degenerate). Body: { rows }.
-  // Writes nothing. A job with NO foreign active tasks classifies every data row as
-  // `new`; a job that already has a task list answers 200 with degenerate:false and
-  // revision_reconcile_available:false — the SPA shows "revision reconcile arrives in
-  // a later update". Deliberately NOT a 409: asking "what would this do" must never
-  // error just because the answer is "nothing yet" — only the COMMIT refuses.
+  // POST /api/fieldops/schedules/:id/plan — DRY RUN. Body: { rows }. Writes nothing.
+  // Returns the FULL three-way classification (PR-6): a job with no foreign active
+  // tasks is the degenerate arm (every data row `fresh`); otherwise the diff engine
+  // classifies matched (with per-pair date/percent/info changes) / BLOCKING ambiguous /
+  // fresh / removed (flagged blocking when marked / delivered / contract-milestone).
+  // Deliberately NOT a 409 under any classification: asking "what would this do" must
+  // never error just because the answer needs human decisions — only the COMMIT refuses.
   app.post(
     "/api/fieldops/schedules/:id/plan",
     gates.requireSession,
@@ -798,46 +896,67 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
       if (!schedule) return c.json({ error: "not_found" }, 404);
       const rows = readCommitRows(body);
       if (!Array.isArray(rows)) return c.json(rows, 400);
-      const dataRows = rows.filter((r) => r.kind === "data");
-      const existing = await countForeignActiveTasks(c, schedule.job_id, id);
-      const payload: SchedulePlanResponse = existing > 0
-        ? {
-            ok: true, degenerate: false, revision_reconcile_available: false,
-            counts: { incoming: dataRows.length, new: 0, existing },
-          }
-        : {
-            ok: true, degenerate: true, revision_reconcile_available: false,
-            counts: { incoming: dataRows.length, new: dataRows.length, existing: 0 },
-          };
+      const dataRows = rows.filter(
+        (r): r is CommitRow & { fields: ScheduleTaskFields } => r.kind === "data" && r.fields !== null,
+      );
+      const living = await loadForeignActiveTasks(c, schedule.job_id, id);
+      const diff = diffSchedule({
+        proposed: dataRows.map((r) => ({ source_row_index: r.source_row_index, fields: r.fields })),
+        living,
+      });
+      const payload: SchedulePlanResponse = {
+        ok: true,
+        degenerate: living.length === 0,
+        revision_reconcile_available: true,
+        counts: {
+          incoming: dataRows.length,
+          new: diff.fresh.length,
+          existing: living.length,
+          matched: diff.matched.length,
+          ambiguous: diff.ambiguous.length,
+          removed: diff.removed.length,
+          blocking_removals: diff.removed.filter((r) => r.blocking).length,
+          percent_conflicts: diff.matched.filter((m) => m.percent.rule === "conflict").length,
+        },
+        matched: diff.matched.map(toPlanMatched),
+        ambiguous: diff.ambiguous,
+        fresh: diff.fresh.map(toPlanFresh),
+        removed: diff.removed.map(toPlanRemoved),
+      };
       return c.json(payload);
     },
   );
 
-  // POST /api/fieldops/schedules/:id/commit — ONE PAGE of the degenerate first-commit.
-  // Body: { rows } (same shape /plan validates; section rows are context, never
-  // committed). PAGED WITH THE 0066 WATERMARK PROTOCOL: statement 0 is the state
-  // transition (parsed/committing → committing + watermark advance, guarded on the
-  // watermark strictly advancing AND on NO OTHER schedule of this job being mid-commit
-  // — the two-uploads serialization), and every task INSERT after it is guarded on the
-  // schedule being 'committing' AT THIS PAGE'S WATERMARK (the 0060 MANIFEST_LIVE_GUARD
-  // pattern), so a page racing a discard lands nothing and meta.changes on statement 0
-  // turns that into an honest 409 instead of ok:true on writes that never happened.
+  // POST /api/fieldops/schedules/:id/commit — ONE PAGE of the commit (first import AND
+  // revision reconcile — one surface, ADR-0006 decision 9). Body: { rows, resolutions? }
+  // (same rows shape /plan validates; section rows are context, never committed).
+  //
+  // THE DIFF IS RE-DERIVED HERE, EVERY PAGE, from the posted rows and the LIVE task
+  // list — the /plan payload the human reviewed is never trusted as state. `resolutions`
+  // carries the human's decisions and is validated for MEANING against the server's own
+  // classification: links (fresh row → removed task, a rename), removals (every BLOCKING
+  // removal MUST be explicit 'remove'|'keep'; non-blocking defaults to remove), percents
+  // (a CONFLICT's 'portal'|'revision' pick, default portal). Ambiguity has NO resolution
+  // channel — it refuses 409 until the human fixes the duplication itself.
+  //
+  // PAGED WITH THE 0066 WATERMARK PROTOCOL: statement 0 is the state transition
+  // (parsed/committing → committing + watermark advance + the resolutions ledger merge,
+  // guarded on the watermark strictly advancing AND on NO OTHER schedule of this job
+  // being mid-commit — the two-uploads serialization), and every task write after it is
+  // guarded on the schedule being 'committing' AT THIS PAGE'S WATERMARK (the 0060
+  // MANIFEST_LIVE_GUARD pattern), so a page racing a discard lands nothing and
+  // meta.changes on statement 0 turns that into an honest 409 instead of ok:true on
+  // writes that never happened.
   //
   // REPLAY GUARD FIRST, before the status guard: everything at or below the watermark
   // is already committed, so a fully-replayed payload — the retry of a LOST final
   // response — is an idempotent { done:true } no-op, never a 409 for work that
   // succeeded.
   //
-  // REFUSES 409 `revision_reconcile_not_available` when the job holds ANY active task
-  // this schedule didn't author (a manual add or another schedule's commit): PR-4 has
-  // no reconcile, and silently stacking a second import onto a live list would
-  // duplicate every task. PR-6 replaces this refusal with the three-way diff.
-  //
-  // FINAL PAGE, supersede-FIRST (the 0066 one-committed partial UNIQUE's ordering):
-  // any OTHER committed row of this job flips → superseded (superseded_at stamped)
-  // BEFORE committing→committed, in the same batch. In the PR-4 degenerate case there
-  // is no prior committed row and the UPDATE is a no-op — but PR-6 inherits the
-  // ordering already correct.
+  // REMOVALS APPLY ON THE FINAL PAGE ONLY: "removed" is defined against the WHOLE
+  // document, so deactivating before the last page could sweep a task a later page's
+  // rows still claim. The supersede-then-commit FINALIZE also runs on the final page
+  // (supersede-FIRST — the 0066 one-committed partial UNIQUE's ordering).
   app.post(
     "/api/fieldops/schedules/:id/commit",
     gates.requireSession,
@@ -856,6 +975,8 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
       if (!schedule) return c.json({ error: "not_found" }, 404);
       const rows = readCommitRows(body);
       if (!Array.isArray(rows)) return c.json(rows, 400);
+      const resolutions = readResolutions(body);
+      if ("error" in resolutions) return c.json(resolutions, 400);
 
       // The FULL ordered data-row set — `seq` (1-based position here) drives
       // sort_order = seq*10, so it must be derived from the whole payload, not the
@@ -874,12 +995,14 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
         // would report success while the schedule stays stuck in 'committing' FOREVER
         // (no other route can finish it) — the 2026-08-11 security-review BLOCK finding.
         // Finalize is idempotent, so the stuck state is repaired HERE, on the replay.
+        // (Reconcile inherits this unchanged: removals ride the final PAGE batch, so a
+        // maxed watermark proves they already applied.)
         if (schedule.status === "committing") {
           const actor = c.get("session").username;
           await finalizeScheduleCommit(c, actor, schedule.job_id, id, 0);
         }
         const payload: ScheduleCommitResponse = {
-          ok: true, done: true, inserted: 0,
+          ok: true, done: true, inserted: 0, updated: 0, linked: 0, removed: 0,
           committed_through_row: schedule.committed_through_row,
         };
         return c.json(payload);
@@ -890,38 +1013,250 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
       if (schedule.status !== "parsed" && schedule.status !== "committing") {
         return c.json({ error: "schedule_not_committable", status: schedule.status }, 409);
       }
-      const existing = await countForeignActiveTasks(c, schedule.job_id, id);
-      if (existing > 0) {
-        return c.json({ error: "revision_reconcile_not_available", existing_tasks: existing }, 409);
+
+      // ── The three-way diff, derived from the LIVE list (never the client's classes). ──
+      const living = await loadForeignActiveTasks(c, schedule.job_id, id);
+      const diff = diffSchedule({
+        proposed: dataRows.map((r) => ({ source_row_index: r.source_row_index, fields: r.fields })),
+        living,
+      });
+
+      // BLOCKING ambiguity — refused on EVERY page, before any write. There is no
+      // resolution channel for it (decision 9): the human resolves the duplication
+      // itself (rename/deactivate a duplicate task, or fix the upload) and re-plans.
+      //
+      // KNOWN FAIL-CLOSED EDGE (2026-08-12 security review, WARN — deliberate): on a
+      // MULTI-PAGE commit, a below-watermark row whose LINK already rewrote its target
+      // task's match_key stays in the re-derived diff, so a later-page row with the
+      // IDENTICAL (section, name) now collides with it → duplicate_proposed → this 409
+      // blocks the remainder. Reaching it takes a >100-task document + a rename link +
+      // a coincidental exact duplicate of the new name later in the same document; the
+      // refusal is honest (nothing corrupts, landed pages stay, discard remains the
+      // exit). Preferring the loud 409 over teaching the diff to silently settle
+      // below-watermark claims — revisit if it ever bites a real document.
+      if (diff.ambiguous.length > 0) {
+        return c.json(
+          {
+            error: "ambiguous_unresolved",
+            rows: diff.ambiguous.map((a) => a.source_row_index).slice(0, 50),
+          },
+          409,
+        );
+      }
+
+      const matchedByIndex = new Map(diff.matched.map((m) => [m.source_row_index, m]));
+      const freshByIndex = new Map(diff.fresh.map((f) => [f.source_row_index, f]));
+      const removedById = new Map(diff.removed.map((r) => [r.task.id, r]));
+
+      // links: each maps a FRESH row onto an "active, otherwise-unclaimed task of this
+      // job" — after the ambiguity gate, that set IS the removed set. A link whose
+      // source row isn't fresh, whose target isn't removed-classified, or whose target
+      // is claimed twice refuses loudly: a mis-aimed rename would graft one task's
+      // history onto another.
+      const linkTargetByIndex = new Map<number, DiffLivingTask>();
+      const linkedTargets = new Set<number>();
+      for (const [srcIdx, taskId] of resolutions.links) {
+        const freshRow = freshByIndex.get(srcIdx);
+        const target = removedById.get(taskId);
+        if (!freshRow || !target || linkedTargets.has(taskId)) {
+          return c.json({ error: "invalid_link_target", source_row_index: srcIdx }, 400);
+        }
+        linkedTargets.add(taskId);
+        linkTargetByIndex.set(srcIdx, target.task);
+      }
+
+      // removals: keys must reference tasks that are STILL removed once links are
+      // applied (an entry for anything else means the client's plan is stale — re-plan);
+      // every BLOCKING removal needs an explicit disposition before ANY page writes, so
+      // the refusal comes on page 1, not after half the document landed.
+      const effectiveRemoved = diff.removed.filter((r) => !linkedTargets.has(r.task.id));
+      const effectiveRemovedIds = new Set(effectiveRemoved.map((r) => r.task.id));
+      for (const taskId of resolutions.removals.keys()) {
+        if (!effectiveRemovedIds.has(taskId)) return c.json({ error: "invalid_resolutions" }, 400);
+      }
+      const blockingUnresolved = effectiveRemoved
+        .filter((r) => r.blocking && !resolutions.removals.has(r.task.id))
+        .map((r) => r.task.id);
+      if (blockingUnresolved.length > 0) {
+        return c.json(
+          { error: "blocking_removals_unresolved", task_ids: blockingUnresolved.slice(0, 50) },
+          409,
+        );
+      }
+
+      // percents: keys must reference a matched pair or a linked row. The pick only
+      // ever APPLIES to a derived CONFLICT — on a settled rule (keep_portal /
+      // take_revision) it is ignored, so a benign race (a field mark landing between
+      // plan and commit) cannot turn a stored pick into a wrong write.
+      for (const idx of resolutions.percents.keys()) {
+        if (!matchedByIndex.has(idx) && !linkTargetByIndex.has(idx)) {
+          return c.json({ error: "invalid_resolutions" }, 400);
+        }
       }
 
       const page = remaining.slice(0, COMMIT_PAGE_TASKS);
       const watermark = page[page.length - 1].source_row_index;
       const seqByIndex = new Map(dataRows.map((r, i) => [r.source_row_index, i + 1]));
 
+      // The resolutions LEDGER — merged across pages onto the pool row (the manifest
+      // merge_options_json pattern), so the audit trail of "what the human decided"
+      // survives paging, replays, and the commit itself.
+      const priorLedger = ((): Record<string, unknown> => {
+        try {
+          return schedule.resolutions_json
+            ? (JSON.parse(schedule.resolutions_json) as Record<string, unknown>)
+            : {};
+        } catch {
+          return {};
+        }
+      })();
+      const priorMap = (k: string): Record<string, unknown> =>
+        isPlainObject(priorLedger[k]) ? (priorLedger[k] as Record<string, unknown>) : {};
+      const hasCurrent =
+        resolutions.links.size + resolutions.removals.size + resolutions.percents.size > 0;
+      const mergedLedger = hasCurrent
+        ? JSON.stringify({
+            links: { ...priorMap("links"), ...Object.fromEntries(resolutions.links) },
+            removals: { ...priorMap("removals"), ...Object.fromEntries(resolutions.removals) },
+            percents: { ...priorMap("percents"), ...Object.fromEntries(resolutions.percents) },
+          })
+        : null;
+
       const actor = c.get("session").username;
       // Statement 0 — THE state transition, decided once for the whole batch (D1 runs a
       // batch as one serialized transaction). Its three guards: committable status,
       // watermark strictly advancing, and the TWO-UPLOADS SERIALIZATION — no other
       // schedule of this job may be mid-commit (two governing candidates interleaving
-      // pages would race the one-committed UNIQUE at their final pages).
+      // pages would race the one-committed UNIQUE at their final pages). COALESCE keeps
+      // an earlier page's ledger when this call carried no resolutions.
       const stmts = [
         c.env.DB
           .prepare(
-            "UPDATE job_schedules SET status='committing', committed_through_row = ?2 " +
+            "UPDATE job_schedules SET status='committing', committed_through_row = ?2, " +
+              "resolutions_json = COALESCE(?4, resolutions_json) " +
               "WHERE id = ?1 AND status IN ('parsed','committing') AND committed_through_row < ?2 " +
               "AND NOT EXISTS (SELECT 1 FROM job_schedules WHERE job_id = ?3 AND status = 'committing' AND id <> ?1)",
           )
-          .bind(id, watermark, schedule.job_id),
+          .bind(id, watermark, schedule.job_id, mergedLedger),
       ];
-      // Which batch index holds each task's INSERT — the response count derives from the
+      // Which batch index holds each row's MUTATE — the response counts derive from the
       // ACTUAL per-statement meta.changes, never the pre-write classification.
       const insertIdx: number[] = [];
+      const updateIdx: number[] = [];
+      const linkIdx: number[] = [];
+      const removeIdx: number[] = [];
+
+      /** The matched/linked UPDATE: content fields + sort_order from the revision,
+       *  schedule_percent = the revision's %, percent_done per the resolved three-way
+       *  rule. BASELINE IMMUTABILITY (0071): baseline_start_date/baseline_finish_date
+       *  are deliberately ABSENT from the SET — they keep the task's own first-commit
+       *  values forever, whatever revisions later move the working dates. Also
+       *  untouched: task_uuid (the stable identity a link exists to preserve),
+       *  last_marked_by/at (commits never field-mark), the delivered mark, and
+       *  is_contract_milestone — the CM flag has no OCR signal (ADR-0006: "always a
+       *  human decision"), and taking the revision's always-false value would both wipe
+       *  the office's mark AND strip the task's blocking-removal protection. */
+      const pushTaskUpdate = (
+        task: DiffLivingTask,
+        row: CommitRow & { fields: ScheduleTaskFields },
+        kind: "update" | "link",
+      ) => {
+        const f = row.fields;
+        const plan = percentPlan(f, task);
+        // The three-way rule's STABLE inputs are decided here from the pre-read (both
+        // are safe: a percents pick only exists on a derived CONFLICT, and marks are
+        // never un-set, so a conflict cannot un-conflict; schedule_percent is written
+        // only by a committing reconcile, and the two-uploads serialization makes us
+        // the only one). The VOLATILE input — last_marked_by — is deliberately NOT
+        // decided here: the CASE below re-reads it atomically at write time, so a
+        // field mark landing between our SELECT and this batch flips take_revision →
+        // keep-portal instead of being clobbered by a stale decision (2026-08-12 PR-6
+        // security-review WARN; operator decision 2 — the portal % is preserved unless
+        // the human explicitly takes the revision's value).
+        const explicitRevision =
+          plan.rule === "conflict" && resolutions.percents.get(row.source_row_index) === "revision";
+        const revEqualsSchedule = plan.rule === "keep_portal";
+        const matchKey = scheduleMatchKey(f.section ?? "", f.name);
+        (kind === "update" ? updateIdx : linkIdx).push(stmts.length);
+        stmts.push(
+          c.env.DB
+            .prepare(
+              // percent_done, atomically: the human's explicit 'revision' pick wins
+              // (informed by the surfaced conflict); an unchanged schedule assertion
+              // keeps the portal %; otherwise the revision's % lands ONLY if the row
+              // is unmarked AT WRITE TIME — a marked row keeps its mark.
+              `UPDATE job_schedule_tasks
+                  SET section = ?2, name = ?3, match_key = ?4, duration_days = ?5,
+                      start_date = ?6, finish_date = ?7,
+                      is_milestone = ?8, is_delivery = ?9,
+                      predecessors_raw = ?10, sort_order = ?11,
+                      schedule_percent = ?12,
+                      percent_done = CASE
+                        WHEN ?13 = 1 THEN ?12
+                        WHEN ?16 = 1 THEN percent_done
+                        WHEN last_marked_by IS NULL THEN ?12
+                        ELSE percent_done
+                      END,
+                      updated_schedule_id = ?14, updated_at = unixepoch()
+                WHERE id = ?1 AND active = 1
+                  AND EXISTS (SELECT 1 FROM job_schedules
+                               WHERE id = ?14 AND status = 'committing' AND committed_through_row = ?15)`,
+            )
+            .bind(
+              task.id, f.section, f.name, matchKey, f.duration_days,
+              f.start_date, f.finish_date, f.is_milestone, f.is_delivery,
+              f.predecessors_raw, (seqByIndex.get(row.source_row_index) ?? 0) * 10,
+              f.percent_done, explicitRevision ? 1 : 0, id, watermark,
+              revEqualsSchedule ? 1 : 0,
+            ),
+          // IfChanged, directly after its own mutate (W4): a guard-blocked UPDATE
+          // leaves no lying audit row.
+          auditStmtIfChanged(
+            c,
+            actor,
+            kind === "update" ? "schedule_task_revision_update" : "schedule_task_revision_link",
+            schedule.job_id,
+            // from/to detail on purpose (decision 8 — audit_log IS the history): a
+            // reconcile has no undo, so the pre-revision dates live only here.
+            kind === "update"
+              ? {
+                  schedule_id: id, job_id: schedule.job_id, task_uuid: task.task_uuid,
+                  source_row_index: row.source_row_index, name: f.name,
+                  start_from: task.start_date, start_to: f.start_date,
+                  finish_from: task.finish_date, finish_to: f.finish_date,
+                  // The rule + the human's pick (the decision INPUTS) — never a claim
+                  // about the landed value, which the CASE decides at write time.
+                  percent_rule: plan.rule,
+                  percent_pick: explicitRevision ? "revision" : "portal",
+                }
+              : {
+                  schedule_id: id, job_id: schedule.job_id, task_uuid: task.task_uuid,
+                  source_row_index: row.source_row_index,
+                  from_name: task.name, to_name: f.name,
+                  start_from: task.start_date, start_to: f.start_date,
+                  finish_from: task.finish_date, finish_to: f.finish_date,
+                },
+          ),
+        );
+      };
+
       for (const row of page) {
+        const pair: DiffMatchedPair | undefined = matchedByIndex.get(row.source_row_index);
+        if (pair) {
+          pushTaskUpdate(pair.task, row, "update");
+          continue;
+        }
+        const linkTarget = linkTargetByIndex.get(row.source_row_index);
+        if (linkTarget) {
+          pushTaskUpdate(linkTarget, row, "link");
+          continue;
+        }
+        // Fresh (unlinked) → INSERT exactly like the first import: a task's baseline is
+        // ITS OWN first commit, so a task new in this revision baselines at these dates.
         const f = row.fields;
         const taskUuid = crypto.randomUUID();
         // match_key through the ONE shared normalizer (schedule_normalize.ts) — the
-        // same function the manual add/edit routes and PR-6's diff engine use.
+        // same function the manual add/edit routes and the diff engine use.
         const matchKey = scheduleMatchKey(f.section ?? "", f.name);
         insertIdx.push(stmts.length);
         stmts.push(
@@ -931,7 +1266,7 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
               // twice) — stamped at the task's OWN first commit, never rewritten (0071).
               // percent_done = schedule_percent = the row's percent (?9 twice): the
               // schedule's asserted % IS the portal's starting belief, and the copy in
-              // schedule_percent is PR-6's three-way diff base. last_marked_by/at stay
+              // schedule_percent is the three-way diff base. last_marked_by/at stay
               // NULL — commits never field-mark (0071 header).
               `INSERT INTO job_schedule_tasks
                  (task_uuid, job_id, section, name, match_key, duration_days,
@@ -958,10 +1293,37 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
         );
       }
 
+      const done = remaining.length <= page.length;
+      if (done) {
+        // Removals ride the FINAL page's batch (they are defined against the whole
+        // document), guarded like every other write — a page racing a discard
+        // deactivates nothing. 'keep' resolutions are simply not swept; non-blocking
+        // removals default to remove (the plan showed them, the human left the default).
+        for (const entry of effectiveRemoved) {
+          if ((resolutions.removals.get(entry.task.id) ?? "remove") === "keep") continue;
+          removeIdx.push(stmts.length);
+          stmts.push(
+            c.env.DB
+              .prepare(
+                `UPDATE job_schedule_tasks
+                    SET active = 0, updated_schedule_id = ?2, updated_at = unixepoch()
+                  WHERE id = ?1 AND active = 1
+                    AND EXISTS (SELECT 1 FROM job_schedules
+                                 WHERE id = ?2 AND status = 'committing' AND committed_through_row = ?3)`,
+              )
+              .bind(entry.task.id, id, watermark),
+            auditStmtIfChanged(c, actor, "schedule_task_revision_remove", schedule.job_id, {
+              schedule_id: id, job_id: schedule.job_id, task_uuid: entry.task.task_uuid,
+              name: entry.task.name, blocking: entry.blocking, reasons: entry.reasons,
+            }),
+          );
+        }
+      }
+
       const res = await c.env.DB.batch(stmts);
       // Statement 0 changed nothing → the schedule left the committable states, the
       // watermark didn't advance, or ANOTHER schedule of this job is mid-commit —
-      // every guarded INSERT above then landed NOTHING. Say which, honestly.
+      // every guarded write above then landed NOTHING. Say which, honestly.
       if ((res[0].meta.changes ?? 0) === 0) {
         const other = await c.env.DB
           .prepare(
@@ -973,14 +1335,17 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
         const now = await loadSchedule(c, id);
         return c.json({ error: "schedule_not_committable", status: now?.status ?? "unknown" }, 409);
       }
-      const inserted = insertIdx.filter((i) => (res[i].meta.changes ?? 0) > 0).length;
+      const countOf = (idx: number[]) => idx.filter((i) => (res[i].meta.changes ?? 0) > 0).length;
+      const inserted = countOf(insertIdx);
+      const updated = countOf(updateIdx);
+      const linked = countOf(linkIdx);
+      const removed = countOf(removeIdx);
 
-      const done = remaining.length <= page.length;
       if (done) {
         await finalizeScheduleCommit(c, actor, schedule.job_id, id, inserted);
       }
       const payload: ScheduleCommitResponse = {
-        ok: true, done, inserted, committed_through_row: watermark,
+        ok: true, done, inserted, updated, linked, removed, committed_through_row: watermark,
       };
       return c.json(payload);
     },
@@ -1030,10 +1395,10 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
         // ORPHAN-TASK CASCADE (2026-08-11 security-review BLOCK finding 2): a schedule
         // discarded mid-commit has already landed active tasks (source_schedule_id =
         // this row) across its committed pages. Left active, they are attributed to a
-        // TERMINAL schedule that never governed, and — worse — countForeignActiveTasks
-        // counts them, so EVERY future upload's commit refuses
-        // revision_reconcile_not_available: a permanent, self-inflicted lockout with no
-        // reconcile path until PR-6. Deactivating them WITH the discard restores the
+        // TERMINAL schedule that never governed — and every FUTURE upload would then
+        // diff against them (when PR-4 counted instead of diffing, this was a permanent
+        // commit lockout; post-PR-6 it would silently pollute every reconcile with
+        // phantom matches/removals). Deactivating them WITH the discard restores the
         // invariant that active imported tasks always trace to a committing/committed
         // schedule. Safe by construction: committed/superseded rows are not discardable,
         // so a governing schedule's tasks can never be swept by this statement.

@@ -397,8 +397,17 @@ export const ERROR_COPY: Record<string, string> = {
   duplicate_line: "A line collided with one that already exists — reload the validate screen to see the current list.",
   // 2026-08-11: real merge + the shipments import.
   invalid_import_as: "Choose whether these rows are material lines (a BOM) or scheduled loads (a shipping log).",
-  invalid_resolutions: "The ambiguous-part choices didn't come through correctly — re-run the preview and decide them again.",
-  ambiguous_unresolved: "Some part numbers match more than one existing line — run the preview and pick which line each one belongs to before importing.",
+  // SHARED by the manifest merge (part → line picks) and the schedule reconcile
+  // (links / removals / percent picks) — worded to serve both: each is "your review
+  // choices no longer line up with what the server derived; re-run the preview".
+  invalid_resolutions: "Your review choices didn't come through, or no longer match the current list — re-run the preview and decide them again.",
+  // SHARED by the manifest commit (a part number matching >1 line) and the schedule
+  // reconcile commit (a task name matching >1 living task, or two rows claiming one
+  // task) — both mean "more than one existing entry could be meant; the import stays
+  // blocked until that's resolved". The manifest preview offers a picker; the schedule
+  // reconcile deliberately has NO picker (no fuzzy matching, ADR-0006 decision 9) —
+  // its review screen names the duplicates so the human can fix them at the source.
+  ambiguous_unresolved: "Some rows match more than one existing entry — open the preview, see which ones, and resolve the duplicates before importing.",
   invalid_bol: "A BOL / load number is too long — shorten it to 120 characters or less.",
   // Resolve-problem (the expected-materials incident flag's explicit counterpart).
   not_flagged: "This line has no problem flag to resolve — someone may have already cleared it.",
@@ -427,10 +436,14 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_task_duration: "A duration must be a whole number of days, up to 5000.",
   invalid_task_predecessors: "The predecessors text is too long (up to 200 characters).",
   invalid_task_flag: "The milestone / delivery markers must be on or off.",
-  // The PR-4 degenerate boundary: a job that already has a task list can't take a second
-  // import until the PR-6 reconcile lands. The current list is untouched — say so.
-  revision_reconcile_not_available:
-    "This job already has a task list — importing a schedule revision (reconcile) arrives in a later update. The current task list is unchanged.",
+  // ── schedule revision reconcile (PR-6 — the three-way diff's own refusals) ─────────
+  // (`ambiguous_unresolved` and `invalid_resolutions` above are shared with the
+  // manifest merge; `revision_reconcile_not_available` was the PR-4 refusal this flow
+  // replaced — the Worker no longer sends it.)
+  blocking_removals_unresolved:
+    "Some tasks the new schedule drops have field progress, a delivered mark, or are contract milestones — decide keep-or-remove for each of them before importing.",
+  invalid_link_target:
+    "A task link no longer lines up — the task may have changed since you reviewed. Re-run the preview and link again.",
   schedule_not_committable:
     "This schedule can't be committed from its current state — refresh to see where it stands.",
   another_commit_in_progress:

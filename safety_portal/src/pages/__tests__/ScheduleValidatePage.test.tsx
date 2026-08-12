@@ -70,10 +70,16 @@ beforeEach(() => {
   vi.mocked(api.fetchSchedule).mockResolvedValue({ schedule: SCHEDULE, preview_pages: [] });
   vi.mocked(api.fetchAllScheduleRows).mockResolvedValue(ROWS);
   vi.mocked(api.planSchedule).mockResolvedValue({
-    ok: true, degenerate: true, revision_reconcile_available: false,
-    counts: { incoming: 2, new: 2, existing: 0 },
+    ok: true, degenerate: true, revision_reconcile_available: true,
+    counts: {
+      incoming: 2, new: 2, existing: 0,
+      matched: 0, ambiguous: 0, removed: 0, blocking_removals: 0, percent_conflicts: 0,
+    },
+    matched: [], ambiguous: [], fresh: [], removed: [],
   });
-  vi.mocked(api.commitAllSchedule).mockResolvedValue({ inserted: 2, pages: 1 });
+  vi.mocked(api.commitAllSchedule).mockResolvedValue({
+    inserted: 2, updated: 0, linked: 0, removed: 0, pages: 1,
+  });
 });
 afterEach(cleanup);
 
@@ -129,17 +135,21 @@ describe("ScheduleValidatePage — plan, evidence gate, commit", () => {
     expect(commitBtn().disabled).toBe(false);
   });
 
-  it("a NON-degenerate plan says reconcile arrives later and never enables commit", async () => {
+  it("a NON-degenerate plan points at the reconcile screen and never enables commit", async () => {
     vi.mocked(api.planSchedule).mockResolvedValue({
-      ok: true, degenerate: false, revision_reconcile_available: false,
-      counts: { incoming: 2, new: 0, existing: 40 },
+      ok: true, degenerate: false, revision_reconcile_available: true,
+      counts: {
+        incoming: 2, new: 2, existing: 40,
+        matched: 0, ambiguous: 0, removed: 40, blocking_removals: 0, percent_conflicts: 0,
+      },
+      matched: [], ambiguous: [], fresh: [], removed: [],
     });
     const { getByLabelText, getByText, container } = mount();
     await waitFor(() => expect(getByLabelText("Row 2 task name")).toBeTruthy());
     fireEvent.click(getByLabelText("I reviewed the source PDF elsewhere"));
     fireEvent.click(getByText("Preview import"));
     await waitFor(() =>
-      expect(container.textContent ?? "").toContain("arrives in a later update"),
+      expect(container.textContent ?? "").toContain("reconcile screen"),
     );
     expect((getByText(/^Import \d+ tasks$/) as HTMLButtonElement).disabled).toBe(true);
   });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../lib/fieldops_schedules";
 import type { ScheduleListRow, ScheduleTaskRow } from "../lib/fieldops_schedules";
 import { ScheduleValidatePage } from "./ScheduleValidatePage";
+import { ScheduleReconcilePage } from "./ScheduleReconcilePage";
 import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/errorCopy";
 import { PageShell } from "../components/PageShell";
@@ -25,7 +26,12 @@ import { ConfirmDelete } from "../components/ChecklistItemForm";
 // The Worker re-gates every call; capability checks here drive affordances only
 // (Invariant 2 — SPA gating is convenience, never the boundary).
 //
-// Revision reconcile arrives in PR-6.
+// TWO sub-faces, routed by whether the job already HAS a task list (the plan's
+// degenerate flag made local): no tasks → the first-import VALIDATE face
+// (ScheduleValidatePage); tasks exist → the revision RECONCILE face
+// (ScheduleReconcilePage, PR-6 — the three-way diff review). Both are remount-keyed
+// sub-faces, never router entries; the Worker's own plan re-derives the truth either
+// way, so a mis-route degrades to an honest banner, never a wrong commit.
 
 /** Upload-list status → chip copy. `superseded` reads as revision history on purpose —
  *  those rows are the job's prior governing schedules, kept, never a failure state. */
@@ -245,22 +251,30 @@ export function JobSchedulePage({
     }
   }
 
-  // ── The validate SUB-FACE (remount-keyed; not a router entry) ──────────────────────
+  // ── The validate / reconcile SUB-FACES (remount-keyed; not router entries) ─────────
+  // Routed by the task list: no tasks → first import (validate); tasks → revision
+  // reconcile. While the task read is still in flight the route is unknown — hold,
+  // rather than guessing a face the Worker's plan would immediately contradict.
   if (openSchedule !== null) {
+    const onCloseFace = (notice?: { ok: boolean; text: string }, committed?: boolean) => {
+      setOpenSchedule(null);
+      if (notice) setMsg(notice);
+      loadSchedules();
+      // A commit authors/updates the living task list, so the list behind this screen
+      // is stale the moment we finish.
+      if (committed) loadTasks();
+    };
     return (
       <PageShell onHome={onHome}>
-        <ScheduleValidatePage
-          key={openSchedule}
-          scheduleId={openSchedule}
-          onClose={(notice, committed) => {
-            setOpenSchedule(null);
-            if (notice) setMsg(notice);
-            loadSchedules();
-            // A commit authors the living task list, so the list behind this screen is
-            // stale the moment we finish.
-            if (committed) loadTasks();
-          }}
-        />
+        {tasks === null ? (
+          <section className="card dash-section" aria-label="Loading schedule">
+            <p className="dash__intro">Loading the task list…</p>
+          </section>
+        ) : tasks.length > 0 ? (
+          <ScheduleReconcilePage key={openSchedule} scheduleId={openSchedule} onClose={onCloseFace} />
+        ) : (
+          <ScheduleValidatePage key={openSchedule} scheduleId={openSchedule} onClose={onCloseFace} />
+        )}
       </PageShell>
     );
   }
@@ -319,7 +333,10 @@ export function JobSchedulePage({
           <p className="dash__intro">
             Upload the project schedule as a PDF (the Smartsheet export). It is read on the
             office Mac and comes back as a task grid you check side-by-side with the source
-            pages — nothing reaches the task list until you import it.
+            pages — nothing reaches the task list until you import it. Schedule revisions are
+            supported: a new export uploaded onto a job with a task list opens a reconcile
+            review — date changes, new tasks, removals and progress conflicts — before
+            anything applies.
           </p>
           <div className="dash-row">
             <input
@@ -352,6 +369,9 @@ export function JobSchedulePage({
                   {(schedules ?? []).map((s) => {
                     const chip = statusChip(s);
                     const validatable = s.status === "parsed" || s.status === "committing";
+                    // The button says what OPENING it does: a job with a task list gets
+                    // the reconcile review, an empty one the first-import check.
+                    const openVerb = (tasks?.length ?? 0) > 0 ? "Reconcile" : "Validate";
                     const discardable =
                       s.status !== "committed" && s.status !== "superseded";
                     return (
@@ -366,10 +386,10 @@ export function JobSchedulePage({
                             <button
                               type="button"
                               className="btn btn--secondary"
-                              aria-label={`Validate ${s.filename}`}
+                              aria-label={`${openVerb} ${s.filename}`}
                               onClick={() => setOpenSchedule(s.id)}
                             >
-                              Validate →
+                              {openVerb} →
                             </button>
                           ) : null}
                           {discardable ? (
