@@ -597,3 +597,47 @@ def test_lockout_message_shows_remaining_cooldown(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(PinError) as ei:
         verify_pin("correcthorse")  # locked out — even the correct PIN is refused
     assert "locked out for ~" in str(ei.value) and "s;" in str(ei.value)
+
+
+def test_every_send_lane_exposes_all_three_runtime_config_siblings() -> None:
+    """PARITY TOOTH: a send lane in the registry carries ALL of its runtime keys.
+
+    Every `*_send` lane resolves the same three ITS_Config settings at runtime —
+    `polling_enabled` (the External Send Gate), `from_mailbox` (the From identity)
+    and `scheduled_send_local` (the send window). Enrolling only some of them is a
+    silent, per-lane console gap: the operator retunes one lane from the dashboard
+    and has to hand-edit ITS_Config for its structural twin, with nothing announcing
+    the difference.
+
+    That is exactly what happened — PR #627 gave the RFQ lane all three and
+    `subcontract_send` only `polling_enabled`, so the subcontract mailbox and send
+    window were console-invisible until this was noticed by hand. Deriving the
+    expectation from the lanes actually present makes the NEXT omission fail here,
+    for whichever lane is added next, rather than waiting to be spotted.
+
+    Structural only — this asserts which KEYS exist, never their VALUES. Pinning
+    editable-config content is its own recurring self-defeating-test bug.
+    """
+    from operator_dashboard.act.registry import REGISTRY
+
+    siblings = ("polling_enabled", "from_mailbox", "scheduled_send_local")
+    lanes: dict[str, set[str]] = {}
+    for key, _workstream in REGISTRY:
+        for sibling in siblings:
+            suffix = f".{sibling}"
+            if key.endswith(suffix):
+                lane = key[: -len(suffix)]
+                if lane.endswith("_send"):
+                    lanes.setdefault(lane, set()).add(sibling)
+
+    assert lanes, "no *_send lanes found in REGISTRY — did the key shape change?"
+    incomplete = {
+        lane: sorted(set(siblings) - present)
+        for lane, present in lanes.items()
+        if set(siblings) - present
+    }
+    assert not incomplete, (
+        "send lanes enrolled in the dashboard config registry without all three runtime "
+        f"siblings: {incomplete}. Add the missing key(s) to operator_dashboard/act/registry.py "
+        "(and seed the ITS_Config row) so the console covers the lane uniformly."
+    )

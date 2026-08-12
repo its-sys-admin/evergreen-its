@@ -358,6 +358,11 @@ _ENTRIES: list[ConfigEntry] = [
     _e("po_materials.po_send.scheduled_send_local", "po_materials", _WINDOWS, v_schedule),
     _e("progress_reports.progress_send.scheduled_send_local", "progress_reports", _WINDOWS, v_schedule),
     _e("po_materials.rfq_send.scheduled_send_local", "po_materials", _WINDOWS, v_schedule),
+    # Subcontract lane parity: #627 enrolled subcontract_send's polling gate but not its
+    # two siblings, so the console could retune the RFQ lane's window and mailbox while the
+    # structurally-identical subcontract lane needed a direct ITS_Config edit. Both rows are
+    # seeded by scripts/migrations/seed_subcontracts_send_config.py.
+    _e("subcontracts.subcontract_send.scheduled_send_local", "subcontracts", _WINDOWS, v_schedule),
     # --- data / paths ---
     _e("safety_reports.box.portal_root_folder_id", "safety_reports", _DATA, v_id),
     _e("progress_reports.box.portal_root_folder_id", "progress_reports", _DATA, v_id),
@@ -530,6 +535,7 @@ _ENTRIES += [
     _b("po_materials.po_send.from_mailbox", "po_materials", _IDENTITY, v_email),
     _b("progress_reports.progress_send.from_mailbox", "progress_reports", _IDENTITY, v_email),
     _b("po_materials.rfq_send.from_mailbox", "po_materials", _IDENTITY, v_email),
+    _b("subcontracts.subcontract_send.from_mailbox", "subcontracts", _IDENTITY, v_email),
     _b("safety_reports.intake.mailbox", "safety_reports", _IDENTITY, v_email),
     _b(
         "safety_reports.portal.worker_base_url",
