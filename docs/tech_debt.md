@@ -2876,3 +2876,22 @@ replay-guard-before-finalize-check shape (its final committing→committed batch
 second transaction its replay guard never re-attempts). Same fix applies: on a fully-replayed
 payload with status still 'committing', run the finalize batch before answering done:true,
 plus the interruption test.
+
+## [OPEN 2026-08-12, low] Two docs-currency drifts from the ADR-0006 schedule lane, flagged by the build agents but not fixed in-arc
+
+`docs/references/daemon_reference.md` documents `estimate-poll` / `manifest-poll` / `rfq-poll`
+but has no `schedule-poll` row — the newest §34 Option-D daemon (PR #85,
+`field_ops/schedule_poll.py`, gate `field_ops.schedule_poll.polling_enabled`) is invisible to
+anyone reading that reference for a symptom. Separately, `CLAUDE.md`'s `safety_portal/` row
+worker-file count ("46 `.ts` files", set by PR #85 itself) is already stale — live count is 48
+after PRs #90–93 added more route files. Same "hand-maintained count in prose" class as the
+earlier TRACKED_JOBS 16-vs-18 drift (resolved PR #648).
+
+**Fix:** add a `schedule-poll` row to `daemon_reference.md` matching the `manifest-poll` shape
+(docstring/gate/heartbeat/log/failure-modes); bump the `.ts` count in CLAUDE.md. Consider whether
+a CI docs-currency check should assert the file count dynamically instead of a hand-typed number,
+since this is the second time the same class has drifted.
+
+**Tag:** `field-ops`, `adr-0006`, `docs-currency`, `low`.
+
+**Revisit when:** next `daemon_reference.md` touch, or a dedicated CLAUDE.md docs-currency pass.
