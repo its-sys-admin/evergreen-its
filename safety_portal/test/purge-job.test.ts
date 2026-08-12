@@ -37,6 +37,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM job_schedule_rows"),
     env.DB.prepare("DELETE FROM job_schedule_previews"),
     env.DB.prepare("DELETE FROM job_schedules"),
+    env.DB.prepare("DELETE FROM job_schedule_tasks"),
     env.DB.prepare("DELETE FROM jobs"),
     env.DB.prepare("DELETE FROM audit_log"),
   ]);
@@ -187,6 +188,17 @@ async function seedJobWithData(job: string, uuid: string): Promise<void> {
         .prepare("INSERT INTO job_schedule_previews (schedule_id, page, png_b64) VALUES (?,?, 'QUJD')")
         .bind(sid, p),
     ),
+    // PR-4 (0071): the LIVING task list rides the cascade too — job-keyed directly. NINE
+    // tasks: distinct from every sibling count in this seed (1/2/3/4/5/6/7/8 are all
+    // taken), so the ONE newly-inserted DELETE — which shifts every later positional
+    // results[] index by one — cannot mis-report by reading a neighbour's count.
+    ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) =>
+      env.DB
+        .prepare(
+          "INSERT INTO job_schedule_tasks (task_uuid, job_id, name, match_key, sort_order) VALUES (?,?,?,?,?)",
+        )
+        .bind(`task-${job}-${i}`, job, `Task ${i}`, `\ntask ${i}`, i * 10),
+    ),
   ]);
 }
 
@@ -222,6 +234,7 @@ async function counts(job: string, uuid: string) {
       "SELECT COUNT(*) n FROM job_schedule_rows WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id=?)", job),
     schedulePreviews: await q(
       "SELECT COUNT(*) n FROM job_schedule_previews WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id=?)", job),
+    scheduleTasks: await q("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id=?", job),
   };
 }
 
@@ -249,8 +262,11 @@ describe("POST /api/internal/admin/purge-job", () => {
       // matters most: it counts the ORIGINAL untrusted document bytes leaving with the job.
       manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
       // ADR-0006 — the schedule pool, same rule: scheduleChunks counts the untrusted
-      // schedule BYTES leaving with the job.
+      // schedule BYTES leaving with the job. scheduleTasks (0071, PR-4) is the living
+      // task list going with it — 9 is distinct from every sibling, so the one inserted
+      // DELETE's positional shift fails loudly instead of reading a neighbour's count.
       schedules: 2, scheduleChunks: 3, scheduleRows: 7, schedulePreviews: 8,
+      scheduleTasks: 9,
     });
 
     expect(await counts("JOB-PURGE", "u-purge")).toEqual({
@@ -260,6 +276,7 @@ describe("POST /api/internal/admin/purge-job", () => {
       timeEntries: 0, tasks: 0, inspections: 0, checklists: 0, equipLoc: 0,
       manifests: 0, manifestChunks: 0, manifestRows: 0, manifestPreviews: 0,
       schedules: 0, scheduleChunks: 0, scheduleRows: 0, schedulePreviews: 0,
+      scheduleTasks: 0,
     });
     // The OTHER job keeps every one of them — the cascade is job-scoped, not a sweep.
     expect(await counts("JOB-KEEP", "u-keep")).toEqual({
@@ -269,6 +286,7 @@ describe("POST /api/internal/admin/purge-job", () => {
       timeEntries: 1, tasks: 1, inspections: 1, checklists: 1, equipLoc: 1,
       manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
       schedules: 2, scheduleChunks: 3, scheduleRows: 7, schedulePreviews: 8,
+      scheduleTasks: 9,
     });
     const audit = await env.DB
       .prepare("SELECT action, target_username FROM audit_log WHERE action='purge-job'")

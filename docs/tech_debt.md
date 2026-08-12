@@ -2864,3 +2864,15 @@ change.
 
 **Revisit when:** the schedule lane merges `job_schedule_tasks`. **Tag:** `progress_reports`,
 `weekly-production-report`, `adr-0006`, `low`.
+
+## [OPEN 2026-08-11, medium] manifest commit's replay guard has the same finalize-gap the schedule lane just fixed
+
+The PR #90 security review found the schedule /commit's replay guard returned done:true on
+watermark alone — so a Worker eviction between the page batch and the finalize batch left the
+schedule stuck at status='committing' forever while the client's documented re-post reported
+false success. Fixed for schedules (finalizeScheduleCommit runs from the replay branch too).
+The reviewer noted `worker/fieldops_manifests.ts`'s /commit shares the exact same
+replay-guard-before-finalize-check shape (its final committing→committed batch is likewise a
+second transaction its replay guard never re-attempts). Same fix applies: on a fully-replayed
+payload with status still 'committing', run the finalize batch before answering done:true,
+plus the interruption test.

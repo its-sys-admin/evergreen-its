@@ -364,6 +364,12 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
           // are the job's revision history. Same in-step rule with purge-job's cascade as
           // the manifest guard above.
           "AND job_id NOT IN (SELECT job_id FROM job_schedules) " +
+          // 0071 (ADR-0006 PR-4): the LIVING task list — D1-PRIMARY operational record
+          // (portal progress marks, baselines, delivered stamps have no copy outside D1).
+          // A job holding one is not dead weight; purge-job is the explicit exit, and its
+          // cascade carries the matching DELETE (in-step rule). job_id is NOT NULL in
+          // 0071, so no IS-NOT-NULL filter is needed.
+          "AND job_id NOT IN (SELECT job_id FROM job_schedule_tasks) " +
           // 0067: a job holding Weekly Production Report office inputs has had a client-facing
           // report prepared against it — the OSHA case counts and pending-items record are the
           // evidence of what was reported — and that table has no time-based prune of its own

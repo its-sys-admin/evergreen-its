@@ -9,6 +9,8 @@ import { FieldOpsJobTracker } from "./pages/FieldOpsJobTracker";
 // EAGER on purpose: a manager marking a delivery is a field path, and the lazy split is reserved
 // for office-desk admin surfaces (a chunk-load failure mid-shift must not take the daily path down).
 import { JobMaterialsPage } from "./pages/JobMaterialsPage";
+// EAGER for the same reason: the schedule is an all-roles field view (ADR-0006 decision 4).
+import { JobSchedulePage } from "./pages/JobSchedulePage";
 import { WeeklyReportPage } from "./pages/WeeklyReportPage";
 import { FieldOpsMyTasks } from "./pages/FieldOpsMyTasks";
 import { FieldOpsInspections } from "./pages/FieldOpsInspections";
@@ -319,6 +321,12 @@ export function App() {
     setEditing(false);
     navigate({ view: "fieldops-job-materials", jobId });
   };
+  // ADR-0006 PR-4: the per-job Schedule page, reached from the Job Tracker's card beside
+  // Materials — a deep link, no home card (job-scoped, so there is no job-less entry point).
+  const openJobSchedule = (jobId: string) => {
+    setEditing(false);
+    navigate({ view: "fieldops-job-schedule", jobId });
+  };
 
   // The effective FormFillPage prefill: the route's shareable fields + the in-memory S5 draft.
   let fillPrefill: FormPrefill | undefined;
@@ -358,6 +366,7 @@ export function App() {
           syncRouteUp({ view: "fieldops-jobs", jobId: id ?? undefined }, id === null)
         }
         onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
+        onOpenSchedule={has("cap.jobtracker.read") ? openJobSchedule : undefined}
         onOpenWeeklyReport={has("cap.jobtracker.manage") ? openWeeklyReport : undefined}
       />
     );
@@ -366,6 +375,15 @@ export function App() {
   } else if (route.view === "fieldops-job-materials" && allowed) {
     page = (
       <JobMaterialsPage
+        key={`${popEpoch}:${route.jobId}`}
+        jobId={route.jobId}
+        onHome={home}
+        onOpenJob={openJobTracker}
+      />
+    );
+  } else if (route.view === "fieldops-job-schedule" && allowed) {
+    page = (
+      <JobSchedulePage
         key={`${popEpoch}:${route.jobId}`}
         jobId={route.jobId}
         onHome={home}

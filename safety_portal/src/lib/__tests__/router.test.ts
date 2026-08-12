@@ -35,6 +35,10 @@ describe("router — round-trip law", () => {
     { view: "fieldops-job-materials", jobId: "JOB-000018" },
     // A job id needing percent-encoding — the /jobs/:id/materials matcher must decode it back.
     { view: "fieldops-job-materials", jobId: "JOB 42/A" },
+    { view: "fieldops-job-schedule", jobId: "JOB-000018" },
+    // Same percent-encoding proof — the /jobs/:id/schedule matcher must decode it back, and
+    // must be ordered BEFORE the bare /jobs/:id matcher (ADR-0006 PR-4).
+    { view: "fieldops-job-schedule", jobId: "JOB 42/A" },
     { view: "fieldops-weekly-report", jobId: "JOB-000018" },
     // Same percent-encoding proof as materials — the /jobs/:id/weekly-report matcher must
     // decode it back, and must be ordered BEFORE the bare /jobs/:id matcher.
@@ -152,6 +156,7 @@ describe("router — VIEW_CAPS gate map", () => {
       "subcontract-builder": "cap.subcontracts.manage",
       "fieldops-jobs": "cap.jobtracker.read",
       "fieldops-job-materials": "cap.materials.receive",
+      "fieldops-job-schedule": "cap.jobtracker.read",
       "fieldops-weekly-report": "cap.jobtracker.manage",
       "fieldops-tasks": "cap.tasks.own",
       "fieldops-inspections": "cap.checklist.manage",

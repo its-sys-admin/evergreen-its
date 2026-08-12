@@ -290,6 +290,28 @@ describe("pruneOldData (A3 D1 housekeeping)", () => {
     const left = await env.DB.prepare("SELECT job_id FROM jobs ORDER BY job_id").all<{ job_id: string }>();
     expect(left.results.map((j) => j.job_id)).toEqual(["J-mats", "J-reqs"]);
   });
+
+  it("NEVER deletes an inactive job holding a living schedule task list (job_schedule_tasks) [ADR-0006 PR-4 fence]", async () => {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active) VALUES ('J-sched','S',0)"), // holds a task → keep
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active) VALUES ('J-bare','B',0)"),  // nothing → delete
+    ]);
+    // The task list is D1-PRIMARY operational record (portal marks, baselines, delivered
+    // stamps have no copy outside D1). A soft-deleted (active=0) task still guards — the
+    // tombstone is the PR-6 reconcile's record — so seed one INACTIVE task and prove the
+    // guard bites on it too.
+    await env.DB
+      .prepare(
+        "INSERT INTO job_schedule_tasks (task_uuid, job_id, name, match_key, active) VALUES ('tu-guard','J-sched','Pile Installation','\npile installation',0)",
+      )
+      .run();
+
+    const res = await pruneOldData(env.DB, NOW);
+
+    expect(res.jobs).toBe(1); // only J-bare deleted
+    const left = await env.DB.prepare("SELECT job_id FROM jobs ORDER BY job_id").all<{ job_id: string }>();
+    expect(left.results.map((j) => j.job_id)).toEqual(["J-sched"]);
+  });
 });
 
 // ── PR-4 Part A — the filed_pdfs cache prune branch + D1 size telemetry. ──────────
