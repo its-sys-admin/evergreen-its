@@ -203,7 +203,7 @@ export function PhotoField({ field, photos, onChange }: Props) {
       />
       <button
         type="button"
-        className="btn btn--secondary photo-field__add"
+        className="btn btn--secondary"
         disabled={busy || room === 0}
         onClick={() => inputRef.current?.click()}
       >

@@ -205,7 +205,7 @@ function RequestRow({
           return (
             <li key={step.key} className={`form-editor__step form-editor__step--${state}`}>
               <span className="form-editor__step-dot" aria-hidden="true" />
-              <span className="form-editor__step-label">{step.label}</span>
+              <span>{step.label}</span>
             </li>
           );
         })}

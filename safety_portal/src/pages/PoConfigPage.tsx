@@ -526,7 +526,7 @@ export function PoConfigPage({ onBack }: { onBack: () => void }) {
                 {taxStates.map((st) => {
                   const bp = config.tax.rates_bp[st];
                   return (
-                    <section key={st} className="card po-config__tax-card">
+                    <section key={st} className="card">
                       <div className="po-config__tax-rate">{bp == null ? "—" : bpToPct(bp)}</div>
                       <div className="dash-chips">
                         <span className="dash-chip">{st}</span>
@@ -617,7 +617,7 @@ export function PoConfigPage({ onBack }: { onBack: () => void }) {
             ) : (
               <div className="dash-grid">
                 {config.delivery_contacts.map((ct) => (
-                  <section key={ct.name} className="card po-config__tax-card">
+                  <section key={ct.name} className="card">
                     <div className="po-config__entity">{ct.name}</div>
                     <div className="dash-chips">
                       {ct.phone && <span className="dash-chip">{ct.phone}</span>}
@@ -994,7 +994,7 @@ function ConfigRequestRow({ req, onCleared }: { req: api.ConfigRequest; onCleare
           return (
             <li key={step.key} className={`form-editor__step form-editor__step--${state}`}>
               <span className="form-editor__step-dot" aria-hidden="true" />
-              <span className="form-editor__step-label">{step.label}</span>
+              <span>{step.label}</span>
             </li>
           );
         })}

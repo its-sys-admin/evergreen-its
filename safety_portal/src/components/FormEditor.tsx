@@ -74,7 +74,7 @@ export function FormEditor(props: Props) {
   };
 
   return (
-    <div className="form-editor">
+    <div>
       <IdentityPanel {...props} />
 
       <h3 className="form-editor__sections-heading">Sections</h3>
@@ -88,7 +88,7 @@ export function FormEditor(props: Props) {
                   its job_requirements / expected_materials mounts, so the builder must not
                   even offer the amputation the C3 gates would refuse. */}
               {READ_ONLY_SECTION_TYPES.has(s.type) ? (
-                <span className="muted form-editor__section-locked">definition-managed</span>
+                <span className="muted">definition-managed</span>
               ) : (
                 <div className="form-editor__section-controls">
                   <button

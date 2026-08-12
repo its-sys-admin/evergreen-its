@@ -234,7 +234,7 @@ export function AccountsPage({
                       Edit login
                     </button>
                     <select
-                      className="btn btn--secondary accounts__role-select"
+                      className="btn btn--secondary"
                       aria-label={`Role for ${a.username}`}
                       value={a.role}
                       disabled={busy}
