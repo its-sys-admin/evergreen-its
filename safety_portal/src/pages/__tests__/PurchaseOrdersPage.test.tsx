@@ -326,6 +326,26 @@ describe("PurchaseOrdersPage — the estimate→PO fold", () => {
     await waitFor(() =>
       expect((getByLabelText("Site / phase") as HTMLInputElement).value).toBe("1"),
     );
+
+    // ...and the seeded value must actually REACH the draft. Asserting only the input would
+    // prove the box shows "1", not that the PO numbers .1 — and the number is contractual.
+    vi.mocked(api.createDraft).mockResolvedValue({
+      id: 91,
+      totals: { subtotal_cents: 1234, tax_rate_bp: 900, tax_cents: 111, total_cents: 1345 },
+    });
+    vi.mocked(est.disposeEstimate).mockResolvedValue({ ok: true, status: "imported" });
+    fireEvent.change(getByLabelText("Manual line 1 description"), { target: { value: "Rail 208in" } });
+    fireEvent.change(getByLabelText("Manual line 1 quantity"), { target: { value: "3" } });
+    fireEvent.change(getByLabelText("Manual line 1 unit cost"), { target: { value: "12.34" } });
+    fireEvent.change(getByLabelText("Vendor"), { target: { value: "VEN-000001" } });
+    fireEvent.change(getByLabelText("Ship-to state (2 letters — drives tax)"), { target: { value: "IL" } });
+    fireEvent.click(getByText("Create draft PO"));
+
+    await waitFor(() =>
+      expect(api.createDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ job_no: "2026.384", site_phase: 1 }),
+      ),
+    );
   });
 
   it("0069: an estimate with NO job_id leaves Site / phase alone (no lookup, no crash)", async () => {
