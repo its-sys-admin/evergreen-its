@@ -32,6 +32,7 @@ import {
   releaseAllPhotoClaimsStmt,
 } from "./fieldops_daily_photos";
 import { registerProgressRollupRoutes } from "./fieldops_rollup";
+import { registerWeeklyReportRoutes } from "./fieldops_report";
 import { registerPoRoutes } from "./po";
 import { registerPoAttachmentRoutes } from "./po_attachments";
 import { registerManifestRoutes } from "./fieldops_manifests";
@@ -561,6 +562,11 @@ registerManifestRoutes(app, { requireSession, requireCapability, requireManifest
 registerDailyPhotoRoutes(app, fieldopsGates);
 // — P6 progress rollup read (bearer-gated /api/internal/*, NOT a session gate) —
 registerProgressRollupRoutes(app, requireInternalToken);
+// — Weekly Production Report (0067): the client-facing 5-page report's aggregation. TWO gate
+//   tiers on ONE derivation — bearer /api/internal/production-report for the Mac compile (same
+//   privilege class as the rollup above, no new secret) and session+cap.jobtracker.manage
+//   /api/fieldops/weekly-report for the office screen that supplies what D1 cannot derive —
+registerWeeklyReportRoutes(app, { requireSession, requireCapability, requireInternalToken });
 // — PO workstream S2: vendors cache + drafts/generate/supersede/cancel (session +
 //   cap.po.manage) + the /api/po/internal/* queue under the NEW requirePoToken tier —
 registerPoRoutes(app, { requireSession, requireCapability, requirePoToken });
@@ -2699,7 +2705,8 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
   // job_id is always parameterized, never concatenated — and there is no string-built query for
   // CodeQL's injection sink to flag. The cascade deletes children (filed_pdfs, pdf_requests via
   // the submissions subquery; the job-keyed per-job content tables job_daily_requirements +
-  // job_expected_materials — Slice 1, R3-F4, mirroring their prune.ts guard-union entries;
+  // job_weekly_report_inputs + job_expected_materials — Slice 1, R3-F4, mirroring their prune.ts
+  // guard-union entries;
   // and the five field-ops job-context tables prune.ts guards a job on — checklist_item_states,
   // checklist_instances, time_entries, task_assignments, inspections, equipment_location)
   // BEFORE the parents (submissions, then jobs). The cascade must cover EXACTLY prune.ts's
@@ -2715,6 +2722,12 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
       .prepare("DELETE FROM pdf_requests WHERE submission_uuid IN (SELECT submission_uuid FROM submissions WHERE job_id = ?)")
       .bind(job_id),
     c.env.DB.prepare("DELETE FROM job_daily_requirements WHERE job_id = ?").bind(job_id),
+    // Weekly Production Report office inputs (0067) — the same job-keyed per-job content class as
+    // job_daily_requirements above, and deleted for the same reason: it has no time-based prune
+    // (it is the small record of what was reported to a client), so purge-job is its ONLY exit.
+    // Orphaned, it would be a client-facing safety-statistics and pending-items record surviving
+    // behind a job nobody can see.
+    c.env.DB.prepare("DELETE FROM job_weekly_report_inputs WHERE job_id = ?").bind(job_id),
     // Materials tracking children BEFORE their parent line (0059). Both denormalize job_id, and
     // both would otherwise be orphaned behind a deleted job exactly the way the five field-ops
     // tables below once were. The delivery ledger is the record-grade one here: an orphaned
@@ -2766,24 +2779,28 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
   const pdfChunks = results[0]?.meta?.changes ?? 0;
   const pdfRequests = results[1]?.meta?.changes ?? 0;
   const requirements = results[2]?.meta?.changes ?? 0;
-  const receiptEvents = results[3]?.meta?.changes ?? 0;
-  const shipments = results[4]?.meta?.changes ?? 0;
-  const expectedMaterials = results[5]?.meta?.changes ?? 0;
-  const manifestChunks = results[6]?.meta?.changes ?? 0;
-  const manifestRows = results[7]?.meta?.changes ?? 0;
-  const manifestPreviews = results[8]?.meta?.changes ?? 0;
-  const manifests = results[9]?.meta?.changes ?? 0;
-  const checklistItemStates = results[10]?.meta?.changes ?? 0;
-  const checklistInstances = results[11]?.meta?.changes ?? 0;
-  const timeEntries = results[12]?.meta?.changes ?? 0;
-  const taskAssignments = results[13]?.meta?.changes ?? 0;
-  const inspections = results[14]?.meta?.changes ?? 0;
-  const equipmentLocation = results[15]?.meta?.changes ?? 0;
-  const submissions = results[16]?.meta?.changes ?? 0;
-  const job = results[17]?.meta?.changes ?? 0;
+  const weeklyReportInputs = results[3]?.meta?.changes ?? 0;
+  const receiptEvents = results[4]?.meta?.changes ?? 0;
+  const shipments = results[5]?.meta?.changes ?? 0;
+  const expectedMaterials = results[6]?.meta?.changes ?? 0;
+  const manifestChunks = results[7]?.meta?.changes ?? 0;
+  const manifestRows = results[8]?.meta?.changes ?? 0;
+  const manifestPreviews = results[9]?.meta?.changes ?? 0;
+  const manifests = results[10]?.meta?.changes ?? 0;
+  const checklistItemStates = results[11]?.meta?.changes ?? 0;
+  const checklistInstances = results[12]?.meta?.changes ?? 0;
+  const timeEntries = results[13]?.meta?.changes ?? 0;
+  const taskAssignments = results[14]?.meta?.changes ?? 0;
+  const inspections = results[15]?.meta?.changes ?? 0;
+  const equipmentLocation = results[16]?.meta?.changes ?? 0;
+  const submissions = results[17]?.meta?.changes ?? 0;
+  const job = results[18]?.meta?.changes ?? 0;
   return c.json({
     ok: true, found: job > 0, job_id, job_deleted: job, submissions, pdfChunks, pdfRequests,
     requirements, expectedMaterials,
+    // Weekly Production Report office inputs (0067) — reported separately so the operator sees
+    // that the client-facing safety statistics and pending-items record went with the job.
+    weeklyReportInputs,
     // Reported per-table so the operator SEES the payroll/billing-grade rows this
     // removed — a silent count is how the old omission stayed invisible.
     receiptEvents, shipments,
