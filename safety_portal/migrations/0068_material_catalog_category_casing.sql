@@ -1,4 +1,4 @@
--- 0066 — normalise the two hand-added material_catalog categories (operator ask, 2026-08-11).
+-- 0068 — normalise the two hand-added material_catalog categories (operator ask, 2026-08-11).
 --
 -- `material_catalog.category` is FREE TEXT — fieldops_material_write.ts only length-checks it
 -- (`invalid_category` on empty or over-long), so any string an admin types becomes a category
