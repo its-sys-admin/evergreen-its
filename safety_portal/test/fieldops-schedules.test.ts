@@ -1,0 +1,426 @@
+import { env } from "cloudflare:test";
+import { describe, it, expect, beforeEach } from "vitest";
+import { call, provision, login, g, p, seedJob } from "./helpers";
+import { scheduleCanonical } from "../worker/fieldops_schedules";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Job-schedule import pool (ADR-0006) — worker/fieldops_schedules.ts.
+//
+// Real workerd + D1 (migrations auto-applied), no route mocks. The properties under test
+// are the ones unit tests structurally cannot reach: bearer privilege separation, the
+// per-job exact-sha dedupe with the SUPERSEDED re-entry (the rollback path), the
+// claim-first lifecycle, byte-flow direction (chunks are Mac-ward ONLY), and the
+// in-WHERE status guards that stop a late daemon post resurrecting a discarded or
+// committed schedule.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCHEDULE_BEARER = "test-schedule-token";
+const MANIFEST_BEARER = "test-manifest-token";
+const ESTIMATE_BEARER = "test-estimate-token";
+const PDF_MIME = "application/pdf";
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/** A minimal byte string whose first 8 bytes satisfy the magic sniff, base64-encoded.
+ *  `tail` varies the bytes so two documents get distinct sha256s. */
+function b64(head: number[], tail = 0x41, tailLen = 16): string {
+  const bytes = new Uint8Array(head.length + tailLen);
+  bytes.set(head, 0);
+  for (let i = head.length; i < bytes.length; i++) bytes[i] = tail;
+  let bin = "";
+  for (const byte of bytes) bin += String.fromCharCode(byte);
+  return btoa(bin);
+}
+const PDF_HEAD = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]; // "%PDF-1.7"
+const PDF_B64 = b64(PDF_HEAD);
+const PDF_B64_OTHER = b64(PDF_HEAD, 0x42);
+const ZIP_B64 = b64([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]); // PK\x03\x04
+const PNG_B64 = b64([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+let admin = "";
+let manager = "";
+let sub = "";
+
+beforeEach(async () => {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM job_schedule_chunks"),
+    env.DB.prepare("DELETE FROM job_schedule_rows"),
+    env.DB.prepare("DELETE FROM job_schedule_previews"),
+    env.DB.prepare("DELETE FROM job_schedules"),
+    env.DB.prepare("DELETE FROM personnel"),
+    env.DB.prepare("DELETE FROM users"),
+    env.DB.prepare("DELETE FROM jobs"),
+    env.DB.prepare("DELETE FROM audit_log"),
+  ]);
+  await provision("admin.one", "pw-admin-1234", "admin");
+  await provision("mgr.mike", "pw-manager-12", "manager");
+  await provision("sub.sam", "pw-subby-1234", "submitter");
+  admin = await login("admin.one", "pw-admin-1234");
+  manager = await login("mgr.mike", "pw-manager-12");
+  sub = await login("sub.sam", "pw-subby-1234");
+  await seedJob("JOB-A");
+  await seedJob("JOB-B");
+});
+
+async function upload(
+  cookie: string,
+  jobId: string,
+  filename = "Project Schedule - KSI - Coker 8.5.26.pdf",
+  mime = PDF_MIME,
+  data = PDF_B64,
+): Promise<Response> {
+  return p(cookie, "/api/fieldops/schedules", { job_id: jobId, filename, mime, data_b64: data });
+}
+
+async function uploadOk(jobId: string, filename?: string, mime?: string, data?: string): Promise<number> {
+  const res = await upload(admin, jobId, filename, mime, data);
+  expect(res.status, await res.clone().text()).toBe(201);
+  return ((await res.json()) as { id: number }).id;
+}
+
+async function setStatus(id: number, status: string): Promise<void> {
+  await env.DB.prepare("UPDATE job_schedules SET status = ?2 WHERE id = ?1").bind(id, status).run();
+}
+
+describe("schedule:v1 canonical (cross-language pin)", () => {
+  it("builds the EXACT literal tests/test_schedule_hmac_parity.py pins on the Python side", () => {
+    // THE cross-runtime contract. This literal and the one in the Python golden-vector suite
+    // are the same bytes, written independently in each runtime — if either side reorders a
+    // field, changes the separator, or drops the domain, exactly one of the two suites goes
+    // red and names the drift. A shared helper would prove nothing; the duplication IS the test.
+    expect(
+      scheduleCanonical(
+        "9d24af71-88c3-4b02-b615-2f7a90cd41e6",
+        "JOB-2026-021",
+        "Project Schedule - KSI - Coker 8.5.26.pdf",
+        "application/pdf",
+        724954,
+        "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      ),
+    ).toBe(
+      "schedule:v1\n" +
+        "9d24af71-88c3-4b02-b615-2f7a90cd41e6\n" +
+        "JOB-2026-021\n" +
+        "Project Schedule - KSI - Coker 8.5.26.pdf\n" +
+        "application/pdf\n" +
+        "724954\n" +
+        "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+    );
+  });
+});
+
+describe("upload (session + cap.jobtracker.manage)", () => {
+  it("201 for admin; pool row pending + chunks landed + audit row in the same batch", async () => {
+    const id = await uploadOk("JOB-A");
+    const row = await env.DB
+      .prepare("SELECT job_id, status, declared_mime, uploaded_by, hmac, sha256 FROM job_schedules WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ job_id: "JOB-A", status: "pending", declared_mime: PDF_MIME, uploaded_by: "admin.one" });
+    expect(String(row!.hmac)).toMatch(/^[0-9a-f]{64}$/);
+    const chunks = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_chunks WHERE schedule_id = ?1")
+      .bind(id)
+      .first<{ n: number }>();
+    expect(chunks!.n).toBeGreaterThan(0);
+    const audit = await env.DB
+      .prepare("SELECT actor_username FROM audit_log WHERE action = 'job_schedule_upload'")
+      .first<{ actor_username: string }>();
+    expect(audit).toMatchObject({ actor_username: "admin.one" });
+  });
+
+  it("403 for submitter AND for manager (cap.jobtracker.manage is withheld from manager — 0023)", async () => {
+    expect((await upload(sub, "JOB-A")).status).toBe(403);
+    expect((await upload(manager, "JOB-A")).status).toBe(403);
+  });
+
+  it("unknown job → 404; blank job_id → 400", async () => {
+    expect((await upload(admin, "JOB-NOPE")).status).toBe(404);
+    expect((await upload(admin, "")).status).toBe(400);
+  });
+
+  it("PDF-only: xlsx MIME → 422 schedule_mime_not_allowed (the lane's OWN code — the shared copy names the manifest allowlist)", async () => {
+    const res = await upload(admin, "JOB-A", "schedule.xlsx", XLSX_MIME, ZIP_B64);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "schedule_mime_not_allowed" });
+  });
+
+  it("zip bytes under a .pdf name → 422 schedule_magic_mime_mismatch", async () => {
+    const res = await upload(admin, "JOB-A", "schedule.pdf", PDF_MIME, ZIP_B64);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "schedule_magic_mime_mismatch" });
+  });
+
+  it(".xlsx extension under the pdf MIME → 422 extension_mime_mismatch", async () => {
+    const res = await upload(admin, "JOB-A", "schedule.xlsx", PDF_MIME, PDF_B64);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "extension_mime_mismatch" });
+  });
+
+  it("path-separator / control-char / dotfile names → 400 invalid_filename", async () => {
+    for (const name of ["a/b.pdf", "a\\b.pdf", ".hidden.pdf", "bad\u0000name.pdf", "bidi‮name.pdf"]) {
+      const res = await upload(admin, "JOB-A", name);
+      expect(res.status, name).toBe(400);
+    }
+  });
+});
+
+describe("dedupe (per-job, exact sha, in-play rows only)", () => {
+  it("byte-identical replay into the SAME job → 409 duplicate_schedule; a DIFFERENT job accepts it", async () => {
+    await uploadOk("JOB-A");
+    const dup = await upload(admin, "JOB-A");
+    expect(dup.status).toBe(409);
+    expect(await dup.json()).toMatchObject({ error: "duplicate_schedule" });
+    expect((await upload(admin, "JOB-B")).status).toBe(201);
+  });
+
+  it("different bytes (a revision) into the same job → 201 — revisions never collide", async () => {
+    await uploadOk("JOB-A");
+    expect((await upload(admin, "JOB-A", "Project Schedule - KSI - Coker 9.1.26.pdf", PDF_MIME, PDF_B64_OTHER)).status).toBe(201);
+  });
+
+  it("discarded rows leave the index — discard then re-upload the same bytes → 201", async () => {
+    const id = await uploadOk("JOB-A");
+    expect((await p(admin, `/api/fieldops/schedules/${id}/discard`)).status).toBe(200);
+    expect((await upload(admin, "JOB-A")).status).toBe(201);
+  });
+
+  it("SUPERSEDED rows leave the index — re-uploading the displaced revision's exact bytes IS the rollback path", async () => {
+    const id = await uploadOk("JOB-A");
+    await setStatus(id, "superseded");
+    expect((await upload(admin, "JOB-A")).status).toBe(201);
+  });
+});
+
+describe("bearer privilege separation (the ADR-0004 decision-4 posture)", () => {
+  it("schedule bearer reads the schedule pool; manifest/estimate bearers and a session cookie do NOT", async () => {
+    await uploadOk("JOB-A");
+    expect((await call("/api/fieldops/schedules/internal/pending", { bearer: SCHEDULE_BEARER })).status).toBe(200);
+    expect((await call("/api/fieldops/schedules/internal/pending", { bearer: MANIFEST_BEARER })).status).toBe(401);
+    expect((await call("/api/fieldops/schedules/internal/pending", { bearer: ESTIMATE_BEARER })).status).toBe(401);
+    expect((await call("/api/fieldops/schedules/internal/pending", { cookie: admin })).status).toBe(401);
+    expect((await call("/api/fieldops/schedules/internal/pending")).status).toBe(401);
+  });
+
+  it("the schedule bearer reaches NOTHING else — not the manifest pool, not the submission drain", async () => {
+    expect((await call("/api/fieldops/manifests/internal/pending", { bearer: SCHEDULE_BEARER })).status).toBe(401);
+    expect((await call("/api/internal/pending", { bearer: SCHEDULE_BEARER })).status).toBe(401);
+  });
+});
+
+describe("internal lifecycle (claim → chunks → rows/preview → result)", () => {
+  it("pending serves metadata + hmac; claim is idempotent; claimed rows stay served (crash recovery)", async () => {
+    const id = await uploadOk("JOB-A");
+    const pending = await call("/api/fieldops/schedules/internal/pending", { bearer: SCHEDULE_BEARER });
+    const body = (await pending.json()) as { schedules: Record<string, unknown>[] };
+    expect(body.schedules).toHaveLength(1);
+    expect(body.schedules[0]).toMatchObject({ id, job_id: "JOB-A", status: "pending", project_name: expect.any(String) });
+    expect(String(body.schedules[0].hmac)).toMatch(/^[0-9a-f]{64}$/);
+
+    const one = await call(`/api/fieldops/schedules/internal/${id}/claim`, { method: "POST", bearer: SCHEDULE_BEARER });
+    expect(await one.json()).toMatchObject({ ok: true, found: true });
+    const two = await call(`/api/fieldops/schedules/internal/${id}/claim`, { method: "POST", bearer: SCHEDULE_BEARER });
+    expect(await two.json()).toMatchObject({ ok: true, found: false });
+
+    const still = (await (
+      await call("/api/fieldops/schedules/internal/pending", { bearer: SCHEDULE_BEARER })
+    ).json()) as { schedules: { id: number; status: string }[] };
+    expect(still.schedules).toHaveLength(1);
+    expect(still.schedules[0].status).toBe("claimed");
+  });
+
+  it("chunks serve to the bearer for live rows only — and never to a session", async () => {
+    const id = await uploadOk("JOB-A");
+    const mac = await call(`/api/fieldops/schedules/internal/${id}/chunks`, { bearer: SCHEDULE_BEARER });
+    expect(mac.status).toBe(200);
+    const { chunks } = (await mac.json()) as { chunks: { chunk_b64: string }[] };
+    expect(chunks.length).toBeGreaterThan(0);
+    expect((await call(`/api/fieldops/schedules/internal/${id}/chunks`, { cookie: admin })).status).toBe(401);
+  });
+
+  it("rows post upserts on (schedule_id, row_index); bad kind → 400; posts refuse discarded parents", async () => {
+    const id = await uploadOk("JOB-A");
+    const rows = [
+      { row_index: 1, source_page: "pdf:p1", kind: "section", cells: ["Deliveries"], flags: null },
+      { row_index: 2, source_page: "pdf:p1", kind: "data", cells: ["Pile Delivery", "137d", "01/15/26", "07/24/26", "100"], flags: "" },
+    ];
+    const first = await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ rows }),
+    });
+    expect(first.status, await first.clone().text()).toBe(200);
+    // Re-post (the crashed-daemon replay) — an upsert, not duplicates.
+    await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ rows }),
+    });
+    const count = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_rows WHERE schedule_id = ?1")
+      .bind(id)
+      .first<{ n: number }>();
+    expect(count!.n).toBe(2);
+
+    const bad = await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+      method: "POST", bearer: SCHEDULE_BEARER,
+      body: JSON.stringify({ rows: [{ row_index: 3, kind: "gantt-bar", cells: [] }] }),
+    });
+    expect(bad.status).toBe(400);
+
+    await p(admin, `/api/fieldops/schedules/${id}/discard`);
+    const late = await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ rows }),
+    });
+    expect(late.status).toBe(404); // a late daemon post cannot resurrect discarded evidence
+  });
+
+  it("rows/preview posts refuse COMMITTED and SUPERSEDED parents — retained evidence is immutable", async () => {
+    // The grid + previews OUTLIVE the commit (reconcile evidence), so the guard that a late
+    // daemon post cannot rewrite them is load-bearing in a way 0060 never needed. Proven
+    // against a synthetic violation per HOUSE_REFLEXES §2, not just code-shape.
+    const rows = [{ row_index: 1, kind: "data", cells: ["Fencing"] }];
+    for (const status of ["committed", "superseded"]) {
+      const id = await uploadOk("JOB-A", `${status}.pdf`, PDF_MIME, status === "committed" ? PDF_B64 : PDF_B64_OTHER);
+      await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+        method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ rows }),
+      });
+      await setStatus(id, status);
+      const lateRows = await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+        method: "POST", bearer: SCHEDULE_BEARER,
+        body: JSON.stringify({ rows: [{ row_index: 1, kind: "data", cells: ["TAMPERED"] }] }),
+      });
+      expect(lateRows.status, `rows post on ${status}`).toBe(404);
+      const cell = await env.DB
+        .prepare("SELECT cells_json FROM job_schedule_rows WHERE schedule_id = ?1 AND row_index = 1")
+        .bind(id)
+        .first<{ cells_json: string }>();
+      expect(cell!.cells_json, `evidence intact on ${status}`).toBe('["Fencing"]');
+      const latePreview = await call(`/api/fieldops/schedules/internal/${id}/preview`, {
+        method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ page: 1, png_b64: PNG_B64 }),
+      });
+      expect(latePreview.status, `preview post on ${status}`).toBe(404);
+    }
+  });
+
+  it("preview post bounds the page number to the lane's 12-page ceiling", async () => {
+    const id = await uploadOk("JOB-A");
+    const ok = await call(`/api/fieldops/schedules/internal/${id}/preview`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ page: 1, png_b64: PNG_B64 }),
+    });
+    expect(ok.status).toBe(200);
+    const over = await call(`/api/fieldops/schedules/internal/${id}/preview`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ page: 13, png_b64: PNG_B64 }),
+    });
+    expect(over.status).toBe(400);
+  });
+
+  it("result 'parsed' stamps metadata + deletes chunks; a re-post is found:false; refused forbids box_file_id", async () => {
+    const id = await uploadOk("JOB-A");
+    const res = await call("/api/fieldops/schedules/internal/result", {
+      method: "POST", bearer: SCHEDULE_BEARER,
+      body: JSON.stringify({
+        schedule_id: id, status: "parsed", profile: "gantt_export", row_count: 46,
+        column_map: { mapping: { task_name: 0, start_date: 2 }, labels: {} },
+        header_meta: { title: "Project Schedule - KSI - Coker 8.5.26" },
+        parse_notes: "rotation: 90cw\nimplausible_year: row 7",
+      }),
+    });
+    expect(await res.json()).toMatchObject({ ok: true, found: true });
+    const row = await env.DB
+      .prepare("SELECT status, profile, row_count, parsed_at FROM job_schedules WHERE id = ?1")
+      .bind(id)
+      .first<Record<string, unknown>>();
+    expect(row).toMatchObject({ status: "parsed", profile: "gantt_export", row_count: 46 });
+    expect(row!.parsed_at).not.toBeNull();
+    const chunks = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_chunks WHERE schedule_id = ?1")
+      .bind(id)
+      .first<{ n: number }>();
+    expect(chunks!.n).toBe(0); // bytes die at parse — D1 holds them only mid-pipeline
+
+    const replay = await call("/api/fieldops/schedules/internal/result", {
+      method: "POST", bearer: SCHEDULE_BEARER,
+      body: JSON.stringify({ schedule_id: id, status: "parsed" }),
+    });
+    expect(await replay.json()).toMatchObject({ ok: true, found: false });
+
+    const id2 = await uploadOk("JOB-B");
+    const contradiction = await call("/api/fieldops/schedules/internal/result", {
+      method: "POST", bearer: SCHEDULE_BEARER,
+      body: JSON.stringify({ schedule_id: id2, status: "refused", detail: "screen:malicious:L3", box_file_id: "12345" }),
+    });
+    expect(contradiction.status).toBe(400);
+    expect(await contradiction.json()).toMatchObject({ error: "box_file_id_on_refusal" });
+  });
+});
+
+describe("browser reads + discard", () => {
+  it("list excludes discarded, serves superseded (revision history), and NEVER carries the hmac", async () => {
+    const id1 = await uploadOk("JOB-A");
+    const id2 = await uploadOk("JOB-A", "rev2.pdf", PDF_MIME, PDF_B64_OTHER);
+    await setStatus(id1, "superseded");
+    await p(admin, `/api/fieldops/schedules/${id2}/discard`);
+    const res = await g(admin, "/api/fieldops/schedules?job_id=JOB-A");
+    const { schedules } = (await res.json()) as { schedules: Record<string, unknown>[] };
+    expect(schedules.map((s) => s.id)).toEqual([id1]);
+    expect(schedules[0].status).toBe("superseded");
+    expect(schedules[0]).not.toHaveProperty("hmac");
+  });
+
+  it("detail serves the evidence pane (column map, notes, preview page list) to the office; submitter is refused", async () => {
+    const id = await uploadOk("JOB-A");
+    await call(`/api/fieldops/schedules/internal/${id}/preview`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ page: 1, png_b64: PNG_B64 }),
+    });
+    const res = await g(admin, `/api/fieldops/schedules/${id}`);
+    const body = (await res.json()) as { schedule: Record<string, unknown>; preview_pages: number[] };
+    expect(body.schedule).toMatchObject({ id, job_id: "JOB-A" });
+    expect(body.schedule).not.toHaveProperty("hmac");
+    expect(body.preview_pages).toEqual([1]);
+    expect((await g(sub, `/api/fieldops/schedules/${id}`)).status).toBe(403);
+  });
+
+  it("discard drops grid + previews + chunks in one batch; a second discard is 409 not_discardable; committed refuses", async () => {
+    const id = await uploadOk("JOB-A");
+    await call(`/api/fieldops/schedules/internal/${id}/rows`, {
+      method: "POST", bearer: SCHEDULE_BEARER,
+      body: JSON.stringify({ rows: [{ row_index: 1, kind: "data", cells: ["Fencing"] }] }),
+    });
+    await call(`/api/fieldops/schedules/internal/${id}/preview`, {
+      method: "POST", bearer: SCHEDULE_BEARER, body: JSON.stringify({ page: 1, png_b64: PNG_B64 }),
+    });
+    expect((await p(admin, `/api/fieldops/schedules/${id}/discard`)).status).toBe(200);
+    for (const table of ["job_schedule_chunks", "job_schedule_rows", "job_schedule_previews"]) {
+      const n = await env.DB
+        .prepare(`SELECT COUNT(*) n FROM ${table} WHERE schedule_id = ?1`)
+        .bind(id)
+        .first<{ n: number }>();
+      expect(n!.n, table).toBe(0);
+    }
+    const again = await p(admin, `/api/fieldops/schedules/${id}/discard`);
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ error: "not_discardable", status: "discarded" });
+
+    const id2 = await uploadOk("JOB-B");
+    await setStatus(id2, "committed");
+    const gov = await p(admin, `/api/fieldops/schedules/${id2}/discard`);
+    expect(gov.status).toBe(409); // a governing schedule is displaced by supersede, never discard
+  });
+
+  it("submitter cannot discard (403 before any state change)", async () => {
+    const id = await uploadOk("JOB-A");
+    expect((await p(sub, `/api/fieldops/schedules/${id}/discard`)).status).toBe(403);
+    const row = await env.DB
+      .prepare("SELECT status FROM job_schedules WHERE id = ?1")
+      .bind(id)
+      .first<{ status: string }>();
+    expect(row!.status).toBe("pending");
+  });
+});
+
+describe("one-governing-schedule invariant (0066 partial UNIQUE)", () => {
+  it("the machine refuses a second committed row per job", async () => {
+    const id1 = await uploadOk("JOB-A");
+    const id2 = await uploadOk("JOB-A", "rev2.pdf", PDF_MIME, PDF_B64_OTHER);
+    await setStatus(id1, "committed");
+    await expect(
+      env.DB.prepare("UPDATE job_schedules SET status='committed' WHERE id = ?1").bind(id2).run(),
+    ).rejects.toThrow(/UNIQUE/i);
+  });
+});

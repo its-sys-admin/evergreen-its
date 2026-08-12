@@ -359,6 +359,11 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
           // row no path can ever remove, and anything cascaded there and missing here is a
           // job prune can delete out from under its own manifest rows.
           "AND job_id NOT IN (SELECT job_id FROM job_manifests) " +
+          // ADR-0006 (0066): a job holding an imported schedule is not dead weight either —
+          // the pooled document is the provenance of its task list, and its superseded rows
+          // are the job's revision history. Same in-step rule with purge-job's cascade as
+          // the manifest guard above.
+          "AND job_id NOT IN (SELECT job_id FROM job_schedules) " +
           // 0067: a job holding Weekly Production Report office inputs has had a client-facing
           // report prepared against it — the OSHA case counts and pending-items record are the
           // evidence of what was reported — and that table has no time-based prune of its own

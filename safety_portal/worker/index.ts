@@ -36,6 +36,7 @@ import { registerWeeklyReportRoutes } from "./fieldops_report";
 import { registerPoRoutes } from "./po";
 import { registerPoAttachmentRoutes } from "./po_attachments";
 import { registerManifestRoutes } from "./fieldops_manifests";
+import { registerScheduleRoutes } from "./fieldops_schedules";
 import { registerPoEstimateRoutes } from "./po_estimates";
 import { registerRfqRoutes } from "./rfq";
 import { registerConfigRoutes } from "./config";
@@ -304,6 +305,29 @@ const requireManifestToken = createMiddleware<{ Bindings: Env; Variables: Vars }
 });
 
 /**
+ * Bearer-token gate for /api/fieldops/schedules/internal/* — the Mac-side schedule daemon
+ * (field_ops/schedule_poll.py, ADR-0006). SEPARATE secret from every other tier, for exactly the
+ * reason the manifest lane has its own: this daemon decodes hostile PDF bytes (Quartz render +
+ * Apple Vision OCR inside a killable child), making it a highest-exposure process, so its token
+ * scopes ONLY the schedule pool. It must NOT be able to read the manifest / PO / RFQ / estimate
+ * queues, drain the submission queue, provision users, touch the mirrors, or reach any send-lane
+ * control surface — and none of those tokens may read the schedule pool. Same
+ * fail-closed-on-missing-secret + constant-time posture as requireInternalToken. Passed into
+ * registerScheduleRoutes (worker/fieldops_schedules.ts).
+ */
+const requireScheduleToken = createMiddleware<{ Bindings: Env; Variables: Vars }>(async (c, next) => {
+  const auth = c.req.header("Authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (
+    !token || !c.env.PORTAL_SCHEDULE_API_TOKEN ||
+    !(await safeTokenEqual(token, c.env.PORTAL_SCHEDULE_API_TOKEN))
+  ) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+  await next();
+});
+
+/**
  * Bearer-token gate for /api/internal/config/* — the Mac-side config daemon (config_editor/
  * config_poll.py, §50 — built LATER). SEPARATE secret from the portal_poll / admin / fieldops /
  * PO tokens (privilege separation): the config daemon's token must NOT be able to drain the
@@ -557,6 +581,13 @@ registerExpectedMaterialsRoutes(app, fieldopsGates);
 //   /api/fieldops/manifests/internal/* under its OWN requireManifestToken bearer. Zero parsing
 //   here: openpyxl/pdfplumber over untrusted bytes runs on the Mac inside a killable child. —
 registerManifestRoutes(app, { requireSession, requireCapability, requireManifestToken });
+// — Job-schedule import pool (ADR-0006): the office uploads a project-schedule PDF (Smartsheet
+//   Gantt export); the Worker bounds-gates it, signs schedule:v1 and pools the bytes SEND-FREE
+//   in D1 (session + cap.jobtracker.manage), and the Mac schedule_poll daemon drains
+//   /api/fieldops/schedules/internal/* under its OWN requireScheduleToken bearer. Zero parsing
+//   here: Quartz render + Vision OCR over untrusted bytes runs on the Mac inside a killable
+//   child. —
+registerScheduleRoutes(app, { requireSession, requireCapability, requireScheduleToken });
 // — DR-photo-pool Slice 1: the daily-report additional-photo pool (upload / list / delete;
 //   send-free D1 queue for the Slice-2 Mac §34 screen; /api/submit claims the references) —
 registerDailyPhotoRoutes(app, fieldopsGates);
@@ -2749,6 +2780,20 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
       .prepare("DELETE FROM job_manifest_previews WHERE manifest_id IN (SELECT id FROM job_manifests WHERE job_id = ?)")
       .bind(job_id),
     c.env.DB.prepare("DELETE FROM job_manifests WHERE job_id = ?").bind(job_id),
+    // Schedule-import pool (0066). Same shape as the manifest pool: three children key on
+    // schedule_id and resolve their parents through the job-keyed subquery BEFORE the parent
+    // row goes. An orphaned schedule chunk is the same hazard as a manifest one — original
+    // untrusted document bytes surviving behind a job nobody can see any more.
+    c.env.DB
+      .prepare("DELETE FROM job_schedule_chunks WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id = ?)")
+      .bind(job_id),
+    c.env.DB
+      .prepare("DELETE FROM job_schedule_rows WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id = ?)")
+      .bind(job_id),
+    c.env.DB
+      .prepare("DELETE FROM job_schedule_previews WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id = ?)")
+      .bind(job_id),
+    c.env.DB.prepare("DELETE FROM job_schedules WHERE job_id = ?").bind(job_id),
     // The field-ops job-context tables prune.ts already guards a job on. Its guard
     // comment named purge-job as "the explicit operator cleanup path (cascades both)"
     // — it did not: these five were never deleted, so purging a job returned ok:true
@@ -2787,14 +2832,18 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
   const manifestRows = results[8]?.meta?.changes ?? 0;
   const manifestPreviews = results[9]?.meta?.changes ?? 0;
   const manifests = results[10]?.meta?.changes ?? 0;
-  const checklistItemStates = results[11]?.meta?.changes ?? 0;
-  const checklistInstances = results[12]?.meta?.changes ?? 0;
-  const timeEntries = results[13]?.meta?.changes ?? 0;
-  const taskAssignments = results[14]?.meta?.changes ?? 0;
-  const inspections = results[15]?.meta?.changes ?? 0;
-  const equipmentLocation = results[16]?.meta?.changes ?? 0;
-  const submissions = results[17]?.meta?.changes ?? 0;
-  const job = results[18]?.meta?.changes ?? 0;
+  const scheduleChunks = results[11]?.meta?.changes ?? 0;
+  const scheduleRows = results[12]?.meta?.changes ?? 0;
+  const schedulePreviews = results[13]?.meta?.changes ?? 0;
+  const schedules = results[14]?.meta?.changes ?? 0;
+  const checklistItemStates = results[15]?.meta?.changes ?? 0;
+  const checklistInstances = results[16]?.meta?.changes ?? 0;
+  const timeEntries = results[17]?.meta?.changes ?? 0;
+  const taskAssignments = results[18]?.meta?.changes ?? 0;
+  const inspections = results[19]?.meta?.changes ?? 0;
+  const equipmentLocation = results[20]?.meta?.changes ?? 0;
+  const submissions = results[21]?.meta?.changes ?? 0;
+  const job = results[22]?.meta?.changes ?? 0;
   return c.json({
     ok: true, found: job > 0, job_id, job_deleted: job, submissions, pdfChunks, pdfRequests,
     requirements, expectedMaterials,
@@ -2807,6 +2856,9 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
     // Manifest pool (0060) — chunks reported separately because that counter is the
     // operator's only confirmation that the untrusted document BYTES went with the job.
     manifests, manifestChunks, manifestRows, manifestPreviews,
+    // Schedule pool (0066) — same rule: the chunks counter is the confirmation the
+    // untrusted schedule bytes went with the job.
+    schedules, scheduleChunks, scheduleRows, schedulePreviews,
     checklistItemStates, checklistInstances, timeEntries, taskAssignments, inspections,
     equipmentLocation,
   });
