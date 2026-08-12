@@ -7,23 +7,37 @@ into per-page OCR word payloads: `estimate_sandbox.run_sandboxed("ocr_page_words
 — Quartz render + rotation ladder + Apple Vision, ALL inside the killable child
 (the lane carries no ADR-0004 §Vision in-process deviation; a wedged OCR of a
 hostile document is reaped like any other parse) — plus strict shape validation of
-the child's JSON here in the parent, because a bearer-gated child is still a
-process boundary, not a trusted one.
+the child's JSON here in the parent. This module deliberately does NOT interpret
+the words — reconstruction is `field_ops.schedule_geometry`, semantics
+`field_ops.schedule_parse`. It exists so the daemon's import surface stays clean
+(`estimate_ocr.ocr_pages`' text-only return shape stays untouched for the
+estimate ladder — ADR-0006 names that as a hard constraint) and so the shape
+validation has one owner.
 
-Degrade contract
-----------------
+Invariants
+----------
+    * Invariant 2 (Adversarial Input Handling): the schedule bytes are
+      portal-inbound UNTRUSTED content. They are decoded ONLY inside the
+      rlimited, timeout-bounded sandbox child; this parent never opens them. The
+      child's JSON is re-validated field-by-field here — a bearer-gated child is
+      still a process boundary, not a trusted one — and a payload violating the
+      declared shape is REFUSED whole, never coerced.
+    * OCR confidence is evidence for the validate screen, never a filter — the
+      corpus shows digit misreads at confidence 1.0 (ADR-0006 decision 2).
+    * No AI beyond local Apple Vision, no send capability, no raw network —
+      enforced by tests/test_capability_gating.py.
+
+Failure modes
+-------------
 Returns None on ANY failure — sandbox timeout/kill/crash, malformed JSON, a
 payload that violates the declared shape. None is the daemon's degrade signal
 (the document refuses as unreadable; the human re-exports). Never raises on
 hostile input.
 
-This module deliberately does NOT interpret the words — reconstruction is
-`field_ops.schedule_geometry`, semantics `field_ops.schedule_parse`. It exists so
-the daemon's import surface stays clean (`estimate_ocr.ocr_pages`' text-only
-return shape stays untouched for the estimate ladder — ADR-0006 names that as a
-hard constraint) and so the shape validation has one owner.
-
-Capability-gated with the lane: no AI, no send, no network.
+Consumers
+---------
+The PR-3 `field_ops.schedule_poll` daemon (its OCR tier), and
+tests/test_schedule_ocr.py (the mocked validation-boundary suite).
 """
 from __future__ import annotations
 

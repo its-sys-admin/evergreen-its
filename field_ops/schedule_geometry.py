@@ -45,13 +45,29 @@ label, harvested as `gantt_percent` (the only per-task % the Gantt-view exports
 carry). Header labels that wrap onto a second text line ('Completion' / 'Date')
 are absorbed so the wrapped fragment can't masquerade as a data row.
 
-OCR confidence rides through as evidence for the validate screen and is NEVER a
-filter: the corpus shows digit misreads at confidence 1.0 (ADR-0006 decision 2).
+Invariants
+----------
+    * PURE — no I/O, no network, no AI, no send capability (enforced by
+      tests/test_capability_gating.py). The words originate from untrusted bytes
+      (Invariant 2), but by the time they reach here they are sandbox-laundered,
+      parent-validated STRINGS + floats; this module adds no decode surface.
+    * OCR confidence rides through as evidence for the validate screen and is
+      NEVER a filter: the corpus shows digit misreads at confidence 1.0
+      (ADR-0006 decision 2).
+    * Output is bounded (MAX_ROWS_PER_PAGE) — a hostile word bag cannot
+      fabricate an unbounded grid.
+
+Failure modes
+-------------
+Never raises on malformed word dicts — a word missing coordinates is skipped; an
+empty page reconstructs to an empty PageRows with an `empty_page` note; a page
+with no recognizable header keeps every word (`no_header_row` note) so the parse
+layer's patterns still get a shot. Degradation is always visible via `notes`.
 
 Consumers
 ---------
-`field_ops.schedule_parse` and the PR-3 `field_ops.schedule_poll` daemon.
-Capability-gated with the lane: no AI, no send, no network.
+`field_ops.schedule_parse` (concept inference over the reconstructed rows) and
+the PR-3 `field_ops.schedule_poll` daemon.
 """
 from __future__ import annotations
 

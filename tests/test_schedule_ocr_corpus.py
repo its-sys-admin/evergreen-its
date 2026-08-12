@@ -8,6 +8,11 @@ this suite asserts what must hold on ANY run: every document parses, rows land i
 the plausible band, names cover the data rows, and the flagship live exports keep
 their known shape.
 
+NOTE this suite calls the sandbox + geometry directly and deliberately BYPASSES
+`schedule_ocr.ocr_schedule_pages()`'s strict `_validate()` boundary — it probes
+the raw ladder. The parent-side validation contract the daemon actually sits
+behind is proven by tests/test_schedule_ocr.py (mocked), not here.
+
 Skipped automatically when the corpus folder or the Vision bridge is absent
 (CI, non-Darwin, another host). Run with:
 

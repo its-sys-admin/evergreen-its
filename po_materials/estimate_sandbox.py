@@ -130,6 +130,12 @@ PREVIEW_MAX_PIXELS = 24_000_000
 # RLIMIT_CPU/AS) so a wedged OCR of a hostile document is reaped like any other parse —
 # this lane carries no ADR-0004 §Vision in-process deviation.
 OCR_TARGET_WIDTH_PX = 2400
+# Budget honesty (measured 2026-08-11, this host): the 32-document corpus sweep —
+# 2–4 pages each, the rotation ladder firing on effectively EVERY page (so 2–3
+# Vision passes/page) — averaged ~64s/document end-to-end. 240s therefore covers
+# the ladder's worst case (DEFAULT_MAX_PAGES=6 × 3 passes ≈ 3× the measured
+# average shape) with real margin; a legitimate document hitting this wall would
+# be an anomaly worth the refused-as-unreadable it produces.
 OCR_TIMEOUT_S = 240
 OCR_MAX_WORDS_PER_PAGE = 3000
 # The rotation ladder's quality discriminator (see _child_ocr_page_words): clean

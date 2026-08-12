@@ -27,14 +27,33 @@ Output contract
 (`CANONICAL_COLUMNS`), so the validate screen and the PR-4 commit key on stable
 indices regardless of export style.
 
-Two-digit years pivot per Python's %y (1969–2068). Corpus dates run 2025–2027;
-the implausible-year flag (outside PLAUSIBLE_YEARS) catches the OCR digit-misread
-class ('12/01/25' → '72/01/25') long before the pivot could matter.
+Invariants
+----------
+    * PURE — no I/O, no network, no AI, no send capability (enforced by
+      tests/test_capability_gating.py). Upstream of it sits Invariant-2 handling
+      (sandbox decode + parent validation); this module adds no decode surface.
+    * §4 no-invented-field-data: every automated check verifies internal
+      CONSISTENCY, never fidelity — a shredded date is kept verbatim +
+      flagged, never guessed; a percent is never synthesized; the human
+      side-by-side is the only fidelity control (ADR-0004 red-team #2,
+      inherited).
+    * Flags, never raises: malformed content degrades to flagged cells.
+    * Two-digit years pivot per Python's %y (1969–2068). Corpus dates run
+      2025–2027; the implausible-year flag (outside PLAUSIBLE_YEARS) catches the
+      OCR digit-misread class ('12/01/25' → '72/01/25') long before the pivot
+      could matter.
+
+Failure modes
+-------------
+Never raises on any row content — unclassifiable tokens either extend the task
+name (long tokens) or drop (short debris); rows with no dates flag
+`missing_dates`; a document with zero reconstructable rows parses to an empty
+proposal with profile 'unknown'. All degradation is visible in flags/notes.
 
 Consumers
 ---------
-The PR-3 `field_ops.schedule_poll` daemon. Capability-gated with the lane: no AI,
-no send, no network.
+The PR-3 `field_ops.schedule_poll` daemon (result-post payload), and the PR-4
+validate screen via the D1 grid it produces.
 """
 from __future__ import annotations
 

@@ -4,19 +4,27 @@
 Renders + OCRs every PDF in the operator's schedule-corpus folder through the REAL
 sandbox child (`estimate_sandbox.ocr_page_words`), then runs geometry + parse, and:
 
-* writes the raw OCR payload of the FIXTURE SET (a small, named subset — committing
+* writes the OCR payload of the FIXTURE SET (a small, named subset — committing
   all 32 would bloat the repo for no marginal coverage) to
-  tests/fixtures/schedule_corpus/<slug>.json — these captured payloads are what the
-  CI geometry/parse suites run on, deterministically, with no OCR / corpus / Darwin
-  dependency;
+  tests/fixtures/schedule_corpus/<slug>.json, ANONYMIZED — these captured payloads
+  are what the CI geometry/parse suites run on, deterministically, with no OCR /
+  corpus / Darwin dependency;
 * prints a per-document survey (profile, row counts by kind, flag histogram,
   delivery/milestone counts) for the whole corpus — the qualification evidence the
   operator-run corpus test (tests/test_schedule_ocr_corpus.py) re-derives.
 
-The corpus PDFs themselves are NEVER committed (customer data). Vision output is
-not perfectly deterministic across macOS runs, which is exactly why the CI suites
-run on the CAPTURED payloads while the live corpus test asserts bounded properties
-(row-count ranges, section names) rather than exact cells.
+The corpus PDFs themselves are NEVER committed (customer data), and neither is
+their raw text: captures are ANONYMIZED AT WRITE TIME (`_ANONYMIZE` below) —
+client and project identifiers are substituted (Coker→Kestrel, KSI→Acme, …)
+while the Vision GEOMETRY, the industry-standard task vocabulary, the dates and
+the real OCR misread patterns ('12125125') all survive, because those are what
+the tests exercise. This keeps the repo consistent with the manifest/estimate
+lanes' no-customer-content-in-fixtures precedent (docs/tech_debt.md;
+tests/test_estimate_parse.py) — the 2026-08-11 ops-stds review finding that
+created this rule. Vision output is not perfectly deterministic across macOS
+runs, which is exactly why the CI suites run on the CAPTURED payloads while the
+live corpus test asserts bounded properties (row-count ranges, section names)
+rather than exact cells.
 
 Usage:
     .venv/bin/python scripts/dev/capture_schedule_fixtures.py \
@@ -39,15 +47,48 @@ from po_materials import estimate_sandbox  # noqa: E402
 # The committed fixture set: one of each corpus shape — a live rotated Gantt-view
 # export, a fresh 0% one, the lone text-layer grid-view export (captured via
 # parse_native, not OCR), and a revision pair for the future reconcile suites.
+# Slugs use the ANONYMIZED project names (the keys are on-disk filenames, needed
+# to find the operator's PDFs; only what gets COMMITTED is anonymized).
 FIXTURE_SET = {
-    "Project Schedule - KSI - Coker 8.5.26.pdf": "coker_2026-08-05_gantt",
-    "Project Schedule - KSI - Deeplake 7.22.pdf": "deeplake_2026-07-22_gantt",
-    "Project Schedule - Generate - Bonacci 1- 11.19.pdf": "bonacci1_2025-11-19_gantt",
-    "Project Schedule - Generate - Bonacci 1- 1.16.26.pdf": "bonacci1_2026-01-16_gantt",
+    "Project Schedule - KSI - Coker 8.5.26.pdf": "kestrel_2026-08-05_gantt",
+    "Project Schedule - KSI - Deeplake 7.22.pdf": "clearlake_2026-07-22_gantt",
+    "Project Schedule - Generate - Bonacci 1- 11.19.pdf": "baseline1_2025-11-19_gantt",
+    "Project Schedule - Generate - Bonacci 1- 1.16.26.pdf": "baseline1_2026-01-16_gantt",
 }
 TEXT_LAYER_FIXTURES = {
-    "Project Schedule - KSI - Deeplake.pdf": "deeplake_2026-06-02_grid_textlayer",
+    "Project Schedule - KSI - Deeplake.pdf": "clearlake_2026-06-02_grid_textlayer",
 }
+
+# Customer/project identifier substitutions applied to every string in a payload
+# BEFORE it is written. Word-boundary anchored; the lookahead keeps the task verb
+# 'Generated' intact while replacing the client name 'Generate'.
+_ANONYMIZE = [
+    (re.compile(r"\bCoker\b"), "Kestrel"),
+    (re.compile(r"\bDeeplake\b"), "Clearlake"),
+    (re.compile(r"\bDeep Lake\b"), "Clear Lake"),
+    (re.compile(r"\bBonacci\b"), "Baseline"),
+    (re.compile(r"\bKSI\b"), "Acme"),
+    (re.compile(r"\bGenerate\b(?!d)"), "GridCo"),
+    (re.compile(r"\bColfax\b"), "Crossfield"),
+    (re.compile(r"\bKiwi\b"), "Kite"),
+    (re.compile(r"\bMinooka\b"), "Midfield"),
+    (re.compile(r"\bIndian Creek\b"), "Iron Creek"),
+    (re.compile(r"\bRoxbury\b"), "Rockvale"),
+    (re.compile(r"\bSteger\b"), "Stonegate"),
+    (re.compile(r"\bLuminace\b"), "Lumen"),
+]
+
+
+def _anon_payload(obj: object) -> object:
+    if isinstance(obj, dict):
+        return {k: _anon_payload(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_anon_payload(v) for v in obj]
+    if isinstance(obj, str):
+        for rx, sub in _ANONYMIZE:
+            obj = rx.sub(sub, obj)
+        return obj
+    return obj
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "schedule_corpus"
 
@@ -68,7 +109,7 @@ def survey_one(pdf: Path, *, capture_as: str | None, textlayer_as: str | None) -
     if capture_as:
         FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
         (FIXTURES_DIR / f"{capture_as}.json").write_text(
-            json.dumps(payload, separators=(",", ":")) + "\n"
+            json.dumps(_anon_payload(payload), separators=(",", ":")) + "\n"
         )
     if textlayer_as:
         native = estimate_sandbox.run_sandboxed(
@@ -77,7 +118,7 @@ def survey_one(pdf: Path, *, capture_as: str | None, textlayer_as: str | None) -
         if native:
             FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
             (FIXTURES_DIR / f"{textlayer_as}.json").write_text(
-                json.dumps(json.loads(native), separators=(",", ":")) + "\n"
+                json.dumps(_anon_payload(json.loads(native)), separators=(",", ":")) + "\n"
             )
 
     pages = schedule_geometry.reconstruct(payload["pages"])

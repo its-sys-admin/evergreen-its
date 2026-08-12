@@ -176,3 +176,19 @@ schema change.
   (decision: PDF-only until the parser reads a Smartsheet XLSX export).
 - The alert engine's arrival requires zero schema change; its arrival IS the moment
   `billing_cadence` starts doing work (transient expected-next-invoice reminders).
+
+## Amendment 2026-08-11 — committed fixtures are ANONYMIZED captures
+
+The PR-2 ops-stds review (BLOCK finding) surfaced that raw OCR captures of the corpus
+carry real customer schedule text — project/client names, task lists, dates — into
+permanent git history, contradicting the manifest/estimate lanes' explicit
+no-customer-content-in-fixtures precedent even though decision 7's "the corpus PDFs
+become test fixtures" gestured at committing captures. Resolution (the conservative
+reading, applied before merge): committed fixtures are captures with client/project
+identifiers SUBSTITUTED at write time (`capture_schedule_fixtures._ANONYMIZE` —
+Coker→Kestrel, KSI→Acme, Bonacci→Baseline, …) while the Vision geometry, the
+industry-standard task vocabulary, the dates and the real misread patterns
+('12125125') survive — those are what the tests exercise, and none identify the
+customer's projects. The corpus PDFs and their raw text stay on the operator's disk
+only; the operator-run qualification suite reads them there. Committing RAW captures
+would take an explicit recorded operator decision reversing this amendment.
