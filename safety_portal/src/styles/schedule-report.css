@@ -1629,3 +1629,145 @@ button.sched-task__prog:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10 — SCHEDULE: the hand-editor (add / edit one task)
+   ═══════════════════════════════════════════════════════════════════════════
+   Office-only (cap.jobtracker.manage), and a different gate from the field's mark-off,
+   so it renders on its own terms rather than inside the mark strip. It opens in the same
+   per-row disclosure the marks use — one place a row expands, whatever you can do to it.
+
+   The form reuses the house field kit (.field__input) rather than inventing inputs; only
+   the grid and the warning are new. */
+.sched-edit {
+  grid-column: 1 / -1;
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  background: var(--c-white);
+  border: 1.5px solid var(--c-brg);
+  border-radius: var(--radius-sm);
+}
+
+.sched-edit__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-brg);
+  margin: 0 0 var(--space-3);
+}
+
+.sched-edit__grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .sched-edit__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.sched-edit__field {
+  display: block;
+  margin: 0; /* the shared .field margin would double the grid gap */
+  min-width: 0;
+}
+
+.sched-edit__field--wide {
+  grid-column: 1 / -1;
+}
+
+.sched-edit__label {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-brg);
+  margin-bottom: 4px;
+}
+
+.sched-edit__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* Same switch-sized treatment as the milestone done-mark — a flag that changes how the
+   whole lane reads a task deserves more than a 13px box. */
+.sched-edit__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-muted);
+}
+
+.sched-edit__flag:has(input:checked) {
+  border-color: var(--c-brg);
+  color: var(--c-brg);
+  box-shadow: inset 3px 0 0 var(--c-gold);
+}
+
+.sched-edit__flag input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--c-brg);
+}
+
+/* The reconcile consequence, in the established advisory idiom (#fff8e8 + gold rule) —
+   BRG ink, so the meaning never rides on the gold. */
+.sched-edit__warn {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  background: #fff8e8;
+  border: 1px solid var(--c-gold);
+  border-left: 4px solid var(--c-gold);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  color: var(--c-black);
+}
+
+.sched-edit__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* The office's row controls, beside the field's mark strip inside the same disclosure. */
+.sched-rowops {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.sched-rowops__label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  margin-right: var(--space-1);
+}
+
+/* "Add a task" sits at the foot of each section, because a task belongs to a section and
+   that is where a reader is when they notice one missing. */
+.sched-group__add {
+  display: flex;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--c-line);
+}
