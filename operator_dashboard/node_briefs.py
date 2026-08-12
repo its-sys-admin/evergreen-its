@@ -253,20 +253,22 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
     "box": NodeBrief(
         what=(
             "Every ITS-produced document lands here first, and everything else points at it. "
-            "Approval rows carry a Box link and an attached copy, and the send daemons download "
-            "the Box original at send time."
+            "Each workstream owns its own top-level tree — ITS Safety Reports (also carrying "
+            "the materials manifests), ITS Progress Reports, ITS Purchase Orders (also RFQs "
+            "and vendor quotes), ITS Subcontracts — with ITS Archive beside them for closed "
+            "jobs. A job's documents live at <root>/<job name> in each tree."
             "\n\n"
-            "Day-to-day this is watch-only. When filing fails, check ITS_Errors for Box rows and "
-            "the watchdog's token-freshness check — the sign-in credential renews whenever ITS "
-            "talks to Box and expires 60 days after its last use, so a stopped daemon or long "
-            "outage is the usual cause. Restarting that daemon is ordinary work; re-seeding the "
-            "credential is secrets work — escalate. Never delete a filed document: a missing link "
-            "HOLDS the send, a dead one retries until it gives up."
+            "Day-to-day this is watch-only. The 'Box roots' panel is the validity surface: red "
+            "means a root id is missing or dead (filings hold), amber means renamed or "
+            "unreachable. On filing failures also check ITS_Errors and the token-freshness "
+            "check — the credential expires 60 days after last use. Re-seeding it is secrets "
+            "work — escalate. Never delete a filed document."
         ),
         key_label="Key facts",
         key_line=(
-            "ITS signs in as a real Box user, not a service account — filed documents attribute "
-            "to that account."
+            "Five roots, five ITS_Config rows (*.box.portal_root_folder_id + the field_ops "
+            "archive root). ITS signs in as a real Box user, not a service account — filed "
+            "documents attribute to that account."
         ),
     ),
     "weekly_send": NodeBrief(

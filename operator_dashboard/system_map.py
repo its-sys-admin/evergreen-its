@@ -203,9 +203,13 @@ NODES: tuple[MapNode, ...] = (
     ),
     MapNode(
         id="box", label="Box", kind="store", lane="records", band="safety", band_span=5,
-        blurb="The document system of record: filed report PDFs, weekly packets, PO and "
-              "subcontract files, screened photos. Refresh token rotates on every exchange — "
-              "watchdog Check P watches its freshness.",
+        blurb="The document system of record, organised as FIVE top-level roots since the "
+              "2026-08-11/12 lane splits: per-workstream trees for Safety (+ materials "
+              "manifests), Progress, Purchase Orders (+ RFQs and vendor quotes) and "
+              "Subcontracts, plus the ITS Archive root closed jobs relocate into. Each root's "
+              "folder id is an ITS_Config row; the 'Box roots' panel proves each id still "
+              "resolves. Refresh token rotates on every exchange — watchdog Check P watches "
+              "its freshness.",
         watchdog_checks=("P",), script_path="shared/box_client.py",
         runbook="docs/runbooks/box_token_freshness.md",
     ),
