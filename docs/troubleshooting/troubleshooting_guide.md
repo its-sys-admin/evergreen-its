@@ -391,6 +391,7 @@ The Safety-Reports twin for weekly progress packets, on its own Active-Jobs shee
 
 **Healthy signals:**
 - Friday 14:30 the progress compile runs (staggered 30 min after safety); a PENDING WPR row appears.
+- The WPR row's Compiled PDF is the 5-page client Weekly Production Report; the field-records packet is linked from Notes.
 
 #### The Friday progress compile did not run.
 
@@ -405,6 +406,34 @@ The Safety-Reports twin for weekly progress packets, on its own Active-Jobs shee
 - The watchdog progress catch-up recovers a missed Friday; otherwise run the documented manual re-run.
 
 **See also:** runbook `docs/runbooks/progress_weekly_generate.md` · watchdog `_check_progress_generate_catchup`
+
+#### The client received the stack of daily reports instead of the 5-page report.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** client_report_failed, packet instead of report
+
+**Checks (in order):**
+- Is there an ITS_Errors row with error_code progress_weekly_generate.client_report_failed naming the job and week?
+
+**Resolutions (in order):**
+- The report build failed and the compile deliberately fell back to the field-records packet so the weekly cadence did not stop. Tick Compile Now on the job's week-sheet Rollup row to rebuild; escalate if it fails again with the same code.
+
+**See also:** runbook `docs/runbooks/progress_weekly_report.md`
+
+#### A WPR row sits at HELD with held_no_activity and nothing was sent.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** held_no_activity, no daily reports filed
+
+**Checks (in order):**
+- Were any daily reports filed for that job and week? Is the job still mobilized?
+
+**Resolutions (in order):**
+- Working as designed - no daily reports were filed, so no client report was compiled. Choose one of three - send a no-activity note, get the missing dailies filed and recompile, or mark the job Inactive.
+
+**See also:** runbook `docs/runbooks/progress_weekly_report.md`
 
 ### progress-send transmits an approved WPR row
 
