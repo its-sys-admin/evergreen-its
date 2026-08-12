@@ -107,7 +107,7 @@ docs:
     title: "The Operator Dashboard"
     version: v1
     source: docs/enablement/operator_dashboard.md
-    sha256: cb8415af6430edf7a6feda54adb0b9f0dc1e3542452b992b9453998c36ed8023
+    sha256: 5e43dfb3d9dca73fdcad4f139d5f4983ca8e8c9f6f1dce6660fa5b3f27a63f74
 
   - key: subcontracts
     title: "Subcontracts — Generating a Subcontract Package"

@@ -68,6 +68,7 @@ here changes anything.
 | **ITS_Errors — recent** | The latest errors ITS recorded. |
 | **ITS_Review_Queue — depth** | How many items are waiting for human review. |
 | **Send queue** | Customer-send review rows waiting for approval or in flight (read-only — approving a send still happens on the review sheets, never here). |
+| **Box roots** | The five top-level Box folders every filing path lands in (the four workstream trees + the archive). Each row proves the configured folder id still resolves under its expected name: red = missing/dead id (filings hold), amber = renamed or Box unreachable. |
 
 Everything shown is treated as untrusted and is redacted and escaped before it reaches the screen, so a
 malicious-looking value in a cell or log line renders as harmless text.

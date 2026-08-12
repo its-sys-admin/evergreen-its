@@ -18,6 +18,8 @@ from fastapi.testclient import TestClient
 from operator_dashboard.app import create_app
 from operator_dashboard.sources import PANELS_BY_ID
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 @pytest.fixture(autouse=True)
 def _clear_cache() -> Iterator[None]:
@@ -244,6 +246,111 @@ def test_send_queue_source_fail_soft_per_sheet(monkeypatch: pytest.MonkeyPatch) 
     result = SendQueueSource().fetch()
     assert result.available  # never crashes
     assert any(r.get("status") == "(unavailable)" for r in result.rows)
+
+
+def _clear_panel_cache() -> None:
+    import operator_dashboard.cache as cache
+
+    with cache._lock:
+        cache._store.clear()
+
+
+def test_box_roots_panel_all_canonical_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Five configured roots, five live folders under their canonical names → OK."""
+    import shared.box_client as box
+    import shared.smartsheet_client as ss
+    from operator_dashboard.sources.box_roots import CANONICAL_ROOTS, BoxRootsSource
+
+    ids = {setting: f"id-{i}" for i, (_n, setting, _w) in enumerate(CANONICAL_ROOTS)}
+    names = {f"id-{i}": name for i, (name, _s, _w) in enumerate(CANONICAL_ROOTS)}
+    monkeypatch.setattr(ss, "get_setting", lambda key, workstream: ids[key])
+    monkeypatch.setattr(box, "get_folder_name", lambda fid: names[fid])
+    _clear_panel_cache()
+
+    result = BoxRootsSource().fetch()
+
+    assert result.available and result.severity == "ok"
+    assert len(result.rows) == 5
+    assert all(r["status"] == "ok" for r in result.rows)
+
+
+def test_box_roots_panel_missing_row_and_dead_id_are_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty config row and an id that resolves to nothing both drive ERROR —
+    the two states where filings hold or would file into a void."""
+    import shared.box_client as box
+    import shared.smartsheet_client as ss
+    from operator_dashboard.sources.box_roots import BoxRootsSource
+
+    def get_setting(key: str, workstream: str) -> str | None:
+        if key == "subcontracts.box.portal_root_folder_id":
+            # A genuinely MISSING row RAISES (the real client contract — the
+            # review caught the earlier mock returning None here, which modeled
+            # a seam get_setting does not have).
+            raise ss.SmartsheetNotFoundError("no row")
+        if key == "field_ops.box.archive_root_folder_id":
+            return None  # row present, Value blank
+        return "id-x"
+
+    def get_folder_name(fid: str) -> str:
+        raise box.BoxNotFoundError("404")
+
+    monkeypatch.setattr(ss, "get_setting", get_setting)
+    monkeypatch.setattr(box, "get_folder_name", get_folder_name)
+    _clear_panel_cache()
+
+    result = BoxRootsSource().fetch()
+
+    assert result.severity == "error"
+    statuses = {r["root"]: r["status"] for r in result.rows}
+    assert "MISSING" in statuses["ITS Subcontracts"]
+    assert "EMPTY" in statuses["ITS Archive"]
+    assert "NO folder" in statuses["ITS Safety Reports"]
+    # Rows keep _sev for the template's per-row tinting (house convention).
+    assert all("_sev" in r for r in result.rows)
+
+
+def test_box_roots_panel_rename_is_warn_and_box_outage_never_crashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolved-but-renamed root WARNs (legitimate but worth eyes); a Box
+    transport failure degrades that root's row without failing the panel."""
+    import shared.box_client as box
+    import shared.smartsheet_client as ss
+    from operator_dashboard.sources.box_roots import BoxRootsSource
+
+    def get_folder_name(fid: str) -> str:
+        if fid.endswith("safety_reports"):
+            raise box.BoxError("503")
+        return "Renamed By Operator"
+
+    monkeypatch.setattr(ss, "get_setting", lambda key, workstream: f"id-{workstream}")
+    monkeypatch.setattr(box, "get_folder_name", get_folder_name)
+    _clear_panel_cache()
+
+    result = BoxRootsSource().fetch()
+
+    assert result.available and result.severity == "warn"
+    statuses = " ".join(r["status"] for r in result.rows)
+    assert "renamed" in statuses and "Box unreachable" in statuses
+
+
+def test_box_roots_canonical_set_matches_the_builders() -> None:
+    """Parity tooth: the panel's local canonical list must equal
+    standup.BOX_ROOT_CONFIG_ROWS (the build/seed source of truth) — the heavy
+    sys.path import happens HERE, not in the panel (scripts/migrations is not a
+    package; a dashboard panel must not import a tenant-lifecycle migration)."""
+    import importlib
+    import sys
+
+    migrations_dir = str(_REPO_ROOT / "scripts" / "migrations")
+    if migrations_dir not in sys.path:
+        sys.path.insert(0, migrations_dir)
+    standup = importlib.import_module("standup")
+    from operator_dashboard.sources.box_roots import CANONICAL_ROOTS
+
+    # Exact equality: standup's seed tuple carries all five roots (the four
+    # portal roots + the Track 6 archive root), and the panel watches the same set.
+    assert set(CANONICAL_ROOTS) == set(standup.BOX_ROOT_CONFIG_ROWS)
 
 
 def test_open_criticals_panel_counts_only_open_criticals(monkeypatch: pytest.MonkeyPatch) -> None:
