@@ -40,6 +40,16 @@ that. Loaded via `@import` from `CLAUDE.md`'s START-HERE block.
   2026-07-12 WP1 pass updated the first two and MISSED the third — this reflex exists because of it). A new
   `StrEnum` value → `picklist_validation.REGISTRY`. A new generation/send script → the capability-gating lists.
   `grep` the datum across every surface before claiming done.
+- **The enablement sha-pin covers `docs/references/` and `docs/troubleshooting/` too — not just
+  `docs/enablement/`.** `docs/enablement/manifest.yaml` pins **22** sources by sha256, and **10 of them live
+  outside `docs/enablement/`**: nine `docs/references/*.md` (`its_config_dictionary`, `system_architecture`,
+  `daemon_reference`, `data_model_reference`, `integration_reference`, `security_trust_model`,
+  `escalation_matrix`, `glossary`, `documentation_index`) plus `docs/troubleshooting/troubleshooting_guide.md`.
+  Editing any of them without re-recording its sha turns the `test_docs_pdf` docs-currency gate RED, and nothing
+  about the filename hints that it is pinned. There is no `--record` flag — `scripts/build_docs_pdfs.py --check`
+  only *reports* drift; re-record by hand (`shasum -a 256 <file>` into the matching `sha256:` line) and re-run
+  `--check`. `its_config_dictionary.md` is doubly bound: it is GENERATED, so edit
+  `scripts/generate_config_dictionary.py`, regenerate, *then* re-record.
 - **Don't deploy / migrate / audit from a stale checkout.** `git -C ~/its pull origin main` before any
   `wrangler deploy`, `wrangler d1 migrations apply/list`, or cross-repo drift audit — a 25-commit-behind tree
   reported "No migrations to apply" while the live Worker expected the new tables → universal lockout.
