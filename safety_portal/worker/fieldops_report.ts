@@ -627,15 +627,18 @@ export function registerWeeklyReportRoutes(
   // Upsert on (job_id, week_start) — the unique index is the target, so two office users editing
   // the same week converge on one row rather than forking it. Mutation + audit in ONE batch (W4).
   app.put("/api/fieldops/weekly-report", requireSession, requireCapability("cap.jobtracker.manage"), async (c) => {
+    // `bad_request` is the house-wide malformed-body code (config.ts, fieldops_checklist.ts,
+    // fieldops_expected_materials.ts and five more) and already carries plain-language copy.
+    // Minting an `invalid_body` synonym would have grown the operator vocabulary for nothing.
     let body: Record<string, unknown>;
     try {
       const parsed = await c.req.json();
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return c.json({ error: "invalid_body" }, 400);
+        return c.json({ error: "bad_request" }, 400);
       }
       body = parsed as Record<string, unknown>;
     } catch {
-      return c.json({ error: "invalid_body" }, 400);
+      return c.json({ error: "bad_request" }, 400);
     }
 
     const jobId = typeof body.job_id === "string" ? body.job_id : "";

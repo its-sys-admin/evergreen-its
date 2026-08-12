@@ -504,6 +504,7 @@ describe("weekly report — office inputs", () => {
       method: "PUT", cookie, body: JSON.stringify([1, 2, 3]),
     });
     expect(notObject.status).toBe(400);
+    expect(await json<{ error: string }>(notObject)).toEqual({ error: "bad_request" });
   });
 
   it("rejects a save from a caller without cap.jobtracker.manage", async () => {

@@ -233,6 +233,15 @@ export const ERROR_COPY: Record<string, string> = {
     "That form is filed from the Daily Report tab — it can't be added as a daily requirement.",
   too_many_items: "This job already has the maximum number of daily requirements — remove one first.",
 
+  // ── weekly production report (worker/fieldops_report.ts — 0067) ───────────────────────────────
+  // `invalid_job_id` and `unknown_job` are shared with the codes above and need no entry here.
+  invalid_week: "That week couldn't be read — pick the week again from the report page.",
+  // Deliberately NOT "try again": a malformed photo selection is a client-side defect, and
+  // retrying the same save reproduces it. Reload is the remedy that can actually help, and the
+  // second sentence protects the office from assuming their cleared photo page silently refilled.
+  invalid_photos:
+    "Your photo selection couldn't be read — reload the page and choose the photos again; nothing was saved, so your previous selection is unchanged.",
+
   // ── purchase orders (worker/po.ts vocabulary — S6) ─────────────────────────────────────────────
   invalid_vendor_key: "That vendor reference isn't valid — refresh and pick again.",
   invalid_vendor_name: "Enter a vendor name (up to 256 characters).",
