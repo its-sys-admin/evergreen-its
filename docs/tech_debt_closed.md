@@ -3041,3 +3041,73 @@ DEFAULT 0, so it cannot represent "never reported". The route returns NULL — a
 em dash — only when no portal mark, no committed schedule value, and percent_done still 0.
 Printing 0% there would tell a client no work was done, a different and possibly false claim.
 
+## [RESOLVED 2026-08-12] Progress packets file under their own suffix [OPEN 2026-08-11, low]
+
+`generate_core._packet_basename` hardcodes the `_WSR` suffix, so a PROGRESS week's
+field-records packet lands in Box as `<Job>_week of <Sat>_WSR.pdf`. This is the same class as
+the cover-title bug that WAS fixed (`cover_title` was parameterized in 2026-07-23 precisely
+because every progress cover read "WEEKLY SAFETY REPORT") — the filename was simply missed in
+that pass.
+
+It became more visible with the Weekly Production Report (0067): the client report correctly
+files as `..._WPR.pdf`, so the same Box week folder now holds one correctly-named artifact and
+one carrying the other workstream's initials. An operator opening the folder has to know which
+is which by size.
+
+**Deliberately NOT bundled** into the report PRs: renaming an existing artifact is a behaviour
+change to a live filing path (the append-only `_vN` version probe restarts at v1 under a new
+basename), and mixing it into the swap PR would have muddied a diff whose whole point was
+"which link goes in the review row."
+
+**Fix:** parameterize it the way `cover_title` was — a `packet_suffix: str = "WSR"` on
+`GenerateConfig`, progress binds `"packet"` or `"FieldRecords"`. Safety unchanged by default
+(§14). Note the version-probe restart is benign but should be stated in the commit.
+
+**Revisit when:** anyone is next in `generate_core`, or an operator asks why a progress folder
+contains a WSR file. **Tag:** `progress_reports`, `box`, `naming`, `low`.
+
+---
+
+**Resolved 2026-08-12.** `GenerateConfig.packet_suffix` parameterizes it exactly as `cover_title`
+did for the same class; safety's default keeps `_WSR` byte-for-byte and
+`tests/test_weekly_generate.py` now pins BOTH bindings so the preservation invariant is
+explicit. Progress binds `FieldRecords`, so a Box week folder reads
+`<Job>_week of <Sat>_WPR.pdf` (the client's) beside `..._FieldRecords.pdf` (the internal
+record) instead of two files distinguishable only by size. The new basename starts a fresh
+`_vN` sequence for that week — harmless, since a recompile appends rather than overwrites.
+
+
+## [RESOLVED 2026-08-12] Weekly-report narrative touched-ness is now PER FIELD [OPEN 2026-08-11, medium]
+
+`job_weekly_report_inputs` (0067) carries one `saved` signal for the whole row. `wpr_data.
+_office_or_seed` uses it to decide, per field, whether the office's value wins over the
+deterministic assembly — which is correct for a field the office actually edited and WRONG for
+one they never touched. The moment the office saves anything (say, the OSHA counts), an
+untouched Critical Items renders BLANK on the client's page instead of the assembled text.
+
+This is currently compensated in the UI rather than the model: `WeeklyReportPage` PRE-FILLS
+both narrative textareas with the same seed, so a save captures it. That works, and it is
+tested both sides — but it means the correctness of a client-facing document depends on a
+screen behaviour rather than a storage invariant. Anything that writes the row WITHOUT the
+screen (a script, a future API client, a migration) silently produces blank narrative
+sections. It already did once: the 2026-08-11 mock render, seeded by hand, rendered both
+sections empty and that is how the coupling was found.
+
+**Fix (not scoped):** make touched-ness per FIELD rather than per row — either store NULL for
+"never touched" and distinguish it from `''` ("deliberately cleared"), or carry an explicit
+`touched: string[]`. The three-state photo contract (`NULL` / `[]` / list) is the shape that
+already works for exactly this distinction and is the natural precedent.
+
+**Revisit when:** a second writer of `job_weekly_report_inputs` appears, or an office user
+reports a narrative section going blank after a save. **Tag:** `progress_reports`,
+`weekly-production-report`, `data-model`, `medium`.
+
+---
+
+**Resolved 2026-08-12.** The narrative fields became THREE-STATE — the shape `photos` already
+used, for the same reason: `null` = never touched (the report seeds), `""` = deliberately
+cleared (stays cleared), text = the office's words. `_office_or_seed` no longer takes `saved`
+at all, so a client-facing document's correctness stopped depending on the SPA pre-filling its
+textareas, and any other writer of the row — script, future client, migration — keeps the
+distinction. The regression the entry described (save the OSHA counts, get a blank Critical
+Items) is pinned on all three sides and RED-lights against the old row-level rule.

@@ -93,7 +93,14 @@ def test_its_week_folder_name_and_packet_basename():
     wk = generate_core.safety_week.week_bounds(ANCHOR)
     assert generate_core._its_week_folder_name(wk) == "ITS Week of 2026-05-30 to 2026-06-05"
     # Operator naming rule (2026-06-17): clean job-prefixed packet name <Job>_week of <Sat>_WSR.
-    assert generate_core._packet_basename("Bradley 1", wk) == "Bradley 1_week of 2026-05-30_WSR"
+    # §14 preservation: SAFETY's packet name is byte-identical to its pre-parameterization self.
+    assert (generate_core._packet_basename(weekly_generate.SAFETY_GENERATE_CONFIG, "Bradley 1", wk)
+            == "Bradley 1_week of 2026-05-30_WSR")
+    # PROGRESS no longer files under safety's initials — the two artifacts in one Box week folder
+    # are now distinguishable by name rather than by file size.
+    from progress_reports.progress_weekly_generate import PROGRESS_GENERATE_CONFIG
+    assert (generate_core._packet_basename(PROGRESS_GENERATE_CONFIG, "Bradley 1", wk)
+            == "Bradley 1_week of 2026-05-30_FieldRecords")
 
 
 def test_upload_packet_first_compile_uses_clean_unversioned_name(mocker):
