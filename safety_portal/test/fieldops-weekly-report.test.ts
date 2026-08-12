@@ -479,6 +479,19 @@ describe("weekly report — office inputs", () => {
     expect(r.photos.selected[0]).toMatchObject({ box_file_id: "box-b", caption: "Torque tube splice" });
   });
 
+  it("rejects a malformed photos value rather than silently reverting to auto-select", async () => {
+    await seedPhoto("2026-08-08", "clean", "box-a");
+    const cookie = await adminCookie();
+    // First clear the page explicitly...
+    expect((await save(cookie, { photos: [] })).status).toBe(200);
+    // ...then send junk. Degrading that to null would mean "auto-select" and would silently
+    // re-populate the photo page the office had just cleared.
+    expect((await save(cookie, { photos: "junk" })).status).toBe(400);
+    const r = await body(await internal());
+    expect(r.photos.auto_selected).toBe(false);
+    expect(r.photos.selected).toEqual([]);
+  });
+
   it("rejects a save for an unknown job, and a malformed body", async () => {
     const cookie = await adminCookie();
     const unknown = await call("/api/fieldops/weekly-report", {

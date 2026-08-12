@@ -659,6 +659,16 @@ export function registerWeeklyReportRoutes(
     const pending = JSON.stringify(normalizePending(body.pending));
     // Preserve the three-state contract: an ABSENT `photos` key means "leave curation to the
     // auto-selection" (SQL NULL); a present empty array means "no photos this week".
+    //
+    // A PRESENT-but-malformed `photos` is REJECTED rather than degraded. Everything else in this
+    // body is clamped-not-rejected (office text bound for one document — failing a whole weekly
+    // save over a long paste would be the wrong trade), but photos is the one field where the
+    // degrade is indistinguishable from a legitimate state: silently treating junk as `null`
+    // would mean "auto-select", so an office user who meant to clear the photo page would see
+    // it silently re-populate on the next compile. A save that cannot be honoured must say so.
+    if ("photos" in body && body.photos !== null && !Array.isArray(body.photos)) {
+      return c.json({ error: "invalid_photos" }, 400);
+    }
     const photosNorm = "photos" in body ? normalizePhotos(body.photos) : null;
     const photos = photosNorm === null ? null : JSON.stringify(photosNorm);
 
