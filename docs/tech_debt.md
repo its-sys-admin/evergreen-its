@@ -2895,3 +2895,122 @@ since this is the second time the same class has drifted.
 **Tag:** `field-ops`, `adr-0006`, `docs-currency`, `low`.
 
 **Revisit when:** next `daemon_reference.md` touch, or a dedicated CLAUDE.md docs-currency pass.
+## [OPEN 2026-08-11, low] Bonacci PV module still missing from `material_catalog` — needs the operator's real model number
+
+The 2026-08-11 BOM-corpus reconciliation (PR #75, migration 0065) could not add the Bonacci
+project's PV module because **both** racking-vendor BOMs that reference it ship a templated,
+non-real model number in the source PDF — `VSUN###N-132BMHR-DG` and `VSUNXXXN-156BMH-DG`, with
+literal `###`/`XXX` placeholders. No amount of re-reading the corpus recovers the real number;
+it isn't in the data. Per Op Stds §4 (Data-Fidelity/No-Invented-Field-Data), a placeholder or
+guessed model number must not be entered as a real catalogue row.
+
+**Fix:** ask the operator for the actual VSUN module model number Bonacci 1/2 used, then add it
+via a small follow-up migration (same shape as 0065).
+
+**Tag:** `materials`, `data-fidelity`, `seth-owned`, `low`.
+
+**Revisit when:** the operator supplies the real model number, or the next materials-catalogue
+touch.
+
+Surfaced: 2026-08-11/12 session close (job-identifier + procurement site-threading session).
+
+## [OPEN 2026-08-11, low] `tests/test_rfq_poll.py:689` asserts a prefix too weak to catch a regression in the 0070 RFQ-numbering shape
+
+The assertion is `rfq_number.startswith("RFQ-2026.001")`. Migration 0070 (PR #86) changed RFQ
+numbers from `RFQ-{job_no}-{NNN}` to `RFQ-{job_no}.{site_phase}-{NNN}` — but a site-bearing number
+for job `2026.001` at site `1` (`RFQ-2026.001.1-003`) ALSO starts with the literal string
+`"RFQ-2026.001"`, so this test would pass identically whether or not the site segment is present,
+malformed, or silently dropped. It currently passes only because it happens to be testing against
+the correct shape, not because it can distinguish the correct shape from a regression.
+
+**Fix:** tighten the assertion to match the full number shape, e.g. a regex
+`^RFQ-\d{4}\.\d{3}\.\d+-\d{3}$` or an exact-equals against the expected composed string, so a
+future numbering-format change (or an accidental site_phase drop) red-lights here instead of
+passing silently.
+
+**Tag:** `procurement`, `tests`, `rfq`, `low`.
+
+**Revisit when:** the next `rfq_poll`/RFQ-numbering touch, or the next §30-style test-hardening pass.
+
+Surfaced: 2026-08-11/12 session close (PR #86 review).
+
+## [OPEN 2026-08-11, medium] Estimates uploaded before migration 0069 have `po_estimates.job_id=''` and cannot be backfilled
+
+Migration 0069 (PR #86) added `po_estimates.job_id`, populated going forward at upload time. Every
+estimate uploaded before the migration has `job_id=''` — and because `job_no` alone does not
+disambiguate a site (a project number can belong to more than one job/site, per the
+`decision_evergreen-job-identifier-site-phase` rationale), there is no reliable way to backfill
+these rows after the fact. An import-time-only value that predates its own column has no recovery
+path once the originating upload session's context is gone.
+
+**Fix:** none available for the historical rows — document them as a known gap (e.g. a query that
+lists affected `po_estimates` rows for operator awareness) rather than attempting an unreliable
+backfill. Any future column with the same "only resolvable at write time" shape should ship WITH
+its NOT NULL/backfill story from the start, not add it later.
+
+**Tag:** `procurement`, `estimates`, `data-migration`, `medium`.
+
+**Revisit when:** an operator asks why an old estimate's PO/RFQ auto-bind doesn't work, or before
+any report that assumes every `po_estimates` row has a `job_id`.
+
+Surfaced: 2026-08-11/12 session close (PR #86).
+
+## [OPEN 2026-08-11, medium] RFQ drafts created before migration 0070 carry `site_phase=0` and generate site-less numbers — issued numbers are permanent
+
+Migration 0070 (PR #86) added `rfqs.site_phase`. Existing draft rows default to `0` (no site
+segment), so an RFQ drafted before the migration and issued after it still generates a number in
+the OLD shape (`RFQ-{job_no}-{NNN}`), not the new site-bearing one. Re-opening and re-saving a
+still-draft row picks up the new numbering going forward, but any RFQ number that has already been
+ISSUED is permanent — it lives in filed Box PDFs, signed vendor quote forms, and vendor inboxes,
+none of which this system can retroactively rewrite.
+
+**Fix:** no code fix needed — this is expected migration-boundary behavior, not a bug. Worth a
+one-time operator sweep of still-DRAFT pre-0070 RFQ rows (re-open + re-save each) so the
+site-bearing shape applies before they're issued, rather than after.
+
+**Tag:** `procurement`, `rfq`, `data-migration`, `medium`.
+
+**Revisit when:** before the next batch of pre-0070 draft RFQs is issued, or on operator request.
+
+Surfaced: 2026-08-11/12 session close (PR #86).
+
+## [OPEN 2026-08-11, low] Local `wrangler d1` commands fail on this dev host (`_cf_ALARM has 3 columns but 2 values`) — remote/deploy confirmed unaffected
+
+Any **local** D1 command (`wrangler d1 migrations apply --local`, `wrangler d1 execute --local`)
+dies with `Fatal uncaught kj::Exception: … table _cf_ALARM has 3 columns but 2 values were
+supplied: SQLITE_ERROR` — a `workerd` local-runtime fault (first seen wrangler 4.105.0), not a
+project bug. It survives wiping `.wrangler/state` and reappears after `npm ci` in a fresh
+worktree. `--remote` and `npm run deploy` are confirmed NOT affected (neither starts the local
+runtime) — do not chase this as a deploy blocker or recommend a wrangler upgrade on account of it.
+
+**Fix:** no project-side fix available (upstream `workerd`/wrangler issue). Two working
+substitutes when a migration needs local validation: (1) stdlib `sqlite3`, `executescript`-ing
+every prior migration file in order then running the one under test; (2) the vitest worker suite,
+which applies every migration through real `workerd` + D1 already. See auto-memory
+`reference_wrangler-local-d1-cf-alarm-fault.md`.
+
+**Tag:** `tooling`, `wrangler`, `cloudflare`, `low`.
+
+**Revisit when:** a wrangler upgrade is taken, to check whether the upstream fault is resolved.
+
+Surfaced: 2026-08-11 session close.
+
+## [OPEN 2026-08-11, low] BOM-corpus extraction/reconciliation tooling used for the 218-part materials analysis is not committed anywhere
+
+The 2026-08-11 reconciliation of ten vendor BOMs against `material_catalog` (666 lines → 218
+unique parts, zero overlap with the existing 37 catalogue rows — PR #75's basis) was done with
+scripts that lived only in the session's ephemeral scratchpad. The analysis itself is sound and
+its conclusion (migration 0065's 28 equipment rows) is committed, but the extraction/matching
+tooling that produced it is not — the 218-part analysis cannot be re-run or re-verified from the
+repo alone.
+
+**Fix:** if the BOM corpus is revisited (e.g. when the six job-less projects named in the corpus —
+Bradley 1/2, Brimfield 1/2, Steger, Roxbury — get real job records, or when a new vendor BOM
+arrives), recreate or commit a durable version of the extraction/reconciliation script under
+`scripts/` rather than re-deriving it ad hoc each time.
+
+**Tag:** `materials`, `tooling`, `reproducibility`, `low`.
+
+**Revisit when:** the next BOM-corpus or materials-catalogue reconciliation.
+
+Surfaced: 2026-08-11/12 session close.
