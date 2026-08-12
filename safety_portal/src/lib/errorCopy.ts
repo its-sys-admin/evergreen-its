@@ -233,6 +233,15 @@ export const ERROR_COPY: Record<string, string> = {
     "That form is filed from the Daily Report tab — it can't be added as a daily requirement.",
   too_many_items: "This job already has the maximum number of daily requirements — remove one first.",
 
+  // ── weekly production report (worker/fieldops_report.ts — 0067) ───────────────────────────────
+  // `invalid_job_id` and `unknown_job` are shared with the codes above and need no entry here.
+  invalid_week: "That week couldn't be read — pick the week again from the report page.",
+  // Deliberately NOT "try again": a malformed photo selection is a client-side defect, and
+  // retrying the same save reproduces it. Reload is the remedy that can actually help, and the
+  // second sentence protects the office from assuming their cleared photo page silently refilled.
+  invalid_photos:
+    "Your photo selection couldn't be read — reload the page and choose the photos again; nothing was saved, so your previous selection is unchanged.",
+
   // ── purchase orders (worker/po.ts vocabulary — S6) ─────────────────────────────────────────────
   invalid_vendor_key: "That vendor reference isn't valid — refresh and pick again.",
   invalid_vendor_name: "Enter a vendor name (up to 256 characters).",
@@ -364,7 +373,8 @@ export const ERROR_COPY: Record<string, string> = {
   magic_mime_mismatch: "That file isn't the type its name claims — re-export it as a PDF or .xlsx and upload again.",
   manifest_too_large: "That manifest is too large to import — split it or export a smaller range.",
   duplicate_manifest: "This job already has that exact manifest — open the existing one, or discard it first to re-import.",
-  not_discardable: "That manifest can't be discarded now — its lines have already been committed.",
+  // Shared by the manifest AND schedule (ADR-0006) discard routes — worded for both.
+  not_discardable: "That document can't be discarded now — its contents have already been committed.",
   preview_too_large: "A source-page preview was too large to store — the grid is still usable without it.",
   invalid_data: "The upload didn't come through intact — choose the file again.",
   invalid_page: "That preview page number isn't valid.",
@@ -392,6 +402,17 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_bol: "A BOL / load number is too long — shorten it to 120 characters or less.",
   // Resolve-problem (the expected-materials incident flag's explicit counterpart).
   not_flagged: "This line has no problem flag to resolve — someone may have already cleared it.",
+
+  // ── job-schedule import (ADR-0006 — worker/fieldops_schedules.ts) ──────────────────────────────
+  // The lane is PDF-only, so its MIME codes are its own: the shared manifest copy above
+  // recommends re-exporting as .xlsx, which would be actively-false advice here.
+  schedule_mime_not_allowed:
+    "Only a PDF project-schedule export can be imported — export the schedule as a PDF and upload it again.",
+  schedule_magic_mime_mismatch:
+    "That file isn't really a PDF — re-export the schedule as a PDF and upload it again.",
+  schedule_too_large: "That schedule PDF is too large to import — re-export it and try again.",
+  duplicate_schedule:
+    "This job already has that exact schedule file — open the existing upload, or discard it first to re-import.",
 };
 
 /** Humanize an unknown wire code: 'some_new_code' → 'some new code'. */
