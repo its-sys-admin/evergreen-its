@@ -94,6 +94,7 @@ beforeEach(() => {
   vi.mocked(api.fetchScheduleTasks).mockResolvedValue({
     tasks: [TASK, DELIVERY_TASK, CM_TASK],
     project_name: "Deep Lake",
+    truncated: false,
   });
   vi.mocked(api.fetchSchedules).mockResolvedValue({
     schedules: [PARSED, SUPERSEDED, REFUSED],
@@ -130,7 +131,7 @@ describe("JobSchedulePage — the task list", () => {
   });
 
   it("an empty list says so — read-only copy for the field, an upload CTA for the office", async () => {
-    vi.mocked(api.fetchScheduleTasks).mockResolvedValue({ tasks: [], project_name: "Deep Lake" });
+    vi.mocked(api.fetchScheduleTasks).mockResolvedValue({ tasks: [], project_name: "Deep Lake", truncated: false });
     vi.mocked(api.fetchSchedules).mockResolvedValue({ schedules: [] });
     const readOnly = mountAs("submitter", READ_ONLY);
     await waitFor(() =>

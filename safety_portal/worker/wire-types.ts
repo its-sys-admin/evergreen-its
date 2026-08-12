@@ -861,10 +861,13 @@ export interface ScheduleTaskRow {
 }
 
 /** GET /api/fieldops/schedule-tasks?job_id= — active tasks in document order, plus the job's
- *  display name (the heading says the project, never the JOB-###### key). */
+ *  display name (the heading says the project, never the JOB-###### key). `truncated` means
+ *  the 600-row read cap was hit and the page is NOT showing the whole schedule (a commit may
+ *  create up to 2000 tasks) — the SPA surfaces it rather than rendering a silent partial. */
 export interface ScheduleTasksResponse {
   tasks: ScheduleTaskRow[];
   project_name: string | null;
+  truncated: boolean;
 }
 
 /** POST /api/fieldops/schedules/:id/plan — a DRY RUN. PR-4 ships the DEGENERATE case only:

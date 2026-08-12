@@ -405,7 +405,7 @@ export function ScheduleValidatePage({
           ok: true,
           text:
             schedule?.status === "committing"
-              ? "Schedule discarded. Tasks from pages that already imported remain on the list."
+              ? "Schedule discarded. Tasks the interrupted import had already created were removed with it."
               : "Schedule discarded.",
         },
         schedule?.status === "committing",

@@ -198,10 +198,16 @@ export function registerScheduleTaskRoutes(app: FieldopsApp, gates: FieldopsGate
         // name must come from data, not navigation state).
         c.env.DB.prepare("SELECT project_name FROM jobs WHERE job_id = ?1").bind(jobId),
       ]);
+      const rows = (tasks.results ?? []) as ScheduleTaskRow[];
       const payload: ScheduleTasksResponse = {
-        tasks: (tasks.results ?? []) as ScheduleTaskRow[],
+        tasks: rows,
         project_name:
           ((jobRow.results?.[0] as { project_name?: string } | undefined)?.project_name) ?? null,
+        // A commit may create up to MAX_ROWS_TOTAL (2000) tasks while this read caps at
+        // 600 — a silent cap would render a partial page as if it were the whole
+        // schedule (2026-08-11 review W8). Exactly-at-cap reports truncated; the false
+        // positive at exactly 600 real tasks is the honest direction to be wrong in.
+        truncated: rows.length >= TASKS_READ_CAP,
       };
       return c.json(payload, 200);
     },

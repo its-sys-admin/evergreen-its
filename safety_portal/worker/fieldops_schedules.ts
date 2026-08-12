@@ -311,6 +311,38 @@ async function loadSchedule(
  *  page 1's freshly-inserted tasks as "the job already has a task list" and refuse
  *  its own remainder. Anything else — a manual add, another schedule's commit — is a
  *  real existing list, and PR-4 has no reconcile for it. */
+/** The commit's FINALIZE — supersede-FIRST, then committing→committed, one batch (the
+ *  ordering idx_job_schedules_one_committed requires; both UPDATEs no-op harmlessly when
+ *  already done). IDEMPOTENT by construction, because it runs from TWO places: the happy
+ *  path's final page, and the replay guard's stuck-'committing' repair — a Worker
+ *  eviction between the page batch and this batch would otherwise strand the schedule in
+ *  'committing' forever with the client's own retry reporting false success (the
+ *  2026-08-11 security-review BLOCK finding). */
+async function finalizeScheduleCommit(
+  c: Ctx, actor: string, jobId: string, scheduleId: number, inserted: number,
+): Promise<void> {
+  await c.env.DB.batch([
+    c.env.DB
+      .prepare(
+        "UPDATE job_schedules SET status='superseded', superseded_at = unixepoch() " +
+          "WHERE job_id = ?1 AND status = 'committed' AND id <> ?2",
+      )
+      .bind(jobId, scheduleId),
+    auditStmtIfChanged(c, actor, "job_schedule_supersede", String(scheduleId), {
+      schedule_id: scheduleId, job_id: jobId,
+    }),
+    c.env.DB
+      .prepare(
+        "UPDATE job_schedules SET status='committed', committed_at = unixepoch() " +
+          "WHERE id = ?1 AND status = 'committing'",
+      )
+      .bind(scheduleId),
+    auditStmtIfChanged(c, actor, "job_schedule_commit", String(scheduleId), {
+      schedule_id: scheduleId, job_id: jobId, inserted,
+    }),
+  ]);
+}
+
 async function countForeignActiveTasks(c: Ctx, jobId: string, scheduleId: number): Promise<number> {
   const row = await c.env.DB
     .prepare(
@@ -834,6 +866,18 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
         .sort((a, b) => a.source_row_index - b.source_row_index);
       const remaining = dataRows.filter((r) => r.source_row_index > schedule.committed_through_row);
       if (remaining.length === 0) {
+        // Fully-replayed payload — every row is at/below the watermark. BUT the watermark
+        // alone does not prove the FINALIZE ran: the page batch and the finalize batch are
+        // two separate transactions, and a Worker eviction / transient D1 error between
+        // them leaves status='committing' with a maxed watermark. The client's documented
+        // recovery is exactly this re-post, so returning done:true on watermark alone
+        // would report success while the schedule stays stuck in 'committing' FOREVER
+        // (no other route can finish it) — the 2026-08-11 security-review BLOCK finding.
+        // Finalize is idempotent, so the stuck state is repaired HERE, on the replay.
+        if (schedule.status === "committing") {
+          const actor = c.get("session").username;
+          await finalizeScheduleCommit(c, actor, schedule.job_id, id, 0);
+        }
         const payload: ScheduleCommitResponse = {
           ok: true, done: true, inserted: 0,
           committed_through_row: schedule.committed_through_row,
@@ -933,29 +977,7 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
 
       const done = remaining.length <= page.length;
       if (done) {
-        // Supersede-FIRST, then commit — the ordering idx_job_schedules_one_committed
-        // requires. No-op UPDATE in the degenerate case (no prior committed row); the
-        // conditional audits record exactly what actually flipped.
-        await c.env.DB.batch([
-          c.env.DB
-            .prepare(
-              "UPDATE job_schedules SET status='superseded', superseded_at = unixepoch() " +
-                "WHERE job_id = ?1 AND status = 'committed' AND id <> ?2",
-            )
-            .bind(schedule.job_id, id),
-          auditStmtIfChanged(c, actor, "job_schedule_supersede", String(id), {
-            schedule_id: id, job_id: schedule.job_id,
-          }),
-          c.env.DB
-            .prepare(
-              "UPDATE job_schedules SET status='committed', committed_at = unixepoch() " +
-                "WHERE id = ?1 AND status = 'committing'",
-            )
-            .bind(id),
-          auditStmtIfChanged(c, actor, "job_schedule_commit", String(id), {
-            schedule_id: id, job_id: schedule.job_id, inserted,
-          }),
-        ]);
+        await finalizeScheduleCommit(c, actor, schedule.job_id, id, inserted);
       }
       const payload: ScheduleCommitResponse = {
         ok: true, done, inserted, committed_through_row: watermark,
@@ -1005,6 +1027,23 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
               "AND EXISTS (SELECT 1 FROM job_schedules WHERE id = ?1 AND status = 'discarded')",
           )
           .bind(id),
+        // ORPHAN-TASK CASCADE (2026-08-11 security-review BLOCK finding 2): a schedule
+        // discarded mid-commit has already landed active tasks (source_schedule_id =
+        // this row) across its committed pages. Left active, they are attributed to a
+        // TERMINAL schedule that never governed, and — worse — countForeignActiveTasks
+        // counts them, so EVERY future upload's commit refuses
+        // revision_reconcile_not_available: a permanent, self-inflicted lockout with no
+        // reconcile path until PR-6. Deactivating them WITH the discard restores the
+        // invariant that active imported tasks always trace to a committing/committed
+        // schedule. Safe by construction: committed/superseded rows are not discardable,
+        // so a governing schedule's tasks can never be swept by this statement.
+        c.env.DB
+          .prepare(
+            "UPDATE job_schedule_tasks SET active = 0, updated_at = unixepoch() " +
+              "WHERE source_schedule_id = ?1 AND active = 1 " +
+              "AND EXISTS (SELECT 1 FROM job_schedules WHERE id = ?1 AND status = 'discarded')",
+          )
+          .bind(id),
       ]);
       const changed = (res[0].meta.changes ?? 0) > 0;
       if (!changed) {
@@ -1015,7 +1054,18 @@ export function registerScheduleRoutes(app: FieldopsApp, gates: ScheduleGates): 
         if (!row) return c.json({ error: "not_found" }, 404);
         return c.json({ error: "not_discardable", status: row.status }, 409);
       }
-      return c.json({ ok: true, id });
+      const orphanedTasksDeactivated = res[5]?.meta?.changes ?? 0;
+      if (orphanedTasksDeactivated > 0) {
+        // The cascade is multi-row, so it carries its own audit record naming the count
+        // (the expected-materials cascade pattern) — recorded AFTER the batch so the
+        // count is the real one, on a path that just proved the discard landed.
+        await c.env.DB.batch([
+          auditStmt(c, actor, "job_schedule_discard_orphan_tasks", String(id), {
+            schedule_id: id, deactivated: orphanedTasksDeactivated,
+          }),
+        ]);
+      }
+      return c.json({ ok: true, id, orphaned_tasks_deactivated: orphanedTasksDeactivated });
     },
   );
 }

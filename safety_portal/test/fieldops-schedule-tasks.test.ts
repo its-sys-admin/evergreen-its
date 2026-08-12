@@ -466,3 +466,61 @@ describe("schedule bearer cannot reach the task surface (privilege separation)",
     ).toBe(401);
   });
 });
+
+describe("2026-08-11 security-review BLOCK fixes (stuck-committing repair + discard cascade)", () => {
+  it("a replay against a schedule STUCK in 'committing' (finalize batch lost) repairs it to 'committed'", async () => {
+    // Simulate the Worker-eviction window: page batch landed (tasks + maxed watermark),
+    // finalize batch never ran. The client's documented recovery is a plain re-post —
+    // before the fix it returned done:true while the row stayed 'committing' forever.
+    const id = await parsedSchedule("JOB-A");
+    const rows = [taskRow(1), taskRow(2)];
+    expect((await p(admin, `/api/fieldops/schedules/${id}/commit`, { rows })).status).toBe(200);
+    // Force the stuck state: back to 'committing' with the watermark already at max.
+    await env.DB.prepare("UPDATE job_schedules SET status='committing', committed_at=NULL WHERE id = ?1").bind(id).run();
+
+    const replay = await p(admin, `/api/fieldops/schedules/${id}/commit`, { rows });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({ ok: true, done: true, inserted: 0 });
+    const after = await env.DB
+      .prepare("SELECT status, committed_at FROM job_schedules WHERE id = ?1")
+      .bind(id)
+      .first<{ status: string; committed_at: number | null }>();
+    expect(after!.status).toBe("committed");
+    expect(after!.committed_at).not.toBeNull();
+    // And no duplicate tasks from the replay.
+    const n = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE source_schedule_id = ?1 AND active = 1")
+      .bind(id)
+      .first<{ n: number }>();
+    expect(n!.n).toBe(2);
+  });
+
+  it("discarding a mid-commit schedule deactivates its orphan tasks — and the job can import again", async () => {
+    const id = await parsedSchedule("JOB-A");
+    // Land page 1 of 2 (watermark below max) — tasks exist, status 'committing'.
+    const allRows = Array.from({ length: 120 }, (_, i) => taskRow(i + 1));
+    const first = await p(admin, `/api/fieldops/schedules/${id}/commit`, { rows: allRows });
+    expect(await first.clone().json()).toMatchObject({ ok: true, done: false });
+
+    const res = await p(admin, `/api/fieldops/schedules/${id}/discard`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { orphaned_tasks_deactivated: number };
+    expect(body.orphaned_tasks_deactivated).toBe(100); // exactly one committed page
+
+    const live = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id = 'JOB-A' AND active = 1")
+      .bind()
+      .first<{ n: number }>();
+    expect(live!.n).toBe(0); // no orphaned remnants pretend to be a task list
+
+    // THE LOCKOUT IS GONE: a fresh upload plans degenerate and commits cleanly.
+    const id2 = await parsedSchedule("JOB-A", PDF_B64_OTHER, "Project Schedule rev2.pdf");
+    const plan = await p(admin, `/api/fieldops/schedules/${id2}/plan`, { rows: [taskRow(1)] });
+    expect(await plan.json()).toMatchObject({ ok: true, degenerate: true });
+    expect((await p(admin, `/api/fieldops/schedules/${id2}/commit`, { rows: [taskRow(1)] })).status).toBe(200);
+    const audit = await env.DB
+      .prepare("SELECT detail FROM audit_log WHERE action = 'job_schedule_discard_orphan_tasks'")
+      .first<{ detail: string }>();
+    expect(audit).not.toBeNull();
+  });
+});
