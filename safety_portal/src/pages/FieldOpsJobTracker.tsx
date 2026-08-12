@@ -347,6 +347,7 @@ export function FieldOpsJobTracker({
   initialJobId,
   onJobViewChange,
   onOpenMaterials,
+  onOpenSchedule,
   onOpenWeeklyReport,
 }: {
   onBack: () => void;
@@ -361,6 +362,10 @@ export function FieldOpsJobTracker({
   /** PR2 — deep link from the job detail's expected-materials section into the per-job Materials
    *  page. Absent (no cap.materials.receive) → the section renders without the button. */
   onOpenMaterials?: (jobId: string) => void;
+  /** ADR-0006 PR-4 — deep link into the per-job Schedule page (all-roles view, decision 4).
+   *  Absent (no cap.jobtracker.read — unreachable here in practice, since this page itself
+   *  rides that cap) → the card doesn't render. */
+  onOpenSchedule?: (jobId: string) => void;
   onOpenWeeklyReport?: (jobId: string) => void;
 }) {
   const [view, setView] = useState<"list" | "detail">("list");
@@ -1694,6 +1699,22 @@ export function FieldOpsJobTracker({
           jobId={job.job_id}
           onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(job.job_id) : undefined}
         />
+
+        {/* ADR-0006 PR-4 — the per-job Schedule deep-link card, beside Materials. All roles
+            see it (schedule visibility is all-roles, decision 4); the import affordances on
+            the page itself re-gate on cap.jobtracker.manage server-side. */}
+        {onOpenSchedule && (
+          <section className="card dash-section">
+            <h3 className="dash-detail__h2">Schedule</h3>
+            <p className="dash-hint">
+              The job&apos;s living task list — what the project schedule says is happening,
+              with dates, milestones and deliveries.
+            </p>
+            <button className="btn" onClick={() => onOpenSchedule(job.job_id)}>
+              Open schedule →
+            </button>
+          </section>
+        )}
 
         {/* 0067 — the office's weekly-report inputs (the sections D1 cannot derive). Deep-link
             card beside Materials; rendered only for the office capability, and the Worker

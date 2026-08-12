@@ -413,6 +413,28 @@ export const ERROR_COPY: Record<string, string> = {
   schedule_too_large: "That schedule PDF is too large to import — re-export it and try again.",
   duplicate_schedule:
     "This job already has that exact schedule file — open the existing upload, or discard it first to re-import.",
+
+  // ── schedule validate + commit (PR-4 — the living task list) ───────────────────────────────
+  // Task-row bounds — the SAME reader gates the manual add/edit routes and the commit's
+  // imported rows (worker/fieldops_schedule_tasks.ts readScheduleTaskFields), so one copy
+  // per code serves both paths.
+  invalid_task_rows: "The task rows didn't come through correctly — reload the validate screen and try again.",
+  invalid_task_kind: "A row must be a task row or a section row — reload the validate screen.",
+  invalid_task_name: "Every task needs a name (up to 300 characters).",
+  invalid_task_section: "A section name is too long (up to 120 characters).",
+  invalid_task_date: "Enter task dates as YYYY-MM-DD.",
+  invalid_task_percent: "Percent done must be a whole number from 0 to 100.",
+  invalid_task_duration: "A duration must be a whole number of days, up to 5000.",
+  invalid_task_predecessors: "The predecessors text is too long (up to 200 characters).",
+  invalid_task_flag: "The milestone / delivery markers must be on or off.",
+  // The PR-4 degenerate boundary: a job that already has a task list can't take a second
+  // import until the PR-6 reconcile lands. The current list is untouched — say so.
+  revision_reconcile_not_available:
+    "This job already has a task list — importing a schedule revision (reconcile) arrives in a later update. The current task list is unchanged.",
+  schedule_not_committable:
+    "This schedule can't be committed from its current state — refresh to see where it stands.",
+  another_commit_in_progress:
+    "Another schedule upload for this job is mid-import — finish or discard that one first.",
 };
 
 /** Humanize an unknown wire code: 'some_new_code' → 'some new code'. */

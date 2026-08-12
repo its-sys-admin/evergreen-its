@@ -54,6 +54,8 @@ export type AppRoute =
   | { view: "fieldops-jobs"; jobId?: string }
   // jobId REQUIRED — this view has no job-less form, so the round-trip law stays total.
   | { view: "fieldops-job-materials"; jobId: string }
+  // jobId REQUIRED for the same reason as materials — the schedule is always per-job.
+  | { view: "fieldops-job-schedule"; jobId: string }
   // jobId REQUIRED for the same reason as materials — the weekly report is always per-job.
   | { view: "fieldops-weekly-report"; jobId: string }
   | { view: "fieldops-tasks"; tab?: MyTasksTab }
@@ -89,6 +91,9 @@ export const VIEW_CAPS: Record<AppRoute["view"], string | null> = {
   // Read is cap-only; the Worker per-job-scopes non-admins, so a submitter reaches only their
   // own job's page, and the write affordances re-gate on materials.manage / the manager role.
   "fieldops-job-materials": "cap.materials.receive",
+  // Schedule visibility is ALL ROLES (ADR-0006 operator decision 4) — the same read cap as
+  // the Job Tracker; the import affordances re-gate on cap.jobtracker.manage server-side.
+  "fieldops-job-schedule": "cap.jobtracker.read",
   // The office surface that supplies what D1 cannot derive. Rides the existing office capability
   // (the 0060 manifest precedent — no new cap for an office-desk screen); the Worker re-gates.
   "fieldops-weekly-report": "cap.jobtracker.manage",
@@ -164,6 +169,18 @@ export function parseRoute(loc: { pathname: string; search: string }): AppRoute 
     const jobId = cleanParam(raw);
     return jobId ? { view: "fieldops-job-materials", jobId } : null;
   }
+  // Schedule — same ordering rule as materials: BEFORE the bare /jobs/:id matcher.
+  const schedMatch = /^\/jobs\/([^/]+)\/schedule$/.exec(path);
+  if (schedMatch) {
+    let raw: string;
+    try {
+      raw = decodeURIComponent(schedMatch[1]);
+    } catch {
+      return null; // malformed percent-encoding → unrecognized
+    }
+    const jobId = cleanParam(raw);
+    return jobId ? { view: "fieldops-job-schedule", jobId } : null;
+  }
   // Weekly report — same ordering rule as materials: BEFORE the bare /jobs/:id matcher.
   const wrMatch = /^\/jobs\/([^/]+)\/weekly-report$/.exec(path);
   if (wrMatch) {
@@ -223,6 +240,8 @@ export function formatRoute(route: AppRoute): string {
       return route.jobId ? `/jobs/${encodeURIComponent(route.jobId)}` : "/jobs";
     case "fieldops-job-materials":
       return `/jobs/${encodeURIComponent(route.jobId)}/materials`;
+    case "fieldops-job-schedule":
+      return `/jobs/${encodeURIComponent(route.jobId)}/schedule`;
     case "fieldops-weekly-report":
       return `/jobs/${encodeURIComponent(route.jobId)}/weekly-report`;
     case "fill": {

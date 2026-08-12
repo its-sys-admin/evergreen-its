@@ -37,6 +37,7 @@ import { registerPoRoutes } from "./po";
 import { registerPoAttachmentRoutes } from "./po_attachments";
 import { registerManifestRoutes } from "./fieldops_manifests";
 import { registerScheduleRoutes } from "./fieldops_schedules";
+import { registerScheduleTaskRoutes } from "./fieldops_schedule_tasks";
 import { registerPoEstimateRoutes } from "./po_estimates";
 import { registerRfqRoutes } from "./rfq";
 import { registerConfigRoutes } from "./config";
@@ -588,6 +589,10 @@ registerManifestRoutes(app, { requireSession, requireCapability, requireManifest
 //   here: Quartz render + Vision OCR over untrusted bytes runs on the Mac inside a killable
 //   child. —
 registerScheduleRoutes(app, { requireSession, requireCapability, requireScheduleToken });
+// — Living schedule task list (ADR-0006 PR-4): the per-job tasks a committed schedule import
+//   authors (0071). Read rides cap.jobtracker.read (all roles view — decision 4); the manual
+//   add/edit/deactivate floor rides cap.jobtracker.manage. Send-free D1 writes, W4-batched. —
+registerScheduleTaskRoutes(app, fieldopsGates);
 // — DR-photo-pool Slice 1: the daily-report additional-photo pool (upload / list / delete;
 //   send-free D1 queue for the Slice-2 Mac §34 screen; /api/submit claims the references) —
 registerDailyPhotoRoutes(app, fieldopsGates);
@@ -2794,6 +2799,10 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
       .prepare("DELETE FROM job_schedule_previews WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id = ?)")
       .bind(job_id),
     c.env.DB.prepare("DELETE FROM job_schedules WHERE job_id = ?").bind(job_id),
+    // Living schedule task list (0071, ADR-0006 PR-4). Job-keyed directly (no subquery
+    // needed) and deleted with its pool: an orphaned task row is a live-looking task list
+    // behind a job nobody can see. Mirrors its prune.ts jobs-guard entry (in-step rule).
+    c.env.DB.prepare("DELETE FROM job_schedule_tasks WHERE job_id = ?").bind(job_id),
     // The field-ops job-context tables prune.ts already guards a job on. Its guard
     // comment named purge-job as "the explicit operator cleanup path (cascades both)"
     // — it did not: these five were never deleted, so purging a job returned ok:true
@@ -2836,14 +2845,15 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
   const scheduleRows = results[12]?.meta?.changes ?? 0;
   const schedulePreviews = results[13]?.meta?.changes ?? 0;
   const schedules = results[14]?.meta?.changes ?? 0;
-  const checklistItemStates = results[15]?.meta?.changes ?? 0;
-  const checklistInstances = results[16]?.meta?.changes ?? 0;
-  const timeEntries = results[17]?.meta?.changes ?? 0;
-  const taskAssignments = results[18]?.meta?.changes ?? 0;
-  const inspections = results[19]?.meta?.changes ?? 0;
-  const equipmentLocation = results[20]?.meta?.changes ?? 0;
-  const submissions = results[21]?.meta?.changes ?? 0;
-  const job = results[22]?.meta?.changes ?? 0;
+  const scheduleTasks = results[15]?.meta?.changes ?? 0;
+  const checklistItemStates = results[16]?.meta?.changes ?? 0;
+  const checklistInstances = results[17]?.meta?.changes ?? 0;
+  const timeEntries = results[18]?.meta?.changes ?? 0;
+  const taskAssignments = results[19]?.meta?.changes ?? 0;
+  const inspections = results[20]?.meta?.changes ?? 0;
+  const equipmentLocation = results[21]?.meta?.changes ?? 0;
+  const submissions = results[22]?.meta?.changes ?? 0;
+  const job = results[23]?.meta?.changes ?? 0;
   return c.json({
     ok: true, found: job > 0, job_id, job_deleted: job, submissions, pdfChunks, pdfRequests,
     requirements, expectedMaterials,
@@ -2857,8 +2867,9 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
     // operator's only confirmation that the untrusted document BYTES went with the job.
     manifests, manifestChunks, manifestRows, manifestPreviews,
     // Schedule pool (0066) — same rule: the chunks counter is the confirmation the
-    // untrusted schedule bytes went with the job.
-    schedules, scheduleChunks, scheduleRows, schedulePreviews,
+    // untrusted schedule bytes went with the job. scheduleTasks (0071) is the LIVING
+    // task list going with it.
+    schedules, scheduleChunks, scheduleRows, schedulePreviews, scheduleTasks,
     checklistItemStates, checklistInstances, timeEntries, taskAssignments, inspections,
     equipmentLocation,
   });

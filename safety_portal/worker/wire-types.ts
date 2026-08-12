@@ -825,6 +825,75 @@ export interface SchedulePreviewResponse {
   png_b64: string;
 }
 
+/** One living-task-list row (`job_schedule_tasks`, migration 0071) as the Schedule page reads
+ *  it. WHO fields are DISPLAY-NAME-ONLY (W9): `delivered_by_name` / `last_marked_by_name`
+ *  resolve through personnel; the stored account username never leaves the Worker. Flags are
+ *  the stored 0/1. `schedule_percent` is what the last committed schedule asserted (the PR-6
+ *  three-way diff base); `percent_done` is the portal's current belief; `last_marked_at`
+ *  non-null ⇔ a human marked the task in the portal (PR-5 — commits leave it NULL). */
+export interface ScheduleTaskRow {
+  id: number;
+  task_uuid: string;
+  job_id: string;
+  section: string | null;
+  name: string;
+  duration_days: number | null;
+  start_date: string | null;
+  finish_date: string | null;
+  /** Stamped at the task's OWN first commit, never rewritten — the slip anchor. */
+  baseline_start_date: string | null;
+  baseline_finish_date: string | null;
+  percent_done: number;
+  schedule_percent: number | null;
+  is_milestone: number;
+  is_contract_milestone: number;
+  is_delivery: number;
+  delivered_date: string | null;
+  delivered_by_name: string | null;
+  delivered_at: number | null;
+  /** Verbatim from the source document — never parsed, display + provenance only. */
+  predecessors_raw: string | null;
+  sort_order: number;
+  last_marked_by_name: string | null;
+  last_marked_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** GET /api/fieldops/schedule-tasks?job_id= — active tasks in document order, plus the job's
+ *  display name (the heading says the project, never the JOB-###### key). */
+export interface ScheduleTasksResponse {
+  tasks: ScheduleTaskRow[];
+  project_name: string | null;
+}
+
+/** POST /api/fieldops/schedules/:id/plan — a DRY RUN. PR-4 ships the DEGENERATE case only:
+ *  `degenerate` true means the job has no existing task list and every incoming data row
+ *  classifies as `new`; false means a task list already exists — the plan still answers 200
+ *  (a read never 409s) and `revision_reconcile_available` stays false until the PR-6 diff
+ *  engine lands, so the SPA says "revision reconcile arrives in a later update". */
+export interface SchedulePlanResponse {
+  ok: true;
+  degenerate: boolean;
+  revision_reconcile_available: false;
+  counts: {
+    incoming: number;
+    new: number;
+    existing: number;
+  };
+}
+
+/** POST /api/fieldops/schedules/:id/commit — ONE page of the 0066-watermark commit. `done`
+ *  false means re-post the same full payload; every row at or below `committed_through_row`
+ *  is dropped before any write, so a replayed page (a lost final response's retry) is an
+ *  idempotent no-op rather than a duplicate task list. */
+export interface ScheduleCommitResponse {
+  ok: true;
+  done: boolean;
+  inserted: number;
+  committed_through_row: number;
+}
+
 // ── Weekly Production Report (0067) ──────────────────────────────────────────────────────────
 // The office screen and the Mac compile read the SAME payload from the SAME builder, so these
 // shapes are the single source of truth for both. `worker/fieldops_report.ts` annotates its
