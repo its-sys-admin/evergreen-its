@@ -1,0 +1,37 @@
+-- 0069 — carry the JOB IDENTITY on a vendor estimate (operator ask, 2026-08-11).
+--
+-- THE DEFECT: a PO drafted from an accepted vendor estimate composes with site_phase 0
+-- instead of the job's real site, so MH405 (job_no 2026.384, site_phase 1) numbers
+-- 2026.384.0.x instead of 2026.384.1.x. This was harmless while every job sat at site 0.
+-- Migration 0064 made site_phase meaningful, and the four jobs added 2026-08-11 made it
+-- reachable: MH405 and OG593 are sites 1 and 2 of the SAME project.
+--
+-- WHY A COLUMN AND NOT A LOOKUP: `po_estimates` stores only `job_no`, the two-segment
+-- PROJECT number — and job_no is deliberately NOT unique. 2026.384 is both MH405 and OG593.
+-- Resolving the site by job_no would have to pick one of two jobs, which is precisely the
+-- silent-wrong-site corruption 0064 exists to eliminate and that worker/po.ts:738 calls
+-- "the one surface in this fan-out that corrupted rather than refused". The estimate must
+-- carry the unambiguous job_id or the site is genuinely unrecoverable.
+--
+-- The value is ALREADY KNOWN and thrown away: EstimatesPage holds the selected job_id in
+-- state and simply does not send it. This column gives it somewhere to land, and the
+-- disposition screen then resolves the site through the EXISTING
+-- GET /api/po/jobs/:job_id/ship-to route, which has returned site_phase since 0064.
+--
+-- DEFAULT '' rather than NULL, and no foreign key: every estimate uploaded before this
+-- migration has no job_id and never will, so '' is the honest "not recorded" value and
+-- every reader can treat it as falsy without a null branch. No FK to jobs because an
+-- estimate is a snapshot — a job later archived or renamed must not break a historic
+-- estimate row, the same reasoning 0056 records for the rfqs ship-to snapshot.
+--
+-- The site is NOT re-resolved server-side at draft time. parseDraftBody takes site_phase
+-- from the request body verbatim, by design: the hand-built PO builder path treats
+-- auto-fill as a convenience the operator may always override (worker/po.ts:709). Seeding
+-- it in the SPA preserves that; overriding it in the Worker would not.
+--
+-- Writers: worker/po_estimates.ts (the office upload route).
+-- Readers: the estimate list/detail projection → EstimateDispositionPage.
+--
+-- DEPLOY ORDER (lockout class #2): apply --remote BEFORE deploying the Worker that SELECTs
+-- this column, or every estimate read 500s on the unknown column.
+ALTER TABLE po_estimates ADD COLUMN job_id TEXT NOT NULL DEFAULT '';

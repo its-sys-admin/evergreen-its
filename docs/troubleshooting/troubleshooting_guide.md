@@ -663,6 +663,63 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **See also:** runbook `docs/runbooks/material_manifest_import.md`
 
+### schedule-poll screens, OCRs, and files an uploaded project-schedule PDF
+
+| What happens | |
+|---|---|
+| Daemon | `schedule-poll` |
+| Worker route | `GET /api/fieldops/schedules/internal/pending` |
+| Sheets | `ITS_Review_Queue` |
+| Config gates | `field_ops.schedule_poll.polling_enabled`, `po_materials.po_attach_screen.clamav_enabled` |
+
+**Healthy signals:**
+- With the gate on, an office-uploaded schedule PDF is HMAC- and digest-verified, §34-screened, rendered + OCR'd in a killable sandbox child (on-device Apple Vision — no cloud AI), filed to Box (job → Schedules), and lands `parsed` with a reviewable grid + page previews for the validate screen. It never commits a task by itself — the human disposes.
+
+#### Uploaded schedules are not being pulled or parsed.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** schedule-poll gate off, designed-dark, no marker written, schedule_creds_missing
+
+**Checks (in order):**
+- Is schedule-poll loaded AND field_ops.schedule_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design.
+- If both are on, look for schedule_creds_missing (CRITICAL) — the daemon is fail-closed and will not poll half-configured.
+
+**Resolutions (in order):**
+- Load the plist and flip the gate together; a first activation is a §44 capability action — confirm with Seth. Missing credentials always escalate.
+
+**See also:** runbook `docs/runbooks/schedule_import_path.md`
+
+#### An uploaded schedule was refused (unreadable or MALICIOUS), failed integrity, or imported with an active-content warning.
+
+**Resolution class:** Escalate to Seth (co-resolve)
+
+**Signals:** schedule_unreadable, schedule_active_content, schedule_malicious, schedule_integrity_failed, ocr_failed, no_rows_recognised
+
+**Checks (in order):**
+- Read the ITS_Review_Queue row (refusals) or the validate screen's parse notes (warnings). An unreadable document (ocr_failed — the page reader crashed or timed out; no_rows_recognised — a cover page or blank export) is ORDINARY — ask the office for a fresh Smartsheet PDF export.
+- schedule_active_content is a WARNING, not a refusal (the manifest lane's 2026-08-11 disposition, inherited) — the document imported; the note says to take care opening the ORIGINAL from Box. Nothing to repair.
+- A security_flag row is not a readability problem; an integrity failure means the bytes disagree with what was signed.
+
+**Resolutions (in order):**
+- For a readability refusal only, clear that schedule's id from state/schedule_poll_flagged.json to retry. NEVER clear a flag for a MALICIOUS verdict or an integrity failure — both escalate, and the bytes are retained for investigation.
+
+**See also:** runbook `docs/runbooks/schedule_import_path.md`
+
+#### The daemon's grid post for a schedule was permanently refused by the Worker (an HTTP 4xx), and the schedule stopped retrying.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** schedule_worker_rejected, worker_rejected flag, invalid_rows
+
+**Checks (in order):**
+- Read the Review-Queue row — it names the HTTP status and detail. Rare by construction; the daemon clamps its grid to the Worker's own bounds before posting, with a visible parse note per clamp.
+
+**Resolutions (in order):**
+- If the cause was transient tooling and the document should retry, delete that schedule's id from state/schedule_poll_flagged.json — the same flag-file remediation as a readability refusal, and NEVER for an integrity/malicious flag. A repeat on the same document escalates.
+
+**See also:** runbook `docs/runbooks/schedule_import_path.md`
+
 ### The archive pass relocates a closed job's seven containers (and brings them back)
 
 | What happens | |

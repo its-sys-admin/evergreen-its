@@ -355,6 +355,21 @@ NODES: tuple[MapNode, ...] = (
         marker="manifest_poll",
     ),
     MapNode(
+        id="schedule_poll", label="schedule_poll", kind="daemon", lane="generation", band="fieldops",
+        blurb="The 120s job-schedule importer daemon (ADR-0006 PR-3): pulls office-uploaded "
+              "project-schedule PDFs, re-verifies the schedule:v1 HMAC + digest, §34-screens, "
+              "OCRs the vector-outline Gantt export inside a KILLABLE sandbox child (Apple "
+              "Vision — local, no cloud AI), reconstructs the table, and posts a REVIEWABLE "
+              "GRID plus source-page previews for the validate screen. The parser PROPOSES; "
+              "the human commits.",
+        error_scripts=("field_ops.schedule_poll",),
+        launchd_label="org.solutionsmith.its.schedule-poll", heartbeat_stem="schedule_poll",
+        config_gate="field_ops.schedule_poll.polling_enabled",
+        watchdog_checks=("C",), script_path="field_ops/schedule_poll.py",
+        runbook="docs/runbooks/schedule_import_path.md", send_half="generation",
+        marker="schedule_poll",
+    ),
+    MapNode(
         id="rfq_poll", label="rfq_poll", kind="daemon", lane="generation", band="po",
         blurb="The 120s outbound-RFQ generation daemon (ADR-0004 Lane 2): pulls composed "
               "requests-for-quote from the Worker, re-verifies the rfq:v1 HMAC, and per vendor "
@@ -706,6 +721,14 @@ EDGES: tuple[MapEdge, ...] = (
             "write"),
     MapEdge("manifest_poll", "worker", "post parsed grid + column-map proposal, result LAST", "push"),
     MapEdge("manifest_poll", "sheet_review_queue", "§34 / integrity / parse refusals", "write"),
+    # job-schedule import (ADR-0006 PR-3) — the manifest lane's schedule sibling: pull
+    # the pool, sandbox-OCR, file the original to Box, post the grid back, ticket refusals.
+    MapEdge("worker", "schedule_poll", "pull uploaded schedules — schedule:v1 HMAC + digest re-verify",
+            "pull", port="HMAC"),
+    MapEdge("schedule_poll", "box", "file the ORIGINAL schedule PDF (job → Schedules)",
+            "write"),
+    MapEdge("schedule_poll", "worker", "post OCR'd grid + page previews, result LAST", "push"),
+    MapEdge("schedule_poll", "sheet_review_queue", "§34 / integrity / unreadable refusals", "write"),
     # purchase orders
     MapEdge("worker", "po_poll", "pull drafts + attachments — HMAC + integer-cents re-assert", "pull",
             port="HMAC"),

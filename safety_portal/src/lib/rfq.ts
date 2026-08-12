@@ -50,6 +50,10 @@ export interface RfqListRow {
   id: number;
   rfq_number: string | null;
   job_no: string;
+  /** 0070 — the Evergreen identifier's site segment; 0 = no site. The RFQ number
+   *  carries it as `RFQ-{job_no}.{site}-{NNN}` so two sites of one project do not
+   *  share a sequence. */
+  site_phase: number;
   job_name: string;
   ship_to_name: string;
   ship_to_address: string;
@@ -80,6 +84,8 @@ export interface RfqDetail {
  *  positions are server-assigned from array order. */
 export interface RfqDraftBody {
   job_no: string;
+  /** 0070 — the site segment. Omit or 0 for a job with no site breakdown. */
+  site_phase?: number;
   job_name?: string;
   ship_to_name?: string;
   ship_to_address?: string;

@@ -288,6 +288,10 @@ DARK_BEARER_SECRETS: tuple[str, ...] = (
     # PR3b: the manifest importer's OWN bearer — same privilege-separation reason
     # as the estimate token (it decodes hostile PDF/xlsx bytes).
     "ITS_PORTAL_MANIFEST_TOKEN",
+    # ADR-0006 PR-3: the schedule importer's OWN bearer (decision 5) — same
+    # privilege-separation reason as the manifest token (it decodes hostile PDF
+    # bytes), scoping only /api/fieldops/schedules/internal/*.
+    "ITS_PORTAL_SCHEDULE_TOKEN",
     "ITS_PORTAL_RFQ_TOKEN",
 )
 # Operator-dashboard PIN (operator_dashboard/auth.py PIN_KEYCHAIN_KEY). The dashboard
@@ -483,6 +487,11 @@ CONFIG_ROWS: tuple[ConfigRow, ...] = (
     # ships dark and activation is a §44 capability action, not a cutover checkbox.
     ConfigRow("field_ops.manifest_poll.polling_enabled", "field_ops", "non_empty"),
     ConfigRow("field_ops.manifest_poll.poll_interval_seconds", "field_ops", "non_empty"),
+    # ADR-0006 PR-3 job-schedule importer. Same posture as the manifest rows above:
+    # `non_empty`, NEVER forced true — the lane ships dark (seed_schedule_config.py
+    # seeds the gate false) and activation is a §44 capability action.
+    ConfigRow("field_ops.schedule_poll.polling_enabled", "field_ops", "non_empty"),
+    ConfigRow("field_ops.schedule_poll.poll_interval_seconds", "field_ops", "non_empty"),
     ConfigRow("po_materials.estimate_poll.max_pages_preview", "po_materials", "non_empty"),
     # Extraction-ladder tier gates (ADR-0004 E4-E6, PR-B). Asserted SEEDED PRESENT
     # (non_empty, NEVER forced 'true' — the dark-ship reflex: all three seed 'false'

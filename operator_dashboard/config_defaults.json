@@ -102,6 +102,17 @@
       "origin": "daemon"
     },
     {
+      "setting": "field_ops.schedule_poll.polling_enabled",
+      "workstream": "field_ops",
+      "kind": "bool",
+      "default": false,
+      "purpose": "Runtime on/off gate for the field_ops.schedule_poll daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox).",
+      "read_by": [
+        "field_ops.schedule_poll"
+      ],
+      "origin": "daemon"
+    },
+    {
       "setting": "alerting.dedupe_window_minutes",
       "workstream": "global",
       "kind": "int",
@@ -422,6 +433,7 @@
       "purpose": "Shared §34 ClamAV posture; owned by po_materials. One scanner setting spans every document pool (PO attachments, estimates, manifests).",
       "read_by": [
         "field_ops.manifest_poll",
+        "field_ops.schedule_poll",
         "po_materials.estimate_poll",
         "po_materials.po_poll"
       ],
@@ -726,6 +738,7 @@
       "read_by": [
         "field_ops.job_archive",
         "field_ops.manifest_poll",
+        "field_ops.schedule_poll",
         "safety_reports.intake",
         "safety_reports.portal_poll",
         "safety_reports.weekly_generate",
@@ -842,6 +855,7 @@
       "read_by": [
         "field_ops.fieldops_sync",
         "field_ops.manifest_poll",
+        "field_ops.schedule_poll",
         "po_materials.estimate_poll",
         "po_materials.po_poll",
         "po_materials.rfq_poll",

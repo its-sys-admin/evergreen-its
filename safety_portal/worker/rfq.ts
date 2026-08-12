@@ -147,6 +147,9 @@ function parseLines(raw: unknown): RfqLine[] | string {
 // ── Draft body validation ───────────────────────────────────────────────────────
 interface RfqDraftFields {
   job_no: string;
+  /** 0070 — the Evergreen identifier's SITE segment. job_no stays two-segment (0064's model);
+   *  this is what makes MH405's and OG593's RFQ numbers distinguishable. */
+  site_phase: number;
   job_name: string;
   ship_to_name: string;
   ship_to_address: string;
@@ -165,6 +168,13 @@ interface RfqDraftFields {
 function parseRfqDraftBody(body: Record<string, unknown>): RfqDraftFields | string {
   const job_no = str(body.job_no);
   if (!JOB_NO_RE.test(job_no)) return "invalid_job_no";
+  // 0070 — same shape and bounds parseDraftBody enforces on a PO's site_phase (po.ts), so a
+  // value that is legal on one procurement lane is legal on the other. job_no itself is NOT
+  // widened: 0064's model is that job_no stays two-segment everywhere.
+  const site_phase = body.site_phase === undefined ? 0 : body.site_phase;
+  if (typeof site_phase !== "number" || !Number.isSafeInteger(site_phase) || site_phase < 0 || site_phase > 9999) {
+    return "invalid_site_phase";
+  }
   const job_name = str(body.job_name);
   if (job_name.length > MAX_NAME) return "invalid_job_name";
   const ship_to_name = str(body.ship_to_name);
@@ -209,7 +219,7 @@ function parseRfqDraftBody(body: Record<string, unknown>): RfqDraftFields | stri
   }
 
   return {
-    job_no, job_name,
+    job_no, site_phase, job_name,
     ship_to_name, ship_to_address, ship_to_city, ship_to_state, ship_to_zip,
     delivery_contact_name, delivery_contact_phone, delivery_contact_email,
     scope_text, due_date: dd, lines, vendor_keys,
@@ -248,6 +258,9 @@ export interface RfqRow {
   id: number;
   rfq_number: string | null;
   job_no: string;
+  /** 0070 — the Evergreen identifier's site segment; 0 = no site, and the composed
+   *  rfq_number then omits it entirely (see the generate route). */
+  site_phase: number;
   job_name: string;
   ship_to_name: string;
   ship_to_address: string;
@@ -298,7 +311,7 @@ const VENDOR_COLS =
   "vendor_key, status, box_pdf_file_id, box_form_file_id, review_row_id, responded_estimate_id, sent_at";
 // The list/detail projection — never the hmac (internal pending serves it explicitly).
 const ROW_COLS =
-  "id, rfq_number, job_no, job_name, ship_to_name, ship_to_address, ship_to_city, " +
+  "id, rfq_number, job_no, site_phase, job_name, ship_to_name, ship_to_address, ship_to_city, " +
   "ship_to_state, ship_to_zip, delivery_contact_name, delivery_contact_phone, " +
   "delivery_contact_email, scope_text, due_date, status, draft_version, created_by, " +
   "created_at, updated_at";
@@ -529,15 +542,15 @@ export function registerRfqRoutes(app: FieldopsApp, gates: RfqGates): void {
     const res = await c.env.DB.batch([
       c.env.DB
         .prepare(
-          "INSERT INTO rfqs (rfq_uuid, job_no, job_name, ship_to_name, ship_to_address, " +
+          "INSERT INTO rfqs (rfq_uuid, job_no, site_phase, job_name, ship_to_name, ship_to_address, " +
             "ship_to_city, ship_to_state, ship_to_zip, delivery_contact_name, " +
             "delivery_contact_phone, delivery_contact_email, scope_text, due_date, status, created_by) " +
-            "VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'draft',?14) RETURNING id",
+            "VALUES (?1,?2,?15,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'draft',?14) RETURNING id",
         )
         .bind(
           rfqUuid, d.job_no, d.job_name, d.ship_to_name, d.ship_to_address, d.ship_to_city,
           d.ship_to_state, d.ship_to_zip, d.delivery_contact_name, d.delivery_contact_phone,
-          d.delivery_contact_email, d.scope_text, d.due_date, actor,
+          d.delivery_contact_email, d.scope_text, d.due_date, actor, d.site_phase,
         ),
       auditStmt(c, actor, "rfq_draft_create", rfqUuid, {
         rfq_uuid: rfqUuid, job_no: d.job_no, lines: d.lines.length, vendors: d.vendor_keys.length,
@@ -624,7 +637,7 @@ export function registerRfqRoutes(app: FieldopsApp, gates: RfqGates): void {
     const res = await c.env.DB.batch([
       c.env.DB
         .prepare(
-          "UPDATE rfqs SET job_no=?2, job_name=?3, ship_to_name=?4, ship_to_address=?5, " +
+          "UPDATE rfqs SET job_no=?2, site_phase=?14, job_name=?3, ship_to_name=?4, ship_to_address=?5, " +
             "ship_to_city=?6, ship_to_state=?7, ship_to_zip=?8, delivery_contact_name=?9, " +
             "delivery_contact_phone=?10, delivery_contact_email=?11, scope_text=?12, " +
             "due_date=?13, updated_at=unixepoch(), draft_version=draft_version+1 " +
@@ -633,7 +646,7 @@ export function registerRfqRoutes(app: FieldopsApp, gates: RfqGates): void {
         .bind(
           id, d.job_no, d.job_name, d.ship_to_name, d.ship_to_address, d.ship_to_city,
           d.ship_to_state, d.ship_to_zip, d.delivery_contact_name, d.delivery_contact_phone,
-          d.delivery_contact_email, d.scope_text, d.due_date,
+          d.delivery_contact_email, d.scope_text, d.due_date, d.site_phase,
         ),
       auditStmtIfChanged(c, actor, "rfq_draft_update", String(id), {
         rfq_id: id, lines: d.lines.length, vendors: d.vendor_keys.length,
@@ -689,18 +702,29 @@ export function registerRfqRoutes(app: FieldopsApp, gates: RfqGates): void {
     const inactive = await findUnknownVendor(c.env.DB, vendorKeys);
     if (inactive !== null) return c.json({ error: "vendor_inactive", vendor_key: inactive }, 409);
 
-    // MAX(seq)+1 over the job's ALLOCATED numbers. The number format is fixed
-    // ('RFQ-' + job_no + '-' + NNN), so the seq starts at a computed offset; seq > 999
-    // simply widens past 3 digits (padStart pads, never truncates) — still UNIQUE-safe.
+    // 0070 — the number prefix, built HERE rather than in SQL so site-0 emits NO segment.
+    // That rule is load-bearing, not cosmetic: the allocator below recovers NNN by measuring
+    // PAST this prefix, so if a site-0 job started emitting `.0`, the already-issued
+    // `RFQ-2026.384-001` (16 chars) measured against the longer `RFQ-2026.384.0-` (15 chars)
+    // yields "1" instead of "001" — MAX+1 = 2 — and generate mints `-002` beside an existing
+    // `-001`. Two DIFFERENT strings, so the UNIQUE(rfq_number) index does not catch it; the
+    // sequence is simply, silently wrong. Matches src/lib/jobNumber.formatJobNumber.
+    const sitePhase = rfq.site_phase ?? 0;
+    const numberPrefix = sitePhase > 0 ? `RFQ-${rfq.job_no}.${sitePhase}-` : `RFQ-${rfq.job_no}-`;
+
+    // MAX(seq)+1 over the (job, SITE) family's ALLOCATED numbers. Scoping to site_phase as
+    // well as job_no is the other half of the guard above: a legacy site-less row must only
+    // ever be counted for site-0 RFQs, never against a site-bearing family whose prefix it
+    // does not share. seq > 999 simply widens past 3 digits (padStart pads, never truncates).
     const seqRow = await c.env.DB
       .prepare(
-        "SELECT COALESCE(MAX(CAST(substr(rfq_number, length('RFQ-' || ?1 || '-') + 1) AS INTEGER)), 0) + 1 AS seq " +
-          "FROM rfqs WHERE job_no = ?1 AND rfq_number IS NOT NULL",
+        "SELECT COALESCE(MAX(CAST(substr(rfq_number, length(?2) + 1) AS INTEGER)), 0) + 1 AS seq " +
+          "FROM rfqs WHERE job_no = ?1 AND site_phase = ?3 AND rfq_number IS NOT NULL",
       )
-      .bind(rfq.job_no)
+      .bind(rfq.job_no, numberPrefix, sitePhase)
       .first<{ seq: number }>();
     const seq = seqRow?.seq ?? 1;
-    const rfqNumber = `RFQ-${rfq.job_no}-${String(seq).padStart(3, "0")}`;
+    const rfqNumber = `${numberPrefix}${String(seq).padStart(3, "0")}`;
 
     // Fail closed on a missing HMAC secret — signing with undefined would mint
     // signatures the Mac side can never verify (silent loss).

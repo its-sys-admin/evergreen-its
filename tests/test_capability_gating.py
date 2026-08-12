@@ -162,6 +162,20 @@ GATED_SCRIPTS: list[tuple[str, list[str]]] = [
          "anthropic", "anthropic_client"],
     ),
     (
+        # schedule_poll (ADR-0006 PR-3) is the job-schedule import daemon: it drains the
+        # send-free D1 schedule pool, §34-screens each PDF, OCRs it inside the KILLABLE
+        # sandbox child (Quartz render + Apple Vision — LOCAL, ADR-0006 decision 3),
+        # reconstructs + parses the table, files the ORIGINAL bytes to Box and posts the
+        # reviewable grid back. Like manifest_poll it decodes hostile PDF bytes — which
+        # is exactly why it holds its OWN bearer and why this entry matters: no send
+        # path, no LLM (cloud OR local — `ollama_client` is forbidden too; the lane has
+        # no Tier-2). Its HTTP egress to OUR Worker rides the F02-allowlisted
+        # shared.portal_client, so it imports no raw network library.
+        "field_ops/schedule_poll.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client"],
+    ),
+    (
         # Schedule lane (ADR-0006) — parent-side OCR entry: hands untrusted schedule-PDF
         # bytes to the KILLABLE sandbox child (Quartz render + rotation ladder + Apple
         # Vision, all in-child) and shape-validates the JSON that comes back. LOCAL

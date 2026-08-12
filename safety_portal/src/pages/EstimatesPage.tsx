@@ -120,8 +120,12 @@ export function EstimatesPage({
     const job = jobs.find((j) => j.job_id === id);
     if (!job) return;
     setJobName(job.project_name);
-    // Stored Evergreen number (0057) first; name-prefix parse stays the fallback.
-    const m = /^(\d{4}\.\d{3})/.exec((job.project_name ?? "").trim());
+    // Stored Evergreen number (0057) first; name-prefix parse stays the fallback. The regex is
+    // anchored at the END OF THE NUMBER (`(?![\d.])`, not `$` — the name continues): the old
+    // open-tailed form matched "2026.384.1 Coker Solar" and returned the truncated "2026.384",
+    // a wrong-but-plausible number for a DIFFERENT site of the same project. Only job_no is
+    // needed here — the site travels with job_id — but the parse must still not lie.
+    const m = /^(\d{4}\.\d{3})(?:\.(\d+))?(?![\d.])/.exec((job.project_name ?? "").trim());
     setJobNo(job.job_no || (m ? m[1] : ""));
   }
 
@@ -148,6 +152,10 @@ export function EstimatesPage({
       const b64 = await fileToB64(file);
       await est.uploadEstimate({
         job_no: jobNo.trim(),
+        // 0069 — the page has held this in state since the job dropdown was added and simply
+        // dropped it. Without it the disposition screen cannot tell MH405 from OG593 and every
+        // estimate-imported PO composes at site 0.
+        ...(jobId ? { job_id: jobId } : {}),
         job_name: jobName.trim() || undefined,
         vendor_key: vendorKey || undefined,
         filename: file.name,

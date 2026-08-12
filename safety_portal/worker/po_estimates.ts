@@ -325,7 +325,10 @@ function parseExtraction(raw: unknown): ExtractionBody | string {
 
 // The projection the list/detail reads serve (never chunk bytes, never the hmac).
 const ROW_COLS =
-  "id, est_uuid, job_no, job_name, vendor_key, filename, declared_mime, size_bytes, sha256, " +
+  // job_id (0069): the UNAMBIGUOUS job identity. job_no alone cannot resolve the site —
+  // 2026.384 is both MH405 (site 1) and OG593 (site 2) — so the disposition screen needs
+  // this to look the site up and seed the PO draft with it.
+  "id, est_uuid, job_no, job_id, job_name, vendor_key, filename, declared_mime, size_bytes, sha256, " +
   "status, doc_type, detail, uploaded_by, box_file_id, family_key, supersedes_estimate_id, " +
   "po_id, rfq_id, rfq_vendor_key, created_at, screened_at, extracted_at, disposed_at";
 
@@ -672,6 +675,16 @@ export function registerPoEstimateRoutes(app: FieldopsApp, gates: PoEstimateGate
 
     const jobNo = str(body.job_no);
     if (!JOB_NO_RE.test(jobNo)) return c.json({ error: "invalid_job_no" }, 400);
+    // 0069 — the job identity, OPTIONAL so the route stays backward-compatible with any
+    // caller that only knows the project number. Bounded but not existence-checked: an
+    // estimate is a snapshot, and refusing an upload because a job row moved would lose the
+    // vendor's document over a bookkeeping mismatch. A job_id that resolves to nothing simply
+    // leaves the site un-seeded, which is exactly today's behaviour.
+    const jobIdRaw = optStr(body.job_id, MAX_SHORT);
+    if (jobIdRaw === "bad") return c.json({ error: "invalid_job_id" }, 400);
+    // optStr returns NULL for absent/blank, but the column is NOT NULL DEFAULT '' — binding
+    // null would be a constraint violation, i.e. a 500 on every upload that omits the job.
+    const jobId = jobIdRaw ?? "";
     const jobName = optStr(body.job_name, MAX_TEXT);
     if (jobName === "bad") return c.json({ error: "invalid_job_name" }, 400);
     const vendorKey = optStr(body.vendor_key, MAX_SHORT);
@@ -744,12 +757,12 @@ export function registerPoEstimateRoutes(app: FieldopsApp, gates: PoEstimateGate
       await c.env.DB.batch([
         c.env.DB
           .prepare(
-            "INSERT INTO po_estimates (est_uuid, job_no, job_name, vendor_key, filename, " +
+            "INSERT INTO po_estimates (est_uuid, job_no, job_id, job_name, vendor_key, filename, " +
               "declared_mime, size_bytes, sha256, status, hmac, uploaded_by, family_key) " +
-              "VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?10,?11)",
+              "VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending',?10,?11,?12)",
           )
           .bind(
-            estUuid, jobNo, jobName, vendorKey, filename, declaredMime, bytes.length,
+            estUuid, jobNo, jobId, jobName, vendorKey, filename, declaredMime, bytes.length,
             sha256, hmac, actor,
             // family_key: sha256 fallback until a body-derived vendor|quote_number
             // identity lands at extraction (E4 — ADR decision 7).

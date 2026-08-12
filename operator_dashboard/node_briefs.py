@@ -465,6 +465,25 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "No heartbeat → check the polling gate, then the launchd job, then the runbook."
         ),
     ),
+    "schedule_poll": NodeBrief(
+        what=(
+            "The office uploads the job's schedule PDF; this daemon turns it into a grid "
+            "someone can check on screen. Most exports carry no real text, so it photographs "
+            "each page and reads it with on-device OCR inside a throwaway child process, then "
+            "files the original to the job's Schedules folder in Box."
+            "\n\n"
+            "It deliberately decides nothing: OCR misreads digits confidently, so every cell "
+            "waits for a person on the validate screen, checked against the page image beside "
+            "it. An unreadable export gets a Review Queue row asking for a fresh one — "
+            "ordinary, not a fault. An integrity failure, a malicious verdict, or a first "
+            "switch-on escalate."
+        ),
+        key_label="Key signals",
+        key_line=(
+            "Healthy: a fresh heartbeat each ~120-second cycle and uploads reaching 'parsed'. "
+            "No heartbeat → check the polling gate, then the launchd job, then the runbook."
+        ),
+    ),
     "rfq_poll": NodeBrief(
         what=(
             "An RFQ (request for quote) starts in the portal, where the office names its vendors. "
