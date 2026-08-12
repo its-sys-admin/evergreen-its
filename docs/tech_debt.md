@@ -2616,3 +2616,21 @@ provenance is document-derived.
 
 Surfaced: 2026-08-12 tech-debt triage — carved out of the nine-defect cluster during defect-by-defect
 verification, because closing the parent entry would otherwise have dropped it.
+
+## [OPEN 2026-08-12, low] Estimate dispositions never mirror back to Estimate_Log — the office ledger freezes at filing statuses
+
+The SPA dispose flow (accept-into-PO-draft / reject) flips only the D1 `po_estimates` row; no pass
+stamps the outcome onto the corresponding `Estimate_Log` row, so the office-facing ledger reads
+`extracted`/`needs_review` forever even after a quote became a PO draft. The sheet's picklist and
+`picklist_validation.REGISTRY` already carry `imported`/`rejected`/`superseded` — they have **zero
+writers** (the 2026-08-12 wiring audit; `estimate_log.py`'s docstring, which claimed such a pass
+existed, was corrected in the same change). D1 stays authoritative, so nothing is lost — but anyone
+using the ledger to see which quotes still await disposition gets a permanently wrong answer.
+
+**Fix shape:** a forward-only status-sync pass in `estimate_poll` (the `rfq_poll` pass-② pattern):
+read disposed `po_estimates` rows via an internal route (needs a small Worker addition — the current
+internal `/pending` serves only undisposed statuses) and `estimate_log.update_status` each. Gate on
+the existing lane gate; no new bearer needed.
+
+**Trigger:** the first time the office asks "which quotes are still open?" off the sheet, or when
+the disposition screen gains a "history" view — whichever comes first.

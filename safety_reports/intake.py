@@ -2435,6 +2435,30 @@ def _run_portal_pipeline(
             f"portal: submission_uuid={submission_uuid} already filed; skipping re-file",
             error_code="portal_already_filed", correlation_id=correlation_id,
         )
+        # Self-heal the inline attach on the replay (#79/#98 parity, wiring audit
+        # 2026-08-12): a crash between the fresh-path attach and the receipt used to
+        # leave the Submission row permanently bare, because this branch returned
+        # before re-attaching. The rendered bytes are not in hand here, so the Box
+        # original is re-downloaded under its OWN filed name (deterministic → the
+        # attach replaces, never duplicates). WHOLLY fenced — a Box hiccup must
+        # never fail an already-filed replay.
+        try:
+            recovered_id = _box_file_id_from_link(recovered)
+            if recovered_id:
+                meta = box_client.get_file_metadata(recovered_id)
+                filed_name = str(meta.get("name") or "")
+                if filed_name:
+                    _attach_pdf_best_effort(
+                        sheet_id, int(existing["_row_id"]), filed_name,
+                        box_client.download_file(recovered_id), correlation_id,
+                    )
+        except Exception as exc:  # noqa: BLE001 — supplementary self-heal only
+            error_log.log(
+                Severity.WARN, SCRIPT_NAME,
+                f"portal: already-filed re-attach skipped for {submission_uuid}: "
+                f"{type(exc).__name__}: {exc!r}",
+                error_code="portal_reattach_failed", correlation_id=correlation_id,
+            )
         return ProcessResult(
             status="already_filed", message_id=submission_uuid,
             correlation_id=correlation_id, notes="already filed", box_link=recovered,

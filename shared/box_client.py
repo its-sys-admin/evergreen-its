@@ -772,12 +772,14 @@ def move_folder(
     `estimate_poll._resolve_quotes_box_folder` all bottom out on it, and its per-job folder
     carries ``RFQs/`` + ``Vendor Quotes/`` along) and the subcontract lane since 2026-08-12
     (``subcontracts.box.portal_root_folder_id`` — `subcontract_poll._resolve_subcontract_box_folder`),
-    while ``safety_reports.box.portal_root_folder_id`` remains the SHARED root for safety AND
-    materials manifests (`manifest_poll._resolve_manifests_box_folder` bottoms out on it), so
-    relocating ``<safety root>/<Job>`` still carries those. Progress has its own root. A future
+    while ``safety_reports.box.portal_root_folder_id`` remains the SHARED root for every
+    portal per-submission PDF, the materials manifests AND the imported schedule PDFs
+    (`manifest_poll._resolve_manifests_box_folder` and
+    `schedule_poll._resolve_schedules_box_folder` both bottom out on it), so relocating
+    ``<safety root>/<Job>`` still carries all of those. Progress has its own root. A future
     reader will be tempted to "fix" the residual asymmetry by adding rfq / vendor-quote /
-    manifest Box slots — don't: those subtrees ride their parent folders, and a second slot
-    would double-move them into the very collision this function refuses.
+    manifest / schedule Box slots — don't: those subtrees ride their parent folders, and a
+    second slot would double-move them into the very collision this function refuses.
 
     ATOMIC move+rename, unlike Smartsheet. boxsdk emits ONE ``PUT /folders/{id}`` carrying
     both ``parent.id`` and ``name``, so there is no crash window between relocating and

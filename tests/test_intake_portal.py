@@ -56,6 +56,15 @@ def stub(mocker) -> dict[str, MagicMock]:
         "resolve_sub": mocker.patch.object(intake, "_resolve_box_subfolder", return_value="leaf1"),
         "upload": mocker.patch.object(intake.box_client, "upload_bytes", return_value={"id": "f9", "name": "x", "size": 5}),
         "get_or_create": mocker.patch.object(intake.box_client, "get_or_create_folder", return_value="fb1"),
+        # The already-filed re-attach self-heal (wiring audit 2026-08-12) reads the
+        # filed original back from Box; stubbed so the dedupe test is deterministic.
+        "file_meta": mocker.patch.object(
+            intake.box_client, "get_file_metadata",
+            return_value={"id": "old", "name": "Bradley 1_2026-05-27_form.pdf", "size": 5},
+        ),
+        "download": mocker.patch.object(
+            intake.box_client, "download_file", return_value=b"%PDF-recovered"
+        ),
         "review": mocker.patch.object(intake.review_queue, "add"),
         "log": mocker.patch.object(intake.error_log, "log"),
         "clamav": mocker.patch.object(intake, "_photo_clamav_enabled", return_value=False),
@@ -153,11 +162,12 @@ def test_mirror_tree_new_job_does_not_strand(stub):
 # ---- dedupe (re-pull) ----------------------------------------------------
 
 
-def test_dedupe_already_filed_skips_refile_and_recovers_link(stub):
+def test_dedupe_already_filed_skips_refile_and_recovers_link(stub, mocker):
     stub["find"].return_value = {
         "_row_id": 7, week_sheet.COL_SUBMISSION_PDF: "https://app.box.com/file/old",
         "Row Type": week_sheet.ROW_TYPE_SUBMISSION,
     }
+    attach = mocker.patch.object(intake, "_attach_pdf_best_effort")
     result = intake.process_portal_submission(dict(BASE_SUB))
     assert result.status == "already_filed"
     assert result.box_link == "https://app.box.com/file/old"
@@ -165,6 +175,27 @@ def test_dedupe_already_filed_skips_refile_and_recovers_link(stub):
     assert result.box_file_id == "old"
     stub["write"].assert_not_called()
     stub["upload"].assert_not_called()
+    # Every-service self-heal (wiring audit 2026-08-12): the replay re-downloads the
+    # filed original and re-attaches it on the EXISTING row under its own filed name —
+    # a crash between the fresh-path attach and the receipt is no longer permanent.
+    stub["download"].assert_called_once_with("old")
+    attach.assert_called_once()
+    assert attach.call_args.args[1] == 7
+    assert attach.call_args.args[2] == "Bradley 1_2026-05-27_form.pdf"
+    assert attach.call_args.args[3] == b"%PDF-recovered"
+
+
+def test_dedupe_reattach_failure_never_fails_the_replay(stub, mocker):
+    """The re-attach is WHOLLY fenced: a Box outage on the self-heal path must not
+    turn an already-filed replay into an error (the receipt still posts)."""
+    stub["find"].return_value = {
+        "_row_id": 7, week_sheet.COL_SUBMISSION_PDF: "https://app.box.com/file/old",
+        "Row Type": week_sheet.ROW_TYPE_SUBMISSION,
+    }
+    stub["download"].side_effect = box_client.BoxError("503")
+    result = intake.process_portal_submission(dict(BASE_SUB))
+    assert result.status == "already_filed"
+    assert result.box_link == "https://app.box.com/file/old"
 
 
 # ---- permanent refusals → review_queue (drain) ---------------------------

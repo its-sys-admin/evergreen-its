@@ -254,9 +254,9 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
         what=(
             "Every ITS-produced document lands here first, and everything else points at it. "
             "Each workstream owns its own top-level tree — ITS Safety Reports (also carrying "
-            "the materials manifests), ITS Progress Reports, ITS Purchase Orders (also RFQs "
-            "and vendor quotes), ITS Subcontracts — with ITS Archive beside them for closed "
-            "jobs. A job's documents live at <root>/<job name> in each tree."
+            "the materials manifests and schedule PDFs), ITS Progress Reports, ITS Purchase "
+            "Orders (also RFQs and vendor quotes), ITS Subcontracts — with ITS Archive beside "
+            "them for closed jobs. A job's documents live at <root>/<job name> in each tree."
             "\n\n"
             "Day-to-day this is watch-only. The 'Box roots' panel is the validity surface: red "
             "means a root id is missing or dead (filings hold), amber means renamed or "

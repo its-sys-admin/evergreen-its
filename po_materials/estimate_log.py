@@ -5,9 +5,13 @@ remains the authoritative estimate status machine; this ITS-owned sheet (§51) i
 ledger the office reads without portal access — the PO_Log posture, mirror-not-master.
 
 `estimate_poll` APPENDS the row at servicing time (Status=needs_review for a filed
-doc, refused for a screen/doc-type rejection) and STAMPS later transitions; PR-B's
-extraction pass fills Vendor Name / Quote Number and stamps extracted; the SPA
-dispose flow's status pass stamps imported / rejected / superseded.
+doc, refused for a screen/doc-type rejection, extracted when the PR-B ladder fills
+Vendor Name / Quote Number) and inline-attaches the filed original (#79 parity,
+2026-08-12). Those filing-time statuses are TERMINAL on this sheet today: the SPA
+dispose flow flips only the D1 `po_estimates` row (imported / rejected /
+superseded), and NO pass mirrors those dispositions back here — the picklist
+carries the values, but their sole writers would be a future status-sync pass
+(recorded in docs/tech_debt.md). D1 is authoritative; read dispositions there.
 
 Write discipline
 ----------------

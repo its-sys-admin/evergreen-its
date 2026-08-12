@@ -40,13 +40,15 @@ containers**, then reports back. That separation is deliberate: it is what lets 
 | 2 | Smartsheet | the job's **Progress** folder (the Hours Log, Equipment, Material List, Material Incidents and Material Receipts trackers are *inside* it) | `ITS — Archive / <Job> / Progress` |
 | 3 | Smartsheet | the job's **Purchase Orders** folder | `ITS — Archive / <Job> / Purchase Orders` |
 | 4 | Smartsheet | the job's **Subcontracts** folder | `ITS — Archive / <Job> / Subcontracts` |
-| 5 | Box | the job's folder under the **safety** root | `ITS Archive / <Job> / Safety` |
+| 5 | Box | the job's folder under the **safety** root (every portal per-submission PDF — safety AND progress categories — plus screened photos, the Materials/Manifests and Schedules subfolders are *inside* it) | `ITS Archive / <Job> / Safety` |
 | 6 | Box | the job's folder under the **progress** root | `ITS Archive / <Job> / Progress` |
 | 7 | Box | the job's folder under the **purchase orders** root (PO PDFs + the RFQs and Vendor Quotes subfolders are *inside* it) | `ITS Archive / <Job> / Purchase Orders` |
+| 8 | Box | the job's folder under the **subcontracts** root (the .docx/.xlsx package + send ZIP) | `ITS Archive / <Job> / Subcontracts` |
 
-**Seven, not eleven.** In Box, the purchase-orders root's per-job folder carries the RFQs and
-vendor quotes with it, and the safety root is still shared by subcontracts and the materials
-manifests — so moving the job's safety folder carries those with it. (Jobs archived BEFORE the
+**Eight, not eleven.** In Box, the purchase-orders root's per-job folder carries the RFQs and
+vendor quotes with it, and the safety root is shared by the materials manifests AND the imported
+schedule PDFs (plus every portal per-submission PDF of both categories) — so moving the job's
+safety folder carries those with it. Subcontracts have owned their own root since 2026-08-12. (Jobs archived BEFORE the
 2026-08-11 PO-root split had their PO content inside the archived *Safety* folder; a restore of
 such a job puts it back under the safety root, and `scripts/migrations/relocate_po_box_folders.py`
 re-run moves it across.) Everything is a

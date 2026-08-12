@@ -466,7 +466,10 @@ def sync_once() -> int:
     # source; a MISSING declared row WARNs distinctly (config_row_missing). Runs after
     # @require_active (a PAUSED daemon never logs) and is fail-open — it never blocks the
     # cycle. The runtime _read_*_setting reads below are UNCHANGED (§14, additive).
-    resolve_and_log(SCRIPT_NAME, REQUIRED_CONFIG)
+    # The archive pass's five Box-root keys ride this daemon's startup sweep — the
+    # contract job_archive.py states beside its REQUIRED_CONFIG (that module has no
+    # entry point of its own; wiring audit 2026-08-12 found the promise unkept).
+    resolve_and_log(SCRIPT_NAME, REQUIRED_CONFIG + job_archive.REQUIRED_CONFIG)
 
     if not _sync_enabled():
         # Shipped default (OFF until cutover) — an intentional state, not an anomaly, so no

@@ -126,8 +126,13 @@ def _patch(mocker):
         "po_materials.estimate_poll.box_client.upload_bytes_or_new_version",
         return_value={"id": "f-est-1", "name": "x", "size": 9},
     )
+    # The ledger-row inline attach (#79 parity, wiring audit 2026-08-12).
+    attach = mocker.patch(
+        "po_materials.estimate_poll.smartsheet_client.attach_pdf_to_row", return_value=1
+    )
 
     seams = {
+        "attach": attach,
         "gate": mocker.patch(
             "po_materials.estimate_poll._polling_enabled", return_value=True
         ),
@@ -448,6 +453,14 @@ def test_clean_quote_filed_logged_previewed_and_resulted(_patch):
     result = _result_kwargs(_patch)
     assert result["status"] == "needs_review"
     assert result.get("box_file_id") == "f-est-1"
+    # Ledger-row inline attach (#79 parity, wiring audit 2026-08-12): the filed
+    # ORIGINAL rides the Estimate_Log row, content-typed by the verified MIME —
+    # the office reads the quote from the sheet without a Box round-trip.
+    _patch["attach"].assert_called_once()
+    attach_call = _patch["attach"].call_args
+    assert attach_call.args[1] == 1  # append_row's returned row id
+    assert _MINIMAL_PDF in list(attach_call.args) + list(attach_call.kwargs.values())
+    assert attach_call.kwargs.get("content_type") == "application/pdf"
     # A clean doc is not a security event and needs no one-shot flag.
     _patch["review_q"].assert_not_called()
     _patch["flags_persist"].assert_not_called()
