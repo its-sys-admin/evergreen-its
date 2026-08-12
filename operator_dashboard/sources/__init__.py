@@ -7,6 +7,7 @@ is one entry here — no route changes.
 from __future__ import annotations
 
 from operator_dashboard.sources.base import DataSource
+from operator_dashboard.sources.box_roots import BoxRootsSource
 from operator_dashboard.sources.daemons import DaemonStatusSource
 from operator_dashboard.sources.logs import LogTailSource
 from operator_dashboard.sources.runtime_state import (
@@ -38,6 +39,7 @@ PANELS: list[DataSource] = [
     ErrorsRecentSource(),
     ReviewQueueDepthSource(),
     SendQueueSource(),
+    BoxRootsSource(),
     AuditTrailSource(),
 ]
 
