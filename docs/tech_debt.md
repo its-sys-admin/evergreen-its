@@ -2094,12 +2094,22 @@ empty pool is not parser evidence.
 fragile; this activation is the proof. The corpus is customer data and correctly out of the repo, but it needs a
 durable, findable home (Box, with the runbook pointing at it) so the next operator is not blocked the same way.
 
+**2026-08-12 update (informal, does not close this entry).** The corpus is confirmed present on this
+(dev) host at `~/Desktop/evergreen project/manifests` — contradicting the 2026-08-10 note above that it
+was absent from "the production Mac." A read-only run of `scripts/eval_manifest_parse.py` against it this
+session returned **10/10 exit 0**, satisfying precondition 3 on its face. This was NOT a committed,
+`--write-expectations` run and produced no artifact in the repo, so it doesn't discharge the entry's own
+"Fix" instruction (run it and *record* the result, then close via `tech_debt_closed.md`) — treat this as
+a positive signal, not a substitute for that formal step. Corpus-durability concern above is unchanged:
+this run still depended on finding the corpus on one specific laptop.
+
 **Tag:** `field_ops`, `manifest-import`, `go-live`, `verification-gap`, `waived-precondition`, `high`.
 
 **Revisit when:** immediately — before the first real manifest upload, if at all possible. Otherwise at the next
 field-ops session. Close by moving to `tech_debt_closed.md` with the eval's actual pass/fail result recorded.
 
-Surfaced: 2026-08-07 manifest-import activation session; re-verified against live state 2026-08-10.
+Surfaced: 2026-08-07 manifest-import activation session; re-verified against live state 2026-08-10; informal
+read-only re-verification 2026-08-12 (tech-debt triage session close).
 
 ## [OPEN 2026-08-07, low] Dev Mac's `ITS_PORTAL_MANIFEST_TOKEN` is superseded after the production-side rotation
 
@@ -2211,13 +2221,26 @@ same eval. Full narrative in auto-memory `estimate-corpus-lives-on-dev-mac.md`.
 fact; or (b) have Seth ratify the narrowed RFQ-form acceptance bar, in writing, as superseding
 ADR-0004 E6's original corpus-eval requirement for this gate.
 
+**2026-08-12 update (informal, does not close this entry — if anything, sharpens the concern).**
+A read-only run of the estimate ladder against the same on-host corpus (82 files, `tier2_enabled`
+and OCR both off) returned **zero Tier-1 extractions** — every file landed at `needs_review` with
+`line_count: 0`. This is not proof the parser is broken: the corpus is largely scanned-image PDFs,
+which Tier-1 (pdfplumber, text-layer only) cannot be expected to read regardless of correctness —
+that is precisely what the OCR/Tier-2 rungs exist for. But it means the informal run produced no
+positive evidence for `tier1_enabled`, which reads live `true` in production right now. Formal
+`--write-expectations` qualification (or the narrowed-bar ratification in (b) above) still hasn't
+happened, and this result is a reason to prioritize it rather than treat the gate as validated by
+inaction.
+
 **Tag:** `po_materials`, `estimates`, `adr-0004`, `verification-gap`, `waived-precondition`,
 `high`.
 
 **Revisit when:** before the next estimate-extraction hardening pass, or immediately if Seth
 wants the corpus run properly.
 
-Surfaced: 2026-08-10 session close; see auto-memory `estimate-corpus-lives-on-dev-mac.md`.
+Surfaced: 2026-08-10 session close; see auto-memory `estimate-corpus-lives-on-dev-mac.md`. Informal
+read-only re-verification 2026-08-12 (tech-debt triage session close) — zero Tier-1 hits on the
+82-file corpus, inconclusive given its scanned-PDF composition but not reassuring.
 
 ## [OPEN 2026-08-10, low] Operator-run one-shot seeders ship, then silently never get executed — the Track 6 archive-gate outage is one instance of a class
 
@@ -2616,6 +2639,35 @@ provenance is document-derived.
 
 Surfaced: 2026-08-12 tech-debt triage — carved out of the nine-defect cluster during defect-by-defect
 verification, because closing the parent entry would otherwise have dropped it.
+
+## [OPEN 2026-08-12, low] This file's own heading convention is inconsistent — the status tag sits at
+the START of most headings but the END of some, and a naive count undercounts by roughly two-thirds
+
+This session's full-corpus triage started with `grep -c '^## \[OPEN'` to size the backlog and got
+**46** — the real count of open entries, confirmed by enumerating every `^## ` heading and
+classifying each by hand, is **130** (at the time of the count; six of this session's own PRs have
+since dropped it to 130 net of fourteen closures, so the pre-session figure was closer to 144).
+Two independent header shapes both occur in this file: `## [OPEN 2026-08-11, medium] Title…` (the
+current majority convention, tag first) and `## Title… [OPEN 2026-08-10, medium]` / bracket-free
+headings using a different status word entirely (`[DEFERRED …]`, `[BLOCKED …]`, `[PARTIALLY_MITIGATED
+…]`) or no bracket at all. Any future tooling, brief, or session-close pass that counts entries by
+grepping for a single fixed pattern will silently undercount unless it matches **every** heading
+shape actually in use — `grep -c '^## '` (all headings) is the only currently-reliable proxy for
+"how many entries," with severity/status read per-entry rather than assumed from a fixed prefix
+position.
+
+**Fix:** either normalize every heading to one convention (tag-first, matching the majority and this
+file's own preamble examples) in a dedicated pass, or — cheaper and less risky, since a pure
+reformat PR touches every entry in the file for no functional gain — document the two shapes
+explicitly in this file's own preamble so the next counting exercise doesn't have to rediscover it
+by hand.
+
+**Tag:** `docs`, `tech-debt-meta`, `tooling`, `low`.
+
+**Revisit when:** the next full-corpus tech-debt triage, or if automated tooling starts consuming
+this file's heading structure (e.g. a dashboard panel or a CI entry-count gate).
+
+Surfaced: 2026-08-12 tech-debt triage session close.
 
 ## [OPEN 2026-08-12, low] Estimate dispositions never mirror back to Estimate_Log — the office ledger freezes at filing statuses
 
