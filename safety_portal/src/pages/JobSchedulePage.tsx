@@ -20,6 +20,11 @@ import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/errorCopy";
 import { PageShell } from "../components/PageShell";
 import { ConfirmDelete } from "../components/ChecklistItemForm";
+import {
+  EMPTY_TASK_FORM,
+  ScheduleTaskEditor,
+  formFromTask,
+} from "../components/ScheduleTaskEditor";
 import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection";
 
 // Per-job SCHEDULE page (ADR-0006) — /jobs/:jobId/schedule, the deep-link target from the
@@ -160,6 +165,11 @@ export function JobSchedulePage({
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [openRows, setOpenRows] = useState<Set<number>>(() => new Set());
+  // Hand-editing (canManage). One form at a time: `editingTask` is a task id, `addingIn`
+  // a section-group key. Both null means nothing is open.
+  const [editingTask, setEditingTask] = useState<number | null>(null);
+  const [addingIn, setAddingIn] = useState<string | null>(null);
+  const [taskBusy, setTaskBusy] = useState(false);
 
   // Today is resolved ONCE per mount and threaded down, so every "is this late" answer on
   // the page agrees with every other one.
@@ -310,6 +320,65 @@ export function JobSchedulePage({
       else next.add(id);
       return next;
     });
+  }
+
+  /** One in-flight task write at a time; reload after — the server's row is the record.
+   *  Returns true so callers can close their form only on success. */
+  async function runTaskWrite(fn: () => Promise<unknown>, failText: string): Promise<boolean> {
+    if (taskBusy) return false;
+    setTaskBusy(true);
+    setMsg(null);
+    try {
+      await fn();
+      return true;
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, failText) });
+      return false;
+    } finally {
+      setTaskBusy(false);
+      loadTasks();
+    }
+  }
+
+  /** A draft arrives already validated, or as the Worker's own error code — translate it
+   *  through the one vocabulary rather than inventing a second. */
+  function refuseDraft(draft: api.ScheduleTaskDraft | string): draft is string {
+    if (typeof draft === "string") {
+      setMsg({ ok: false, text: errorText(draft) });
+      return true;
+    }
+    return false;
+  }
+
+  function saveTaskEdit(id: number, draft: api.ScheduleTaskDraft | string) {
+    if (refuseDraft(draft)) return;
+    void runTaskWrite(
+      () => api.editScheduleTask(id, draft),
+      "Could not save that task.",
+    ).then((ok) => {
+      if (ok) setEditingTask(null);
+    });
+  }
+
+  function saveNewTask(draft: api.ScheduleTaskDraft | string) {
+    if (refuseDraft(draft)) return;
+    // Append: one past the highest ordinal in the job. The list groups by section in
+    // first-seen order, so the new row lands at the end of its own section rather than
+    // in an arbitrary place — and no existing task's position moves.
+    const sortOrder = (tasks ?? []).reduce((m, t) => Math.max(m, t.sort_order), 0) + 1;
+    void runTaskWrite(
+      () => api.addScheduleTask(jobId, { ...draft, sort_order: sortOrder }),
+      "Could not add that task.",
+    ).then((ok) => {
+      if (ok) setAddingIn(null);
+    });
+  }
+
+  function removeTask(t: ScheduleTaskRow) {
+    return runTaskWrite(
+      () => api.deactivateScheduleTask(t.id),
+      "Could not remove that task.",
+    );
   }
 
   // ── The validate / reconcile SUB-FACES (remount-keyed; not router entries) ─────────
@@ -540,9 +609,19 @@ export function JobSchedulePage({
                       t={t}
                       today={today}
                       canMark={canMark}
+                      canManage={canManage}
                       markBusy={markBusy}
+                      taskBusy={taskBusy}
                       open={openRows.has(t.id)}
                       onToggle={() => toggleRow(t.id)}
+                      editing={editingTask === t.id}
+                      onEdit={() => {
+                        setEditingTask(t.id);
+                        setOpenRows((prev) => new Set(prev).add(t.id));
+                      }}
+                      onCancelEdit={() => setEditingTask(null)}
+                      onSaveEdit={(d) => saveTaskEdit(t.id, d)}
+                      onRemove={() => removeTask(t)}
                       exactPct={exactPct}
                       setExactPct={setExactPct}
                       deliveredDraft={deliveredDraft}
@@ -556,6 +635,34 @@ export function JobSchedulePage({
                   ))}
                 </ul>
               )}
+
+              {/* Add sits at the FOOT of a section because a task belongs to a section, and
+                  that is where a reader is standing when they notice one missing. */}
+              {canManage && !isCollapsed ? (
+                addingIn === key ? (
+                  <div className="sched-group__add">
+                    <ScheduleTaskEditor
+                      mode="add"
+                      ariaScope="new task"
+                      initial={{ ...EMPTY_TASK_FORM, section: group.name ?? "" }}
+                      busy={taskBusy}
+                      onSave={saveNewTask}
+                      onCancel={() => setAddingIn(null)}
+                    />
+                  </div>
+                ) : (
+                  <div className="sched-group__add">
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--sm"
+                      aria-label={`Add a task to ${group.name ?? "Tasks"}`}
+                      onClick={() => setAddingIn(key)}
+                    >
+                      + Add a task
+                    </button>
+                  </div>
+                )
+              ) : null}
             </section>
           );
         })}
@@ -727,9 +834,16 @@ function TaskRow({
   t,
   today,
   canMark,
+  canManage,
   markBusy,
+  taskBusy,
   open,
   onToggle,
+  editing,
+  onEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onRemove,
   exactPct,
   setExactPct,
   deliveredDraft,
@@ -743,9 +857,16 @@ function TaskRow({
   t: ScheduleTaskRow;
   today: string;
   canMark: boolean;
+  canManage: boolean;
   markBusy: number | null;
+  taskBusy: boolean;
   open: boolean;
   onToggle: () => void;
+  editing: boolean;
+  onEdit: () => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (draft: api.ScheduleTaskDraft | string) => void;
+  onRemove: () => Promise<boolean>;
   exactPct: Record<number, string>;
   setExactPct: Dispatch<SetStateAction<Record<number, string>>>;
   deliveredDraft: Record<number, string>;
@@ -810,11 +931,14 @@ function TaskRow({
       </div>
       <div className="sched-task__dur">{t.duration_days != null ? `${t.duration_days}d` : "—"}</div>
 
-      {canMark ? (
+      {/* One disclosure per row, whichever capability the session holds: the field's
+          mark-off and the office's edit both live behind it, so a row expands in exactly
+          one place. The label names what THIS session can actually do with it. */}
+      {canMark || canManage ? (
         <button
           type="button"
           className="sched-task__prog"
-          aria-label={`Update progress for ${t.name}`}
+          aria-label={canMark ? `Update progress for ${t.name}` : `Open task ${t.name}`}
           aria-expanded={open}
           onClick={onToggle}
         >
@@ -829,7 +953,7 @@ function TaskRow({
         </div>
       )}
 
-      {canMark && open ? (
+      {canMark && open && !editing ? (
         <div className="sched-mark">
           <span className="sched-mark__label">Mark progress — {t.name}</span>
 
@@ -921,6 +1045,41 @@ function TaskRow({
 
           {provenance ? <span className="sched-mark__label">{provenance}</span> : null}
         </div>
+      ) : null}
+
+      {/* The OFFICE half of the same disclosure — a different capability from the field's
+          mark-off, so it is gated separately rather than folded into the strip above. */}
+      {canManage && open && !editing ? (
+        <div className="sched-rowops">
+          <span className="sched-rowops__label">Office</span>
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm"
+            aria-label={`Edit ${t.name}`}
+            disabled={taskBusy}
+            onClick={onEdit}
+          >
+            Edit task
+          </button>
+          <ConfirmDelete
+            actionLabel="Remove task"
+            ariaLabel={`Remove task ${t.name}`}
+            copy="Remove this task from the schedule? Its history is kept, and re-importing the schedule can bring it back."
+            busy={taskBusy}
+            onConfirm={() => void onRemove()}
+          />
+        </div>
+      ) : null}
+
+      {canManage && editing ? (
+        <ScheduleTaskEditor
+          mode="edit"
+          ariaScope={t.name}
+          initial={formFromTask(t)}
+          busy={taskBusy}
+          onSave={onSaveEdit}
+          onCancel={onCancelEdit}
+        />
       ) : null}
     </li>
   );

@@ -30,6 +30,9 @@ vi.mock("../../lib/fieldops_schedules", async (importOriginal) => {
     markScheduleTaskProgress: vi.fn(),
     markScheduleTaskMilestoneDone: vi.fn(),
     markScheduleTaskDelivered: vi.fn(),
+    addScheduleTask: vi.fn(),
+    editScheduleTask: vi.fn(),
+    deactivateScheduleTask: vi.fn(),
   };
 });
 vi.mock("../../lib/auth", () => ({ useAuth: vi.fn() }));
@@ -363,3 +366,94 @@ describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
     expect(alert.textContent ?? "").toContain("either done or not");
   });
 });
+
+describe("JobSchedulePage — the office hand-editor (cap.jobtracker.manage)", () => {
+  beforeEach(() => {
+    vi.mocked(api.addScheduleTask).mockResolvedValue({ ok: true, id: 9, task_uuid: "tu-9" });
+    vi.mocked(api.editScheduleTask).mockResolvedValue({ ok: true, id: 1 });
+    vi.mocked(api.deactivateScheduleTask).mockResolvedValue({ ok: true, id: 1 });
+  });
+
+  it("is HIDDEN from a field session — mark-off is a different capability from authoring", async () => {
+    const { container, queryByLabelText } = mountAs("submitter", MARK);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    openMark(getByLabelTextOf(container), "Fencing");
+    expect(queryByLabelText("Edit Fencing")).toBeNull();
+    expect(queryByLabelText("Remove task Fencing")).toBeNull();
+    expect(queryByLabelText("Add a task to Civil")).toBeNull();
+  });
+
+  it("gives the office an Edit and a Remove inside the same row disclosure", async () => {
+    const { container, getByLabelText } = mountAs("admin", MANAGE);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    // The office holds no cap.schedule.mark here, so the disclosure names what IT can do.
+    fireEvent.click(getByLabelText("Open task Fencing"));
+    expect(getByLabelText("Edit Fencing")).toBeTruthy();
+    expect(getByLabelText("Remove task Fencing")).toBeTruthy();
+    // …and no mark controls leaked in on a session without the mark capability.
+    expect(container.querySelector('[aria-label="Mark Fencing 75%"]')).toBeNull();
+  });
+
+  it("edits a task through the lib and reloads the list", async () => {
+    const { container, getByLabelText } = mountAs("admin", MANAGE);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    fireEvent.click(getByLabelText("Open task Fencing"));
+    fireEvent.click(getByLabelText("Edit Fencing"));
+    fireEvent.change(getByLabelText("Finish date — Fencing"), { target: { value: "2026-09-12" } });
+    fireEvent.click(getByLabelText("Save task — Fencing"));
+    await waitFor(() =>
+      expect(api.editScheduleTask).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ name: "Fencing", finish_date: "2026-09-12", section: "Civil" }),
+      ),
+    );
+    await waitFor(() => expect(api.fetchScheduleTasks).toHaveBeenCalledTimes(2));
+  });
+
+  it("adds a task at the END of the job's ordinals so nothing else moves", async () => {
+    const { container, getByLabelText } = mountAs("admin", MANAGE);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    fireEvent.click(getByLabelText("Add a task to Civil"));
+    fireEvent.change(getByLabelText("Task name — new task"), { target: { value: "Punch list" } });
+    fireEvent.click(getByLabelText("Save new task"));
+    // Fixture ordinals are 10 / 20 / 30 → the new row appends at 31.
+    await waitFor(() =>
+      expect(api.addScheduleTask).toHaveBeenCalledWith(
+        "JOB-000018",
+        expect.objectContaining({ name: "Punch list", section: "Civil", sort_order: 31 }),
+      ),
+    );
+  });
+
+  it("refuses an out-of-range field LOCALLY, in the Worker's own words, with no call", async () => {
+    const { container, getByLabelText, findByRole } = mountAs("admin", MANAGE);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    fireEvent.click(getByLabelText("Open task Fencing"));
+    fireEvent.click(getByLabelText("Edit Fencing"));
+    fireEvent.change(getByLabelText("Duration days — Fencing"), { target: { value: "9999" } });
+    fireEvent.click(getByLabelText("Save task — Fencing"));
+    const alert = await findByRole("alert");
+    expect(alert.textContent ?? "").toContain("up to 5000");
+    expect(api.editScheduleTask).not.toHaveBeenCalled();
+  });
+
+  it("removes a task only behind the two-step confirm", async () => {
+    const { container, getByLabelText } = mountAs("admin", MANAGE);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    fireEvent.click(getByLabelText("Open task Fencing"));
+    fireEvent.click(getByLabelText("Remove task Fencing"));
+    expect(api.deactivateScheduleTask).not.toHaveBeenCalled(); // armed, not fired
+    fireEvent.click(getByLabelText("Confirm Remove task Fencing"));
+    await waitFor(() => expect(api.deactivateScheduleTask).toHaveBeenCalledWith(1));
+  });
+});
+
+/** `mountAs` returns testing-library's bound queries; this re-binds getByLabelText for the
+ *  helper above, which takes a plain lookup rather than the whole render result. */
+function getByLabelTextOf(container: HTMLElement) {
+  return (label: string): HTMLElement => {
+    const el = container.querySelector(`[aria-label="${label}"]`);
+    if (!el) throw new Error(`no element with aria-label ${label}`);
+    return el as HTMLElement;
+  };
+}
