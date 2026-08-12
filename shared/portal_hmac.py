@@ -266,6 +266,32 @@ Material-manifest protocol (PR3b — the materials-tracking import pool)
     hostile byte is §34-screened, handed to the sandboxed extractor, parsed, or filed
     to Box (the downgrade defense). The cross-language vector is pinned in
     tests/test_manifest_hmac_parity.py.
+
+Job-schedule protocol (ADR-0006 — the schedule import pool)
+-----------------------------------------------------------
+    An office-uploaded PROJECT SCHEDULE — a Smartsheet Gantt PDF export
+    (`job_schedules`, migration 0066) — is signed by the Worker at upload
+    (safety_portal/worker/fieldops_schedules.ts `scheduleCanonical`) with the SAME
+    key + MAC over its own domain-separated canonical string:
+
+        canonical = "schedule:v1" \\n <schedule_uuid> \\n <job_id> \\n <filename>
+                    \\n <declared_mime> \\n <size_bytes (decimal)> \\n <sha256 hex>
+
+    * The `"schedule:v1"` literal domain-separates this protocol from every sibling
+      (submission uuid-first, "item_photo:v1", "daily_photo:v1", "po:v1", "sub:v1",
+      "po-att:v1", "est:v1", "rfq-form:v1", "rfq:v1", "manifest:v1") — the manifest
+      protocol is the nearest sibling, with an IDENTICAL 7-field flat shape, so the
+      leading domain literal is the ONLY thing separating the two. The parity suite
+      asserts both directions.
+    * Same content-covered posture as manifest/est/po-att: `schedule_uuid` + `job_id`
+      bind identity (a signed schedule cannot be replayed onto another row or job —
+      load-bearing because a SUPERSEDED revision's exact bytes may legally re-enter
+      under the same job as the rollback path, so byte-identical documents recur by
+      design); `size_bytes` + `sha256` extend the signature to the reassembled bytes.
+
+    `verify_schedule` is the recompute `field_ops.schedule_poll` runs before a single
+    hostile byte is §34-screened, rendered, OCR'd, or filed to Box (the downgrade
+    defense). The cross-language vector is pinned in tests/test_schedule_hmac_parity.py.
 """
 from __future__ import annotations
 
@@ -930,6 +956,104 @@ def verify_manifest(
     expected = sign_manifest(
         secret,
         manifest_uuid=manifest_uuid,
+        job_id=job_id,
+        filename=filename,
+        declared_mime=declared_mime,
+        size_bytes=size_bytes,
+        sha256=sha256,
+    )
+    return _hmac.compare_digest(expected, provided_hmac or "")
+
+
+# ---- Job-schedule protocol (ADR-0006 — the schedule import pool) ---------------------
+
+# The schedule protocol's domain-separation literal — MUST match the Worker's
+# SCHEDULE_HMAC_DOMAIN (safety_portal/worker/fieldops_schedules.ts) byte-for-byte.
+# Nearest sibling is manifest:v1, with an IDENTICAL 7-field flat shape — the leading
+# domain literal is the ONLY separation, and tests/test_schedule_hmac_parity.py proves
+# both cross-directions fail.
+SCHEDULE_DOMAIN = "schedule:v1"
+
+
+def schedule_canonical(
+    *,
+    schedule_uuid: str,
+    job_id: str,
+    filename: str,
+    declared_mime: str,
+    size_bytes: int,
+    sha256: str,
+) -> str:
+    """The exact string the Worker signs for one uploaded project schedule
+    (fieldops_schedules.ts ``scheduleCanonical`` — field order + the ``\\n``
+    separator are load-bearing).
+
+    Binds identity (``schedule_uuid`` + ``job_id`` — a signed schedule cannot be
+    replayed onto a different row or a different job, which matters here because a
+    SUPERSEDED revision's exact bytes may legally re-enter under the same job as the
+    rollback path, so byte-identical documents recur by design), naming (``filename``
+    + ``declared_mime``), and CONTENT (``size_bytes`` + ``sha256`` of the DECODED
+    bytes) — the caller's own sha256 recompute over the reassembled chunks extends
+    the signature to the bytes themselves.
+
+    ``size_bytes`` renders via ``str(int)`` to mirror the Worker's
+    ``String(sizeBytes)``; that equivalence holds for ints ONLY, so callers must
+    reject a non-int before signing/verifying (coerce to ``-1`` to fail closed).
+    """
+    return "\n".join([
+        SCHEDULE_DOMAIN,
+        schedule_uuid,
+        job_id,
+        filename,
+        declared_mime,
+        str(size_bytes),
+        sha256,
+    ])
+
+
+def sign_schedule(
+    secret: str,
+    *,
+    schedule_uuid: str,
+    job_id: str,
+    filename: str,
+    declared_mime: str,
+    size_bytes: int,
+    sha256: str,
+) -> str:
+    """HMAC-SHA256(secret, schedule canonical) → lowercase hex — identical to the
+    Worker's ``hmacHex`` over ``scheduleCanonical``."""
+    msg = schedule_canonical(
+        schedule_uuid=schedule_uuid,
+        job_id=job_id,
+        filename=filename,
+        declared_mime=declared_mime,
+        size_bytes=size_bytes,
+        sha256=sha256,
+    ).encode("utf-8")
+    return _hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def verify_schedule(
+    secret: str,
+    provided_hmac: str | None,
+    *,
+    schedule_uuid: str,
+    job_id: str,
+    filename: str,
+    declared_mime: str,
+    size_bytes: int,
+    sha256: str,
+) -> bool:
+    """True iff `provided_hmac` matches the recomputed schedule signature.
+
+    Constant-time; never raises (False on any mismatch — the caller refuses the
+    schedule: one-shot flag + CRITICAL + a security-flagged Review-Queue row, never
+    screened, never rendered or OCR'd, never filed, and deliberately never
+    result-posted so the bytes stay in D1 for forensics)."""
+    expected = sign_schedule(
+        secret,
+        schedule_uuid=schedule_uuid,
         job_id=job_id,
         filename=filename,
         declared_mime=declared_mime,

@@ -28,6 +28,7 @@ export default defineConfig(async () => {
             PORTAL_ESTIMATE_API_TOKEN: "test-estimate-token",
             PORTAL_RFQ_API_TOKEN: "test-rfq-token",
             PORTAL_MANIFEST_API_TOKEN: "test-manifest-token",
+            PORTAL_SCHEDULE_API_TOKEN: "test-schedule-token",
             PORTAL_CONFIG_API_TOKEN: "test-config-token",
             PORTAL_SUB_API_TOKEN: "test-sub-token",
           },
