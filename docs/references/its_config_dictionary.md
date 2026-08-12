@@ -19,7 +19,8 @@ This is the operator reference for **ITS_Config** — the Smartsheet sheet where
 ## How to read this
 
 - **Setting** is the exact value in the ITS_Config **Setting** column. **Workstream** is the value in the **Workstream** column — ITS matches on *both*, so the same Setting name can appear under two Workstreams and mean two different rows.
-- **Default** is what ITS uses when the row is **missing, blank, or unreadable** — every read is fail-open to this value, and a *missing* row is logged loudly (a config that "ships dark" has no row to flip until it is seeded).
+- **Default** is what ITS uses when the row is **missing, blank, or unreadable** — the read resolves to this value rather than raising, and a *missing* row is logged loudly (a config that "ships dark" has no row to flip until it is seeded).
+- **"Resolves to the default" is not the same as "fails open."** The direction depends entirely on what the default *is*, and for the send gates it is deliberately the **safe** one: `po_materials.po_send.polling_enabled`, `po_materials.rfq_send.polling_enabled` and `subcontracts.subcontract_send.polling_enabled` all default **false**, so a missing or unreadable row leaves that send daemon **disabled** — it never falls open into transmitting. (`safety_reports.weekly_send.polling_enabled` and `progress_reports.progress_send.polling_enabled` default **true**.) Read each row's own Default column; do not assume one direction across the board.
 - **Read by** names the daemon(s) that resolve the key at runtime — where to look when a setting is not taking effect.
 
 ## Global / shared-infrastructure keys
