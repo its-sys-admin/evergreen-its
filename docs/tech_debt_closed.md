@@ -3009,3 +3009,35 @@ by #18's merged versions. Also holds untracked drill-local sandbox `sheet_ids.py
 **never** be committed. **Fix:** cherry-pick the 4 keepers (if still needed — verify against current main
 first, since #18/#20 may have already carried equivalent fixes), discard the obsolete SPA files, remove the
 worktree. **Tag:** `field_ops`, `archive-on-closure`, `worktree-hygiene`.
+
+## [RESOLVED 2026-08-12 — PR-5] Weekly Production Report page 3 now reads the ADR-0006 living task list [OPEN 2026-08-11, low]
+
+The report's Construction Progress / Delays page renders "No schedule imported for this job"
+because `worker/fieldops_report.ts` returns `schedule: null` — `job_schedule_tasks` does not
+exist yet. The ADR-0006 schedule lane has landed its intake pool (#80, migration 0066), its
+OCR/geometry/parse core (#84) and its daemon (#85); the living task list is its PR-4.
+
+Nothing is broken and nothing is blocked: the renderer already handles both states and the
+office screen already says why the page is empty, so the binding is additive when the table
+arrives.
+
+**Fix:** in `buildReportData`, add the `job_schedule_tasks` read grouped by `section` with
+`percent_done`, plus the behind-schedule derivation (`finish_date < today AND percent_done <
+100`) feeding the assembled Critical Items seed — `wpr_data._assemble_critical_items` is
+already ordered so that source slots in at the top without reordering. The renderer needs no
+change.
+
+**Revisit when:** the schedule lane merges `job_schedule_tasks`. **Tag:** `progress_reports`,
+`weekly-production-report`, `adr-0006`, `low`.
+
+**Resolved 2026-08-12.** The schedule lane landed `job_schedule_tasks` (migration 0071) and
+the binding went in as planned — additive, and the renderer needed no change because it had
+handled both states since #82. `buildReportData` groups ACTIVE tasks by `section` in document
+order and derives the behind-schedule set (`finish_date < today AND percent_done < 100`,
+server Pacific date) which seeds Critical Items worst-slip-first.
+
+One thing the real schema forced that the plan had not anticipated: `percent_done` is NOT NULL
+DEFAULT 0, so it cannot represent "never reported". The route returns NULL — and the report an
+em dash — only when no portal mark, no committed schedule value, and percent_done still 0.
+Printing 0% there would tell a client no work was done, a different and possibly false claim.
+

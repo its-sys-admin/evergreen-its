@@ -2845,26 +2845,6 @@ reports a narrative section going blank after a save. **Tag:** `progress_reports
 
 ---
 
-## [OPEN 2026-08-11, low] Weekly Production Report page 3 stays an empty state until the ADR-0006 living task list lands
-
-The report's Construction Progress / Delays page renders "No schedule imported for this job"
-because `worker/fieldops_report.ts` returns `schedule: null` — `job_schedule_tasks` does not
-exist yet. The ADR-0006 schedule lane has landed its intake pool (#80, migration 0066), its
-OCR/geometry/parse core (#84) and its daemon (#85); the living task list is its PR-4.
-
-Nothing is broken and nothing is blocked: the renderer already handles both states and the
-office screen already says why the page is empty, so the binding is additive when the table
-arrives.
-
-**Fix:** in `buildReportData`, add the `job_schedule_tasks` read grouped by `section` with
-`percent_done`, plus the behind-schedule derivation (`finish_date < today AND percent_done <
-100`) feeding the assembled Critical Items seed — `wpr_data._assemble_critical_items` is
-already ordered so that source slots in at the top without reordering. The renderer needs no
-change.
-
-**Revisit when:** the schedule lane merges `job_schedule_tasks`. **Tag:** `progress_reports`,
-`weekly-production-report`, `adr-0006`, `low`.
-
 ## [OPEN 2026-08-11, medium] manifest commit's replay guard has the same finalize-gap the schedule lane just fixed
 
 The PR #90 security review found the schedule /commit's replay guard returned done:true on
