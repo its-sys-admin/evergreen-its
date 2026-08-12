@@ -1,0 +1,183 @@
+/**
+ * Weekly Production Report office screen (0067).
+ *
+ * The three behaviours the printed document depends on:
+ *   1. the narrative textareas are PRE-FILLED with the assembled seed for an unsaved week —
+ *      `saved` is row-level, so an untouched narrative renders BLANK once anything is saved;
+ *   2. a carried-forward week says so and is not mistaken for a reviewed one;
+ *   3. the three-state photo contract survives the round trip — no curation omits `photos`
+ *      entirely (auto-select stays in force), "use no photos" sends [].
+ */
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../lib/fieldops_report", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/fieldops_report")>();
+  return { ...actual, fetchWeeklyReport: vi.fn(), saveWeeklyReport: vi.fn() };
+});
+
+import { fetchWeeklyReport, saveWeeklyReport } from "../../lib/fieldops_report";
+import type { ProductionReportResponse } from "../../lib/fieldops_report";
+import { WeeklyReportPage } from "../WeeklyReportPage";
+
+function payload(over: Partial<ProductionReportResponse> = {}): ProductionReportResponse {
+  const base: ProductionReportResponse = {
+    job_id: "JOB-1",
+    week: { start: "2026-08-08", end: "2026-08-14", from: 1, to: 2 },
+    job: { project_name: "Steger Solar", address: "", address_city: "Steger", address_state: "IL",
+           job_no: "2026.384", site_phase: 1, status: "active" },
+    daily_report_count: 2,
+    weather: { days: [
+      { work_date: "2026-08-10", conditions: "Clear", avg_temp: "79", inclement: false },
+      { work_date: "2026-08-12", conditions: "Heavy rain", avg_temp: "71", inclement: false },
+    ], weather_days_week: 0, weather_days_to_date: 7 },
+    labor: { total_hours: 122, crews: [{ company: "Pro Panel", workers: 9, days: 3 }] },
+    crew_progress: [],
+    daily_notes: [
+      { work_date: "2026-08-10", tomorrows_goals: "Drive rows 19-24", comments: "",
+        safety_observations: "", manpower_total: "15", prepared_by: "PM" },
+      { work_date: "2026-08-12", tomorrows_goals: "Pump trenches", comments: "Rain day — crew released.",
+        safety_observations: "", manpower_total: "3", prepared_by: "PM" },
+    ],
+    hazard_form_codes: ["jha-v3"],
+    deliveries: [],
+    material_incidents: [
+      { work_date: "2026-08-12", material: "Torque tube", issue: "Short", details: "28 of 40." },
+    ],
+    photos: {
+      available: [
+        { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles" },
+        { pool_id: 2, work_date: "2026-08-12", box_file_id: "b2", caption: "Trench" },
+      ],
+      selected: [{ pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles" }],
+      auto_selected: true,
+    },
+    schedule: null,
+    office: {
+      header: { site_location: "", ess_management: "", mobilization_date: "", subcontractors: [], prepared_by: "" },
+      safety: {}, weather: { inclement_dates: [], weather_days_to_date: 7 },
+      labor: { rows: [] },
+      narrative: { critical_items: "", upcoming_activities: "", hazard_topics: [] },
+      pending: { rfis: "", submittals: "", ifc_review: "", change_orders: "" },
+      photos: null, saved: false, carried_from: null, updated_by: null, updated_at: null,
+    },
+    generated_at: 1,
+  };
+  return { ...base, ...over };
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(saveWeeklyReport).mockResolvedValue(undefined);
+});
+afterEach(cleanup);
+
+async function renderPage(p: ProductionReportResponse) {
+  vi.mocked(fetchWeeklyReport).mockResolvedValue(p);
+  render(<WeeklyReportPage jobId="JOB-1" onBack={() => {}} />);
+  await waitFor(() => expect(screen.getByText(/Report header/)).toBeTruthy());
+}
+
+describe("WeeklyReportPage — the narrative seed", () => {
+  it("pre-fills the narrative from the week's field text on an UNSAVED week", async () => {
+    await renderPage(payload());
+    const critical = screen.getByLabelText(/Critical items/) as HTMLTextAreaElement;
+    const upcoming = screen.getByLabelText(/Upcoming activities/) as HTMLTextAreaElement;
+    // Material incident first, then the daily comment — the assembler's order.
+    expect(critical.value).toContain("Torque tube: Short — 28 of 40.");
+    expect(critical.value).toContain("Rain day — crew released.");
+    // The LAST tomorrow's-goals only; earlier days describe work that has since happened.
+    expect(upcoming.value).toBe("Pump trenches");
+    expect(upcoming.value).not.toContain("Drive rows 19-24");
+  });
+
+  it("shows the office's own text once the week is SAVED, including a cleared section", async () => {
+    const p = payload();
+    p.office.saved = true;
+    p.office.narrative = { critical_items: "", upcoming_activities: "Module install.", hazard_topics: [] };
+    await renderPage(p);
+    // Deliberately cleared stays cleared — re-seeding would make clearing impossible.
+    expect((screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText(/Upcoming activities/) as HTMLTextAreaElement).value).toBe("Module install.");
+  });
+});
+
+describe("WeeklyReportPage — provenance and warnings", () => {
+  it("says so when the values were carried forward", async () => {
+    const p = payload();
+    p.office.carried_from = "2026-08-01";
+    await renderPage(p);
+    expect(screen.getByText(/carried forward from the week of/)).toBeTruthy();
+    expect(screen.getByText(/2026-08-01/)).toBeTruthy();
+  });
+
+  it("warns that a week with no dailies will be HELD rather than sent", async () => {
+    await renderPage(payload({ daily_report_count: 0 }));
+    expect(screen.getByText(/will HOLD this week/)).toBeTruthy();
+  });
+
+  it("states the no-schedule case rather than implying zero progress", async () => {
+    await renderPage(payload());
+    expect(screen.getByText(/No schedule is imported for this job/)).toBeTruthy();
+  });
+});
+
+describe("WeeklyReportPage — the three-state photo contract", () => {
+  it("OMITS photos from the save when the office has not curated", async () => {
+    await renderPage(payload());
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const body = vi.mocked(saveWeeklyReport).mock.calls[0][0];
+    // Absent key = auto-select stays in force. Sending [] would mean "no photos this week".
+    expect("photos" in body).toBe(false);
+  });
+
+  it("sends an EMPTY LIST when the office chooses no photos", async () => {
+    await renderPage(payload());
+    fireEvent.click(screen.getByText(/Use no photos this week/));
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    expect(vi.mocked(saveWeeklyReport).mock.calls[0][0].photos).toEqual([]);
+  });
+
+  it("sends the office's explicit picks once they toggle one", async () => {
+    await renderPage(payload());
+    // Photo 2 starts unselected (server auto-picked only photo 1).
+    const boxes = screen.getAllByRole("checkbox");
+    const photoBox = boxes[boxes.length - 1];
+    fireEvent.click(photoBox);
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const sent = vi.mocked(saveWeeklyReport).mock.calls[0][0].photos;
+    expect(sent).toBeDefined();
+    expect(sent!.map((p) => p.pool_id).sort()).toEqual([1, 2]);
+  });
+});
+
+describe("WeeklyReportPage — the office fields D1 cannot derive", () => {
+  it("saves the six OSHA counts, labor hours and pending items", async () => {
+    await renderPage(payload());
+    fireEvent.change(screen.getByLabelText(/Pending RFIs/), { target: { value: "RFI-014" } });
+    fireEvent.change(screen.getByLabelText(/Total weather days to date/), { target: { value: "9" } });
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const body = vi.mocked(saveWeeklyReport).mock.calls[0][0];
+    expect(body.pending?.rfis).toBe("RFI-014");
+    expect(body.weather?.weather_days_to_date).toBe(9);
+    // All six OSHA rows are always sent, so a blank grid saves as explicit zeros.
+    expect(Object.keys(body.safety ?? {}).sort()).toEqual(
+      ["first_aid", "job_transfer", "lost_time", "lost_work_days", "near_miss", "other_recordable"],
+    );
+    // The labor table seeded from the crews the field reported, hours left for the office.
+    expect(body.labor?.rows?.[0]).toMatchObject({ company: "Pro Panel", man_hours: "" });
+  });
+
+  it("marks a weather day only when the office ticks it", async () => {
+    await renderPage(payload());
+    const dayBoxes = screen.getAllByRole("checkbox");
+    fireEvent.click(dayBoxes[1]); // 2026-08-12, the heavy-rain day
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    expect(vi.mocked(saveWeeklyReport).mock.calls[0][0].weather?.inclement_dates).toEqual(["2026-08-12"]);
+  });
+});

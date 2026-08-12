@@ -43,6 +43,13 @@ _MAX_SEED_CHARS = 1500
 # A form_code is `<name>-v<N>`; the display name lives in the definition JSON. Falls back to a
 # humanized code so an unresolvable definition still reads as English on the client's page.
 _CODE_VERSION_RE = re.compile(r"-v\d+$")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _squash(s: str) -> str:
+    """Lowercase, alphanumerics only — for comparing two labels that may say the same thing
+    with different punctuation."""
+    return _NON_ALNUM_RE.sub("", s.lower())
 
 
 def _display_form_name(form_code: str) -> str:
@@ -57,7 +64,13 @@ def _display_form_name(form_code: str) -> str:
         name = definition.get("form_name")
         variant = definition.get("variant_label")
         if isinstance(name, str) and name.strip():
-            if isinstance(variant, str) and variant.strip() and variant.strip().lower() not in name.lower():
+            # Append the variant ONLY when it adds information the name does not already carry.
+            # The containment test compares ALPHANUMERICS ONLY, because the two strings routinely
+            # say the same thing with different punctuation. A live render put this on a client's
+            # page: "Toolbox Talk — Severe Weather (Tornadoes, High Winds, Lightning and Flooding)
+            # — Severe Weather — Tornadoes, High Winds, Lightning and Flooding" — a raw substring
+            # check saw parentheses-vs-em-dash and concluded the variant was new information.
+            if isinstance(variant, str) and variant.strip() and _squash(variant) not in _squash(name):
                 return f"{name.strip()} — {variant.strip()}"
             return name.strip()
     # Fallback: "toolbox-talk-heat-hydration-v1" → "Toolbox Talk Heat Hydration".
