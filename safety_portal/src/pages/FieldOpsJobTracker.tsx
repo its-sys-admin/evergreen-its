@@ -1177,8 +1177,20 @@ export function FieldOpsJobTracker({
     // move tasks assigned to their OWN linked personnel; managers/admins are unrestricted.
     const canTouchStatus = (t: api.Task): boolean =>
       canOwnTasks && (!isOwnOnlyActor || (viewerPersonnel !== null && t.personnel_id === viewerPersonnel.id));
+
+    // ── Hero figures. Derived from the legs ALREADY loaded, so the hero costs no fetch.
+    // Both counts are honest about being partial: tasks and time entries are paged (the
+    // "Load more" legs), so these describe what is on screen, not the job's lifetime
+    // totals. That is why nothing here is framed as a percentage or a total.
+    const openTaskCount = job.tasks.filter((t) => t.status !== "done").length;
+    // A VOIDED entry is a correction to zero, so excluding it is the same arithmetic the
+    // strike-through already shows. `hours` is nullable (an open clock-in has none yet).
+    const loggedHours = job.time_entries.reduce(
+      (sum, e) => sum + (e.voided ? 0 : (e.hours ?? 0)),
+      0,
+    );
     return (
-      <PageShell onHome={onBack}>
+      <PageShell onHome={onBack} wide>
         <div className="dash-back-btn">
           <button onClick={handleBack} className="btn--secondary">← Back to jobs</button>
         </div>
@@ -1191,6 +1203,61 @@ export function FieldOpsJobTracker({
           <span className={jobPillClass(job.status)}>{lifecycleLabel(job.lifecycle)}</span>
         </div>
         <p className="dash-card__sub muted">{(job.client?.name ?? "No client")} · {job.job_id}</p>
+
+        {/* HERO — what this job IS, before nineteen sections of controls. Counts only:
+            a job has no single completion number, and inventing one would be a figure
+            nobody could reconcile. Open tasks reads DANGER when there are any, because
+            that is the one number here that asks somebody to do something.
+            Deliberately NOT .dash-progress — the detail view asserts that class is
+            absent, and a meter would be exactly the fabricated number this avoids. */}
+        <div className="job-hero">
+          <ul className="job-hero__stats">
+            <li className="job-hero__stat">
+              <span className="job-hero__figure">{job.crew.length}</span>
+              <span className="job-hero__label">On crew</span>
+            </li>
+            <li className="job-hero__stat">
+              <span
+                className={`job-hero__figure${openTaskCount > 0 ? " job-hero__figure--alert" : ""}`}
+              >
+                {openTaskCount}
+              </span>
+              <span className="job-hero__label">Open tasks</span>
+            </li>
+            <li className="job-hero__stat">
+              <span className="job-hero__figure">{job.equipment_on_site.length}</span>
+              <span className="job-hero__label">Equipment</span>
+            </li>
+            <li className="job-hero__stat">
+              <span className="job-hero__figure">{fmtHours(loggedHours)}</span>
+              <span className="job-hero__label">Hours logged</span>
+            </li>
+          </ul>
+        </div>
+
+        {/* SECTION RAIL — nineteen blocks in one column need an index. Same device and
+            the same 1024px breakpoint as the weekly report's rail: a chip scroller on a
+            phone, a sticky column on a laptop. Entries are filtered by what this session
+            can actually see, so a capability-hidden section never leaves a dead link. */}
+        <nav className="job-rail" aria-label="Job sections">
+          {[
+            { id: "jd-manage", label: "Manage", on: canAssignTasks },
+            { id: "jd-client", label: "Client", on: Boolean(job.client) },
+            { id: "jd-crew", label: "Crew", on: true },
+            { id: "jd-tasks", label: "Tasks", on: true },
+            { id: "jd-time", label: "Time", on: true },
+            { id: "jd-equipment", label: "Equipment", on: true },
+            { id: "jd-schedule", label: "Schedule", on: Boolean(onOpenSchedule) },
+            { id: "jd-weekly", label: "Weekly report", on: Boolean(onOpenWeeklyReport) },
+            { id: "jd-inspections", label: "Inspections", on: true },
+          ]
+            .filter((s) => s.on)
+            .map((s) => (
+              <a key={s.id} className="job-rail__link" href={`#${s.id}`}>
+                {s.label}
+              </a>
+            ))}
+        </nav>
 
         {setupBanner === job.job_id && (
           <section className="card dash-section" aria-label="Finish setting up job">
@@ -1212,7 +1279,7 @@ export function FieldOpsJobTracker({
 
         {canAssignTasks && (
           <section className="card dash-section">
-            <h3 className="dash-detail__h2">Manage job</h3>
+            <h3 className="dash-detail__h2" id="jd-manage">Manage job</h3>
             <form onSubmit={submitAddTask} className="dash-row" aria-label="Add a task">
               <input
                 value={taskDesc}
@@ -1315,15 +1382,9 @@ export function FieldOpsJobTracker({
             the job's folders across two external systems. The panel renders nothing at all unless
             the viewer holds cap.job.archive (the worker withholds the block, so this is not a
             UI-only gate). */}
-        <JobArchivePanel
-          job={job}
-          canArchive={(user?.capabilities ?? []).includes("cap.job.archive")}
-          onChanged={reloadDetail}
-        />
-
         {job.client && (
           <section className="card dash-section">
-            <h3 className="dash-detail__h2">Client</h3>
+            <h3 className="dash-detail__h2" id="jd-client">Client</h3>
             <div>{job.client.name}</div>
             <div className="muted">
               {[job.client.contact, job.client.phone, job.client.email].filter(Boolean).join(" · ") || "—"}
@@ -1332,7 +1393,7 @@ export function FieldOpsJobTracker({
         )}
 
         <section className="card dash-section">
-          <h3 className="dash-detail__h2">
+          <h3 className="dash-detail__h2" id="jd-crew">
             Assigned crew ({job.crew.length})
             {setupBanner === job.job_id && job.crew.length === 0 && (
               <span className="dash-pill dash-pill--warn"> needs crew</span>
@@ -1379,7 +1440,7 @@ export function FieldOpsJobTracker({
         </section>
 
         <section className="card dash-section">
-          <h3 className="dash-detail__h2">Tasks</h3>
+          <h3 className="dash-detail__h2" id="jd-tasks">Tasks</h3>
           {job.tasks.length ? (
             <ul className="dash-tasklist">
               {job.tasks.map((t) => {
@@ -1448,7 +1509,7 @@ export function FieldOpsJobTracker({
         </section>
 
         <section className="card dash-section">
-          <h3 className="dash-detail__h2">Time entries</h3>
+          <h3 className="dash-detail__h2" id="jd-time">Time entries</h3>
           {/* R7 — a closed job (legacy status 'closed' ⟺ jobs.active=0, which the Worker's
               time-write job guard rejects) says so instead of silently dropping the form.
               G2.3 — EXCEPT in amend mode: corrections are deliberately allowed on a closed job
@@ -1584,11 +1645,11 @@ export function FieldOpsJobTracker({
                         </>
                       ) : null}
                     </td>
-                    <td className="dash-cell">{fmtHours(t.hours)}</td>
+                    <td className="dash-cell" data-cell="Hours">{fmtHours(t.hours)}</td>
                     <td className="dash-cell" data-cell="Task">{t.task_description ?? "—"}</td>
                     <td className="dash-cell" data-cell="By">{t.recorded_by_name ?? "—"}</td>
                     <td className="dash-cell" data-cell="Recorded">{fmtDateTime(t.recorded_at)}</td>
-                    <td className="dash-cell">{t.notes ?? ""}</td>
+                    <td className="dash-cell" data-cell="Notes">{t.notes ?? ""}</td>
                     {job.time_entries.some((x) => x.can_amend) && (
                       <td className="dash-cell" data-cell="Fix" style={{ textDecoration: "none" }}>
                         {t.can_amend && (
@@ -1662,7 +1723,7 @@ export function FieldOpsJobTracker({
         </section>
 
         <section className="card dash-section">
-          <h3 className="dash-detail__h2">
+          <h3 className="dash-detail__h2" id="jd-equipment">
             Equipment on site ({job.equipment_on_site.length})
             {setupBanner === job.job_id && job.equipment_on_site.length === 0 && (
               <span className="dash-pill dash-pill--warn"> needs equipment</span>
@@ -1695,17 +1756,35 @@ export function FieldOpsJobTracker({
         </section>
 
         {/* Material receipts M1 — self-contained (own caps/fetch/state; the D4 parallel-build rule). */}
-        <ExpectedMaterialsSection
-          jobId={job.job_id}
-          onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(job.job_id) : undefined}
-        />
+        {/* Gated on the SAME two caps ExpectedMaterialsSection checks internally: the
+            component returns null without them, but an ungated drawer would still render
+            its shell — an empty "Materials" disclosure advertising a capability the
+            session does not have.
+            CLOSED by default. This is the same component the Materials page renders, and
+            on a job with a BOM it put every expected line straight onto a page that already
+            carries nineteen sections. The drawer means materials are one tap away instead
+            of always in the way — the posture the Schedule page's copy already uses. */}
+        {(caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage")) && (
+        <details className="sched-drawer" aria-label="Expected materials">
+          <summary>
+            Materials
+            <span className="sched-drawer__note">Expected lines, loads and delivery marks</span>
+          </summary>
+          <div className="sched-drawer__body">
+          <ExpectedMaterialsSection
+            jobId={job.job_id}
+            onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(job.job_id) : undefined}
+          />
+          </div>
+        </details>
+        )}
 
         {/* ADR-0006 PR-4 — the per-job Schedule deep-link card, beside Materials. All roles
             see it (schedule visibility is all-roles, decision 4); the import affordances on
             the page itself re-gate on cap.jobtracker.manage server-side. */}
         {onOpenSchedule && (
           <section className="card dash-section">
-            <h3 className="dash-detail__h2">Schedule</h3>
+            <h3 className="dash-detail__h2" id="jd-schedule">Schedule</h3>
             <p className="dash-hint">
               The job&apos;s living task list — what the project schedule says is happening,
               with dates, milestones and deliveries.
@@ -1721,7 +1800,7 @@ export function FieldOpsJobTracker({
             re-gates every call regardless of what this hides. */}
         {onOpenWeeklyReport && (
           <section className="card dash-section">
-            <h3 className="dash-detail__h2">Weekly production report</h3>
+            <h3 className="dash-detail__h2" id="jd-weekly">Weekly production report</h3>
             <p className="dash-hint">
               Safety statistics, labor hours by company, pending RFIs and submittals, weather days
               and photo selection for the client-facing weekly report.
@@ -1733,9 +1812,12 @@ export function FieldOpsJobTracker({
         )}
 
         <section className="card dash-section">
-          <h3 className="dash-detail__h2">Inspections</h3>
+          <h3 className="dash-detail__h2" id="jd-inspections">Inspections</h3>
           {job.inspections.length ? (
-            <table className="dash-table">
+            /* --stack + data-cell: this was the one table on the page without the
+               kit's phone treatment, so three columns scrolled sideways instead of
+               becoming labelled blocks. */
+            <table className="dash-table dash-table--stack">
               <thead>
                 <tr>
                   <th className="dash-header">Form</th>
@@ -1747,8 +1829,8 @@ export function FieldOpsJobTracker({
                 {job.inspections.map((i) => (
                   <tr key={i.uuid} className="dash-row">
                     <td className="dash-cell">{i.form_code} v{i.version}</td>
-                    <td className="dash-cell">{i.equipment_name ?? "—"}</td>
-                    <td className="dash-cell">{fmtDateTime(i.performed_at)}</td>
+                    <td className="dash-cell" data-cell="Equipment">{i.equipment_name ?? "—"}</td>
+                    <td className="dash-cell" data-cell="Performed">{fmtDateTime(i.performed_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1761,6 +1843,20 @@ export function FieldOpsJobTracker({
 
         {/* D4 — per-job daily-form requirements (self-contained section; cap.checklist.manage). */}
         {canChecklist && <JobDailyRequirementsSection jobId={job.job_id} />}
+
+        {/* DANGER ZONE — last, not ninth of nineteen. Archiving relocates seven
+            containers across Smartsheet and Box; it used to render between the routing
+            form and the client card, in the middle of the reading order. A destructive
+            action belongs at the end, behind its own heading. JobArchivePanel renders
+            null without cap.job.archive, so this whole block self-hides. */}
+        <div className="job-danger">
+          <p className="job-danger__label">Danger zone</p>
+          <JobArchivePanel
+            job={job}
+            canArchive={(user?.capabilities ?? []).includes("cap.job.archive")}
+            onChanged={reloadDetail}
+          />
+        </div>
       </PageShell>
     );
   }
