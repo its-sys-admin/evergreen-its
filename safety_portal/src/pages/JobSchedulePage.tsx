@@ -1,16 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import * as api from "../lib/fieldops_schedules";
 import type { ScheduleListRow, ScheduleTaskRow } from "../lib/fieldops_schedules";
 import { ScheduleValidatePage } from "./ScheduleValidatePage";
 import { ScheduleReconcilePage } from "./ScheduleReconcilePage";
 import { PaymentsSection } from "./JobSchedulePaymentsSection";
+import { ScheduleTimeline } from "../components/ScheduleTimeline";
+import {
+  groupTasks,
+  isLate,
+  matchesFilter,
+  progressBar,
+  slipDays,
+  summarize,
+  todayPacific,
+  type ScheduleFilter,
+} from "../lib/schedule_view";
 import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/errorCopy";
 import { PageShell } from "../components/PageShell";
 import { ConfirmDelete } from "../components/ChecklistItemForm";
+import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection";
 
-// Per-job SCHEDULE page (ADR-0006 PR-4) — /jobs/:jobId/schedule, the deep-link target from
-// the Job Tracker's "Open schedule →" card.
+// Per-job SCHEDULE page (ADR-0006) — /jobs/:jobId/schedule, the deep-link target from the
+// Job Tracker's "Open schedule →" card.
 //
 // It is the home of the LIVING TASK LIST: what the committed project schedule says this job
 // is doing, section by section, with dates, durations and progress.
@@ -21,18 +34,37 @@ import { ConfirmDelete } from "../components/ChecklistItemForm";
 //     OCR-proposed grid on the validate SUB-FACE (ScheduleValidatePage — the
 //     ManifestValidatePage pattern, remount-keyed, NOT a router entry) and commit it.
 //   • cap.schedule.mark (PR-5 — submitter/manager/admin, per-job scoped Worker-side) gets
-//     the IN-ROW mark-off controls (operator decision 8): quick-% chips + an exact-% input
-//     on ordinary tasks, a done-mark on milestones, a delivered-date control on Deliveries
+//     the mark-off controls (operator decision 8): quick-% chips + an exact-% input on
+//     ordinary tasks, a done-mark on milestones, a delivered-date control on Deliveries
 //     tasks. Optimistic row update, then a reload — the server's row is the record.
 // The Worker re-gates every call; capability checks here drive affordances only
 // (Invariant 2 — SPA gating is convenience, never the boundary).
 //
-// TWO sub-faces, routed by whether the job already HAS a task list (the plan's
-// degenerate flag made local): no tasks → the first-import VALIDATE face
-// (ScheduleValidatePage); tasks exist → the revision RECONCILE face
-// (ScheduleReconcilePage, PR-6 — the three-way diff review). Both are remount-keyed
-// sub-faces, never router entries; the Worker's own plan re-derives the truth either
-// way, so a mis-route degrades to an honest banner, never a wrong commit.
+// TWO sub-faces, routed by whether the job already HAS a task list (the plan's degenerate
+// flag made local): no tasks → the first-import VALIDATE face (ScheduleValidatePage); tasks
+// exist → the revision RECONCILE face (ScheduleReconcilePage — the three-way diff review).
+// Both are remount-keyed sub-faces, never router entries; the Worker's own plan re-derives
+// the truth either way, so a mis-route degrades to an honest banner, never a wrong commit.
+//
+// ── LAYOUT (2026-08 design pass) ──────────────────────────────────────────────────────
+// The page used to be a 5-column table inside the 920px reading well, with five percent
+// chips, a number input and a Set button crammed into one cell of every row. It did not fit
+// a laptop and could not be worked on a phone. What replaced it:
+//
+//   • A HERO answering the schedule's first question — overall progress, and how much is
+//     late — before any control.
+//   • SECTION GROUPS that collapse, each carrying its own rollup, because that is how a
+//     superintendent reads a schedule.
+//   • A SEARCH + FILTER row, so a 300-task import is navigable at all.
+//   • A TIMELINE view (ScheduleTimeline) — the signature. See that file for why.
+//   • MARK-OFF as a per-row disclosure with 48px targets, so the list stays scannable and
+//     the controls stay thumb-sized. One row open at a time.
+//   • The office surfaces (import, payments) as drawers BELOW the task list, so the
+//     job-site face is what the page opens on.
+//
+// Three facts the old page threw away are now derived in `lib/schedule_view.ts` and shown:
+// LATE (past finish, under 100%), SLIP against the immutable baseline anchor, and the
+// server's `truncated` flag — which meant the page was silently showing a partial schedule.
 
 /** Upload-list status → chip copy. `superseded` reads as revision history on purpose —
  *  those rows are the job's prior governing schedules, kept, never a failure state. */
@@ -56,13 +88,6 @@ function statusChip(s: ScheduleListRow): { label: string; className: string } {
   }
 }
 
-/** A text progress bar — deliberately characters, not CSS: it survives every theme, prints,
- *  and reads out loud sanely. 10 cells, floor-rounded so 99% still shows one open cell. */
-function progressBar(percent: number): string {
-  const filled = Math.max(0, Math.min(10, Math.floor(percent / 10)));
-  return `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${percent}%`;
-}
-
 function errText(e: unknown, fallback: string): string {
   if (e && typeof e === "object" && "code" in e) {
     const code = (e as { code: string | null }).code;
@@ -71,28 +96,30 @@ function errText(e: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Today as the Pacific calendar date (YYYY-MM-DD, en-CA yields ISO order) — the crews' day,
- *  matching the Worker's own default for an omitted delivered_date. */
-function todayPacific(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
-
 /** The quick-% chips (operator decision 8). */
 const PERCENT_CHIPS = [0, 25, 50, 75, 100] as const;
+
+const FILTERS: { key: ScheduleFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "open", label: "In progress" },
+  { key: "late", label: "Late" },
+  { key: "milestones", label: "Milestones" },
+  { key: "deliveries", label: "Deliveries" },
+];
 
 export function JobSchedulePage({
   jobId,
   onHome,
   onOpenJob,
+  onOpenMaterials,
 }: {
   jobId: string;
   onHome: () => void;
   onOpenJob: (jobId: string) => void;
+  /** Passed only when the session holds cap.materials.receive. The schedule page shows
+   *  delivery CONTEXT but hands receiving off to the materials page — see the note on the
+   *  delivery controls below for why the two are deliberately not conflated. */
+  onOpenMaterials?: (jobId: string) => void;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -101,8 +128,14 @@ export function JobSchedulePage({
   // Payments (PR-7): admin-only office surface (operator decision 4). The check gates the
   // AFFORDANCE — the Worker re-gates every /api/fieldops/payments call (Invariant 2).
   const canPayments = caps.includes("cap.payments.manage");
+  // Materials: the same two caps ExpectedMaterialsSection itself checks. Gating the DRAWER on
+  // them too means a session without either never renders the word "Materials" and never
+  // triggers the section's fetch.
+  const canMaterials =
+    caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage");
 
   const [tasks, setTasks] = useState<ScheduleTaskRow[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -119,6 +152,19 @@ export function JobSchedulePage({
   const [exactPct, setExactPct] = useState<Record<number, string>>({});
   const [deliveredDraft, setDeliveredDraft] = useState<Record<number, string>>({});
 
+  // View state. Mark strips open per row and STAY open — end-of-day marking walks several
+  // tasks at once, so closing the last one on every tap would fight the actual job. The list
+  // is still tight because nothing is open until asked for.
+  const [view, setView] = useState<"list" | "timeline">("list");
+  const [filter, setFilter] = useState<ScheduleFilter>("all");
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [openRows, setOpenRows] = useState<Set<number>>(() => new Set());
+
+  // Today is resolved ONCE per mount and threaded down, so every "is this late" answer on
+  // the page agrees with every other one.
+  const today = useMemo(() => todayPacific(), []);
+
   const loadTasks = useCallback(() => {
     setLoadError(null);
     api
@@ -126,6 +172,7 @@ export function JobSchedulePage({
       .then((d) => {
         setTasks(d.tasks);
         setProjectName(d.project_name);
+        setTruncated(Boolean(d.truncated));
       })
       .catch(() => setLoadError("Could not load this job's schedule."));
   }, [jobId]);
@@ -148,24 +195,16 @@ export function JobSchedulePage({
     loadSchedules();
   }, [loadSchedules]);
 
-  // Group by section in DOCUMENT order (sort_order), preserving first-seen section order —
-  // a schedule is read top to bottom, so alphabetizing sections would scramble the phases.
+  const stats = useMemo(() => summarize(tasks ?? [], today), [tasks, today]);
+
+  // Filter FIRST, then group: a section whose every task is filtered out should disappear
+  // rather than sit there as an empty heading.
   const groups = useMemo(() => {
-    const list = tasks ?? [];
-    const out: { name: string | null; tasks: ScheduleTaskRow[] }[] = [];
-    const byName = new Map<string, ScheduleTaskRow[]>();
-    for (const t of list) {
-      const key = t.section ?? "";
-      let bucket = byName.get(key);
-      if (!bucket) {
-        bucket = [];
-        byName.set(key, bucket);
-        out.push({ name: t.section, tasks: bucket });
-      }
-      bucket.push(t);
-    }
-    return out;
-  }, [tasks]);
+    const visible = (tasks ?? []).filter((t) => matchesFilter(t, filter, query, today));
+    return groupTasks(visible, today);
+  }, [tasks, filter, query, today]);
+
+  const hiddenCount = (tasks?.length ?? 0) - groups.reduce((n, g) => n + g.tasks.length, 0);
 
   /** Optimistically patch one task row, run the mark call, then reload — the reload
    *  confirms the server's row on success and honestly reverts the optimism on failure. */
@@ -224,7 +263,7 @@ export function JobSchedulePage({
   }
 
   function markDelivered(t: ScheduleTaskRow) {
-    const date = deliveredDraft[t.id] ?? t.delivered_date ?? todayPacific();
+    const date = deliveredDraft[t.id] ?? t.delivered_date ?? today;
     return runMark(
       t.id,
       { delivered_date: date },
@@ -255,6 +294,24 @@ export function JobSchedulePage({
     }
   }
 
+  function toggleSection(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleRow(id: number) {
+    setOpenRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   // ── The validate / reconcile SUB-FACES (remount-keyed; not router entries) ─────────
   // Routed by the task list: no tasks → first import (validate); tasks → revision
   // reconcile. While the task read is still in flight the route is unknown — hold,
@@ -269,7 +326,7 @@ export function JobSchedulePage({
       if (committed) loadTasks();
     };
     return (
-      <PageShell onHome={onHome}>
+      <PageShell onHome={onHome} wide>
         {tasks === null ? (
           <section className="card dash-section" aria-label="Loading schedule">
             <p className="dash__intro">Loading the task list…</p>
@@ -285,24 +342,20 @@ export function JobSchedulePage({
 
   const hasUploads = (schedules?.length ?? 0) > 0;
   const empty = tasks !== null && tasks.length === 0;
+  const hasTasks = tasks !== null && tasks.length > 0;
 
   return (
-    <PageShell onHome={onHome}>
+    <PageShell onHome={onHome} wide>
       <div className="dash-back-btn">
         <button type="button" className="btn btn--secondary" onClick={() => onOpenJob(jobId)}>
           ← Back to job
         </button>
       </div>
+
       {/* The job NAME, not the JOB-###### key (the Materials-page precedent) — the key is a
           system identifier the field never speaks; the id falls back only while loading. */}
+      <p className="page__heading--eyebrow">Project schedule</p>
       <h1 className="page__heading">Schedule — {projectName ?? jobId}</h1>
-      <p className="dash__intro">
-        The job&apos;s living task list — what the project schedule says is happening, section by
-        section.
-        {canMark
-          ? " Tap a percent to mark progress; milestones get a done-mark, deliveries a delivered date."
-          : ""}
-      </p>
 
       {msg && (
         <p className={msg.ok ? "dash__msg" : "login__error"} role={msg.ok ? "status" : "alert"}>
@@ -319,260 +372,573 @@ export function JobSchedulePage({
         </p>
       )}
 
-      {tasks === null && !loadError && <p className="dash__intro">Loading…</p>}
-
-      {empty && (
-        <p className="dash__intro">
-          {canManage
-            ? hasUploads
-              ? "No tasks yet — check a finished upload below and import it."
-              : "No schedule yet. Upload the project-schedule PDF export below to start the task list."
-            : "No schedule has been imported for this job yet."}
+      {/* Never-silent: the read caps at 600 tasks but a commit can author up to 2000, so a
+          truncated read means this page is showing a PARTIAL schedule. It used to say
+          nothing at all. */}
+      {truncated && (
+        <p className="wpr-banner wpr-banner--warn" role="status">
+          This job has more tasks than the page can load at once, so the list below is not the
+          whole schedule. Use search to find a specific task.
         </p>
       )}
 
-      {canManage ? (
-        <section className="card dash-section" aria-label="Schedule uploads">
-          <h3 className="dash-detail__h2">Import a schedule</h3>
-          <p className="dash__intro">
-            Upload the project schedule as a PDF (the Smartsheet export). It is read on the
-            office Mac and comes back as a task grid you check side-by-side with the source
-            pages — nothing reaches the task list until you import it. Schedule revisions are
-            supported: a new export uploaded onto a job with a task list opens a reconcile
-            review — date changes, new tasks, removals and progress conflicts — before
-            anything applies.
-          </p>
-          <div className="dash-row">
-            <input
-              type="file"
-              accept={api.SCHEDULE_ACCEPT}
-              aria-label="Schedule PDF"
-              disabled={uploadBusy}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                // Clear the picker so re-choosing the SAME file after a failure still fires.
-                e.target.value = "";
-                if (f) void uploadScheduleFile(f);
-              }}
-            />
-            {uploadBusy ? <span>Uploading…</span> : null}
-          </div>
+      {tasks === null && !loadError && (
+        <div aria-label="Loading schedule" aria-busy="true">
+          <div className="sched-skel" />
+          <div className="sched-skel" />
+          <div className="sched-skel" />
+        </div>
+      )}
 
-          {hasUploads ? (
-            <div style={{ overflowX: "auto" }}>
-              <table className="dash-table">
-                <thead>
-                  <tr>
-                    <th scope="col">File</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Rows</th>
-                    <th scope="col" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {(schedules ?? []).map((s) => {
-                    const chip = statusChip(s);
-                    const validatable = s.status === "parsed" || s.status === "committing";
-                    // The button says what OPENING it does: a job with a task list gets
-                    // the reconcile review, an empty one the first-import check.
-                    const openVerb = (tasks?.length ?? 0) > 0 ? "Reconcile" : "Validate";
-                    const discardable =
-                      s.status !== "committed" && s.status !== "superseded";
-                    return (
-                      <tr key={s.id}>
-                        <td>{s.filename}</td>
-                        <td>
-                          <span className={chip.className}>{chip.label}</span>
-                        </td>
-                        <td>{s.row_count ?? "—"}</td>
-                        <td>
-                          {validatable ? (
-                            <button
-                              type="button"
-                              className="btn btn--secondary"
-                              aria-label={`${openVerb} ${s.filename}`}
-                              onClick={() => setOpenSchedule(s.id)}
-                            >
-                              {openVerb} →
-                            </button>
-                          ) : null}
-                          {discardable ? (
-                            <>
-                              {" "}
-                              <ConfirmDelete
-                                actionLabel="Remove"
-                                ariaLabel={`Remove ${s.filename}`}
-                                copy={
-                                  s.status === "committing"
-                                    ? "Stop this import and remove it? Tasks already imported stay on the list."
-                                    : "Remove this upload from the list?"
-                                }
-                                busy={uploadBusy}
-                                onConfirm={() =>
-                                  void (async () => {
-                                    try {
-                                      await api.discardSchedule(s.id);
-                                    } catch {
-                                      /* surfaced by the list not changing; refresh below */
-                                    }
-                                    loadSchedules();
-                                  })()
-                                }
-                              />
-                            </>
-                          ) : null}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+      {/* ── Hero: the schedule's first question, answered before any control ─────────── */}
+      {hasTasks && (
+        <div className="sched-hero">
+          <div className="sched-hero__figure">
+            <span className="sched-hero__pct">{stats.percent}</span>
+            <span className="sched-hero__pct-unit">% complete</span>
+          </div>
+          <div>
+            <div
+              className="sched-hero__meter"
+              role="img"
+              aria-label={`Overall progress ${stats.percent}%`}
+            >
+              <div className="sched-hero__meter-fill" style={{ width: `${stats.percent}%` }} />
             </div>
-          ) : null}
-        </section>
+            <ul className="sched-hero__stats">
+              <li className="sched-hero__stat">
+                <b>{stats.done}</b> of <b>{stats.total}</b> tasks complete
+              </li>
+              {stats.late > 0 && (
+                <li className="sched-hero__stat sched-hero__stat--late">
+                  <b>{stats.late}</b> past its finish date
+                </li>
+              )}
+              {stats.nextMilestone && (
+                <li className="sched-hero__stat">
+                  Next milestone <b>{stats.nextMilestone.name}</b> on{" "}
+                  <b>{stats.nextMilestone.date}</b>
+                </li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* ── Toolbar ──────────────────────────────────────────────────────────────────── */}
+      {hasTasks && (
+        <div className="sched-toolbar">
+          <input
+            type="search"
+            className="sched-toolbar__search"
+            placeholder="Search tasks and sections"
+            aria-label="Search tasks"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <div className="sched-filters" role="group" aria-label="Filter tasks">
+            {FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                className="sched-chip"
+                aria-pressed={filter === f.key}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.label}
+                {f.key === "late" && stats.late > 0 ? (
+                  <span className="sched-chip__count">{stats.late}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+          <div className="sched-views">
+            <button
+              type="button"
+              className={`admin-tabs__tab${view === "list" ? " admin-tabs__tab--active" : ""}`}
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
+            >
+              List
+            </button>
+            <button
+              type="button"
+              className={`admin-tabs__tab${view === "timeline" ? " admin-tabs__tab--active" : ""}`}
+              aria-pressed={view === "timeline"}
+              onClick={() => setView("timeline")}
+            >
+              Timeline
+            </button>
+          </div>
+        </div>
+      )}
+
+      {empty && (
+        <div className="sched-empty">
+          <p className="sched-empty__title">No tasks yet</p>
+          <p>
+            {canManage
+              ? hasUploads
+                ? "No tasks yet — check a finished upload below and import it."
+                : "No schedule yet. Upload the project-schedule PDF export below to start the task list."
+              : "No schedule has been imported for this job yet."}
+          </p>
+        </div>
+      )}
+
+      {hasTasks && groups.length === 0 && (
+        <div className="sched-empty">
+          <p className="sched-empty__title">Nothing matches</p>
+          <p>No task matches that search or filter. Clear them to see all {tasks.length} tasks.</p>
+        </div>
+      )}
+
+      {/* ── TIMELINE view ────────────────────────────────────────────────────────────── */}
+      {view === "timeline" && groups.length > 0 && (
+        <ScheduleTimeline groups={groups} today={today} />
+      )}
+
+      {/* ── LIST view ────────────────────────────────────────────────────────────────── */}
+      {view === "list" &&
+        groups.map((group) => {
+          const key = group.name ?? "__none";
+          const isCollapsed = collapsed.has(key);
+          return (
+            <section key={key} className="sched-group" aria-label={group.name ?? "Tasks"}>
+              <button
+                type="button"
+                className="sched-group__head"
+                aria-expanded={!isCollapsed}
+                onClick={() => toggleSection(key)}
+              >
+                <span className="sched-group__caret" aria-hidden="true">
+                  ▸
+                </span>
+                <span className="sched-group__title">
+                  {group.name ?? "Tasks"}{" "}
+                  <span className="sched-group__count">
+                    {group.tasks.length} {group.tasks.length === 1 ? "task" : "tasks"}
+                    {group.late > 0 ? ` · ${group.late} late` : ""}
+                  </span>
+                </span>
+                <span className="sched-group__roll">
+                  <span className="sched-group__roll-meter" aria-hidden="true">
+                    <span
+                      className="sched-group__roll-fill"
+                      style={{ width: `${group.percent}%` }}
+                    />
+                  </span>
+                  <span className="sched-group__roll-pct">{group.percent}%</span>
+                </span>
+              </button>
+
+              {!isCollapsed && (
+                <ul className="sched-list">
+                  {group.tasks.map((t) => (
+                    <TaskRow
+                      key={t.id}
+                      t={t}
+                      today={today}
+                      canMark={canMark}
+                      markBusy={markBusy}
+                      open={openRows.has(t.id)}
+                      onToggle={() => toggleRow(t.id)}
+                      exactPct={exactPct}
+                      setExactPct={setExactPct}
+                      deliveredDraft={deliveredDraft}
+                      setDeliveredDraft={setDeliveredDraft}
+                      markPercent={markPercent}
+                      markExact={markExact}
+                      markMilestone={markMilestone}
+                      markDelivered={markDelivered}
+                      onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(jobId) : undefined}
+                    />
+                  ))}
+                </ul>
+              )}
+            </section>
+          );
+        })}
+
+      {hiddenCount > 0 && (
+        <p className="dash__intro">
+          {hiddenCount} {hiddenCount === 1 ? "task is" : "tasks are"} hidden by the current search
+          or filter.
+        </p>
+      )}
+
+      {/* ── Office drawers ───────────────────────────────────────────────────────────────
+          Below the task list on purpose: the job-site face is what the page opens on. Both
+          are <details> so they are keyboard- and screen-reader-native with no dependency,
+          and the import drawer opens itself on a job that has no schedule yet — the one
+          case where importing IS the page's job. */}
+      {canManage ? (
+        <details className="sched-drawer" open={empty}>
+          <summary>
+            Import a schedule
+            {hasUploads ? (
+              <span className="sched-drawer__note">
+                {schedules?.length} {schedules?.length === 1 ? "upload" : "uploads"}
+              </span>
+            ) : null}
+          </summary>
+          <div className="sched-drawer__body">
+            <p className="dash__intro">
+              Upload the project schedule as a PDF (the Smartsheet export). It is read on the
+              office Mac and comes back as a task grid you check side-by-side with the source
+              pages — nothing reaches the task list until you import it. Schedule revisions are
+              supported: a new export uploaded onto a job with a task list opens a reconcile
+              review — date changes, new tasks, removals and progress conflicts — before
+              anything applies.
+            </p>
+            <div className="dash-row">
+              <input
+                type="file"
+                accept={api.SCHEDULE_ACCEPT}
+                aria-label="Schedule PDF"
+                disabled={uploadBusy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  // Clear the picker so re-choosing the SAME file after a failure still fires.
+                  e.target.value = "";
+                  if (f) void uploadScheduleFile(f);
+                }}
+              />
+              {uploadBusy ? <span>Uploading…</span> : null}
+            </div>
+
+            {hasUploads ? (
+              <div style={{ overflowX: "auto" }}>
+                <table className="dash-table dash-table--stack">
+                  <thead>
+                    <tr>
+                      <th scope="col">File</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Rows</th>
+                      <th scope="col" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(schedules ?? []).map((s) => {
+                      const chip = statusChip(s);
+                      const validatable = s.status === "parsed" || s.status === "committing";
+                      // The button says what OPENING it does: a job with a task list gets
+                      // the reconcile review, an empty one the first-import check.
+                      const openVerb = (tasks?.length ?? 0) > 0 ? "Reconcile" : "Validate";
+                      const discardable =
+                        s.status !== "committed" && s.status !== "superseded";
+                      return (
+                        <tr key={s.id}>
+                          <td data-cell="File">{s.filename}</td>
+                          <td data-cell="Status">
+                            <span className={chip.className}>{chip.label}</span>
+                          </td>
+                          <td data-cell="Rows">{s.row_count ?? "—"}</td>
+                          <td>
+                            {validatable ? (
+                              <button
+                                type="button"
+                                className="btn btn--secondary"
+                                aria-label={`${openVerb} ${s.filename}`}
+                                onClick={() => setOpenSchedule(s.id)}
+                              >
+                                {openVerb} →
+                              </button>
+                            ) : null}
+                            {discardable ? (
+                              <>
+                                {" "}
+                                <ConfirmDelete
+                                  actionLabel="Remove"
+                                  ariaLabel={`Remove ${s.filename}`}
+                                  copy={
+                                    s.status === "committing"
+                                      ? "Stop this import and remove it? Tasks already imported stay on the list."
+                                      : "Remove this upload from the list?"
+                                  }
+                                  busy={uploadBusy}
+                                  onConfirm={() =>
+                                    void (async () => {
+                                      try {
+                                        await api.discardSchedule(s.id);
+                                      } catch {
+                                        /* surfaced by the list not changing; refresh below */
+                                      }
+                                      loadSchedules();
+                                    })()
+                                  }
+                                />
+                              </>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        </details>
       ) : null}
 
-      {groups.map((group) => (
-        <section
-          key={group.name ?? "__none"}
-          className="card dash-section"
-          aria-label={group.name ?? "Tasks"}
-        >
-          {group.name && <h3 className="dash-detail__h2">{group.name}</h3>}
-          <div style={{ overflowX: "auto" }}>
-            <table className="dash-table">
-              <thead>
-                <tr>
-                  <th scope="col">Task</th>
-                  <th scope="col">Start</th>
-                  <th scope="col">Finish</th>
-                  <th scope="col">Duration</th>
-                  <th scope="col">Progress</th>
-                </tr>
-              </thead>
-              <tbody>
-                {group.tasks.map((t) => (
-                  <tr key={t.id}>
-                    <td>
-                      {t.name}
-                      {t.is_contract_milestone ? (
-                        <>
-                          {" "}
-                          <span className="dash-pill dash-pill--warn">Contract milestone</span>
-                        </>
-                      ) : t.is_milestone ? (
-                        <>
-                          {" "}
-                          <span className="dash-pill">Milestone</span>
-                        </>
-                      ) : null}
-                      {t.is_delivery ? (
-                        <>
-                          {" "}
-                          <span className="dash-pill">Delivery</span>
-                        </>
-                      ) : null}
-                      {t.delivered_date ? (
-                        <>
-                          {" "}
-                          <span className="dash-pill dash-pill--ok">
-                            Delivered {t.delivered_date}
-                            {t.delivered_by_name ? ` · ${t.delivered_by_name}` : ""}
-                          </span>
-                        </>
-                      ) : null}
-                      {canMark && t.is_delivery ? (
-                        <span style={{ whiteSpace: "nowrap" }}>
-                          {" "}
-                          <input
-                            type="date"
-                            aria-label={`Delivered date for ${t.name}`}
-                            value={deliveredDraft[t.id] ?? t.delivered_date ?? todayPacific()}
-                            disabled={markBusy !== null}
-                            onChange={(e) =>
-                              setDeliveredDraft((prev) => ({ ...prev, [t.id]: e.target.value }))
-                            }
-                          />{" "}
-                          <button
-                            type="button"
-                            className="btn btn--secondary btn--sm"
-                            aria-label={`Mark ${t.name} delivered`}
-                            disabled={markBusy !== null}
-                            onClick={() => void markDelivered(t)}
-                          >
-                            {t.delivered_date ? "Update date" : "Delivered"}
-                          </button>
-                        </span>
-                      ) : null}
-                    </td>
-                    <td>{t.start_date ?? "—"}</td>
-                    <td>{t.finish_date ?? "—"}</td>
-                    <td>{t.duration_days != null ? `${t.duration_days}d` : "—"}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      <span style={{ fontFamily: "monospace" }}>{progressBar(t.percent_done)}</span>
-                      {canMark && !t.is_milestone ? (
-                        <div className="dash-row" style={{ marginTop: "0.25rem" }}>
-                          {PERCENT_CHIPS.map((p) => (
-                            <button
-                              key={p}
-                              type="button"
-                              className="btn btn--secondary btn--sm"
-                              aria-label={`Mark ${t.name} ${p}%`}
-                              disabled={markBusy !== null || t.percent_done === p}
-                              onClick={() => void markPercent(t, p)}
-                            >
-                              {p}%
-                            </button>
-                          ))}
-                          <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            inputMode="numeric"
-                            aria-label={`Exact percent for ${t.name}`}
-                            style={{ width: "4.2rem" }}
-                            value={exactPct[t.id] ?? ""}
-                            disabled={markBusy !== null}
-                            onChange={(e) =>
-                              setExactPct((prev) => ({ ...prev, [t.id]: e.target.value }))
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="btn btn--secondary btn--sm"
-                            aria-label={`Set exact percent for ${t.name}`}
-                            disabled={markBusy !== null || !(exactPct[t.id] ?? "").trim().length}
-                            onClick={() => markExact(t)}
-                          >
-                            Set
-                          </button>
-                        </div>
-                      ) : null}
-                      {canMark && t.is_milestone ? (
-                        <label style={{ marginLeft: "0.5rem", whiteSpace: "nowrap" }}>
-                          <input
-                            type="checkbox"
-                            aria-label={`Done ${t.name}`}
-                            checked={t.percent_done === 100}
-                            disabled={markBusy !== null}
-                            onChange={(e) => void markMilestone(t, e.target.checked)}
-                          />{" "}
-                          Done
-                        </label>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* Materials — the SAME ExpectedMaterialsSection the per-job Materials page renders,
+          mounted here rather than reimplemented (its own docstring says it is mountable
+          anywhere that has somewhere to navigate to). That matters: the delivery ledger is
+          APPEND-ONLY with no delete path, so a second, subtly-different receiving UI is a
+          liability. One component, one behaviour, two places it can be reached from.
+
+          Why it belongs on the schedule page at all: the schedule's Deliveries tasks are the
+          only place the plan says material is due, and marking one only records that the
+          SCHEDULE line is done — the receipt against the ledger is a separate act. Putting
+          the real tracking one drawer away closes that gap without pretending the two records
+          are joined. They are not: nothing in the schema links a task to a receipt (the only
+          shared key is job_id), so this page will not claim otherwise. */}
+      {canMaterials ? (
+        <details className="sched-drawer">
+          <summary>
+            Materials
+            <span className="sched-drawer__note">Expected lines, loads and delivery marks</span>
+          </summary>
+          <div className="sched-drawer__body">
+            <ExpectedMaterialsSection
+              jobId={jobId}
+              onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(jobId) : undefined}
+            />
           </div>
-        </section>
-      ))}
+        </details>
+      ) : null}
 
       {/* Payments — SAME PAGE, office-only (operator decisions: payments live where the
-          job's schedule lives; admin-only visibility). Below the schedule table so the
-          job-site face stays first. */}
+          job's schedule lives; admin-only visibility). Below the schedule so the job-site
+          face stays first. */}
       {canPayments ? <PaymentsSection jobId={jobId} /> : null}
     </PageShell>
+  );
+}
+
+// ── One task row ────────────────────────────────────────────────────────────────────────
+// A grid row on a laptop, a stacked card on a phone. Deliberately NOT a <table>: the
+// mark-off strip spans the full row width when open, which a table cell cannot do without
+// colspan gymnastics — and cramming those controls into a cell is precisely what made the
+// old page unusable on a phone.
+
+function TaskRow({
+  t,
+  today,
+  canMark,
+  markBusy,
+  open,
+  onToggle,
+  exactPct,
+  setExactPct,
+  deliveredDraft,
+  setDeliveredDraft,
+  markPercent,
+  markExact,
+  markMilestone,
+  markDelivered,
+  onOpenMaterials,
+}: {
+  t: ScheduleTaskRow;
+  today: string;
+  canMark: boolean;
+  markBusy: number | null;
+  open: boolean;
+  onToggle: () => void;
+  exactPct: Record<number, string>;
+  setExactPct: Dispatch<SetStateAction<Record<number, string>>>;
+  deliveredDraft: Record<number, string>;
+  setDeliveredDraft: Dispatch<SetStateAction<Record<number, string>>>;
+  markPercent: (t: ScheduleTaskRow, p: number) => Promise<void>;
+  markExact: (t: ScheduleTaskRow) => void;
+  markMilestone: (t: ScheduleTaskRow, done: boolean) => Promise<void>;
+  markDelivered: (t: ScheduleTaskRow) => Promise<void>;
+  onOpenMaterials?: () => void;
+}) {
+  const late = isLate(t, today);
+  const slip = slipDays(t);
+  const doneRow = t.percent_done >= 100;
+
+  const cls = ["sched-task", late ? "sched-task--late" : "", doneRow ? "sched-task--done" : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  const provenance = [
+    t.schedule_percent !== null && t.schedule_percent !== t.percent_done
+      ? `The schedule document says ${t.schedule_percent}%.`
+      : "",
+    t.last_marked_by_name ? `Last marked by ${t.last_marked_by_name}.` : "",
+    t.predecessors_raw ? `Follows ${t.predecessors_raw}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <li className={cls}>
+      <div className="sched-task__main">
+        {t.is_milestone ? (
+          <span className="sched-task__glyph" aria-hidden="true">
+            ◆
+          </span>
+        ) : null}
+        <span className="sched-task__name">{t.name}</span>
+        {t.is_contract_milestone ? (
+          <span className="dash-pill dash-pill--warn">Contract milestone</span>
+        ) : t.is_milestone ? (
+          <span className="dash-pill">Milestone</span>
+        ) : null}
+        {t.is_delivery ? <span className="dash-pill">Delivery</span> : null}
+        {late ? <span className="dash-pill dash-pill--danger">Late</span> : null}
+        {/* Slip is measured against the baseline anchor stamped at the task's first commit —
+            the one field that records that a revision moved this date. Never shown before. */}
+        {slip !== null ? (
+          <span className="dash-pill">
+            {slip > 0 ? `Slipped ${slip}d` : `Pulled in ${Math.abs(slip)}d`}
+          </span>
+        ) : null}
+        {t.delivered_date ? (
+          <span className="dash-pill dash-pill--ok">
+            Delivered {t.delivered_date}
+            {t.delivered_by_name ? ` · ${t.delivered_by_name}` : ""}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="sched-task__dates">
+        {t.start_date ?? "—"} → {t.finish_date ?? "—"}
+      </div>
+      <div className="sched-task__dur">{t.duration_days != null ? `${t.duration_days}d` : "—"}</div>
+
+      {canMark ? (
+        <button
+          type="button"
+          className="sched-task__prog"
+          aria-label={`Update progress for ${t.name}`}
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          <ProgressReadout percent={t.percent_done} />
+          <span className="sched-task__prog-hint" aria-hidden="true">
+            {open ? "▾" : "▸"}
+          </span>
+        </button>
+      ) : (
+        <div className="sched-task__prog">
+          <ProgressReadout percent={t.percent_done} />
+        </div>
+      )}
+
+      {canMark && open ? (
+        <div className="sched-mark">
+          <span className="sched-mark__label">Mark progress — {t.name}</span>
+
+          {!t.is_milestone ? (
+            <>
+              {PERCENT_CHIPS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="sched-mark__chip"
+                  aria-label={`Mark ${t.name} ${p}%`}
+                  aria-pressed={t.percent_done === p}
+                  disabled={markBusy !== null || t.percent_done === p}
+                  onClick={() => void markPercent(t, p)}
+                >
+                  {p}%
+                </button>
+              ))}
+              <input
+                type="number"
+                min={0}
+                max={100}
+                inputMode="numeric"
+                className="sched-mark__exact"
+                aria-label={`Exact percent for ${t.name}`}
+                placeholder="%"
+                value={exactPct[t.id] ?? ""}
+                disabled={markBusy !== null}
+                onChange={(e) => setExactPct((prev) => ({ ...prev, [t.id]: e.target.value }))}
+              />
+              <button
+                type="button"
+                className="btn btn--secondary"
+                aria-label={`Set exact percent for ${t.name}`}
+                disabled={markBusy !== null || !(exactPct[t.id] ?? "").trim().length}
+                onClick={() => markExact(t)}
+              >
+                Set
+              </button>
+            </>
+          ) : null}
+
+          {t.is_milestone ? (
+            <label className="sched-mark__done">
+              <input
+                type="checkbox"
+                aria-label={`Done ${t.name}`}
+                checked={t.percent_done === 100}
+                disabled={markBusy !== null}
+                onChange={(e) => void markMilestone(t, e.target.checked)}
+              />{" "}
+              Done
+            </label>
+          ) : null}
+
+          {t.is_delivery ? (
+            <>
+              <input
+                type="date"
+                className="sched-mark__date"
+                aria-label={`Delivered date for ${t.name}`}
+                value={deliveredDraft[t.id] ?? t.delivered_date ?? today}
+                disabled={markBusy !== null}
+                onChange={(e) =>
+                  setDeliveredDraft((prev) => ({ ...prev, [t.id]: e.target.value }))
+                }
+              />
+              <button
+                type="button"
+                className="btn btn--secondary"
+                aria-label={`Mark ${t.name} delivered`}
+                disabled={markBusy !== null}
+                onClick={() => void markDelivered(t)}
+              >
+                {t.delivered_date ? "Update date" : "Delivered"}
+              </button>
+              {/* Marking this task delivered records that the SCHEDULE line is done. It does
+                  not record WHAT arrived — that is a receipt against the material ledger, on
+                  the materials page, and the two are separate acts with separate records.
+                  Saying so here, with the way to go and do it, is more honest than implying a
+                  link the data model does not have. */}
+              {onOpenMaterials ? (
+                <button type="button" className="btn btn--secondary" onClick={onOpenMaterials}>
+                  Receive materials →
+                </button>
+              ) : null}
+            </>
+          ) : null}
+
+          {provenance ? <span className="sched-mark__label">{provenance}</span> : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/** The progress readout: a CSS meter for the eye, the block-character bar for a screen
+ *  reader and for print. The text is not decoration — it is the page's actual accessible
+ *  rendering of progress, and it is what survives a stylesheet failing to load. */
+function ProgressReadout({ percent }: { percent: number }) {
+  return (
+    <>
+      <span className="sched-task__prog-meter" aria-hidden="true">
+        <span className="sched-task__prog-fill" style={{ width: `${percent}%` }} />
+      </span>
+      <span className="sched-task__prog-pct" aria-hidden="true">
+        {percent}%
+      </span>
+      <span className="u-sr-only">{progressBar(percent)}</span>
+    </>
   );
 }

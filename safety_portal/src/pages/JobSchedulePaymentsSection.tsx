@@ -220,11 +220,15 @@ export function PaymentsSection({ jobId }: { jobId: string }) {
 
   return (
     /* Collapsible on purpose: the schedule is the page's job-site face; money opens on
-       demand. <details> keeps it dependency-free and keyboard/screen-reader native. */
-    <details className="card dash-section" aria-label="Payments">
-      <summary className="dash-detail__h2" style={{ cursor: "pointer" }}>
+       demand. <details> keeps it dependency-free and keyboard/screen-reader native.
+       Wears .sched-drawer so it matches the import and materials drawers beside it —
+       three office surfaces, one control. */
+    <details className="sched-drawer" aria-label="Payments">
+      <summary>
         Payments
+        <span className="sched-drawer__note">Invoice cycles against the contract terms</span>
       </summary>
+      <div className="sched-drawer__body">
       <p className="dash__intro">
         Where each invoice cycle stands against the contract&apos;s payment terms. Status is
         computed from the recorded dates — notices are recorded here after you send them,
@@ -383,8 +387,12 @@ export function PaymentsSection({ jobId }: { jobId: string }) {
           {cycles.length === 0 ? (
             <p className="dash__intro">No payment cycles yet — add the first one below.</p>
           ) : (
+            /* --stack (the kit's phone treatment) drops the header row below 640px and
+               re-flows each cycle into a labelled block, so an eight-column money table
+               stops being 6 window-widths of sideways scroll on a phone. Each cell carries
+               its own `data-cell` label for that mode. */
             <div style={{ overflowX: "auto" }}>
-              <table className="dash-table">
+              <table className="dash-table dash-table--stack">
                 <thead>
                   <tr>
                     <th scope="col">Cycle</th>
@@ -405,11 +413,11 @@ export function PaymentsSection({ jobId }: { jobId: string }) {
                     const rd = receiptDraft[c.id] ?? { amount: "", date: "" };
                     return (
                       <tr key={c.id}>
-                        <td>
+                        <td data-cell="Cycle">
                           {c.label}
                           {c.note ? <div className="dash__intro">{c.note}</div> : null}
                         </td>
-                        <td style={{ whiteSpace: "nowrap" }}>
+                        <td data-cell="Submitted" style={{ whiteSpace: "nowrap" }}>
                           {c.invoice_submitted_date ?? "—"}
                           {c.invoice_submitted_date === null ? (
                             <div className="dash-row">
@@ -447,15 +455,15 @@ export function PaymentsSection({ jobId }: { jobId: string }) {
                             </div>
                           ) : null}
                         </td>
-                        <td>{c.invoice_amount_cents !== null ? formatCents(c.invoice_amount_cents) : "—"}</td>
-                        <td>{c.due_date ?? "—"}</td>
-                        <td style={{ whiteSpace: "nowrap" }}>
+                        <td data-cell="Amount">{c.invoice_amount_cents !== null ? formatCents(c.invoice_amount_cents) : "—"}</td>
+                        <td data-cell="Due">{c.due_date ?? "—"}</td>
+                        <td data-cell="Status" style={{ whiteSpace: "nowrap" }}>
                           <span className={chip.className}>{chip.label}</span>
                           {partial && c.balance_cents !== null ? (
                             <div className="dash__intro">{formatCents(c.balance_cents)} outstanding</div>
                           ) : null}
                         </td>
-                        <td style={{ whiteSpace: "nowrap" }}>
+                        <td data-cell="Notices" style={{ whiteSpace: "nowrap" }}>
                           {c.nonpayment_notice_date ? (
                             <div>Nonpayment: {c.nonpayment_notice_date}</div>
                           ) : (
@@ -489,7 +497,7 @@ export function PaymentsSection({ jobId }: { jobId: string }) {
                             />
                           ) : null}
                         </td>
-                        <td style={{ whiteSpace: "nowrap" }}>
+                        <td data-cell="Payments" style={{ whiteSpace: "nowrap" }}>
                           {c.receipts.map((r) => (
                             <div key={r.id}>
                               {formatCents(r.amount_cents)} on {r.received_date}{" "}
@@ -598,6 +606,7 @@ export function PaymentsSection({ jobId }: { jobId: string }) {
           </div>
         </>
       )}
+      </div>
     </details>
   );
 }
