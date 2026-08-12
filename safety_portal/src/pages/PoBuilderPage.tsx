@@ -957,7 +957,7 @@ export function PoBuilderPage({
         <td>
           {catalog.length > 0 ? (
             <select
-              className="field__input po-line__catalog"
+              className="field__input"
               aria-label={`Line ${i + 1} pick from catalog`}
               value=""
               onChange={(e) => {

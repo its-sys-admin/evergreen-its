@@ -395,7 +395,7 @@ export function EstimateDispositionPage({
           the (RFQ, vendor) identity; every quoted price is still untrusted until you verify it
           against the source.
           {rfqDetail ? (
-            <details className="rfq-compare">
+            <details>
               <summary>Requested vs. quoted lines</summary>
               <div className="table-scroll">
                 <table className="dash-table">

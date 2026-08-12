@@ -666,7 +666,7 @@ function GroupView({ group, state, onChange }: {
         return (
           <div className="fr__item" key={it.key}>
             <span className="fr__item-label">{it.label}</span>
-            <div className="fr__item-control">
+            <div>
               {it.kind === "numeric" ? (
                 <input className="field__input fr__item-num" type="number" value={cur.response ?? ""}
                   onChange={(e) => onChange(it.key, { response: e.target.value })} />
