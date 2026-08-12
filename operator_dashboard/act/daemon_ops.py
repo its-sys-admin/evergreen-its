@@ -83,6 +83,7 @@ _DAEMONS: list[IntervalDaemon] = [
     IntervalDaemon("org.solutionsmith.its.rfq-poll", "po_materials.rfq_poll.poll_interval_seconds", "po_materials", 120),
     IntervalDaemon("org.solutionsmith.its.rfq-send", "po_materials.rfq_send.poll_interval_seconds", "po_materials", 900),
     IntervalDaemon("org.solutionsmith.its.manifest-poll", "field_ops.manifest_poll.poll_interval_seconds", "field_ops", 120),
+    IntervalDaemon("org.solutionsmith.its.schedule-poll", "field_ops.schedule_poll.poll_interval_seconds", "field_ops", 120),
 ]
 INTERVAL_DAEMONS: dict[str, IntervalDaemon] = {d.label: d for d in _DAEMONS}
 

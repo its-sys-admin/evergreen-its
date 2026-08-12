@@ -115,6 +115,12 @@ MANIFEST_CHUNKS_PATH = "/api/fieldops/manifests/internal/{id}/chunks"
 MANIFEST_ROWS_PATH = "/api/fieldops/manifests/internal/{id}/rows"
 MANIFEST_PREVIEW_PATH = "/api/fieldops/manifests/internal/{id}/preview"
 MANIFEST_RESULT_PATH = "/api/fieldops/manifests/internal/result"
+SCHEDULE_PENDING_PATH = "/api/fieldops/schedules/internal/pending"
+SCHEDULE_CLAIM_PATH = "/api/fieldops/schedules/internal/{id}/claim"
+SCHEDULE_CHUNKS_PATH = "/api/fieldops/schedules/internal/{id}/chunks"
+SCHEDULE_ROWS_PATH = "/api/fieldops/schedules/internal/{id}/rows"
+SCHEDULE_PREVIEW_PATH = "/api/fieldops/schedules/internal/{id}/preview"
+SCHEDULE_RESULT_PATH = "/api/fieldops/schedules/internal/result"
 
 
 # ---- Typed exceptions ----------------------------------------------------
@@ -2033,4 +2039,187 @@ def post_manifest_result(
     if parse_notes is not None:
         body["parse_notes"] = parse_notes
     data = _request("POST", base_url, MANIFEST_RESULT_PATH, token, json_body=body)
+    return bool(data.get("found"))
+
+
+# ---- Job-schedule internal tier (ADR-0006 PR-3 — the schedule_poll daemon's I/O) ----
+#
+# Faithful mirror of the materials-manifest pool client (above) — same typed-error
+# contract, same control-plane read/write semantics — against the schedule pool routes.
+# All six calls ride the SEPARATE schedule bearer tier (`requireScheduleToken`, Worker
+# PORTAL_SCHEDULE_API_TOKEN / Mac Keychain ITS_PORTAL_SCHEDULE_TOKEN — resolved by the
+# caller, `field_ops.schedule_poll`; this module stays stateless). Same ADR-0004
+# decision-4 reasoning as the manifest lane (ADR-0006 decision 5): this process decodes
+# hostile PDF bytes, so its bearer scopes ONLY /api/fieldops/schedules/internal/* — none
+# of the sibling bearers is accepted on these routes and this bearer opens no other
+# tier. Every call is a control-plane read/write of OUR OWN Worker, NOT a
+# customer-facing send — outside the External Send Gate (Invariant 1).
+
+
+def get_schedules_pending(
+    base_url: str, token: str, *, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Pull serviceable job schedules: GET /api/fieldops/schedules/internal/pending.
+
+    Each row is one `job_schedules` D1 row (migration 0066) at status pending|claimed,
+    oldest-first — `{id, schedule_uuid, job_id, filename, declared_mime, size_bytes,
+    sha256, hmac, uploaded_by, status, created_at, project_name}` (`project_name` is
+    JOINed from `jobs` — display/foldering metadata, deliberately OUTSIDE the
+    signature). Rows are UNTRUSTED until the caller recomputes the schedule:v1
+    canonical HMAC (`shared.portal_hmac.verify_schedule`) AND separately re-derives
+    length + sha256 over the reassembled chunk bytes — the HMAC covers only the CLAIMS
+    about the bytes.
+
+    Raises `PortalAuthError` (401) / `PortalRateLimitError` (429/503 exhausted) /
+    `PortalTransportError` (any other failure, incl. a non-object / missing-array body).
+    """
+    data = _request("GET", base_url, SCHEDULE_PENDING_PATH, token, params={"limit": limit})
+    schedules = data.get("schedules")
+    if not isinstance(schedules, list):
+        raise PortalTransportError(
+            f"GET {SCHEDULE_PENDING_PATH} missing/invalid 'schedules' array "
+            f"(got {type(schedules).__name__})"
+        )
+    # Defensive: keep only dict rows; a non-dict element is malformed transport.
+    return [row for row in schedules if isinstance(row, dict)]
+
+
+def claim_schedule(base_url: str, token: str, *, schedule_id: int) -> bool:
+    """Mark one schedule claimed BEFORE pulling its bytes: POST
+    /api/fieldops/schedules/internal/:id/claim.
+
+    Claim-FIRST is the crash-visibility contract: a daemon that dies mid-OCR leaves
+    an observably `claimed` row rather than a `pending` one that silently re-services
+    a hostile document every cycle. `found=False` means the row was already claimed or
+    disposed by a previous cycle — BENIGN, and the caller proceeds (its own pending read
+    saw the row serviceable). A control-plane write to OUR OWN Worker (outside the
+    External Send Gate, Invariant 1).
+    """
+    data = _request(
+        "POST", base_url, SCHEDULE_CLAIM_PATH.format(id=schedule_id), token, json_body={}
+    )
+    return bool(data.get("found"))
+
+
+def get_schedule_chunks(
+    base_url: str, token: str, *, schedule_id: int
+) -> list[dict[str, Any]]:
+    """Pull one schedule's bytes: GET /api/fieldops/schedules/internal/:id/chunks.
+
+    Returns the `chunks` list verbatim — `{chunk_index, chunk_total, chunk_b64}` rows,
+    index-ordered (the po_attachments / job_manifests chunk shape). The ONLY route that
+    ever serves schedule bytes, and only Mac-ward over this bearer. NEVER interpolate
+    `chunk_b64` into a log or error. The caller MUST verify the schedule:v1 HMAC + the
+    length/sha256 recompute over the reassembled bytes before screening or rendering.
+
+    Raises `PortalAuthError` (401) / `PortalRateLimitError` (429/503 exhausted) /
+    `PortalTransportError` (any other failure, incl. a 404 for a disposed row).
+    """
+    data = _request("GET", base_url, SCHEDULE_CHUNKS_PATH.format(id=schedule_id), token)
+    chunks = data.get("chunks")
+    if not isinstance(chunks, list):
+        raise PortalTransportError(
+            f"GET {SCHEDULE_CHUNKS_PATH} missing/invalid 'chunks' array "
+            f"(got {type(chunks).__name__})"
+        )
+    # Defensive: keep only dict rows; a non-dict element is malformed transport.
+    return [row for row in chunks if isinstance(row, dict)]
+
+
+def post_schedule_rows(
+    base_url: str, token: str, *, schedule_id: int, rows: list[dict[str, Any]]
+) -> int:
+    """Post ONE PAGE of the proposed grid: POST /api/fieldops/schedules/internal/:id/rows.
+
+    `rows` are `schedule_parse.ParsedScheduleRow` projections —
+    `{row_index, source_page, kind, cells, flags}` — where `cells` is the row's
+    CANONICAL-COLUMN cell list VERBATIM (the validate screen edits against these; a
+    shredded OCR date rides through flagged, never guessed at — §4). The Worker upserts
+    on `(schedule_id, row_index)`, so a re-posted page is a no-op and a crashed daemon
+    simply re-posts from the start next cycle.
+
+    Paged by the caller (≤200 rows/request — the Worker's MAX_ROWS_PER_POST). Returns
+    the Worker's accepted-row count. A control-plane write to OUR OWN Worker (outside
+    the External Send Gate, Invariant 1); raises the typed `PortalTransportError`
+    hierarchy on failure.
+    """
+    data = _request(
+        "POST",
+        base_url,
+        SCHEDULE_ROWS_PATH.format(id=schedule_id),
+        token,
+        json_body={"rows": rows},
+    )
+    written = data.get("written")
+    return written if isinstance(written, int) and not isinstance(written, bool) else 0
+
+
+def post_schedule_preview(
+    base_url: str, token: str, *, schedule_id: int, page: int, png_b64: str
+) -> bool:
+    """Upsert one source-page preview: POST /api/fieldops/schedules/internal/:id/preview.
+
+    `page` is 1-based; `png_b64` is the base64 of one rendered PNG the Worker decodes
+    into `job_schedule_previews`. The previews are what let the validate screen show
+    the SOURCE beside the editable grid without ever serving the original untrusted
+    bytes to a browser — and on this lane they are the ONLY fidelity control (ADR-0006
+    decision 2: Vision misreads digits at confidence 1.00, so the human side-by-side is
+    what catches a wrong-but-self-consistent read).
+    """
+    data = _request(
+        "POST",
+        base_url,
+        SCHEDULE_PREVIEW_PATH.format(id=schedule_id),
+        token,
+        json_body={"page": page, "png_b64": png_b64},
+    )
+    return bool(data.get("found"))
+
+
+def post_schedule_result(
+    base_url: str,
+    token: str,
+    *,
+    schedule_id: int,
+    status: str,
+    detail: str | None = None,
+    box_file_id: str | None = None,
+    profile: str | None = None,
+    row_count: int | None = None,
+    column_map: dict[str, Any] | None = None,
+    header_meta: dict[str, str] | None = None,
+    parse_notes: str | None = None,
+) -> bool:
+    """Post one servicing disposition: POST /api/fieldops/schedules/internal/result.
+
+    `status` is `'refused'` (§34 screen rejection, an unreadable/OCR-failed document,
+    or an empty parse; `detail` carries the machine reason — NEVER file bytes; the
+    Worker 400s a `box_file_id` on a refusal) or `'parsed'` (filed to Box and awaiting
+    the validate screen — carries `box_file_id`, the `profile`, the posted `row_count`,
+    the proposed `column_map`, the header `meta` block and the parser's `notes`). The
+    Worker applies the disposition in ONE atomic batch (W4): status flip + chunk DELETE
+    (the bytes are no longer needed once the grid exists) + audit row.
+
+    Posted LAST, after the rows and previews are in: a crash before this leaves the row
+    `claimed` and every prior step is idempotent, so the next cycle simply redoes them.
+    Idempotent: `found=False` means the row was already disposed (a re-post after a lost
+    ack) — benign. A control-plane write to OUR OWN Worker (outside the External Send
+    Gate, Invariant 1); raises the typed `PortalTransportError` hierarchy on failure.
+    """
+    body: dict[str, Any] = {"schedule_id": schedule_id, "status": status}
+    if detail is not None:
+        body["detail"] = detail
+    if box_file_id is not None:
+        body["box_file_id"] = box_file_id
+    if profile is not None:
+        body["profile"] = profile
+    if row_count is not None:
+        body["row_count"] = row_count
+    if column_map is not None:
+        body["column_map"] = column_map
+    if header_meta is not None:
+        body["header_meta"] = header_meta
+    if parse_notes is not None:
+        body["parse_notes"] = parse_notes
+    data = _request("POST", base_url, SCHEDULE_RESULT_PATH, token, json_body=body)
     return bool(data.get("found"))

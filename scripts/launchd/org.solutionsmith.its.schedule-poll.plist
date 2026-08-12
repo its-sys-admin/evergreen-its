@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Job-schedule import daemon (ADR-0006 PR-3). Drains the send-free D1 schedule pool
+  (GET /api/fieldops/schedules/internal/pending, bearer = the daemon's OWN
+  PORTAL_SCHEDULE_API_TOKEN tier), verifies schedule:v1 + the byte digest, §34-screens
+  the PDF, OCRs it inside the KILLABLE sandbox child (Quartz render + rotation ladder +
+  Apple Vision — LOCAL, no cloud AI), reconstructs + parses the table with
+  field_ops/schedule_geometry.py + schedule_parse.py, files the ORIGINAL bytes to Box
+  <job>/Schedules/, and posts the reviewable grid back for the validate screen. AI-free
+  + customer-send-free (External Send Gate, FM Invariant 1; enrolled in
+  tests/test_capability_gating.py GATED_SCRIPTS) — the Box WRITE is the intended filing
+  capability, and the HTTP egress to OUR Worker goes through the F02-allowlisted
+  shared.portal_client. Fail-closed on missing creds. Gated OFF by
+  field_ops.schedule_poll.polling_enabled until go-live.
+
+  Install:
+    scripts/launchd/install.sh load org.solutionsmith.its.schedule-poll
+
+  StartInterval is PARAMETERIZED (install.sh __POLL_INTERVAL_SECONDS__): resolution is
+  [interval] arg > ITS_Config field_ops.schedule_poll.poll_interval_seconds > default 120s.
+  120s matches manifest-poll — this daemon does the same shape of work (pull, screen,
+  sandboxed decode, file) and a tighter cadence buys nothing on an office-paced upload
+  queue. The resolved value is BAKED into the installed plist, so a later change needs a
+  re-load. If you widen it past ~2 minutes, widen watchdog's schedule_poll marker window
+  too (scripts/watchdog.py, currently 10 min == ~5 cycles).
+
+  See docs/runbooks/schedule_import_path.md for the operator runbook.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.solutionsmith.its.schedule-poll</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__ITS_HOME__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>field_ops.schedule_poll</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__ITS_HOME__</string>
+
+    <key>StandardOutPath</key>
+    <string>__ITS_HOME__/logs/launchd/schedule_poll.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__ITS_HOME__/logs/launchd/schedule_poll.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>__POLL_INTERVAL_SECONDS__</integer>
+
+    <!-- A2 (single-host resilience): RunAtLoad=true so this interval daemon RESUMES
+         immediately when launchd loads the agent after a reboot/OS-update, then
+         StartInterval re-fires on cadence. KeepAlive is intentionally absent: ITS daemons
+         are one-shot-per-fire, so KeepAlive=true would restart on exit and destroy the
+         interval cadence. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

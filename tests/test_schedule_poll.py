@@ -1,0 +1,700 @@
+"""RED-suite unit tests for field_ops/schedule_poll.py — the job-schedule import daemon
+(ADR-0006 PR-3: verify → screen → sandboxed OCR → reconstruct → parse → Box → grid post).
+
+Fully mocked at the module seams, the tests/test_manifest_poll.py house idiom (no live
+Smartsheet / Box / Worker / Vision). Every test here is a PROVE-THE-CONTROL-BITES test: it
+asserts the CONTROL fires and would fail if that control were deleted.
+
+Contract pins exercised:
+  * schedule:v1 HMAC — signatures are computed IN-TEST from the pinned canonical string
+    ("schedule:v1"\\n schedule_uuid\\n job_id\\n filename\\n declared_mime\\n
+    str(size_bytes)\\n sha256), independent of shared.portal_hmac, so a daemon verifying a
+    drifted canonical fails the happy path here.
+  * Integrity failures (tampered bytes vs the SIGNED digest, a chunk gap, a bad signature)
+    → one-shot flag + security Review-Queue row, NO result post (the bytes stay in D1 for
+    forensics), NO Box upload, and the §34 screen never touches unverified bytes.
+  * screen MALICIOUS → CRITICAL naming the uploading account + security-flagged review row
+    + result 'refused'; NO Box, NO OCR.
+  * screen SUSPICIOUS → PROCEEDS with a visible warning riding the parse notes (the
+    manifest-lane 2026-08-11 posture, inherited at birth) — no refusal, no review row.
+  * A CLEAN document the OCR tier cannot read (ocr_schedule_pages → None) → 'refused'
+    detail 'ocr_failed' with an ORDINARY review row, not a security one.
+  * clean + readable → Box upload of the ORIGINAL bytes + paged row posts (driven through
+    the REAL schedule_geometry + schedule_parse over a synthetic Vision word bag) + result
+    'parsed' carrying box_file_id, profile, row_count and the column map.
+  * The RESULT POST IS LAST — a failure at any earlier step leaves the row serviceable.
+  * polling gate false → dark-ship no-op (zero Worker calls, no heartbeat, no marker).
+  * per-row fence — one hostile row never aborts the batch.
+  * 401 anywhere → the cycle STOPS once (a dead bearer must not burn the whole pool).
+  * An unresolved Box root is a CONFIG gap: ERROR, row left claimed and UNFLAGGED.
+  * A Worker 4xx is PERMANENT (one-shot flag + ticket); 5xx / statusless stay transient.
+  * The grid clamps to the Worker's bounds (40 cells / 2 000 chars / 2 000 rows) VISIBLY.
+
+Run with: pytest -q tests/test_schedule_poll.py
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac as _hmac
+import json
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from field_ops import schedule_ocr, schedule_parse, schedule_poll
+from po_materials import po_attach_screen
+from shared import portal_client
+from shared.error_log import Severity
+from shared.review_queue import ReviewReason
+
+SECRET = "schedule-test-secret"
+
+_MINIMAL_PDF = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n"
+
+CLEAN = po_attach_screen.ScreenResult("clean", "L2", "ok")
+SUSPICIOUS = po_attach_screen.ScreenResult("suspicious", "L2", "pdf_active_content:OpenAction")
+MALICIOUS = po_attach_screen.ScreenResult("malicious", "L3", "clamav:Eicar-Test-Signature")
+
+
+def _ocr_page() -> list[dict[str, Any]]:
+    """One synthetic Vision page: a recognisable header row (>= 2 known labels) plus one
+    task row — the smallest bag the REAL geometry + parse turn into a data row. Boxes are
+    Vision-normalized, origin bottom-left (the ocr_page_words contract)."""
+    return [
+        {"text": "Task Name", "conf": 1.0, "x": 0.05, "y": 0.90, "w": 0.10, "h": 0.02},
+        {"text": "Start Date", "conf": 1.0, "x": 0.30, "y": 0.90, "w": 0.08, "h": 0.02},
+        {"text": "Completion Date", "conf": 1.0, "x": 0.45, "y": 0.90, "w": 0.12, "h": 0.02},
+        {"text": "Mobilization", "conf": 1.0, "x": 0.05, "y": 0.80, "w": 0.10, "h": 0.02},
+        {"text": "01/06/26", "conf": 1.0, "x": 0.30, "y": 0.80, "w": 0.07, "h": 0.02},
+        {"text": "02/05/26", "conf": 1.0, "x": 0.45, "y": 0.80, "w": 0.07, "h": 0.02},
+    ]
+
+
+def _ocr_ok() -> schedule_ocr.OcrPages:
+    return schedule_ocr.OcrPages(
+        pages=[_ocr_page()], page_sizes=[(1700, 2200)], rotations=[0]
+    )
+
+
+# ---- row / chunk builders (schedule:v1 canonical computed IN-TEST) -----------------
+
+
+def _sign(secret: str, row: dict[str, Any]) -> str:
+    canonical = "\n".join([
+        "schedule:v1",
+        row["schedule_uuid"],
+        row["job_id"],
+        row["filename"],
+        row["declared_mime"],
+        str(row["size_bytes"]),
+        row["sha256"],
+    ])
+    return _hmac.new(secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _row(data: bytes, **over: Any) -> dict[str, Any]:
+    """A pending job_schedules row signed EXACTLY as the Worker would."""
+    schedule_id = int(over.pop("id", 41))
+    row: dict[str, Any] = {
+        "id": schedule_id,
+        "schedule_uuid": f"u-sched-{schedule_id}",
+        "job_id": str(over.pop("job_id", "JOB-2026-014")),
+        "filename": str(over.pop("filename", "Coker Schedule 6.24.26.pdf")),
+        "declared_mime": str(over.pop("declared_mime", schedule_poll.MIME_PDF)),
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "status": "pending",
+        "uploaded_by": "office.admin",
+        "created_at": 1234,
+    }
+    row["hmac"] = _sign(SECRET, row)
+    row.update(over)  # post-signing overrides = deliberate tampering in tests
+    return row
+
+
+def _one_chunk(data: bytes) -> list[dict[str, Any]]:
+    return [{"chunk_index": 0, "chunk_total": 1, "chunk_b64": base64.b64encode(data).decode()}]
+
+
+def _gapped_chunks(data: bytes) -> list[dict[str, Any]]:
+    """Indexes 0 and 2 with a declared total of 3 — index 1 is missing (the gap)."""
+    half = len(data) // 2
+    return [
+        {"chunk_index": 0, "chunk_total": 3, "chunk_b64": base64.b64encode(data[:half]).decode()},
+        {"chunk_index": 2, "chunk_total": 3, "chunk_b64": base64.b64encode(data[half:]).decode()},
+    ]
+
+
+@pytest.fixture
+def _patch(mocker):
+    upload = mocker.patch(
+        "field_ops.schedule_poll.box_client.upload_bytes_or_new_version",
+        return_value={"id": "f-sched-1", "name": "x", "size": 9},
+    )
+    seams = {
+        "gate": mocker.patch("field_ops.schedule_poll._polling_enabled", return_value=True),
+        "resolve_cfg": mocker.patch("field_ops.schedule_poll.resolve_and_log", return_value={}),
+        "creds": mocker.patch(
+            "field_ops.schedule_poll._resolve_credentials",
+            return_value=SimpleNamespace(
+                base_url="https://portal.example", bearer="tok", secret=SECRET
+            ),
+        ),
+        "clamav": mocker.patch(
+            "field_ops.schedule_poll._attach_clamav_enabled", return_value=False
+        ),
+        "box_folder": mocker.patch(
+            "field_ops.schedule_poll._resolve_schedules_box_folder", return_value="fld-1"
+        ),
+        "upload": upload,
+        "screen": mocker.patch(
+            "field_ops.schedule_poll.po_attach_screen.screen_attachment", return_value=CLEAN
+        ),
+        "ocr": mocker.patch(
+            "field_ops.schedule_poll.schedule_ocr.ocr_schedule_pages",
+            return_value=_ocr_ok(),
+        ),
+        # The sandbox seam serves ONLY the preview render here (OCR is mocked above).
+        "sandbox": mocker.patch(
+            "field_ops.schedule_poll.estimate_sandbox.run_sandboxed",
+            return_value=json.dumps({"pngs": ["QUJD"]}).encode(),
+        ),
+        "pending": mocker.patch("field_ops.schedule_poll.portal_client.get_schedules_pending"),
+        "claim": mocker.patch(
+            "field_ops.schedule_poll.portal_client.claim_schedule", return_value=True
+        ),
+        "chunks": mocker.patch("field_ops.schedule_poll.portal_client.get_schedule_chunks"),
+        "post_rows": mocker.patch(
+            "field_ops.schedule_poll.portal_client.post_schedule_rows", return_value=1
+        ),
+        "post_preview": mocker.patch(
+            "field_ops.schedule_poll.portal_client.post_schedule_preview", return_value=True
+        ),
+        "post_result": mocker.patch(
+            "field_ops.schedule_poll.portal_client.post_schedule_result", return_value=True
+        ),
+        "review": mocker.patch("field_ops.schedule_poll.review_queue.add", return_value=1),
+        "log": mocker.patch("field_ops.schedule_poll.error_log.log"),
+        # State seams — the suite must never touch ~/its/state.
+        "load_flags": mocker.patch("field_ops.schedule_poll._load_flags", return_value={}),
+        "persist_flags": mocker.patch("field_ops.schedule_poll._persist_flags"),
+        "hb": mocker.patch("field_ops.schedule_poll._write_heartbeat"),
+        "hb_row": mocker.patch("field_ops.schedule_poll._write_heartbeat_row"),
+        "marker": mocker.patch("field_ops.schedule_poll._write_watchdog_marker"),
+        "fetch_fails": mocker.patch("field_ops.schedule_poll._FETCH_FAILS"),
+        "flush": mocker.patch("field_ops.schedule_poll.sustained_failure.flush_retry_recovery"),
+        "breaker": mocker.patch(
+            "field_ops.schedule_poll.circuit_breaker.is_open", return_value=False
+        ),
+    }
+    return seams
+
+
+def _logs(seams, severity=None, code=None) -> list[Any]:
+    out = []
+    for call in seams["log"].call_args_list:
+        sev = call.args[0] if call.args else None
+        ec = call.kwargs.get("error_code")
+        if (severity is None or sev == severity) and (code is None or ec == code):
+            out.append(call)
+    return out
+
+
+# ---- the dark-ship gate -----------------------------------------------------------
+
+
+def test_gate_false_is_a_pure_no_op(_patch):
+    """A dark lane is an intentional state, not an anomaly: zero Worker calls, and
+    deliberately NO heartbeat and NO watchdog marker (which is exactly why Check C WARNs
+    until the operator both loads the plist AND flips the gate)."""
+    _patch["gate"].return_value = False
+    stats = schedule_poll.poll_once()
+    assert stats.skipped_disabled is True
+    _patch["pending"].assert_not_called()
+    _patch["hb"].assert_not_called()
+    _patch["marker"].assert_not_called()
+
+
+# ---- the happy path ---------------------------------------------------------------
+
+
+def test_clean_readable_schedule_files_posts_the_grid_and_reports_parsed(_patch):
+    """Driven through the REAL schedule_geometry + schedule_parse over the synthetic
+    Vision word bag — a drift in the OCR→grid contract fails here, not just in the
+    per-module suites."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.filed == 1
+    assert stats.refused == 0 and stats.integrity_failures == 0
+    # The ORIGINAL bytes are filed, never a re-encode.
+    assert _patch["upload"].call_args.args[2] == data
+    # The uuid prefix turns a crash-retry into a Box VERSION, not a duplicate file.
+    assert _patch["upload"].call_args.args[1].startswith("u-sched-41 - ")
+    kwargs = _patch["post_result"].call_args.kwargs
+    assert kwargs["status"] == "parsed"
+    assert kwargs["box_file_id"] == "f-sched-1"
+    assert kwargs["profile"] == "gantt_export"  # no Duration column in the word bag
+    assert kwargs["row_count"] == 1
+    assert "mapping" in kwargs["column_map"]
+    assert stats.rows_posted == 1
+    assert stats.previews_posted == 1
+    # The posted grid row is the ParsedScheduleRow projection, canonical columns intact.
+    posted = _patch["post_rows"].call_args.kwargs["rows"]
+    assert posted[0]["row_index"] == 1
+    assert posted[0]["kind"] == "data"
+    assert posted[0]["source_page"] == "pdf:p1"
+    cells = posted[0]["cells"]
+    assert cells[schedule_parse.CANONICAL_COLUMNS.index("task_name")] == "Mobilization"
+    assert cells[schedule_parse.CANONICAL_COLUMNS.index("start_date")] == "2026-01-06"
+    assert cells[schedule_parse.CANONICAL_COLUMNS.index("finish_date")] == "2026-02-05"
+
+
+def test_box_folder_keys_off_project_name_when_the_join_provides_one(_patch):
+    """The Worker JOINs jobs.project_name into the pending payload (OUTSIDE the
+    schedule:v1 signature — adding it post-signing here proves that). The Box folder
+    keys off the PROJECT NAME, the same folder every other artifact and the Track 6
+    archive resolve."""
+    data = _MINIMAL_PDF
+    row = _row(data)
+    row["project_name"] = "Coker"  # post-signing — the join field is unsigned
+    _patch["pending"].return_value = [row]
+    _patch["chunks"].return_value = _one_chunk(data)
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.filed == 1
+    _patch["box_folder"].assert_called_once_with("Coker")
+
+
+def test_result_post_is_last_so_an_earlier_failure_leaves_the_row_serviceable(_patch):
+    """The result post is the COMMIT POINT. If Box fails, nothing is reported and the row
+    stays claimed — a crash before the commit re-serves it and every prior step is
+    idempotent."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["upload"].side_effect = schedule_poll.box_client.BoxError("box down")
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.filed == 0
+    assert stats.errors == 1
+    _patch["post_result"].assert_not_called()
+    _patch["persist_flags"].assert_not_called()  # NOT flagged — it must retry
+
+
+# ---- integrity (Invariant 2) ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("tampered bytes", "bytes"),
+        ("tampered signature", "hmac"),
+        ("chunk gap", "gap"),
+    ],
+)
+def test_integrity_failure_flags_and_never_posts_a_result(_patch, label, mutate):
+    """No result post is deliberate: the bytes stay in D1 for forensics. The screen must
+    also never run — unverified bytes are never handed to a parser (or a renderer)."""
+    data = _MINIMAL_PDF
+    row = _row(data)
+    if mutate == "bytes":
+        _patch["chunks"].return_value = _one_chunk(data + b"tampered")
+    elif mutate == "hmac":
+        row["hmac"] = "0" * 64
+        _patch["chunks"].return_value = _one_chunk(data)
+    else:
+        _patch["chunks"].return_value = _gapped_chunks(data)
+    _patch["pending"].return_value = [row]
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.integrity_failures == 1, label
+    _patch["post_result"].assert_not_called()
+    _patch["upload"].assert_not_called()
+    _patch["screen"].assert_not_called()
+    _patch["ocr"].assert_not_called()
+    assert _logs(_patch, Severity.CRITICAL, "schedule_integrity_failed")
+    assert _patch["review"].call_args.kwargs["security_flag"] is True
+    _patch["persist_flags"].assert_called_once()
+
+
+def test_a_non_integer_size_fails_the_signature_closed(_patch):
+    """str(48213.0) is "48213.0" in Python and "48213" in JS, so a float size_bytes would
+    silently break every canonical. The daemon coerces to -1 and fails CLOSED."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data, size_bytes=float(len(data)))]
+    _patch["chunks"].return_value = _one_chunk(data)
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.integrity_failures == 1
+    _patch["upload"].assert_not_called()
+
+
+# ---- §34 screening ----------------------------------------------------------------
+
+
+def test_malicious_screen_names_the_account_and_refuses_before_filing(_patch):
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["screen"].return_value = MALICIOUS
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.refused == 1
+    _patch["upload"].assert_not_called()
+    _patch["ocr"].assert_not_called()  # never rendered, never OCR'd
+    crit = _logs(_patch, Severity.CRITICAL, "schedule_malicious")
+    assert crit and "office.admin" in crit[0].args[2]
+    rq = _patch["review"].call_args.kwargs
+    assert rq["security_flag"] is True
+    assert rq["reason"] is ReviewReason.SECURITY_TRIGGER
+    assert _patch["post_result"].call_args.kwargs["status"] == "refused"
+
+
+def test_suspicious_screen_imports_with_a_warning_not_a_refusal(_patch):
+    """The manifest lane's 2026-08-11 operator posture, inherited AT BIRTH by this lane:
+    active content (a PDF OpenAction — an artifact virtually every exported PDF carries)
+    imports normally with a visible warning. The verdict is NEVER silent: a WARN
+    (`schedule_active_content`) and a parse note the validate screen shows beside the
+    grid. Malicious still refuses (the test above)."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["screen"].return_value = SUSPICIOUS
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.refused == 0
+    assert stats.filed == 1  # imported: filed to Box, grid posted, result parsed
+    assert _logs(_patch, Severity.WARN, "schedule_active_content")
+    assert not _logs(_patch, Severity.CRITICAL, "schedule_malicious")
+    _patch["upload"].assert_called_once()  # the original DOES reach Box
+    # The warning reaches the validate screen as a parse note.
+    notes = _patch["post_result"].call_args.kwargs.get("parse_notes") or ""
+    assert "ACTIVE CONTENT" in notes
+    assert "pdf_active_content:OpenAction" in notes
+    # No Review-Queue ticket for a mere warning — the note + WARN are the surfaces.
+    _patch["review"].assert_not_called()
+
+
+# ---- unreadable documents (ordinary, NOT a security event) ------------------------
+
+
+def test_ocr_degrade_refuses_as_ocr_failed_not_as_a_security_event(_patch):
+    """A hostile or corrupt PDF reaps the sandbox child and ocr_schedule_pages returns
+    None. The daemon must degrade the DOCUMENT, never die — and must not cry wolf: this
+    is an ordinary review item asking the office for a fresh export."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["ocr"].return_value = None
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.refused == 1
+    assert _logs(_patch, Severity.WARN, "schedule_unreadable")
+    assert not _logs(_patch, Severity.CRITICAL)
+    assert _patch["review"].call_args.kwargs["reason"] is ReviewReason.POLICY_EDGE
+    assert not _patch["review"].call_args.kwargs.get("security_flag")
+    assert _patch["post_result"].call_args.kwargs["detail"] == "ocr_failed"
+    _patch["upload"].assert_not_called()
+
+
+def test_a_parse_with_no_rows_is_refused_visibly(_patch):
+    """OCR succeeded but found nothing table-shaped (a cover page, a blank export). The
+    Worker 400s an EMPTY rows post and a 0-row 'parsed' would put a blank grid on the
+    validate screen — refuse VISIBLY instead."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["ocr"].return_value = schedule_ocr.OcrPages(
+        pages=[[]], page_sizes=[(1700, 2200)], rotations=[0]
+    )
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.refused == 1
+    assert _patch["post_result"].call_args.kwargs["detail"] == "no_rows_recognised"
+    _patch["upload"].assert_not_called()
+    _patch["post_rows"].assert_not_called()
+
+
+# ---- config gap vs per-row defect -------------------------------------------------
+
+
+def test_unresolved_box_root_leaves_the_row_claimed_and_unflagged(_patch):
+    """A missing Box root is a CONFIG gap, not a per-row defect: flagging it would wedge
+    a good document forever. The row self-heals the moment the root is configured."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["box_folder"].return_value = None
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.errors == 1 and stats.filed == 0
+    assert _logs(_patch, Severity.ERROR, "schedule_box_root_unresolved")
+    _patch["post_result"].assert_not_called()
+    _patch["persist_flags"].assert_not_called()  # deliberately UNFLAGGED
+
+
+# ---- fences ------------------------------------------------------------------------
+
+
+def test_one_hostile_row_never_aborts_the_batch(_patch):
+    data = _MINIMAL_PDF
+    good = _row(data, id=7)
+    _patch["pending"].return_value = [_row(data, id=41), good]
+    _patch["chunks"].side_effect = [RuntimeError("boom"), _one_chunk(data)]
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.errors == 1
+    assert stats.filed == 1  # the second row still landed
+    assert _logs(_patch, Severity.ERROR, "schedule_service_failed")
+
+
+def test_a_401_stops_the_cycle_once_rather_than_burning_the_pool(_patch):
+    """The SAME bearer fails every route, so continuing would mint one CRITICAL per row."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data, id=1), _row(data, id=2), _row(data, id=3)]
+    _patch["chunks"].side_effect = portal_client.PortalAuthError("401")
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.bearer_rejected is True
+    crit = _logs(_patch, Severity.CRITICAL, "schedule_bearer_rejected")
+    assert len(crit) == 1
+    _patch["post_result"].assert_not_called()
+
+
+def test_pending_fetch_failure_escalates_on_the_shared_capped_ladder(_patch):
+    """Hand-rolling `n >= THRESHOLD` is AST-forbidden; the shared helper is what keeps a
+    sustained outage from minting thousands of unreclaimable CRITICAL rows."""
+    _patch["fetch_fails"].record.return_value = 5
+    _patch["pending"].side_effect = portal_client.PortalTransportError("worker down")
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.CRITICAL, "schedule_pending_fetch_sustained")
+
+
+def test_a_successful_but_empty_poll_clears_the_sustained_counter(_patch):
+    """Reset sits BEFORE the empty early-out — an empty-but-successful poll is a healthy
+    cycle and must not leave the outage counter armed."""
+    _patch["pending"].return_value = []
+
+    schedule_poll.poll_once()
+
+    _patch["fetch_fails"].reset.assert_called_once()
+
+
+def test_an_already_flagged_row_is_skipped_without_re_alerting(_patch):
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["load_flags"].return_value = {"41": "refused"}
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.skipped_flagged == 1
+    _patch["claim"].assert_not_called()
+    _patch["review"].assert_not_called()
+
+
+# ---- credentials -------------------------------------------------------------------
+
+
+def test_missing_credentials_fail_closed_without_a_watchdog_marker(_patch):
+    """Skipping the marker is deliberate: a sustained outage must still trip the Check-C
+    staleness floor rather than looking healthy because the daemon 'ran'."""
+    _patch["creds"].return_value = None
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.halted_no_creds is True
+    assert _logs(_patch, Severity.CRITICAL, "schedule_creds_missing")
+    _patch["pending"].assert_not_called()
+    _patch["marker"].assert_not_called()
+
+
+def test_a_transient_base_url_blip_is_a_warn_not_a_credentials_critical(_patch):
+    """The distinction that fired a false CRITICAL on po_poll live: a circuit-open blip
+    must not be reported as missing credentials."""
+    _patch["creds"].return_value = schedule_poll.TransientUnavailable(reason="circuit_open")
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.halted_transient is True
+    assert _logs(_patch, Severity.WARN, "schedule_creds_transient")
+    assert not _logs(_patch, Severity.CRITICAL)
+    _patch["marker"].assert_not_called()
+
+
+# ---- Worker 4xx is PERMANENT; 5xx / statusless stay transient ----------------------
+
+
+def test_a_worker_4xx_is_permanent_flag_plus_ticket_not_an_eternal_retry(_patch):
+    """The manifest lane's audit-A5 wedge, inherited as a control: a 400-class rejection
+    re-serves identically every cycle, so 'transient' means ~720 ERROR rows/day, no
+    CRITICAL, no ticket, item never draining. Now: one-shot flag + Review-Queue ticket,
+    and the row is terminal this cycle."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data, id=9)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_rows"].side_effect = portal_client.PortalTransportError(
+        "POST rows unexpected status 422", status_code=422
+    )
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.ERROR, "schedule_worker_rejected")
+    assert not _logs(_patch, Severity.ERROR, "schedule_transient")
+    _patch["review"].assert_called_once()
+    # The one-shot flag reached the persisted set — next cycle skips, never re-tickets.
+    flagged = _patch["persist_flags"].call_args.args[0]
+    assert flagged == {"9": "worker_rejected"}
+
+
+def test_a_worker_5xx_stays_transient_and_unflagged(_patch):
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data, id=9)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_rows"].side_effect = portal_client.PortalTransportError(
+        "POST rows unexpected status 502", status_code=502
+    )
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.ERROR, "schedule_transient")
+    assert not _logs(_patch, Severity.ERROR, "schedule_worker_rejected")
+    _patch["persist_flags"].assert_not_called()
+    _patch["review"].assert_not_called()
+
+
+def test_a_statusless_transport_error_stays_transient(_patch):
+    """Connection drops / decode failures carry no status — genuinely transient."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data, id=9)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_rows"].side_effect = portal_client.PortalTransportError("connection reset")
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.errors == 1
+    assert _logs(_patch, Severity.ERROR, "schedule_transient")
+    _patch["persist_flags"].assert_not_called()
+
+
+# ---- previews (best-effort by design) ---------------------------------------------
+
+
+def test_a_preview_failure_never_costs_the_import(_patch):
+    """Previews are the validate screen's fidelity aid — on this lane the ONLY fidelity
+    control — but a post failure must never cost the import itself."""
+    data = _MINIMAL_PDF
+    _patch["pending"].return_value = [_row(data)]
+    _patch["chunks"].return_value = _one_chunk(data)
+    _patch["post_preview"].side_effect = portal_client.PortalTransportError("nope")
+
+    stats = schedule_poll.poll_once()
+
+    assert stats.filed == 1  # the import still landed
+    assert _patch["post_result"].call_args.kwargs["status"] == "parsed"
+    assert _logs(_patch, Severity.WARN, "schedule_preview_post_failed")
+
+
+# ---- chunk reassembly (the pure function) ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "chunks"),
+    [
+        ("empty set", []),
+        ("inconsistent total", [
+            {"chunk_index": 0, "chunk_total": 1, "chunk_b64": "QUJD"},
+            {"chunk_index": 1, "chunk_total": 2, "chunk_b64": "QUJD"},
+        ]),
+        ("bool index", [{"chunk_index": True, "chunk_total": 1, "chunk_b64": "QUJD"}]),
+        ("duplicate index", [
+            {"chunk_index": 0, "chunk_total": 2, "chunk_b64": "QUJD"},
+            {"chunk_index": 0, "chunk_total": 2, "chunk_b64": "QUJD"},
+        ]),
+        ("non-strict base64", [{"chunk_index": 0, "chunk_total": 1, "chunk_b64": "not!b64"}]),
+        ("empty b64", [{"chunk_index": 0, "chunk_total": 1, "chunk_b64": ""}]),
+    ],
+)
+def test_reassembly_refuses_every_malformation(label, chunks):
+    """The chunk set was written atomically with its parent row, so a broken set is tamper
+    or a serving defect — never a benign partial."""
+    with pytest.raises(ValueError):
+        schedule_poll._reassemble_chunks(chunks)
+
+
+def test_reassembly_accepts_out_of_order_chunks():
+    """Out-of-order is NOT an error — it is fixed by the sort before concatenation."""
+    data = b"abcdefgh"
+    chunks = [
+        {"chunk_index": 1, "chunk_total": 2, "chunk_b64": base64.b64encode(data[4:]).decode()},
+        {"chunk_index": 0, "chunk_total": 2, "chunk_b64": base64.b64encode(data[:4]).decode()},
+    ]
+    assert schedule_poll._reassemble_chunks(chunks) == data
+
+
+# ---- the Worker-bounds clamp (unit) ------------------------------------------------
+
+
+def _mk_row(index, cells):
+    return schedule_parse.ParsedScheduleRow(
+        index=index, kind="data", cells=cells, flags=[],
+        source_page="pdf:p1", is_milestone=False, is_delivery=False,
+    )
+
+
+def _mk_parsed(rows):
+    return schedule_parse.ParsedSchedule(
+        profile="gantt_export",
+        rows=rows,
+        column_map={"mapping": {}, "labels": {}},
+        meta={},
+        notes=["existing note"],
+    )
+
+
+def test_clamp_passes_a_clean_grid_through_untouched():
+    parsed = _mk_parsed([_mk_row(1, ["a", "b"])])
+    assert schedule_poll._clamp_to_worker_bounds(parsed) is parsed  # zero-copy fast path
+
+
+def test_clamp_truncates_cells_and_chars_with_visible_notes():
+    wide = _mk_row(1, ["c"] * (schedule_poll.WORKER_MAX_ROW_CELLS + 10))
+    long_cell = _mk_row(2, ["x" * (schedule_poll.WORKER_MAX_CELL_CHARS + 100)])
+    parsed = _mk_parsed([wide, long_cell])
+
+    out = schedule_poll._clamp_to_worker_bounds(parsed)
+
+    assert len(out.rows[0].cells) == schedule_poll.WORKER_MAX_ROW_CELLS
+    assert len(out.rows[1].cells[0]) == schedule_poll.WORKER_MAX_CELL_CHARS
+    # VISIBLE, never silent: each clamp appends a note the validate screen displays.
+    assert "existing note" in out.notes
+    assert any("columns" in n for n in out.notes)
+    assert any("characters" in n for n in out.notes)
+
+
+def test_clamp_caps_the_row_count_at_the_worker_ceiling():
+    rows = [_mk_row(i + 1, ["v"]) for i in range(schedule_poll.WORKER_MAX_ROWS_TOTAL + 5)]
+    out = schedule_poll._clamp_to_worker_bounds(_mk_parsed(rows))
+    assert len(out.rows) == schedule_poll.WORKER_MAX_ROWS_TOTAL
+    assert any("TRUNCATED: the document has" in n for n in out.notes)

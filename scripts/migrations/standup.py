@@ -104,6 +104,7 @@ SEEDER_STAGE_SCRIPTS: tuple[str, ...] = (
     "seed_config_actuator_config.py",
     "seed_daemon_gate_config.py",
     "seed_manifest_config.py",
+    "seed_schedule_config.py",
     "seed_generate_and_interval_config.py",
 )
 
