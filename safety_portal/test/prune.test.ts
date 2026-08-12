@@ -34,6 +34,9 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM estimate_previews"),
     env.DB.prepare("DELETE FROM po_estimate_chunks"),
     env.DB.prepare("DELETE FROM po_estimates"),
+    env.DB.prepare("DELETE FROM job_payment_receipts"),
+    env.DB.prepare("DELETE FROM job_payment_cycles"),
+    env.DB.prepare("DELETE FROM job_payment_terms"),
     env.DB.prepare("DELETE FROM jobs"),
   ]);
 });
@@ -311,6 +314,34 @@ describe("pruneOldData (A3 D1 housekeeping)", () => {
     expect(res.jobs).toBe(1); // only J-bare deleted
     const left = await env.DB.prepare("SELECT job_id FROM jobs ORDER BY job_id").all<{ job_id: string }>();
     expect(left.results.map((j) => j.job_id)).toEqual(["J-sched"]);
+  });
+
+  it("NEVER deletes an inactive job holding payment terms or cycles (job_payment_terms / job_payment_cycles) [ADR-0006 PR-7 fence]", async () => {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active) VALUES ('J-terms','T',0)"), // holds terms → keep
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active) VALUES ('J-cycles','C',0)"), // holds a cycle → keep
+      env.DB.prepare("INSERT INTO jobs (job_id, project_name, active) VALUES ('J-bare','B',0)"),   // nothing → delete
+    ]);
+    // Both are D1-PRIMARY commercial records (0073): invoice amounts, recorded notice
+    // dates, and — through the cycles — the receipt ledger (cycle-keyed, guarded
+    // TRANSITIVELY: a receipt can only exist under a cycle, and the cycle guards the
+    // job). A soft-deleted (active=0) cycle still guards — its receipts are history.
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO job_payment_terms (job_id, net_days, nonpayment_notice_days, intent_to_suspend_days, created_by, updated_by) " +
+          "VALUES ('J-terms',30,10,14,'pm','pm')",
+      ),
+      env.DB.prepare(
+        "INSERT INTO job_payment_cycles (cycle_uuid, job_id, label, active, created_by, updated_by) " +
+          "VALUES ('cyc-guard','J-cycles','PP #1',0,'pm','pm')",
+      ),
+    ]);
+
+    const res = await pruneOldData(env.DB, NOW);
+
+    expect(res.jobs).toBe(1); // only J-bare deleted
+    const left = await env.DB.prepare("SELECT job_id FROM jobs ORDER BY job_id").all<{ job_id: string }>();
+    expect(left.results.map((j) => j.job_id)).toEqual(["J-cycles", "J-terms"]);
   });
 });
 

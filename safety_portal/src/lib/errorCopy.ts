@@ -458,6 +458,25 @@ export const ERROR_COPY: Record<string, string> = {
   not_a_milestone: "That task isn't a milestone — set its percent instead.",
   not_a_delivery: "That task isn't a delivery task, so it has no delivered mark.",
   invalid_delivered_date: "Enter the delivered date as YYYY-MM-DD.",
+
+  // ── job payments (ADR-0006 PR-7 — worker/fieldops_payments.ts) ─────────────────────────────
+  // `invalid_cycle_label`, not `invalid_label` — and `invalid_billing_cadence`, not
+  // `invalid_cadence`: both bare codes already mean something else (a checklist item
+  // label up to 256 characters; a checklist repeat schedule), and one code cannot
+  // carry two meanings (the invalid_percent precedent above).
+  invalid_billing_cadence: "Pick a billing cadence — monthly, semimonthly, milestone, or other.",
+  invalid_cadence_detail: "The cadence detail is too long (up to 300 characters).",
+  invalid_net_days: "Net days must be a whole number from 0 to 365.",
+  invalid_notice_days: "Notice days must be a whole number from 1 to 365.",
+  invalid_payment_note: "That note is too long (up to 2000 characters).",
+  invalid_cycle_label: "Give the payment cycle a label (up to 120 characters).",
+  invalid_submitted_date: "Enter the invoice-submitted date as YYYY-MM-DD.",
+  invalid_amount_cents: "Enter the amount as a positive number of dollars and cents.",
+  invalid_notice_kind: "A notice is either the nonpayment notice or the intent to suspend.",
+  invalid_notice_date: "Enter the notice date as YYYY-MM-DD.",
+  invalid_received_date: "Enter the received date as YYYY-MM-DD.",
+  suspend_requires_nonpayment:
+    "Record the Notice of Nonpayment first — the intent to suspend can only follow a recorded nonpayment notice.",
 };
 
 /** Humanize an unknown wire code: 'some_new_code' → 'some new code'. */

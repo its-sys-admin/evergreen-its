@@ -370,6 +370,14 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
           // cascade carries the matching DELETE (in-step rule). job_id is NOT NULL in
           // 0071, so no IS-NOT-NULL filter is needed.
           "AND job_id NOT IN (SELECT job_id FROM job_schedule_tasks) " +
+          // 0073 (ADR-0006 PR-7): payment terms + cycles are D1-PRIMARY commercial records
+          // (invoice amounts, recorded notice dates, and — through the cycles — the receipt
+          // ledger, which keys on cycle_id and is therefore guarded transitively, the
+          // manifest-children pattern). A job holding either is not dead weight; purge-job
+          // is the explicit exit and its cascade carries the matching DELETEs (in-step
+          // rule). Both declare job_id NOT NULL (0073), so no IS-NOT-NULL filter is needed.
+          "AND job_id NOT IN (SELECT job_id FROM job_payment_terms) " +
+          "AND job_id NOT IN (SELECT job_id FROM job_payment_cycles) " +
           // 0067: a job holding Weekly Production Report office inputs has had a client-facing
           // report prepared against it — the OSHA case counts and pending-items record are the
           // evidence of what was reported — and that table has no time-based prune of its own

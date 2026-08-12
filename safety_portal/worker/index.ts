@@ -38,6 +38,7 @@ import { registerPoAttachmentRoutes } from "./po_attachments";
 import { registerManifestRoutes } from "./fieldops_manifests";
 import { registerScheduleRoutes } from "./fieldops_schedules";
 import { registerScheduleTaskRoutes } from "./fieldops_schedule_tasks";
+import { registerPaymentRoutes } from "./fieldops_payments";
 import { registerPoEstimateRoutes } from "./po_estimates";
 import { registerRfqRoutes } from "./rfq";
 import { registerConfigRoutes } from "./config";
@@ -593,6 +594,12 @@ registerScheduleRoutes(app, { requireSession, requireCapability, requireSchedule
 //   authors (0071). Read rides cap.jobtracker.read (all roles view — decision 4); the manual
 //   add/edit/deactivate floor rides cap.jobtracker.manage. Send-free D1 writes, W4-batched. —
 registerScheduleTaskRoutes(app, fieldopsGates);
+// — Job payments (ADR-0006 decision 10, PR-7): per-job payment terms + manual invoice cycles +
+//   append-only receipts (0073), states DERIVED at read (payments_derive.ts) — never stored.
+//   EVERY route session + cap.payments.manage (ADMIN ONLY — operator decision 4: commercially
+//   sensitive; payment data appears in NO other route's response). DISPLAY-ONLY: nothing here
+//   sends, reminds, or generates a notice (Invariant 1 — alerting is the ADR's later fold-in). —
+registerPaymentRoutes(app, fieldopsGates);
 // — DR-photo-pool Slice 1: the daily-report additional-photo pool (upload / list / delete;
 //   send-free D1 queue for the Slice-2 Mac §34 screen; /api/submit claims the references) —
 registerDailyPhotoRoutes(app, fieldopsGates);
@@ -2803,6 +2810,17 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
     // needed) and deleted with its pool: an orphaned task row is a live-looking task list
     // behind a job nobody can see. Mirrors its prune.ts jobs-guard entry (in-step rule).
     c.env.DB.prepare("DELETE FROM job_schedule_tasks WHERE job_id = ?").bind(job_id),
+    // Job payments (0073, ADR-0006 PR-7). Children first: receipts key on cycle_id, so
+    // they resolve their parents through the job-keyed subquery BEFORE the cycles go;
+    // terms last. An orphaned receipt is record-grade — a money-received event nobody
+    // can trace back to a job — and the terms/cycles rows are commercially sensitive
+    // (admin-only in life, so they must not linger behind a deleted job either).
+    // Mirrors the prune.ts jobs-guard entries for terms + cycles (in-step rule).
+    c.env.DB
+      .prepare("DELETE FROM job_payment_receipts WHERE cycle_id IN (SELECT id FROM job_payment_cycles WHERE job_id = ?)")
+      .bind(job_id),
+    c.env.DB.prepare("DELETE FROM job_payment_cycles WHERE job_id = ?").bind(job_id),
+    c.env.DB.prepare("DELETE FROM job_payment_terms WHERE job_id = ?").bind(job_id),
     // The field-ops job-context tables prune.ts already guards a job on. Its guard
     // comment named purge-job as "the explicit operator cleanup path (cascades both)"
     // — it did not: these five were never deleted, so purging a job returned ok:true
@@ -2846,14 +2864,17 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
   const schedulePreviews = results[13]?.meta?.changes ?? 0;
   const schedules = results[14]?.meta?.changes ?? 0;
   const scheduleTasks = results[15]?.meta?.changes ?? 0;
-  const checklistItemStates = results[16]?.meta?.changes ?? 0;
-  const checklistInstances = results[17]?.meta?.changes ?? 0;
-  const timeEntries = results[18]?.meta?.changes ?? 0;
-  const taskAssignments = results[19]?.meta?.changes ?? 0;
-  const inspections = results[20]?.meta?.changes ?? 0;
-  const equipmentLocation = results[21]?.meta?.changes ?? 0;
-  const submissions = results[22]?.meta?.changes ?? 0;
-  const job = results[23]?.meta?.changes ?? 0;
+  const paymentReceipts = results[16]?.meta?.changes ?? 0;
+  const paymentCycles = results[17]?.meta?.changes ?? 0;
+  const paymentTerms = results[18]?.meta?.changes ?? 0;
+  const checklistItemStates = results[19]?.meta?.changes ?? 0;
+  const checklistInstances = results[20]?.meta?.changes ?? 0;
+  const timeEntries = results[21]?.meta?.changes ?? 0;
+  const taskAssignments = results[22]?.meta?.changes ?? 0;
+  const inspections = results[23]?.meta?.changes ?? 0;
+  const equipmentLocation = results[24]?.meta?.changes ?? 0;
+  const submissions = results[25]?.meta?.changes ?? 0;
+  const job = results[26]?.meta?.changes ?? 0;
   return c.json({
     ok: true, found: job > 0, job_id, job_deleted: job, submissions, pdfChunks, pdfRequests,
     requirements, expectedMaterials,
@@ -2870,6 +2891,10 @@ app.post("/api/internal/admin/purge-job", requireAdminToken, async (c) => {
     // untrusted schedule bytes went with the job. scheduleTasks (0071) is the LIVING
     // task list going with it.
     schedules, scheduleChunks, scheduleRows, schedulePreviews, scheduleTasks,
+    // Job payments (0073, ADR-0006 PR-7) — reported per-table: paymentReceipts is the
+    // record-grade counter (money-received events leaving with the job), and a visible
+    // count is how the old five-table omission would have been caught.
+    paymentReceipts, paymentCycles, paymentTerms,
     checklistItemStates, checklistInstances, timeEntries, taskAssignments, inspections,
     equipmentLocation,
   });
