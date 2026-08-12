@@ -3,6 +3,7 @@ import * as api from "../lib/fieldops_schedules";
 import type { ScheduleListRow, ScheduleTaskRow } from "../lib/fieldops_schedules";
 import { ScheduleValidatePage } from "./ScheduleValidatePage";
 import { ScheduleReconcilePage } from "./ScheduleReconcilePage";
+import { PaymentsSection } from "./JobSchedulePaymentsSection";
 import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/errorCopy";
 import { PageShell } from "../components/PageShell";
@@ -97,6 +98,9 @@ export function JobSchedulePage({
   const caps = user?.capabilities ?? [];
   const canManage = caps.includes("cap.jobtracker.manage");
   const canMark = caps.includes("cap.schedule.mark");
+  // Payments (PR-7): admin-only office surface (operator decision 4). The check gates the
+  // AFFORDANCE — the Worker re-gates every /api/fieldops/payments call (Invariant 2).
+  const canPayments = caps.includes("cap.payments.manage");
 
   const [tasks, setTasks] = useState<ScheduleTaskRow[] | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -564,6 +568,11 @@ export function JobSchedulePage({
           </div>
         </section>
       ))}
+
+      {/* Payments — SAME PAGE, office-only (operator decisions: payments live where the
+          job's schedule lives; admin-only visibility). Below the schedule table so the
+          job-site face stays first. */}
+      {canPayments ? <PaymentsSection jobId={jobId} /> : null}
     </PageShell>
   );
 }

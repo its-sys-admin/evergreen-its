@@ -18,6 +18,9 @@ function call(path: string, init: Init = {}): Promise<Response> {
 
 beforeEach(async () => {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM job_payment_receipts"),
+    env.DB.prepare("DELETE FROM job_payment_cycles"),
+    env.DB.prepare("DELETE FROM job_payment_terms"),
     env.DB.prepare("DELETE FROM submissions"),
     env.DB.prepare("DELETE FROM filed_pdfs"),
     env.DB.prepare("DELETE FROM pdf_requests"),
@@ -200,6 +203,44 @@ async function seedJobWithData(job: string, uuid: string): Promise<void> {
         .bind(`task-${job}-${i}`, job, `Task ${i}`, `\ntask ${i}`, i * 10),
     ),
   ]);
+  // PR-7 (0073): the payments family joins the cascade — terms 1 (the UNIQUE forces it),
+  // cycles TEN and receipts ELEVEN (1–9 are all taken above), so the THREE newly-inserted
+  // DELETEs — which shift every later positional results[] index by three — cannot
+  // mis-report by reading a neighbour's count. Receipts key on cycle_id (all eleven on the
+  // first cycle), so the cascade's job-keyed subquery is what this exercises.
+  await env.DB
+    .prepare(
+      "INSERT INTO job_payment_terms (job_id, net_days, nonpayment_notice_days, intent_to_suspend_days, created_by, updated_by) " +
+        "VALUES (?,30,10,14,'pm','pm')",
+    )
+    .bind(job)
+    .run();
+  const cycleId = (
+    await env.DB
+      .prepare(
+        "INSERT INTO job_payment_cycles (cycle_uuid, job_id, seq, label, created_by, updated_by) " +
+          "VALUES (?,?,10,'PP #1','pm','pm') RETURNING id",
+      )
+      .bind(`cyc-${job}-1`, job)
+      .first<{ id: number }>()
+  )!.id;
+  await env.DB.batch([
+    ...[2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) =>
+      env.DB
+        .prepare(
+          "INSERT INTO job_payment_cycles (cycle_uuid, job_id, seq, label, created_by, updated_by) " +
+            "VALUES (?,?,?,?,'pm','pm')",
+        )
+        .bind(`cyc-${job}-${i}`, job, i * 10, `PP #${i}`),
+    ),
+    ...Array.from({ length: 11 }, (_, i) =>
+      env.DB
+        .prepare(
+          "INSERT INTO job_payment_receipts (cycle_id, received_date, amount_cents, recorded_by) VALUES (?,?,100,'pm')",
+        )
+        .bind(cycleId, `2026-01-${String(i + 1).padStart(2, "0")}`),
+    ),
+  ]);
 }
 
 async function counts(job: string, uuid: string) {
@@ -235,6 +276,10 @@ async function counts(job: string, uuid: string) {
     schedulePreviews: await q(
       "SELECT COUNT(*) n FROM job_schedule_previews WHERE schedule_id IN (SELECT id FROM job_schedules WHERE job_id=?)", job),
     scheduleTasks: await q("SELECT COUNT(*) n FROM job_schedule_tasks WHERE job_id=?", job),
+    paymentTerms: await q("SELECT COUNT(*) n FROM job_payment_terms WHERE job_id=?", job),
+    paymentCycles: await q("SELECT COUNT(*) n FROM job_payment_cycles WHERE job_id=?", job),
+    paymentReceipts: await q(
+      "SELECT COUNT(*) n FROM job_payment_receipts WHERE cycle_id IN (SELECT id FROM job_payment_cycles WHERE job_id=?)", job),
   };
 }
 
@@ -267,6 +312,12 @@ describe("POST /api/internal/admin/purge-job", () => {
       // DELETE's positional shift fails loudly instead of reading a neighbour's count.
       schedules: 2, scheduleChunks: 3, scheduleRows: 7, schedulePreviews: 8,
       scheduleTasks: 9,
+      // PR-7 (0073) — asserted BY NAME with distinct values (10/11; terms is pinned at 1
+      // by its per-job UNIQUE): the THREE inserted DELETEs shift every later positional
+      // results[] index by three, and these are what catch a mis-shift. paymentReceipts
+      // matters most — money-received events leaving with the job, via the cycle-keyed
+      // subquery.
+      paymentTerms: 1, paymentCycles: 10, paymentReceipts: 11,
     });
 
     expect(await counts("JOB-PURGE", "u-purge")).toEqual({
@@ -277,6 +328,7 @@ describe("POST /api/internal/admin/purge-job", () => {
       manifests: 0, manifestChunks: 0, manifestRows: 0, manifestPreviews: 0,
       schedules: 0, scheduleChunks: 0, scheduleRows: 0, schedulePreviews: 0,
       scheduleTasks: 0,
+      paymentTerms: 0, paymentCycles: 0, paymentReceipts: 0,
     });
     // The OTHER job keeps every one of them — the cascade is job-scoped, not a sweep.
     expect(await counts("JOB-KEEP", "u-keep")).toEqual({
@@ -287,6 +339,7 @@ describe("POST /api/internal/admin/purge-job", () => {
       manifests: 1, manifestChunks: 4, manifestRows: 6, manifestPreviews: 5,
       schedules: 2, scheduleChunks: 3, scheduleRows: 7, schedulePreviews: 8,
       scheduleTasks: 9,
+      paymentTerms: 1, paymentCycles: 10, paymentReceipts: 11,
     });
     const audit = await env.DB
       .prepare("SELECT action, target_username FROM audit_log WHERE action='purge-job'")

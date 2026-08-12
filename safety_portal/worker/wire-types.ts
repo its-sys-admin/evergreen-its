@@ -1080,3 +1080,101 @@ export interface WeeklyReportSaveBody {
   pending?: Partial<WeeklyReportOffice["pending"]>;
   photos?: WeeklyReportPhoto[];
 }
+
+// ── Job payments (ADR-0006 decision 10, PR-7 — migration 0073) ──────────────────────────────
+// Office-only (cap.payments.manage, admin — operator decision 4); DISPLAY-ONLY (Invariant 1:
+// nothing here sends, reminds or generates a notice). Served by worker/fieldops_payments.ts;
+// states derived at read by worker/payments_derive.ts — NEVER stored.
+
+/** A cycle's DERIVED display state (payments_derive.ts — the exact precedence lives there).
+ *  The *_sent states mean a human RECORDED that date; the *_due states mean the terms'
+ *  clock says the next escalation step has fallen due. Nothing is ever sent by ITS. */
+export type PaymentState =
+  | "draft"
+  | "awaiting"
+  | "due_soon"
+  | "overdue"
+  | "nonpayment_notice_due"
+  | "nonpayment_notice_sent"
+  | "suspension_notice_due"
+  | "suspension_notice_sent"
+  | "paid";
+
+/** The job's terms row as served. WHO columns (created_by/updated_by) deliberately never
+ *  serve — raw account usernames stay Worker-side (the W9 posture), and the Payments card
+ *  has no who-edited display. */
+export interface PaymentTermsRow {
+  job_id: string;
+  billing_cadence: "monthly" | "semimonthly" | "milestone" | "other";
+  billing_cadence_detail: string | null;
+  net_days: number;
+  nonpayment_notice_days: number;
+  intent_to_suspend_days: number;
+  notes: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One APPEND-ONLY money-received event (active rows only; a correction is deactivate +
+ *  re-add). recorded_by never serves (W9 posture). */
+export interface PaymentReceiptRow {
+  id: number;
+  received_date: string;
+  amount_cents: number;
+  note: string | null;
+  recorded_at: number;
+}
+
+/** One cycle as the Payments card renders it: the stored row + its active receipts + the
+ *  DERIVED state and modifiers (payments_derive.ts, server `today` in Pacific).
+ *  `due_date` is the STORED snapshot (submitted + net_days at submit time — 0073 header). */
+export interface PaymentCycleView {
+  id: number;
+  cycle_uuid: string;
+  job_id: string;
+  seq: number;
+  label: string;
+  invoice_submitted_date: string | null;
+  invoice_amount_cents: number | null;
+  due_date: string | null;
+  nonpayment_notice_date: string | null;
+  suspend_notice_date: string | null;
+  note: string | null;
+  created_at: number;
+  updated_at: number;
+  receipts: PaymentReceiptRow[];
+  state: PaymentState;
+  /** amount − active receipts; null while the amount is unknown. */
+  balance_cents: number | null;
+  days_overdue: number | null;
+  days_until_due: number | null;
+  paid_late: boolean;
+}
+
+/** GET /api/fieldops/payments?job_id= — the whole Payments card in one read. */
+export interface PaymentsResponse {
+  terms: PaymentTermsRow | null;
+  cycles: PaymentCycleView[];
+  project_name: string | null;
+}
+
+/** GET /api/fieldops/payments/terms-default?job_id= — the same-client prefill (operator
+ *  decision 6): the client's most recent OTHER job's terms, or null (no client on the job /
+ *  no other job with terms — never an error). The names let the SPA label the button
+ *  ("Copy from <client>'s latest job"). */
+export interface PaymentTermsDefaultResponse {
+  terms: Omit<PaymentTermsRow, "job_id"> | null;
+  client_name: string | null;
+  source_project_name: string | null;
+}
+
+/** POST /api/fieldops/payments/cycles — `due_date` echoes the stored snapshot;
+ *  `note` is `no_terms_no_due_date` when a submitted cycle landed without terms
+ *  (due date unknowable until terms exist and the submitted date is re-entered). */
+export interface PaymentCycleCreateResponse {
+  ok: true;
+  id: number | null;
+  cycle_uuid: string;
+  due_date: string | null;
+  note?: "no_terms_no_due_date";
+}
