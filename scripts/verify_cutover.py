@@ -30,9 +30,13 @@ Checks (each independently selectable via ``--only`` / ``--skip``):
 ====== =============== ==============================================================
 id     slug            what it proves
 ====== =============== ==============================================================
-VC-01  keychain        all required Keychain secrets present (18: 11 non-Box + Box
-                       triplet + ``ITS_PORTAL_PO_TOKEN`` + the config-actuator /
-                       subcontract-poll daemon bearers + the operator-dashboard PIN)
+VC-01  keychain        all required Keychain secrets present (22 = ``NON_BOX_SECRETS``
+                       + ``BOX_SECRETS`` + ``PO_SECRETS`` + ``DARK_BEARER_SECRETS``
+                       + ``OPERATOR_SECRETS``). This count is pinned to
+                       ``len(REQUIRED_SECRETS)`` by
+                       ``test_vc01_docstring_count_matches_required_secrets`` — it
+                       read 18 for long enough to undercount by four as the estimate,
+                       manifest, schedule and RFQ bearers were added.
 VC-02  launchd         every shipped ``org.solutionsmith.its.*`` plist loaded EXCEPT any
                        label in ``DARK_UNLOADED_LABELS``, which must NOT be loaded (no
                        missing, no orphans, no dark send daemon running). That set is
