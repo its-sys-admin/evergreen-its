@@ -109,6 +109,29 @@ use. **Tag:** `cloudflare`, `d1`, `host-migration`.
 
 ---
 
+### Local `wrangler d1` commands fail on this dev host (`_cf_ALARM has 3 columns but 2 values`) — remote/deploy confirmed unaffected [OPEN 2026-08-11]
+
+Any **local** D1 command (`wrangler d1 migrations apply --local`, `wrangler d1 execute --local`)
+dies with `Fatal uncaught kj::Exception: … table _cf_ALARM has 3 columns but 2 values were
+supplied: SQLITE_ERROR` — a `workerd` local-runtime fault (first seen wrangler 4.105.0), not a
+project bug. It survives wiping `.wrangler/state` and reappears after `npm ci` in a fresh
+worktree. `--remote` and `npm run deploy` are confirmed NOT affected (neither starts the local
+runtime) — do not chase this as a deploy blocker or recommend a wrangler upgrade on account of it.
+
+**Fix:** no project-side fix available (upstream `workerd`/wrangler issue). Two working
+substitutes when a migration needs local validation: (1) stdlib `sqlite3`, `executescript`-ing
+every prior migration file in order then running the one under test; (2) the vitest worker suite,
+which applies every migration through real `workerd` + D1 already. See auto-memory
+`reference_wrangler-local-d1-cf-alarm-fault.md`.
+
+**Tag:** `tooling`, `wrangler`, `cloudflare`, `low`.
+
+**Revisit when:** a wrangler upgrade is taken, to check whether the upstream fault is resolved.
+
+Surfaced: 2026-08-11 session close.
+
+---
+
 ## Exchange Online / PowerShell
 
 ### PowerShell `Get-ApplicationAccessPolicy -Identity <friendly-name>` directory lookup fails [OPEN 2026-05-20]
