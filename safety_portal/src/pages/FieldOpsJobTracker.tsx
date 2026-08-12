@@ -1756,10 +1756,28 @@ export function FieldOpsJobTracker({
         </section>
 
         {/* Material receipts M1 — self-contained (own caps/fetch/state; the D4 parallel-build rule). */}
-        <ExpectedMaterialsSection
-          jobId={job.job_id}
-          onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(job.job_id) : undefined}
-        />
+        {/* Gated on the SAME two caps ExpectedMaterialsSection checks internally: the
+            component returns null without them, but an ungated drawer would still render
+            its shell — an empty "Materials" disclosure advertising a capability the
+            session does not have.
+            CLOSED by default. This is the same component the Materials page renders, and
+            on a job with a BOM it put every expected line straight onto a page that already
+            carries nineteen sections. The drawer means materials are one tap away instead
+            of always in the way — the posture the Schedule page's copy already uses. */}
+        {(caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage")) && (
+        <details className="sched-drawer" aria-label="Expected materials">
+          <summary>
+            Materials
+            <span className="sched-drawer__note">Expected lines, loads and delivery marks</span>
+          </summary>
+          <div className="sched-drawer__body">
+          <ExpectedMaterialsSection
+            jobId={job.job_id}
+            onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(job.job_id) : undefined}
+          />
+          </div>
+        </details>
+        )}
 
         {/* ADR-0006 PR-4 — the per-job Schedule deep-link card, beside Materials. All roles
             see it (schedule visibility is all-roles, decision 4); the import affordances on

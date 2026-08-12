@@ -545,9 +545,17 @@ export function JobMaterialsPage({
         </section>
       ) : null}
 
-      {groups.map((group) => (
-        <section key={group.name ?? "__all"} className="card dash-section" aria-label={group.name ?? "Materials"}>
-          {group.name && <h3 className="dash-detail__h2">{group.name}</h3>}
+      {groups.map((group) => {
+        // A NAMED type group collapses; the unnamed single group is the whole page and has
+        // nothing to collapse to. Open by default HERE — this is the page you came to in
+        // order to read them — where the job page's copy of this list ships closed.
+        // aria-label stays the BARE category name: getByLabelText("HARDWARE") is pinned.
+        const owed = group.lines.filter((l) => {
+          const o = lineOwed(l);
+          return o.outstanding !== null && !o.settled;
+        }).length;
+        const inner = (
+          <>
           {group.lines.map((line) => {
             const pill = rollupPill(line);
             const loads = shipmentsByLine.get(line.id) ?? [];
@@ -902,8 +910,28 @@ export function JobMaterialsPage({
               </div>
             );
           })}
-        </section>
-      ))}
+          </>
+        );
+        if (group.name === null) {
+          return (
+            <section key="__all" className="card dash-section" aria-label="Materials">
+              {inner}
+            </section>
+          );
+        }
+        return (
+          <details key={group.name} className="sched-drawer" aria-label={group.name} open>
+            <summary>
+              {group.name}
+              <span className="sched-drawer__note">
+                {group.lines.length} {group.lines.length === 1 ? "line" : "lines"}
+                {owed > 0 ? ` · ${owed} still owed` : ""}
+              </span>
+            </summary>
+            <div className="sched-drawer__body">{inner}</div>
+          </details>
+        );
+      })}
 
       {canManage && (
         <section className="card dash-section" aria-label="Add an expected material">
