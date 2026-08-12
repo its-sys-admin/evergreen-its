@@ -2634,3 +2634,74 @@ the existing lane gate; no new bearer needed.
 
 **Trigger:** the first time the office asks "which quotes are still open?" off the sheet, or when
 the disposition screen gains a "history" view — whichever comes first.
+
+## [OPEN 2026-08-12, low] Three of the CSS allowlist's 14 entries are inert wrappers, not permanently unstylable
+
+PR #114's phantom-CSS closure (`tests/test_portal_css_classes.py`) allowlists exactly 14 class
+names that legitimately render with no CSS rule today, each with its own explained reason. Three
+of the fourteen — `fr__job-reqs`, `fr__expected-materials`, `fr__additional-photos` — are tagged
+"wrapper inside an already-styled `.fr__section`," meaning they were deliberately left bare because
+styling them would have changed a page nobody asked to change this session, not because they can
+never carry rules. A future design pass on `FormRenderer.tsx`'s job-requirements / expected-materials
+/ additional-photos regions can style these directly (giving each its own visual treatment inside
+the section) — at which point they leave the allowlist and `test_allowlist_stays_honest` continues
+to hold (it only asserts an allowlisted name is still rendered somewhere, not that it stays bare).
+The other 11 allowlist entries (9 template-literal bases + 2 test hooks) are structurally different
+— they never reach the DOM as a standalone class or exist purely for test addressing — and have no
+equivalent "could still be styled" future.
+
+**Tag:** `safety-portal`, `frontend`, `css`, `design`.
+
+**Revisit when:** the next design pass touches `FormRenderer.tsx`'s job-requirements, expected-materials,
+or additional-photos sections specifically — not a general trigger, since nothing is broken today.
+
+Surfaced: 2026-08-12 portal design session (PR #114, `tests/test_portal_css_classes.py`).
+
+## [OPEN 2026-08-12, low] `ExpectedMaterialsSection`'s richer multi-control editor and a delivery-mark row were designed during PR #109 but never wired
+
+While building PR #109's job-detail/materials design pass, an expanded per-line editor for
+`ExpectedMaterialsSection` (a wider control row for editing a material line's fields in place —
+roughly eleven controls across expected/received/unit/notes-type fields on one row) and a
+dedicated delivery-mark row/control were drafted in CSS and markup alongside the outstanding-
+quantity rollup that did ship. Neither was wired to a real interaction before commit: "every class
+added here was checked to be USED — the unwired rules from the first draft were removed rather
+than shipped, since dead CSS is the exact defect this session has been repairing" (PR #109 body).
+The unwired CSS/markup was deleted rather than merged dead, so **there is no code trace of this
+design** — no branch, no draft PR, no scratch file. This entry is the only record, written from
+session context rather than a diff. If the office ever needs richer inline editing of an expected-
+materials line (today: add/edit via the existing form-based flow, not an inline multi-control row)
+or a dedicated delivery-mark affordance distinct from the receipt-confirm flow, that work starts
+from a blank page, not a resumable draft — the shape described here is a starting hypothesis, not
+a spec.
+
+**Tag:** `safety-portal`, `frontend`, `materials`, `design`.
+
+**Revisit when:** the office specifically asks for inline multi-field editing of an expected-materials
+line, or for a delivery-mark control distinct from the existing receipt-confirm flow.
+
+Surfaced: 2026-08-12 portal design session (PR #109) — chat-only context, no diff to cite.
+
+## [OPEN 2026-08-12, low] Playwright screenshots are broken in this dev environment — visual verification of Safety Portal SPA changes is numeric-only
+
+`browser_take_screenshot` (and the underlying navigate-then-screenshot flow) timed out on every
+attempt during the 2026-08-12 portal design session, including against a throwaway single-`<h1>`
+static page with no app logic — ruling out a Safety-Portal-specific cause and pointing at this
+Playwright MCP build/host combination generally. Root cause not diagnosed (out of scope for a
+design session). The working substitute, used for all verification this session: Playwright's
+non-screenshot evaluation surface still works — computed styles, `getBoundingClientRect`,
+`scrollWidth`/`clientWidth` overflow checks, and tap-target dimensions measured in-browser at
+390/768/1024/1440 answer "does this overflow / is this ≥44px / did this class resolve to the
+expected rule" without ever rendering a pixel, but it cannot catch a purely visual defect (wrong
+color, misaligned icon, a broken image) that numeric checks don't encode for.
+
+**Fix shape:** not yet investigated — candidates are a Chromium/Playwright version mismatch on
+this host, a resource constraint, or an MCP-server-specific timeout config. First diagnostic step:
+reproduce outside the MCP wrapper (bare `playwright` Python/Node script) to isolate MCP-layer vs.
+Playwright-layer.
+
+**Tag:** `tooling`, `playwright`, `safety-portal`, `frontend`.
+
+**Revisit when:** the next session needs true pixel-level visual verification (not just geometry/
+computed-style checks) of a Safety Portal SPA change, or someone has spare time to bisect the cause.
+
+Surfaced: 2026-08-12 portal design session.
