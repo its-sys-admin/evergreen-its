@@ -125,6 +125,18 @@ GATED_SCRIPTS: list[tuple[str, list[str]]] = [
          "anthropic", "anthropic_client"],
     ),
     (
+        # wpr_data (0067) assembles the CLIENT-FACING Weekly Production Report's data. It reads
+        # the send-free Worker aggregate and Box, and builds the narrative sections BY RULE from
+        # text the field already typed — the office's own words, reordered, never a model's.
+        # Forbidding the LLM imports HERE is what makes that structural rather than conventional:
+        # the client-facing document cannot acquire a generated narrative without this list
+        # changing in a reviewed diff. `ollama_client` joins the list because a LOCAL model is
+        # still a model — the estimate lane's Tier-2 precedent means it is a reachable import.
+        "progress_reports/wpr_data.py",
+        ["graph_client", "send_mail", "resend", "smtplib", "email.mime",
+         "anthropic", "anthropic_client", "ollama_client"],
+    ),
+    (
         # fieldops_sync (P2.5 Slice 5) is the D1→Smartsheet job up-sync daemon: it pulls
         # dirty portal-created jobs and mirrors each UP into BOTH Active-Jobs sheets. SEND-FREE
         # + AI-FREE — the Smartsheet WRITE is the intended SoR-mirror capability, NOT a customer
