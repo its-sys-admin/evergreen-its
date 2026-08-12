@@ -277,7 +277,7 @@ workflows:
             class: daniel_solo
             runbook: docs/runbooks/progress_intake_routing.md
       - id: progress_compile
-        title: progress-generate compiles the weekly progress packet
+        title: progress-generate compiles the client report + the internal packet
         what_happens:
           daemon: progress-generate
           sheets: [ITS_Active_Jobs_Progress, WPR_human_review]

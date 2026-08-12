@@ -331,14 +331,16 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "The approval desk for Weekly Progress Reports — the exact progress-side twin of the "
             "safety WSR sheet: same columns, same approval checkboxes, same rules."
             "\n\n"
-            "Day-to-day: review the compiled PDF, edit Email Body if needed, tick Approve for "
-            "Scheduled Send or Send Now."
+            "Day-to-day: the Compiled PDF is the five-page client report, not the stack of "
+            "dailies — that packet stays internal and its link sits in Notes. Review the "
+            "report, edit Email Body if needed, tick Approve for Scheduled Send or Send Now. "
+            "A row HELD with held_no_activity means no dailies were filed that week."
         ),
     ),
     "progress_send": NodeBrief(
         what=(
             "The progress twin of the safety send: it verifies each approved WPR row's approver "
-            "against the Progress Reporting workspace, then emails the packet to recipients read "
+            "against the Progress Reporting workspace, then emails the report to recipients read "
             "from ITS_Active_Jobs_Progress at send time. Its one deliberate difference: a blank "
             "Progress Reports Contact falls back to the job's Stakeholder Email — logged, never "
             "silent — where safety would hold the report."
