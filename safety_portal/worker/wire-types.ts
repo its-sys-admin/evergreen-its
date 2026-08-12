@@ -897,6 +897,30 @@ export interface ScheduleCommitResponse {
   committed_through_row: number;
 }
 
+/** POST /api/fieldops/schedule-tasks/:id/progress — the PR-5 field %-mark
+ *  (cap.schedule.mark, per-job scoped). Echoes the persisted percent. */
+export interface ScheduleMarkProgressResponse {
+  ok: true;
+  id: number;
+  percent_done: number;
+}
+
+/** POST /api/fieldops/schedule-tasks/:id/milestone-done — `already` true on the idempotent
+ *  repeat (the mark had landed before; nothing re-stamped, nothing re-audited). */
+export interface ScheduleMarkMilestoneDoneResponse {
+  ok: true;
+  id: number;
+  already?: true;
+}
+
+/** POST /api/fieldops/schedule-tasks/:id/delivered — echoes the persisted business date
+ *  (the body's, or today Pacific when the body carried none). */
+export interface ScheduleMarkDeliveredResponse {
+  ok: true;
+  id: number;
+  delivered_date: string;
+}
+
 // ── Weekly Production Report (0067) ──────────────────────────────────────────────────────────
 // The office screen and the Mac compile read the SAME payload from the SAME builder, so these
 // shapes are the single source of truth for both. `worker/fieldops_report.ts` annotates its

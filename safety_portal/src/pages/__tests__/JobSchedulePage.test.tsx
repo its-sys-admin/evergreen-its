@@ -27,6 +27,9 @@ vi.mock("../../lib/fieldops_schedules", async (importOriginal) => {
     discardSchedule: vi.fn(),
     planSchedule: vi.fn(),
     commitAllSchedule: vi.fn(),
+    markScheduleTaskProgress: vi.fn(),
+    markScheduleTaskMilestoneDone: vi.fn(),
+    markScheduleTaskDelivered: vi.fn(),
   };
 });
 vi.mock("../../lib/auth", () => ({ useAuth: vi.fn() }));
@@ -88,6 +91,7 @@ function mountAs(role: Role, caps: string[]) {
 
 const MANAGE = ["cap.jobtracker.read", "cap.jobtracker.manage"];
 const READ_ONLY = ["cap.jobtracker.read"];
+const MARK = ["cap.jobtracker.read", "cap.schedule.mark"];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -184,6 +188,16 @@ describe("JobSchedulePage — the import affordance split", () => {
     expect(api.uploadSchedule).toHaveBeenCalledTimes(1); // never sent
   });
 
+  it("mark affordances are HIDDEN without cap.schedule.mark (the office import cap alone gets none either)", async () => {
+    const { container, queryByLabelText } = mountAs("submitter", READ_ONLY);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    expect(queryByLabelText("Mark Fencing 75%")).toBeNull();
+    expect(queryByLabelText("Exact percent for Fencing")).toBeNull();
+    expect(queryByLabelText("Done Substantial Completion")).toBeNull();
+    expect(queryByLabelText("Mark Pile Delivery delivered")).toBeNull();
+    expect(queryByLabelText("Delivered date for Pile Delivery")).toBeNull();
+  });
+
   it("Validate opens the sub-face (the validate screen replaces the page body)", async () => {
     vi.mocked(api.fetchSchedule).mockResolvedValue({
       schedule: {
@@ -204,5 +218,87 @@ describe("JobSchedulePage — the import affordance split", () => {
       expect(container.textContent ?? "").not.toContain("Import a schedule"),
     );
     await waitFor(() => expect(getByLabelText("Row 1 task name")).toBeTruthy());
+  });
+});
+
+describe("JobSchedulePage — field mark-off (cap.schedule.mark, PR-5)", () => {
+  beforeEach(() => {
+    vi.mocked(api.markScheduleTaskProgress).mockResolvedValue({ ok: true, id: 1, percent_done: 75 });
+    vi.mocked(api.markScheduleTaskMilestoneDone).mockResolvedValue({ ok: true, id: 3 });
+    vi.mocked(api.markScheduleTaskDelivered).mockResolvedValue({
+      ok: true, id: 2, delivered_date: "2026-09-10",
+    });
+  });
+
+  it("renders the row controls per kind: quick-% chips + exact input on ordinary tasks, a Done checkbox on milestones, a date control on deliveries", async () => {
+    const { container, getByLabelText } = mountAs("submitter", MARK);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    // Ordinary task (Fencing, 50%): all five chips + the exact input; the CURRENT % chip
+    // is disabled (nothing to re-mark), the others live.
+    for (const pct of [0, 25, 75, 100]) {
+      expect((getByLabelText(`Mark Fencing ${pct}%`) as HTMLButtonElement).disabled).toBe(false);
+    }
+    expect((getByLabelText("Mark Fencing 50%") as HTMLButtonElement).disabled).toBe(true);
+    expect(getByLabelText("Exact percent for Fencing")).toBeTruthy();
+    // Milestone rows get the done-checkbox, NOT chips (a milestone is binary).
+    const done = getByLabelText("Done Substantial Completion") as HTMLInputElement;
+    expect(done.type).toBe("checkbox");
+    expect(done.checked).toBe(false); // percent_done 0
+    expect((getByLabelText("Done Pile Delivery") as HTMLInputElement).checked).toBe(true); // 100
+    // The delivery row gets the date control, seeded from its stored date.
+    const date = getByLabelText("Delivered date for Pile Delivery") as HTMLInputElement;
+    expect(date.value).toBe("2026-09-10");
+    expect((getByLabelText("Mark Pile Delivery delivered") as HTMLButtonElement).textContent).toBe("Update date");
+  });
+
+  it("a quick-% chip calls the progress helper and reloads the list (optimistic then confirmed)", async () => {
+    const { container, getByLabelText } = mountAs("submitter", MARK);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    fireEvent.click(getByLabelText("Mark Fencing 75%"));
+    await waitFor(() => expect(api.markScheduleTaskProgress).toHaveBeenCalledWith(1, 75));
+    await waitFor(() => expect(api.fetchScheduleTasks).toHaveBeenCalledTimes(2)); // mount + reload
+  });
+
+  it("the exact-% input marks an off-chip value; a non-integer refuses locally without a call", async () => {
+    const { container, getByLabelText } = mountAs("submitter", MARK);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Fencing"));
+    const input = getByLabelText("Exact percent for Fencing") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "62" } });
+    fireEvent.click(getByLabelText("Set exact percent for Fencing"));
+    await waitFor(() => expect(api.markScheduleTaskProgress).toHaveBeenCalledWith(1, 62));
+
+    fireEvent.change(input, { target: { value: "12.5" } });
+    fireEvent.click(getByLabelText("Set exact percent for Fencing"));
+    await waitFor(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent ?? "").toContain("whole number"),
+    );
+    expect(api.markScheduleTaskProgress).toHaveBeenCalledTimes(1); // never sent
+  });
+
+  it("the milestone checkbox calls milestone-done when checking, progress 0 when un-checking (a correction)", async () => {
+    const { container, getByLabelText } = mountAs("submitter", MARK);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Substantial Completion"));
+    fireEvent.click(getByLabelText("Done Substantial Completion")); // 0 → done
+    await waitFor(() => expect(api.markScheduleTaskMilestoneDone).toHaveBeenCalledWith(3));
+    fireEvent.click(getByLabelText("Done Pile Delivery")); // 100 → un-done
+    await waitFor(() => expect(api.markScheduleTaskProgress).toHaveBeenCalledWith(2, 0));
+  });
+
+  it("the Delivered button sends the picked date; a Worker refusal surfaces its plain-language copy", async () => {
+    const { container, getByLabelText, findByRole } = mountAs("submitter", MARK);
+    await waitFor(() => expect(container.textContent ?? "").toContain("Pile Delivery"));
+    fireEvent.change(getByLabelText("Delivered date for Pile Delivery"), {
+      target: { value: "2026-09-12" },
+    });
+    fireEvent.click(getByLabelText("Mark Pile Delivery delivered"));
+    await waitFor(() => expect(api.markScheduleTaskDelivered).toHaveBeenCalledWith(2, "2026-09-12"));
+
+    // Error path: the wire code translates to human copy (errorCopy), never a raw code.
+    vi.mocked(api.markScheduleTaskProgress).mockRejectedValueOnce(
+      Object.assign(new Error("x"), { code: "milestone_binary" }),
+    );
+    fireEvent.click(getByLabelText("Mark Fencing 75%"));
+    const alert = await findByRole("alert");
+    expect(alert.textContent ?? "").toContain("either done or not");
   });
 });

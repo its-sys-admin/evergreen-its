@@ -185,6 +185,9 @@ describe("migration 0023 — manager grant matrix", () => {
     // tasks (subcontractor-target guarded). Deliberate, operator-approved reversal of 0023's
     // "no task create" (see 0025 header). cap.jobtracker.manage stays withheld (job create/lifecycle).
     "cap.tasks.assign",
+    // Schedule lane PR-5 (migration 0072): field mark-off of schedule tasks (%, milestone done,
+    // delivered) — the crew lead marks progress on their own job (per-job scoped in-route).
+    "cap.schedule.mark",
   ];
   const WITHHELD = [
     "cap.jobtracker.manage",
@@ -201,7 +204,7 @@ describe("migration 0023 — manager grant matrix", () => {
     return new Set(rows.map((r) => r.capability_key));
   }
 
-  it("manager's grant is EXACTLY the 12 expected capabilities", async () => {
+  it("manager's grant is EXACTLY the 13 expected capabilities", async () => {
     const caps = await managerCaps();
     expect([...caps].sort()).toEqual([...EXPECTED_MANAGER_CAPS].sort());
   });

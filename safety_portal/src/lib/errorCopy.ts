@@ -435,6 +435,16 @@ export const ERROR_COPY: Record<string, string> = {
     "This schedule can't be committed from its current state — refresh to see where it stands.",
   another_commit_in_progress:
     "Another schedule upload for this job is mid-import — finish or discard that one first.",
+
+  // ── schedule field mark-off (PR-5 — cap.schedule.mark, worker/fieldops_schedule_tasks.ts) ──
+  // `invalid_percent`, not `invalid_task_percent`: that code already means "the add/edit/commit
+  // task CONTENT fields didn't validate" — the mark body's percent is its own wire field, and
+  // one code cannot carry two meanings (the invalid_receipt_kind precedent above).
+  invalid_percent: "Progress must be a whole number from 0 to 100.",
+  milestone_binary: "A milestone is either done or not — mark it 0% or 100%.",
+  not_a_milestone: "That task isn't a milestone — set its percent instead.",
+  not_a_delivery: "That task isn't a delivery task, so it has no delivered mark.",
+  invalid_delivered_date: "Enter the delivered date as YYYY-MM-DD.",
 };
 
 /** Humanize an unknown wire code: 'some_new_code' → 'some new code'. */
