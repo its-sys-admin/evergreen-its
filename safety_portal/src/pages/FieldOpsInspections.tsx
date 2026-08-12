@@ -1060,7 +1060,7 @@ export function FieldOpsInspections({ onBack }: { onBack: () => void }) {
         </aside>
 
         {/* ── DETAIL (selected checklist) ────────────────────────────────────── */}
-        <section className="forms-mgr__detail" aria-label="Checklist detail">
+        <section aria-label="Checklist detail">
           {selected === null ? (
             <div className="dash-empty">
               {templates.length === 0

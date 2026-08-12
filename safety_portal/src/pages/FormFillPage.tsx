@@ -259,36 +259,36 @@ export function FormFillPage({
                 server-side); both the id and the timestamp were snapshotted at submit
                 success, before reset() renews the submission id. */}
             <dl className="receipt">
-              <div className="receipt__row">
-                <dt className="receipt__key">Form</dt>
-                <dd className="receipt__val">{def?.form_name ?? "—"}</dd>
+              <div>
+                <dt>Form</dt>
+                <dd>{def?.form_name ?? "—"}</dd>
               </div>
               {projectName ? (
-                <div className="receipt__row">
-                  <dt className="receipt__key">Job</dt>
-                  <dd className="receipt__val">{projectName}</dd>
+                <div>
+                  <dt>Job</dt>
+                  <dd>{projectName}</dd>
                 </div>
               ) : null}
-              <div className="receipt__row">
-                <dt className="receipt__key">Work date</dt>
-                <dd className="receipt__val">{workDate}</dd>
+              <div>
+                <dt>Work date</dt>
+                <dd>{workDate}</dd>
               </div>
               {submittedAt ? (
-                <div className="receipt__row">
-                  <dt className="receipt__key">Submitted at</dt>
-                  <dd className="receipt__val">{submittedAt.toLocaleString()}</dd>
+                <div>
+                  <dt>Submitted at</dt>
+                  <dd>{submittedAt.toLocaleString()}</dd>
                 </div>
               ) : null}
               {submittedAs ? (
-                <div className="receipt__row">
-                  <dt className="receipt__key">Submitted as</dt>
-                  <dd className="receipt__val"><strong>{submittedAs}</strong></dd>
+                <div>
+                  <dt>Submitted as</dt>
+                  <dd><strong>{submittedAs}</strong></dd>
                 </div>
               ) : null}
               {submittedUuid ? (
-                <div className="receipt__row">
-                  <dt className="receipt__key">Submission ID</dt>
-                  <dd className="receipt__val"><code>{submittedUuid}</code></dd>
+                <div>
+                  <dt>Submission ID</dt>
+                  <dd><code>{submittedUuid}</code></dd>
                 </div>
               ) : null}
             </dl>

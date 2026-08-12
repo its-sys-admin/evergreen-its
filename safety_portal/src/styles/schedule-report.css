@@ -2030,3 +2030,126 @@ form.dash-row select {
   align-items: baseline;
   gap: var(--space-2);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   12 — CLASSES THE APP ASKED FOR AND NEVER GOT (the rest of the audit)
+   ═══════════════════════════════════════════════════════════════════════════
+   The audit of every className token against the stylesheets found 62 undefined names.
+   Most were regex artifacts or dead conventions and have been REMOVED from the markup.
+   These are the remainder: names whose element is genuinely unstyled without them.
+
+   Each is deliberately the MINIMUM that makes the element behave as its markup already
+   assumes — a thumbnail grid that grids, an error that reads as an error — using only
+   existing tokens. None of them invents a look. */
+
+/* Paired form fields (15 uses across the PO builder and the estimate screens): two
+   FieldInputs in a row on a laptop, stacked on a phone. Matches its defined sibling
+   .jha__grid-2, which is the same device for the same markup. */
+.jha__grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .jha__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── The photo field ──────────────────────────────────────────────────────
+   A <figure> per photo carrying an <img>, an optional EXIF caption and a remove ✕. With
+   no rules at all the images rendered at intrinsic size, stacked, and the ✕ sat below its
+   own photo instead of on it. */
+.photo-field__thumbs {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  margin-top: var(--space-3);
+}
+
+.photo-field__thumb {
+  position: relative;
+  margin: 0;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--c-surface-2);
+}
+
+.photo-field__thumb img {
+  display: block;
+  width: 100%;
+  height: 130px;
+  object-fit: cover;
+}
+
+.photo-field__caption {
+  display: block;
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-muted);
+  overflow-wrap: anywhere;
+}
+
+/* On the photo, not under it — and a full 44px, because removing a photo you meant to
+   keep costs a re-shoot on a job site. */
+.photo-field__remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--c-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--c-danger);
+  font-weight: 700;
+  font-size: var(--fs-base);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* role="alert" already; this makes it LOOK like one. Same treatment as .login__error. */
+.photo-field__error {
+  color: var(--c-danger);
+  font-weight: 600;
+  margin: var(--space-2) 0 0;
+}
+
+.additional-photos__list {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+}
+
+.additional-photos__caption {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--c-muted);
+}
+
+/* A wide table inside a card; without it the table pushed its container instead of
+   scrolling inside it. The pattern the rest of the app writes inline. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* A checkbox + its label on one line, the way every other confirm in the kit reads. The
+   element carries .field too, whose display:block was stacking the box above the words. */
+.fr__req-confirm {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.checklist-progress-log__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}

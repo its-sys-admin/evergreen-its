@@ -326,7 +326,7 @@ export function AssignedInspectionsSection({
         </>
       ) : (
         // ── ONE opened inspection — its items + completion + Done ────────────────────────────────
-        <div className="checklist-task-open">
+        <div>
           <button
             type="button"
             className="btn btn--secondary checklist-task-open__back"
@@ -382,7 +382,7 @@ export function AssignedInspectionsSection({
                   (insp.instance.progress_logged ? (
                     <p className="banner banner--ok">Logged to progress report ✓</p>
                   ) : insp.instance.status === "complete" ? (
-                    <div className="checklist-progress-log">
+                    <div>
                       {!signing ? (
                         <button
                           type="button"
@@ -397,7 +397,7 @@ export function AssignedInspectionsSection({
                           Sign &amp; log to progress report
                         </button>
                       ) : (
-                        <div className="checklist-progress-log__panel">
+                        <div>
                           <p className="dash-card__sub">
                             Sign to log this completed inspection to the weekly progress report.
                           </p>
