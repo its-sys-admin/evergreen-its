@@ -584,6 +584,19 @@ def test_get_file_metadata_extracts_fields(mocker):
     }
 
 
+def test_get_folder_name_reads_the_live_name(mocker):
+    """The folder twin of get_file_metadata — a pure read, translated + retry-wrapped
+    like every public fn (the Box-roots validity panel resolves each configured root
+    id through this)."""
+    _, _, instance = _install_mocked_sdk(mocker)
+    instance.folder.return_value.get.return_value = SimpleNamespace(
+        id="408583610037", name="ITS Subcontracts",
+    )
+
+    assert box_client.get_folder_name("408583610037") == "ITS Subcontracts"
+    instance.folder.assert_called_once_with("408583610037")
+
+
 def test_get_folder_by_path_walks_segments(mocker):
     """get_folder_by_path walks from root segment-by-segment using
     list_folder under the hood. Each segment must be matched as a folder
