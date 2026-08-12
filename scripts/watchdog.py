@@ -2926,7 +2926,7 @@ def _check_log_dir_rotation(
 # ---- Check X: stale / stopped job archives (#25) -------------------------
 #
 # THE GAP THIS CLOSES. The Track 6 job archive is deliberately asynchronous — the portal
-# button records INTENT and `fieldops_sync`'s archive pass relocates the seven containers
+# button records INTENT and `fieldops_sync`'s archive pass relocates the eight containers
 # later. That design is right, but it makes "the operator pressed Archive and nothing ever
 # happened" a reachable steady state, and until now NO check covered it: `grep archive
 # scripts/watchdog.py` hit only Check W (log rotation, unrelated). On 2026-08-10

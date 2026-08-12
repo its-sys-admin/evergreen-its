@@ -15,19 +15,20 @@ This pass is the fifth instance of an established shape (`_mirror_hours_pass`,
 drained queue, its own gate, its own fences, and a commit point that reports back. Failures now
 genuinely retry, because the queue keeps serving a job until its archive is terminal.
 
-THE SEVEN CONTAINERS
+THE EIGHT CONTAINERS
 --------------------
 A job owns a FOLDER per workstream, not a loose set of sheets — so this moves folders, and one
 move relocates the whole subtree.
 
     Smartsheet  ITS — Archive / <Job> / {Safety, Progress, Purchase Orders, Subcontracts}/
-    Box         ITS Archive   / <Job> / {Safety, Progress, Purchase Orders}/
+    Box         ITS Archive   / <Job> / {Safety, Progress, Purchase Orders, Subcontracts}/
 
-Seven, not eleven: the PO lane owns its OWN Box root since 2026-08-11
+Eight, not eleven: the PO lane owns its OWN Box root since 2026-08-11
 (`po_naming.CFG_BOX_PORTAL_ROOT` — its per-job folder holds the PO PDFs plus the `RFQs/` and
-`Vendor Quotes/` subtrees, so ONE slot moves all three), while
+`Vendor Quotes/` subtrees, so ONE slot moves all three) and the subcontract lane since
+2026-08-12 (`subcontract_naming.CFG_BOX_PORTAL_ROOT`), while
 `safety_reports.box.portal_root_folder_id` remains the SHARED Box root for safety AND the
-subcontract files AND the materials manifests, so moving `<safety root>/<Job>` still carries those.
+materials manifests, so moving `<safety root>/<Job>` still carries those.
 
 THE TWO SYSTEMS FAIL DIFFERENTLY
 --------------------------------
@@ -41,7 +42,7 @@ BOTH DIRECTIONS, AND THE ORDER INVERTS
 --------------------------------------
 `run_archive_pass` is the entry point; it dispatches on the queue row's `archive_direction`
 because `/archive-pending` serves both and running the wrong one is SILENT (an un-archive row put
-through `archive_job` finds nothing live, reports seven clean "nothing to move" successes, and
+through `archive_job` finds nothing live, reports eight clean "nothing to move" successes, and
 posts `complete` while every folder stays archived).
 
 On Smartsheet the two-call order is opposite per direction, and both orders are chosen so the
@@ -80,6 +81,7 @@ from safety_reports import safety_naming
 from shared import box_client, error_log, sheet_ids, smartsheet_client
 from shared.error_log import Severity
 from shared.required_config import ConfigKey
+from subcontracts import subcontract_naming
 
 SCRIPT_NAME = "job_archive"
 
@@ -109,7 +111,8 @@ WORKSTREAM_PROGRESS = "progress_reports"
 # unlike the progress root there is no import-weight reason for a literal here.
 WORKSTREAM_SAFETY = "safety_reports"
 
-# The #336 observable-config ledger for the three Box roots this module resolves. Declared HERE,
+# The #336 observable-config ledger for the five Box roots this module resolves (the archive
+# destination + the four workstream SOURCE roots). Declared HERE,
 # on the module that actually reads them, following the `weekly_send` / `po_send` / `intake`
 # precedent (a REQUIRED_CONFIG declaration is not daemon-only — it marks the resolving module, and
 # `scripts/generate_config_dictionary.py` discovers it by scanning for this declaration).
@@ -123,15 +126,15 @@ REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(
         CFG_BOX_ARCHIVE_ROOT, WORKSTREAM_FIELD_OPS, "", "str",
         description=(
-            "Box root the Track 6 job archive relocates a closed job's Safety, Progress and "
-            "Purchase Orders containers beneath (ITS Archive/<Job>/<Workstream>). Built by "
-            "build_box_roots.py."
+            "Box root the Track 6 job archive relocates a closed job's Safety, Progress, "
+            "Purchase Orders and Subcontracts containers beneath "
+            "(ITS Archive/<Job>/<Workstream>). Built by build_box_roots.py."
         ),
     ),
-    # The two SOURCE roots carry NO description on purpose. The config dictionary is a single
+    # The SOURCE roots carry NO description on purpose. The config dictionary is a single
     # global table keyed by Setting name, and a `description` here OVERWRITES the owning
     # workstream's prose for every reader — a first regen with one attached rewrote the shared
-    # safety root's entry (read by seven daemons) as "read here as an archive SOURCE", which is
+    # safety root's entry (read by several daemons) as "read here as an archive SOURCE", which is
     # true of this module and useless to everyone else. Declaring the key without a description
     # is what adds `field_ops.job_archive` to the "Read by" column while leaving the owner's
     # wording intact.
@@ -139,6 +142,10 @@ REQUIRED_CONFIG: list[ConfigKey] = [
     ConfigKey(CFG_BOX_PROGRESS_ROOT, WORKSTREAM_PROGRESS, "", "str"),
     ConfigKey(
         po_naming.CFG_BOX_PORTAL_ROOT, po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM, "", "str",
+    ),
+    ConfigKey(
+        subcontract_naming.CFG_BOX_PORTAL_ROOT,
+        subcontract_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM, "", "str",
     ),
 ]
 
@@ -151,7 +158,7 @@ LABEL_SUBCONTRACTS = "Subcontracts"
 
 # Stop auto-retrying a job whose archive keeps failing. Without a cap, a PERMANENT condition (the
 # token lacking ADMIN on the Archive workspace, an operator-deleted destination) would re-fire the
-# whole seven-container sequence every cycle forever. The operator's "Try again" resets the counter.
+# whole eight-container sequence every cycle forever. The operator's "Try again" resets the counter.
 MAX_ARCHIVE_ATTEMPTS = 20
 
 # Access levels that satisfy the ADMIN_WORKSPACES requirement for a folder move.
@@ -193,9 +200,10 @@ SLOTS: tuple[ArchiveSlot, ...] = (
                 parent_folder=sheet_ids.FOLDER_PO_JOBS),
     ArchiveSlot("smartsheet", "smartsheet:subcontracts", LABEL_SUBCONTRACTS,
                 parent_folder=sheet_ids.FOLDER_SC_JOBS),
-    # Box: THREE containers — the safety root still carries the subcontract files and materials
-    # manifests inside its per-job folder (see the module docstring); the PO lane's own root
-    # (2026-08-11) carries the PO PDFs + RFQs/ + Vendor Quotes/ inside ITS per-job folder.
+    # Box: FOUR containers — the safety root still carries the materials manifests inside its
+    # per-job folder (see the module docstring); the PO lane's own root (2026-08-11) carries the
+    # PO PDFs + RFQs/ + Vendor Quotes/ inside its per-job folder; the subcontract lane's own
+    # root (2026-08-12) carries the .docx/.xlsx package + send ZIP.
     ArchiveSlot("box", "box:safety", LABEL_SAFETY,
                 box_root_key=safety_naming.CFG_BOX_PORTAL_ROOT,
                 box_root_workstream=WORKSTREAM_SAFETY),
@@ -205,6 +213,9 @@ SLOTS: tuple[ArchiveSlot, ...] = (
     ArchiveSlot("box", "box:purchase_orders", LABEL_PURCHASE_ORDERS,
                 box_root_key=po_naming.CFG_BOX_PORTAL_ROOT,
                 box_root_workstream=po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM),
+    ArchiveSlot("box", "box:subcontracts", LABEL_SUBCONTRACTS,
+                box_root_key=subcontract_naming.CFG_BOX_PORTAL_ROOT,
+                box_root_workstream=subcontract_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM),
 )
 
 #: The four standing tracker sheets the OLD path moved individually. Retained only so the §43
@@ -249,7 +260,7 @@ def verify_archive_capability(correlation_id: str | None = None) -> bool:
     (2) The failure it could plausibly pre-flight — an unset root config row — already fails
     BEFORE any Box write, in `_read_box_root`, so it cannot leave a half-relocated tree. Skipping
     the whole pass for it would strand the four healthy Smartsheet containers too; letting the
-    per-container fence report 4-of-7 `partial` is strictly more honest and more recoverable.
+    per-container fence report 4-of-8 `partial` is strictly more honest and more recoverable.
     """
     required = (
         sheet_ids.WORKSPACE_ARCHIVE,
@@ -553,7 +564,7 @@ def _log_container_failure(
 ) -> None:
     """WARN naming the JOB, the SYSTEM and the CONTAINER.
 
-    The old `_warn_archive_move_failed` named only a sheet. With seven containers across two systems
+    The old `_warn_archive_move_failed` named only a sheet. With eight containers across two systems
     that is not actionable — an operator reading `ITS_Errors` has to be able to tell which folder
     in which system is stuck without opening a runbook first.
     """
@@ -589,7 +600,7 @@ def _resolve_folder_key(
     """The SNAPSHOTTED per-job folder key, or None after WARNing.
 
     Shared by both directions because the trap is identical and subtle in both: an empty key makes
-    every find-by-name match nothing, so a naive implementation reports seven clean "nothing to move"
+    every find-by-name match nothing, so a naive implementation reports eight clean "nothing to move"
     successes and marks the pass COMPLETE without touching a thing.
     """
     folder_key = str(job.get("archive_folder_key") or "").strip()
@@ -609,7 +620,7 @@ def _resolve_folder_key(
 def archive_job(job: dict[str, Any], correlation_id: str | None = None) -> list[ContainerResult]:
     """Relocate every container for one job INTO the archive. Per-container fenced; never raises.
 
-    Each container is attempted independently, so one failure never blocks the other six — a
+    Each container is attempted independently, so one failure never blocks the other seven — a
     partial archive is a normal, resumable outcome rather than an all-or-nothing collapse. The
     caller turns these results into the D1 state the operator sees.
 
@@ -709,7 +720,7 @@ def run_archive_pass(
     The dispatch lives here rather than in the calling daemon because getting it wrong is silent.
     `/archive-pending` serves BOTH directions from one queue, and running `archive_job` against an
     un-archive row would find nothing in the live tree (the containers are in the archive), report
-    seven clean "nothing to move" successes, and post `complete` — telling the operator their job was
+    eight clean "nothing to move" successes, and post `complete` — telling the operator their job was
     restored while every folder stayed archived.
 
     An unrecognised direction REFUSES rather than defaulting. Defaulting to `archive` is the same
@@ -738,7 +749,7 @@ def run_archive_pass(
 def state_from_results(results: list[ContainerResult]) -> str:
     """Collapse per-container outcomes into the D1 archive_state the operator reads.
 
-    `partial` is deliberately distinct from `failed`: an operator seeing "4 of 7 moved" needs to
+    `partial` is deliberately distinct from `failed`: an operator seeing "4 of 8 moved" needs to
     know something DID move, because the repair differs from "nothing happened".
     """
     moved = sum(1 for r in results if r.moved)

@@ -32,7 +32,8 @@ Worker (`safety_portal/worker/subcontract.ts`) validates + computes + HMAC-signs
 (`org.solutionsmith.its.subcontract-poll`, every 120 s) is the Mac-side consumer. It renders
 **three files** per subcontract — `Subcontract.docx` (the editable contract the operator wet-signs
 in Word), `Exhibit A.docx` (the scope of work — Article II pre-filled per trade), and
-`Annex C - Schedule of Values.xlsx` — and files ALL THREE to Box. It runs **four
+`Annex C - Schedule of Values.xlsx` — and files ALL THREE to Box (the subcontract lane's
+own root since 2026-08-12: `<ITS Subcontracts root>/<job>/`). It runs **four
 passes**, each behind its own ITS_Config gate:
 
 1. **Drafts pass** (`subcontracts.subcontract_poll.polling_enabled`) — pull queued
@@ -292,21 +293,21 @@ that value and clearing the flag is low-class; anything about the picklist *defi
 
 ### What it means
 
-The shared Box mirror-tree root (ITS_Config, `safety_reports.box.portal_root_folder_id`) is unset,
-so the daemon can't find the folder to file the three subcontract files into (ROOT → `<job>` →
-"Subcontracts"). This is the same key the submission mirror tree, item-photo screening, and
-`po_poll` all use.
+The subcontract lane's own Box root (ITS_Config, `subcontracts.box.portal_root_folder_id`,
+Workstream `subcontracts` — the "ITS Subcontracts" tree, split from the safety root 2026-08-12)
+is unset, so the daemon can't find the folder to file the three subcontract files into
+(ROOT → `<job>`, the package directly in the job folder).
 
 ### The low-class Tier-2 action
 
-**Set the documented ITS_Config value** `safety_reports.box.portal_root_folder_id` (workstream
-`safety_reports`) to the Box mirror-tree root folder ID. Setting a documented ITS_Config value is
-the canonical Tier-2 action. No flag to clear — the next cycle files the queued subcontract
-automatically.
+**Set the documented ITS_Config value** `subcontracts.box.portal_root_folder_id` (workstream
+`subcontracts`) to the subcontract Box root folder ID (`build_box_roots.py` prints it). Setting
+a documented ITS_Config value is the canonical Tier-2 action. No flag to clear — the next cycle
+files the queued subcontract automatically.
 
 > "Claude, subcontracts are logging `subcontract_box_root_unresolved`. Confirm the ITS_Config
-> `safety_reports.box.portal_root_folder_id` row and walk me through setting it to the mirror-tree
-> root."
+> `subcontracts.box.portal_root_folder_id` row and walk me through setting it to the subcontract
+> Box root."
 
 ### Escalate-to-Seth condition
 
@@ -488,7 +489,8 @@ Run in order; each gate row's ITS_Config Description restates its own preconditi
 4. **Config + data:** confirm the 4 `subcontracts.subcontract_poll.*` rows are seeded
    (`scripts/migrations/seed_subcontracts_config.py` — the three gates `false`); seed
    `ITS_Subcontractors` (`scripts/migrations/seed_its_subcontractors.py`); set ITS_Config
-   `safety_reports.box.portal_root_folder_id` (the Box mirror-tree root). Confirm `"subcontracts"`
+   `subcontracts.box.portal_root_folder_id` (the subcontract lane's own Box root — the
+   "ITS Subcontracts" folder id `build_box_roots.py` prints). Confirm `"subcontracts"`
    is a legal Workstream picklist value on ITS_Review_Queue / ITS_Errors / ITS_Daemon_Health.
 5. **Install + load** the plist
    (`scripts/launchd/install.sh load org.solutionsmith.its.subcontract-poll`).

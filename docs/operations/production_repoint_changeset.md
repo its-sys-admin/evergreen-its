@@ -84,6 +84,9 @@ to the production custom domain.
 |---|---|---|
 | `safety_reports.box.portal_root_folder_id` | `safety_reports` | → production Box folder ID |
 | `progress_reports.box.portal_root_folder_id` | `progress_reports` | → production Box folder ID |
+| `po_materials.box.portal_root_folder_id` | `po_materials` | → production Box folder ID *(added post-authorship — the 2026-08-11 PO-lane root split)* |
+| `subcontracts.box.portal_root_folder_id` | `subcontracts` | → production Box folder ID *(added post-authorship — the 2026-08-12 subcontract-lane root split)* |
+| `field_ops.box.archive_root_folder_id` | `field_ops` | → production Box folder ID *(added post-authorship — the Track 6 archive root)* |
 
 ### E. Send-scope gates DEFERRED (do NOT flip blindly — CL-13 + External Send Gate)
 

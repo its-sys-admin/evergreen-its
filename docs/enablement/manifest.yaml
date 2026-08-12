@@ -98,7 +98,7 @@ docs:
     title: "ITS_Config Data Dictionary"
     version: v1
     source: docs/references/its_config_dictionary.md
-    sha256: f9fcb5b69cc8ccd811d2953e879cdc0a6d9a58272d19c41aa3dca640004d1929
+    sha256: 92b4a4801599da07df937862772bc16faee264ffeded1d337650e1cece71a8b7
 
   # ── Delivery-critical guides added 2026-07-13: the operator dashboard (WS2 D1-x)
   #    and the subcontracts generator (ADR-0003). Both blockers cleared — the dashboard
@@ -113,7 +113,7 @@ docs:
     title: "Subcontracts — Generating a Subcontract Package"
     version: v1
     source: docs/enablement/subcontracts.md
-    sha256: 33a9a1d581f8dd89d8f2c530e23c2b0970507d7cc26d5555b9dfe59fc6ac35be
+    sha256: 8e9bd4b93dd8b11f2f28c73e4a1910450b84ac788e2fb4842053f16769730912
 
   # ── Tier-1 system references (documentation-corpus, WS3 / Tranche A, authored 2026-07-14/15).
   #    Extraction-first operator references — each factual paragraph carries an invisible
@@ -185,5 +185,5 @@ docs:
     title: "ITS Troubleshooting Guide"
     version: v1
     source: docs/troubleshooting/troubleshooting_guide.md
-    sha256: d5c4bc77473e8d039e9669d82045c771d3e1671212d2ddd83f5de2c9ccb2af93
+    sha256: b0044ee97ac82dcf297d94f5c324f280dac709e460dd87cbb342e07bb08ba739
     audience: operator

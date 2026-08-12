@@ -118,6 +118,15 @@
       "notes": "Production Box root id for the PO lane (its own tree since 2026-08-11: PO PDFs + RFQs/ + Vendor Quotes/ per job) — resolved LIVE at commit, exact-name match, refuse ambiguity/absence. Folder name copied from standup.BOX_ROOT_CONFIG_ROWS."
     },
     {
+      "setting": "subcontracts.box.portal_root_folder_id",
+      "workstream": "subcontracts",
+      "from_mirror": null,
+      "to_production": null,
+      "resolve_box_root": "ITS Subcontracts",
+      "category": "D",
+      "notes": "Production Box root id for the subcontract lane (its own tree since 2026-08-12: the .docx/.xlsx package + send ZIP per job) — resolved LIVE at commit, exact-name match, refuse ambiguity/absence. Folder name copied from standup.BOX_ROOT_CONFIG_ROWS."
+    },
+    {
       "setting": "field_ops.box.archive_root_folder_id",
       "workstream": "field_ops",
       "from_mirror": null,

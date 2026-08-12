@@ -33,8 +33,9 @@ files, and ITS never invents contract language.
 1. **Draft** — an admin builds the subcontract in the portal (job → subcontractor → trade → contract
    price → Schedule of Values → governing law). The portal computes the money and signs the draft.
 2. **Generate & file** — the Mac-side worker (`subcontract-poll`) picks up the queued draft, re-checks
-   everything (below), renders the three files, and files them to **Box** (the job's `Subcontracts`
-   folder), the **`Subcontract_Log`** ledger, and a **`Subcontract_Pending_Review`** row for approval.
+   everything (below), renders the three files, and files them to **Box** (the job's folder under
+   the `ITS Subcontracts` root), the **`Subcontract_Log`** ledger, and a
+   **`Subcontract_Pending_Review`** row for approval.
 3. **Review** — an authorized reviewer opens the `Subcontract_Pending_Review` row, opens the attached
    `.docx`/`.xlsx`, and edits as needed. This is the same WSR-style review surface used for safety and PO.
 4. **Sign & execute** — because this is a wet-signature document, the executed contract is handled

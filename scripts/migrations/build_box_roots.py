@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the four ITS Box ROOT folders — Safety + Progress reports, Purchase Orders, and the job archive (D4).
+"""Build the five ITS Box ROOT folders — Safety + Progress reports, Purchase Orders, Subcontracts, and the job archive (D4).
 
 Purpose
 -------
@@ -13,25 +13,27 @@ rather than a manual click-through. The ARCHIVE root joined them with the Track 
 job archive, which relocates a closed job's Box containers beneath it; the
 PURCHASE ORDERS root joined at the 2026-08-11 lane split.
 
-It find-or-creates EXACTLY four folders, all directly under the Box root
+It find-or-creates EXACTLY five folders, all directly under the Box root
 (folder id ``"0"``):
 
   - "ITS Safety Reports"    -> ITS_Config ``safety_reports.box.portal_root_folder_id``
   - "ITS Progress Reports"  -> ITS_Config ``progress_reports.box.portal_root_folder_id``
   - "ITS Purchase Orders"   -> ITS_Config ``po_materials.box.portal_root_folder_id``
+  - "ITS Subcontracts"      -> ITS_Config ``subcontracts.box.portal_root_folder_id``
   - "ITS Archive"           -> ITS_Config ``field_ops.box.archive_root_folder_id``
 
 Config-key provenance (verified in-tree, not from memory):
 ``safety_reports/safety_naming.py::CFG_BOX_PORTAL_ROOT``,
 ``progress_reports/progress_weekly_generate.py::CFG_BOX_PORTAL_ROOT``,
 ``po_materials/po_naming.py::CFG_BOX_PORTAL_ROOT``,
-``field_ops/job_archive.py::CFG_BOX_ARCHIVE_ROOT``, and all four rows in
+``subcontracts/subcontract_naming.py::CFG_BOX_PORTAL_ROOT``,
+``field_ops/job_archive.py::CFG_BOX_ARCHIVE_ROOT``, and all five rows in
 ``operator_dashboard/act/registry.py`` (the §50 config-editor registry).
 
 OUT OF SCOPE — deliberately: the per-job / per-week / category subtrees beneath these
 roots. Those are RUNTIME find-or-create (``safety_reports/week_folder.py``,
 ``shared/box_client.get_or_create_folder``) and must never be pre-built here. This
-builder creates the four roots and nothing else (MINIMAL SET). The archive's per-job
+builder creates the five roots and nothing else (MINIMAL SET). The archive's per-job
 ``<Job>/`` subfolders are likewise RUNTIME find-or-create
 (``field_ops.job_archive.ensure_archive_box_job_folder``).
 
@@ -47,12 +49,12 @@ Cutover sequence (FLIP-precedes-SEED family convention)
      daemons and silently breaks every filing path.
   2. Preview:   python3 scripts/migrations/build_box_roots.py --dry-run
   3. Live:      python3 scripts/migrations/build_box_roots.py     (y/N confirmed)
-  4. Paste the four printed ids into the corresponding ITS_Config ROWS (see the
+  4. Paste the five printed ids into the corresponding ITS_Config ROWS (see the
      "=== FLIP BLOCK ===" this script prints). NOTE: this is an **ITS_Config row
      flip, NOT a shared/sheet_ids.py flip** — unlike every Smartsheet builder in
      this family, no Python constant changes. The consumers read the ids at runtime
      from ITS_Config via ``get_setting``.
-  5. Re-run this script; it must print four ``[skip]`` lines and create nothing.
+  5. Re-run this script; it must print five ``[skip]`` lines and create nothing.
 
 Invariants (blast-radius — this runs against a customer's PRODUCTION Box account)
 --------------------------------------------------------------------------------
@@ -61,10 +63,10 @@ Invariants (blast-radius — this runs against a customer's PRODUCTION Box accou
      folders this script itself created.
   2. EXACT-NAME FIND, ADOPT-DON'T-TOUCH. A folder whose name string-equals the
      canonical name is adopted and left completely untouched.
-  3. SCOPED CREATION. Only the Box root (``"0"``) is enumerated, and only the four
+  3. SCOPED CREATION. Only the Box root (``"0"``) is enumerated, and only the five
      canonical names are acted on. Nothing else in the account is read into a
      decision or written to.
-  4. MINIMAL SET. Exactly four folders. No "while we're here" subfolders.
+  4. MINIMAL SET. Exactly five folders. No "while we're here" subfolders.
   5. IDEMPOTENT NO-OP. A second run prints the same ids and creates nothing.
   6. LIVE-WRITE CONFIRMATION. Live by default (family convention) with a y/N
      prompt before the FIRST create; ``--dry-run`` makes no create call at all.
@@ -158,7 +160,7 @@ from shared import box_client  # noqa: E402
 # Box's root folder is the literal string id "0" (see box_client.list_folder).
 BOX_ROOT_FOLDER_ID = "0"
 
-# The dedicated ITS Box identity that MUST own the four root folders at the Phase-1
+# The dedicated ITS Box identity that MUST own the five root folders at the Phase-1
 # cutover: Evergreen's production ITS service account. This repo is Evergreen-specific
 # (Customer 0), so a CONCRETE expected login is correct here — the customer-agnostic
 # blueprint would not hardcode one.
@@ -198,6 +200,9 @@ ROOT_FOLDERS: list[tuple[str, str, str]] = [
     # estimate_poll). A SIBLING of the safety tree, not a subtree of it — the operator directive
     # that split the lane out of `<safety root>/<job>/Purchase Orders/`.
     ("ITS Purchase Orders", "po_materials.box.portal_root_folder_id", "po_materials"),
+    # The subcontract lane's OWN root (2026-08-12) — subcontract_naming.CFG_BOX_PORTAL_ROOT.
+    # Its per-job folder holds the .docx/.xlsx package + send ZIP (subcontract_poll).
+    ("ITS Subcontracts", "subcontracts.box.portal_root_folder_id", "subcontracts"),
     # Track 6 job archive. A SIBLING of the live roots, never a child of any: a job's
     # safety, progress and purchase-orders containers all land under it, so nesting it inside
     # one workstream's tree would put the other workstreams' archived documents inside a folder
@@ -417,7 +422,7 @@ def _confirm_live_writes(pending: list[str], login: str) -> bool:
 
 
 def build_roots(*, dry_run: bool) -> tuple[dict[str, str | None], int]:
-    """Find-or-create the four root folders. Returns (name -> id-or-None, exit code)."""
+    """Find-or-create the five root folders. Returns (name -> id-or-None, exit code)."""
     root_items = probe_auth()
     # Surface the authenticated Box IDENTITY loudly + unconditionally (every mode, incl.
     # --dry-run) BEFORE any find/create decision — the D4 wrong-account control (see
@@ -521,7 +526,7 @@ def _print_flip_block(resolved: dict[str, str | None]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Find-or-create the four ITS Box root folders (D4). Create-only, idempotent, "
+            "Find-or-create the five ITS Box root folders (D4). Create-only, idempotent, "
             "exact-name adopt."
         )
     )

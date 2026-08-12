@@ -69,6 +69,7 @@ def _seams(mocker):
                 "safety_reports.box.portal_root_folder_id": "100",
                 "progress_reports.box.portal_root_folder_id": "200",
                 "po_materials.box.portal_root_folder_id": "300",
+                "subcontracts.box.portal_root_folder_id": "400",
             }.get(key),
         ),
         "box_find": mocker.patch.object(box_client, "find_child_folder", return_value=None),
@@ -95,14 +96,15 @@ def _job(**over: Any) -> dict[str, Any]:
 # ---- the slot table ------------------------------------------------------
 
 
-def test_slots_cover_seven_containers_four_smartsheet_three_box():
-    # SEVEN, not eleven: the PO lane's own Box root (2026-08-11) carries PO PDFs + RFQs/ +
-    # Vendor Quotes/ in ONE per-job folder, and the safety root still carries the subcontract
-    # files + materials manifests. A future reader "fixing" the apparent asymmetry by adding
-    # rfq/vendor-quote/subcontract Box slots would double-move those subtrees.
-    assert len(job_archive.SLOTS) == 7
+def test_slots_cover_eight_containers_four_smartsheet_four_box():
+    # EIGHT, not eleven: the PO lane's own Box root (2026-08-11) carries PO PDFs + RFQs/ +
+    # Vendor Quotes/ in ONE per-job folder, the subcontract lane's own root (2026-08-12)
+    # carries its package files, and the safety root still carries the materials manifests.
+    # A future reader "fixing" the apparent asymmetry by adding rfq/vendor-quote/manifest
+    # Box slots would double-move those subtrees.
+    assert len(job_archive.SLOTS) == 8
     assert sum(1 for s in job_archive.SLOTS if s.system == "smartsheet") == 4
-    assert sum(1 for s in job_archive.SLOTS if s.system == "box") == 3
+    assert sum(1 for s in job_archive.SLOTS if s.system == "box") == 4
 
 
 def test_every_smartsheet_slot_names_exactly_one_source_parent():
@@ -260,6 +262,11 @@ def test_box_root_keys_match_their_owning_modules():
     # parity assertion stays: it pins the slot to the key the three lane daemons actually read.
     assert _slot("box:purchase_orders").box_root_key == po_naming.CFG_BOX_PORTAL_ROOT
     assert _slot("box:purchase_orders").box_root_workstream == po_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM
+    # The subcontract slot likewise (subcontract_naming is the leaf owner, 2026-08-12).
+    from subcontracts import subcontract_naming
+
+    assert _slot("box:subcontracts").box_root_key == subcontract_naming.CFG_BOX_PORTAL_ROOT
+    assert _slot("box:subcontracts").box_root_workstream == subcontract_naming.CFG_BOX_PORTAL_ROOT_WORKSTREAM
 
 
 def test_the_box_leg_moves_and_renames_in_a_single_call(_seams):
@@ -306,7 +313,7 @@ def test_an_unset_box_root_fails_the_container_instead_of_looking_clean(_seams):
     results = job_archive.archive_job(_job())
 
     box = [r for r in results if r.key.startswith("box:")]
-    assert len(box) == 3
+    assert len(box) == 4
     assert all(r.moved is False for r in box)
     assert job_archive.state_from_results(results) == "partial"
     _seams["box_move"].assert_not_called()
@@ -316,7 +323,7 @@ def test_an_unset_box_root_fails_the_container_instead_of_looking_clean(_seams):
 
 def test_a_box_failure_never_blocks_the_smartsheet_containers(_seams):
     # The two systems are independently fenced: a Box outage must still let the four Smartsheet
-    # folders relocate, and the job reports 4-of-7 `partial` rather than failing whole.
+    # folders relocate, and the job reports 4-of-8 `partial` rather than failing whole.
     _seams["find_ws"].return_value = 555
     _seams["find_folder"].return_value = 556
     _seams["box_ensure"].side_effect = box_client.BoxError("box down")
@@ -324,7 +331,7 @@ def test_a_box_failure_never_blocks_the_smartsheet_containers(_seams):
     results = job_archive.archive_job(_job())
 
     assert [r.moved for r in results if r.key.startswith("smartsheet:")] == [True] * 4
-    assert [r.moved for r in results if r.key.startswith("box:")] == [False, False, False]
+    assert [r.moved for r in results if r.key.startswith("box:")] == [False, False, False, False]
     assert job_archive.state_from_results(results) == "partial"
 
 
@@ -336,9 +343,9 @@ def test_a_smartsheet_failure_never_blocks_the_box_containers(_seams):
 
     results = job_archive.archive_job(_job())
 
-    assert [r.moved for r in results if r.key.startswith("box:")] == [True, True, True]
+    assert [r.moved for r in results if r.key.startswith("box:")] == [True, True, True, True]
     assert all(r.moved is False for r in results if r.key.startswith("smartsheet:"))
-    assert _seams["box_move"].call_count == 3
+    assert _seams["box_move"].call_count == 4
 
 
 def test_the_box_destination_is_resolved_once_per_job(_seams):
@@ -351,22 +358,22 @@ def test_the_box_destination_is_resolved_once_per_job(_seams):
     _seams["box_ensure"].assert_called_once_with("900", "Coker")
 
 
-def test_the_box_leg_moves_three_containers_not_six(_seams):
-    """Seven-not-eleven, asserted at the call level rather than only in the slot count.
+def test_the_box_leg_moves_four_containers_not_seven(_seams):
+    """Eight-not-eleven, asserted at the call level rather than only in the slot count.
 
-    The PO root's per-job folder carries `RFQs/` + `Vendor Quotes/` along with the PO PDFs, and
-    the shared safety root carries the subcontract files + materials manifests. A future reader
-    "fixing" the apparent asymmetry by adding rfq/vendor-quote/subcontract Box slots would move
-    those trees TWICE — once inside their parent folder and once on their own — which is exactly
-    the collision `move_folder` refuses to merge.
+    The PO root's per-job folder carries `RFQs/` + `Vendor Quotes/` along with the PO PDFs, the
+    subcontract root's carries the package files, and the shared safety root carries the
+    materials manifests. A future reader "fixing" the apparent asymmetry by adding
+    rfq/vendor-quote/manifest Box slots would move those trees TWICE — once inside their parent
+    folder and once on their own — which is exactly the collision `move_folder` refuses to merge.
     """
     _seams["box_find"].return_value = "777"
 
     job_archive.archive_job(_job())
 
-    assert _seams["box_move"].call_count == 3
+    assert _seams["box_move"].call_count == 4
     assert [c.kwargs["new_name"] for c in _seams["box_move"].call_args_list] == [
-        "Safety", "Progress", "Purchase Orders",
+        "Safety", "Progress", "Purchase Orders", "Subcontracts",
     ]
 
 
@@ -400,7 +407,7 @@ def test_a_container_failure_never_raises(_seams):
 
 
 def test_the_failure_warn_names_the_job_system_and_container(_seams):
-    # The old WARN named only a sheet. With seven containers across two systems an operator must be
+    # The old WARN named only a sheet. With eight containers across two systems an operator must be
     # able to tell WHICH folder in WHICH system is stuck straight from ITS_Errors.
     _seams["find_ws"].return_value = 555
     _seams["move"].side_effect = smartsheet_client.SmartsheetError("boom")
@@ -448,7 +455,7 @@ def test_the_archive_destination_folder_is_resolved_once_per_job(_seams):
     ],
 )
 def test_state_from_results(moved_flags, expected):
-    # 'partial' is deliberately distinct from 'failed': an operator seeing "4 of 7 moved" needs to
+    # 'partial' is deliberately distinct from 'failed': an operator seeing "4 of 8 moved" needs to
     # know something DID move, because the repair differs from "nothing happened".
     results = [
         job_archive.ContainerResult(f"k{i}", f"L{i}", moved=flag)
