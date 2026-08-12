@@ -9,6 +9,7 @@ import { FieldOpsJobTracker } from "./pages/FieldOpsJobTracker";
 // EAGER on purpose: a manager marking a delivery is a field path, and the lazy split is reserved
 // for office-desk admin surfaces (a chunk-load failure mid-shift must not take the daily path down).
 import { JobMaterialsPage } from "./pages/JobMaterialsPage";
+import { WeeklyReportPage } from "./pages/WeeklyReportPage";
 import { FieldOpsMyTasks } from "./pages/FieldOpsMyTasks";
 import { FieldOpsInspections } from "./pages/FieldOpsInspections";
 import { FieldOpsEquipment } from "./pages/FieldOpsEquipment";
@@ -310,6 +311,10 @@ export function App() {
   // PR2: the per-job Materials page. Reached from the Job Tracker's expected-materials section
   // and from the daily field report's material-receipt region — both deep links, no home card
   // (the page is job-scoped, so there is no job-less entry point to put on the home grid).
+  // 0067: the per-job weekly-report office screen, reached from the Job Tracker beside Materials.
+  const openWeeklyReport = (jobId: string) => {
+    navigate({ view: "fieldops-weekly-report", jobId });
+  };
   const openJobMaterials = (jobId: string) => {
     setEditing(false);
     navigate({ view: "fieldops-job-materials", jobId });
@@ -353,8 +358,11 @@ export function App() {
           syncRouteUp({ view: "fieldops-jobs", jobId: id ?? undefined }, id === null)
         }
         onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
+        onOpenWeeklyReport={has("cap.jobtracker.manage") ? openWeeklyReport : undefined}
       />
     );
+  } else if (route.view === "fieldops-weekly-report" && allowed) {
+    page = <WeeklyReportPage jobId={route.jobId} onBack={() => navigate({ view: "fieldops-jobs", jobId: route.jobId })} />;
   } else if (route.view === "fieldops-job-materials" && allowed) {
     page = (
       <JobMaterialsPage
