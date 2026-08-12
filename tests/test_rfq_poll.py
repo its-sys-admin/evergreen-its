@@ -681,17 +681,39 @@ def test_crash_retried_filing_self_heals_attachments_without_reappending(_patch)
     _patch["perjob"].assert_called_once()  # the mirror's self-heal path stays live
 
 
-def test_happy_path_mirrors_ledger_row_to_perjob_sheet(_patch):
+@pytest.mark.parametrize(
+    "rfq_number",
+    [
+        "RFQ-2026.001.1-007",  # migration 0070 site-bearing form (sitePhase > 0)
+        "RFQ-2026.001-007",    # sitePhase == 0 — still emitted today, and permanent on pre-0070 drafts
+    ],
+    ids=["site_bearing", "site_less"],
+)
+def test_happy_path_mirrors_ledger_row_to_perjob_sheet(_patch, rfq_number):
     """The filing path hands the SAME ledger-row kwargs to the per-job mirror,
-    keyed by the job name (the Box/PO per-job folder's name source)."""
-    _patch["pending"].return_value = [_rfq_row()]
+    keyed by the job name (the Box/PO per-job folder's name source).
+
+    `rfq_number` is asserted EXACTLY, never by prefix. The previous
+    `startswith("RFQ-2026.001")` matched BOTH shapes below and every mangling of
+    them — a dropped migration-0070 site segment, a truncation, a reformat — so it
+    could not detect a regression in the one thing this hand-off is responsible for.
+
+    Both shapes are parametrized because both are legitimate at HEAD:
+    `worker/rfq.ts:713` composes `RFQ-{job_no}.{sitePhase}-{NNN}` only when
+    `sitePhase > 0`, and falls back to `RFQ-{job_no}-{NNN}` otherwise. A
+    format-validating regex here would be wrong twice over — it would reject the
+    site-less form, and it would re-assert a contract the Python side does not own.
+    `rfq_poll` never composes this number, so what it owes is byte-exact
+    pass-through of whichever shape the Worker allocated.
+    """
+    _patch["pending"].return_value = [_rfq_row(signed={"rfq_number": rfq_number})]
 
     _run(_patch)
 
     _patch["perjob"].assert_called_once()
     job_name, row_kwargs, _corr = _patch["perjob"].call_args.args
     assert job_name == "Sunrise Solar"
-    assert row_kwargs["rfq_number"].startswith("RFQ-2026.001")
+    assert row_kwargs["rfq_number"] == rfq_number
     assert row_kwargs["vendor_key"] == "VEN-000001"
     assert row_kwargs["status"] == "filed"
 

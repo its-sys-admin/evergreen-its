@@ -221,19 +221,35 @@ canonical_sheets:
 # --- Active workstream slugs ---------------------------------------------------
 workstreams:
   source: "../its-blueprint/CONVENTIONS.md canonical set + ../its-blueprint/workstreams/ dirs"
-  count: 6
+  count: 10
   drift_note: >
-    6 canonical workstreams. An earlier 'five' figure predates safety_portal
-    (mission v1, 2026-05-25 canonical). The ../its-blueprint/workstreams/README.md
-    table now lists all 6 (incl. safety-portal) — the earlier 5-vs-6 count drift is
-    reconciled (Op Stds v17 acknowledged the sixth standalone workspace).
+    10 canonical workstreams, verified 2026-08-12 against both
+    ../its-blueprint/workstreams/ (10 subdirectories) and that directory's README.md
+    table (10 rows) — the two agree exactly. This list previously read 6 and had
+    drifted badly: field-ops-portal, progress-reporting, operator-dashboard and
+    urs-marine-portal were all missing, three of them long since built and live.
+    NOTE the slugs are WORKSTREAM TAGS, not directory names, and the mapping is not
+    mechanical: field_ops <- field-ops-portal, progress_reports <- progress-reporting.
+    M5 (check_doctrine_drift) matches each slug as a substring of the exec repo's
+    CLAUDE.md + docs/operations/doc_conventions.md, trying the underscore, hyphen and
+    unseparated spellings, and reports a miss as informational COVERAGE, never
+    blocking drift. urs_marine_portal is EXPECTED to report uncovered — it is the
+    Customer-2 template workstream with no execution-repo code here, which is exactly
+    the correctly-unbuilt case M5 exists to surface.
+    History: an earlier 'five' figure predated safety_portal (mission v1, 2026-05-25
+    canonical); Op Stds v17 acknowledged the sixth standalone workspace. That
+    reconciliation was itself already stale by the time it was written.
   slugs:
     - safety_reports
     - safety_portal
+    - field_ops
+    - progress_reports
+    - operator_dashboard
     - email_triage
     - purchase_orders
     - subcontracts
     - ai_employee_capabilities
+    - urs_marine_portal
 
 # --- doc-conventions taxonomy (execution-repo doc frontmatter) -----------------
 doc_conventions:

@@ -127,6 +127,45 @@ def test_interval_daemons_match_install_sh_table() -> None:
     # read on the (Setting, Workstream) PAIR, so a wrong workstream reads nothing.
     for lbl, d in daemon_ops.INTERVAL_DAEMONS.items():
         assert d.config_key.split(".", 1)[0] == d.workstream, lbl
+
+
+def test_picklist_sync_interval_is_deliberately_not_retunable() -> None:
+    """DASH-11: picklist-sync is excluded from the interval verb ON PURPOSE.
+
+    Its cadence is a literal ``<integer>3600</integer>`` in its plist, not an
+    ITS_Config ``*.poll_interval_seconds`` row, so there is nothing for
+    ``edit_interval`` to write. The parity test above passes because install.sh
+    omits it too — the registries AGREE, and the exclusion is a coverage boundary
+    rather than drift.
+
+    This pins BOTH halves. If the plist is later converted to the config-driven
+    form, the StartInterval assertion red-lights and names the enrollment that must
+    follow — which is exactly the "is this a gap or a bug?" question that cost an
+    investigation to answer the first time.
+    """
+    import re
+    from pathlib import Path
+
+    label = "org.solutionsmith.its.picklist-sync"
+    assert label not in daemon_ops.INTERVAL_DAEMONS, (
+        f"{label} is now dashboard-retunable — update the DASH-11 exclusion note in "
+        "operator_dashboard/act/daemon_ops.py and delete this test"
+    )
+
+    plist_path = (
+        Path(__file__).resolve().parent.parent / "scripts" / "launchd" / f"{label}.plist"
+    )
+    start_interval = re.search(
+        r"<key>StartInterval</key>\s*<integer>(\d+)</integer>", plist_path.read_text()
+    )
+    assert start_interval is not None, (
+        f"{label}.plist no longer carries a literal StartInterval — if its cadence is now "
+        "config-driven it must be enrolled in install.sh's poll_interval_config_key table "
+        "AND in daemon_ops._DAEMONS"
+    )
+    assert start_interval.group(1) == "3600", (
+        "picklist-sync's hourly literal changed; the DASH-11 exclusion note quotes 3600"
+    )
     assert daemon_ops.is_interval_daemon(_PO_POLL)
     assert daemon_ops.is_interval_daemon("org.solutionsmith.its.subcontract-send")  # SC-S4
     assert daemon_ops.is_interval_daemon("org.solutionsmith.its.rfq-send")  # ADR-0004 R3

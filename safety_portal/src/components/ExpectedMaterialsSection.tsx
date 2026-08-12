@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import * as api from "../lib/fieldops_expected_materials";
+import { lineOwed, owedLabel } from "../lib/materials_view";
 import { fetchMaterials, type CatalogRow } from "../lib/fieldops_materials";
 import { useAuth } from "../lib/auth";
 import { ConfirmDelete, planRenumber, nextSeq } from "./ChecklistItemForm";
@@ -364,6 +365,30 @@ export function ExpectedMaterialsSection({
   }
 
   const list = rows ?? [];
+
+  // Group by BOM category for display only. Each entry keeps its GLOBAL index because the
+  // ▲/▼ reorder renumbers the FLAT list (planRenumber) — a group-local index here would
+  // move the wrong row. A swap can therefore carry a row across a category boundary, which
+  // is the existing flat-list behaviour and stays honest under grouping.
+  const groups: { name: string | null; items: { row: api.ExpectedMaterialRow; index: number }[] }[] =
+    (() => {
+      const indexed = list.map((row, index) => ({ row, index }));
+      if (!list.some((l) => l.category)) return [{ name: null, items: indexed }];
+      const out: { name: string | null; items: { row: api.ExpectedMaterialRow; index: number }[] }[] = [];
+      const byCat = new Map<string, { row: api.ExpectedMaterialRow; index: number }[]>();
+      for (const it of indexed) {
+        const key = it.row.category ?? "Uncategorised";
+        let bucket = byCat.get(key);
+        if (!bucket) {
+          bucket = [];
+          byCat.set(key, bucket);
+          out.push({ name: key, items: bucket });
+        }
+        bucket.push(it);
+      }
+      return out;
+    })();
+
   return (
     <section className="card dash-section" aria-label="Expected materials">
       <h3 className="dash-detail__h2">Expected materials ({list.length})</h3>
@@ -398,8 +423,10 @@ export function ExpectedMaterialsSection({
       ) : loadError ? null : list.length === 0 ? (
         <div className="dash-unavail">No expected materials for this job.</div>
       ) : (
-        <ul className="dash-tasklist">
-          {list.map((r, i) => {
+        groups.map((group) => {
+          const body = (
+            <ul className="dash-tasklist">
+              {group.items.map(({ row: r, index: i }) => {
             const pill = statusPill(r.status);
             return (
               <li key={r.id}>
@@ -414,6 +441,21 @@ export function ExpectedMaterialsSection({
                   <span className="dash-chip">{r.unit}</span>
                 ) : null}
                 {r.expected_date ? <span className="dash-chip">expected {r.expected_date}</span> : null}
+                {/* What this line still OWES. NOT a .dash-pill: the first .dash-pill--ok
+                    and .dash-pill--danger on a row are pinned by test to carry the status
+                    pill's own copy, so a second pill here would shadow them. */}
+                {(() => {
+                  const label = owedLabel(r);
+                  if (label === null) return null;
+                  return (
+                    <>
+                      {" "}
+                      <span className={`mat-owed${lineOwed(r).settled ? " mat-owed--settled" : ""}`}>
+                        {label}
+                      </span>
+                    </>
+                  );
+                })()}
                 {r.status !== "expected" && (
                   <div className="dash-card__sub muted">
                     {r.status === "received" ? "Received" : "Flagged"} {fmtDateTime(r.received_at)}
@@ -479,8 +521,31 @@ export function ExpectedMaterialsSection({
                 )}
               </li>
             );
-          })}
-        </ul>
+              })}
+            </ul>
+          );
+          // An unnamed group is the whole list — nothing to collapse it to, so it renders
+          // bare. A NAMED type group becomes a <details>: closed by default, because a
+          // BOM's worth of lines on the job page was the clutter. <details> keeps the rows
+          // in the DOM while hidden, so find-in-page and a screen reader still reach them.
+          if (group.name === null) return <div key="__all">{body}</div>;
+          const owed = group.items.filter((it) => {
+            const o = lineOwed(it.row);
+            return o.outstanding !== null && !o.settled;
+          }).length;
+          return (
+            <details key={group.name} className="sched-drawer" aria-label={group.name}>
+              <summary>
+                {group.name}
+                <span className="sched-drawer__note">
+                  {group.items.length} {group.items.length === 1 ? "line" : "lines"}
+                  {owed > 0 ? ` · ${owed} still owed` : ""}
+                </span>
+              </summary>
+              <div className="sched-drawer__body">{body}</div>
+            </details>
+          );
+        })
       )}
 
       {canManage &&

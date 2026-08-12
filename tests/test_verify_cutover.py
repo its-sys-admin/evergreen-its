@@ -8,6 +8,7 @@ and the per-check decision logic.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -658,6 +659,26 @@ def test_required_secrets_cover_program_list():
     # lane's own bearer, same per-lane separation).
     assert "ITS_PORTAL_SCHEDULE_TOKEN" in vc.REQUIRED_SECRETS
     assert len(vc.REQUIRED_SECRETS) == 22
+
+
+def test_vc01_docstring_count_matches_required_secrets():
+    """The VC-01 line in the module docstring must state the REAL secret count.
+
+    `len(REQUIRED_SECRETS)` was already pinned above, but nothing pinned the prose
+    beside it — so the docstring read "18" while the tuple grew to 22 as the estimate,
+    manifest, schedule and RFQ bearers landed. An operator reading the module header to
+    plan a cutover secret-seed would have provisioned four short. This closes the loop:
+    the number in the docstring and the number in the code cannot diverge again.
+    """
+    assert vc.__doc__ is not None
+    vc01 = [ln for ln in vc.__doc__.splitlines() if ln.startswith("VC-01")]
+    assert len(vc01) == 1, f"expected exactly one VC-01 docstring line, got {vc01!r}"
+    stated = re.search(r"\((\d+) =", vc01[0])
+    assert stated is not None, f"VC-01 line states no secret count: {vc01[0]!r}"
+    assert int(stated.group(1)) == len(vc.REQUIRED_SECRETS), (
+        f"VC-01 docstring says {stated.group(1)} secrets, "
+        f"REQUIRED_SECRETS has {len(vc.REQUIRED_SECRETS)}"
+    )
 
 
 def test_dark_daemon_bearers_and_operator_pin_enrolled():

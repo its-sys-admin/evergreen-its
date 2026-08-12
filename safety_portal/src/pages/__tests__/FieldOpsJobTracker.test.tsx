@@ -1130,9 +1130,14 @@ describe("FieldOpsJobTracker — R7 time attribution", () => {
 
   it("the time table renders Task + By columns from the worker joins", async () => {
     const { container } = await openDetail(["cap.jobtracker.read"]);
-    const headers = Array.from(container.querySelectorAll(".dash-table--stack th")).map((th) => th.textContent);
+    // Scoped to the FIRST stacking table (time entries). The inspections table gained the
+    // same `--stack` modifier in the 2026-08 design pass — it was the one table on the page
+    // without the kit's phone treatment — so an unscoped `.dash-table--stack th` now spans
+    // both. The assertion's subject was always the time table's own headers.
+    const timeTable = container.querySelectorAll("table.dash-table--stack")[0];
+    const headers = Array.from(timeTable.querySelectorAll("th")).map((th) => th.textContent);
     expect(headers).toEqual(["Who", "Hours", "Task", "By", "Recorded", "Notes"]);
-    const cells = Array.from(container.querySelectorAll(".dash-table--stack td")).map((td) => td.textContent);
+    const cells = Array.from(timeTable.querySelectorAll("td")).map((td) => td.textContent);
     expect(cells).toContain("Dig footings"); // task_description
     expect(cells).toContain("Boss Bob"); // recorded_by_name
   });

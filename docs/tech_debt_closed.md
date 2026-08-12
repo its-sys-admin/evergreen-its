@@ -11,6 +11,364 @@ Resolved/closed/delivered/superseded entries moved out of the live `docs/tech_de
 
 > See `docs/tech_debt.md` for the live (open) set.
 
+## [RESOLVED 2026-08-12 — was OPEN 2026-08-11, low] BOM-corpus extraction/reconciliation tooling used for the 218-part materials analysis is not committed anywhere
+
+> **RESOLVED 2026-08-12 — PR #106.** The tooling is committed as
+> `scripts/bom_reconcile.py` (three subcommands: `extract` / `reconcile` / `migration`), with
+> `tests/test_bom_reconcile.py` pinning the customer-data guard and the partial-seed refusal.
+> Reproduction verified against the real corpus rather than merely refactored: `extract` yields
+> **666 lines / 218 unique base parts** (the recorded figures exactly) and `migration` reproduces
+> **all 28 equipment rows byte-identically** to the original `equip_values.sql`, once one renamed
+> corpus file (`Brimfield 1` → `Brimfield 1.1`) is normalised.
+>
+> **Correction recorded there:** the analysis is remembered as "zero overlap with the 37 live
+> catalogue rows". The tooling reports **5 of 218** as `in_catalogue` — and the ORIGINAL script did
+> too, so this is a faithful reproduction, not a regression. All five are token false positives
+> (`SERRATED FLANGE HEX NUT 300 SERIES SS` matched `Series 7 TR1` on `SERIES`). "Zero overlap" was a
+> human verdict on top of five spurious hits; the docstring now says so and flags `in_catalogue` as
+> a candidate, not a verdict.
+
+The 2026-08-11 reconciliation of ten vendor BOMs against `material_catalog` (666 lines → 218
+unique parts, zero overlap with the existing 37 catalogue rows — PR #75's basis) was done with
+scripts that lived only in the session's ephemeral scratchpad. The analysis itself is sound and
+its conclusion (migration 0065's 28 equipment rows) is committed, but the extraction/matching
+tooling that produced it is not — the 218-part analysis cannot be re-run or re-verified from the
+repo alone.
+
+**Fix:** if the BOM corpus is revisited (e.g. when the six job-less projects named in the corpus —
+Bradley 1/2, Brimfield 1/2, Steger, Roxbury — get real job records, or when a new vendor BOM
+arrives), recreate or commit a durable version of the extraction/reconciliation script under
+`scripts/` rather than re-deriving it ad hoc each time.
+
+**Tag:** `materials`, `tooling`, `reproducibility`, `low`.
+
+**Revisit when:** the next BOM-corpus or materials-catalogue reconciliation.
+
+Surfaced: 2026-08-11/12 session close.
+
+## [RESOLVED 2026-08-12 — was OPEN 2026-08-11, low] `tests/test_rfq_poll.py:689` asserts a prefix too weak to catch a regression in the 0070 RFQ-numbering shape
+
+> **RESOLVED 2026-08-12 — PR #107.** The assertion is now exact equality, parametrized over BOTH
+> shapes that are legitimate at HEAD.
+>
+> **The fix proposed in this entry was not applied, because it was wrong.** A format regex
+> (`^RFQ-\d{4}\.\d{3}\.\d+-\d{3}$`) would reject the site-LESS form, which `worker/rfq.ts:713`
+> still emits whenever `sitePhase == 0` — and which is permanent on pre-0070 drafts. It would also
+> re-assert a contract the Python side does not own: `rfq_poll` never composes this number. What the
+> mirror hand-off owes is byte-exact pass-through, and that is what is now tested.
+>
+> **Proven, not assumed:** injecting a dropped site segment into the mirror hand-off (post-HMAC, so
+> it reaches the assertion) RED-lights the new form — `'RFQ-2026.001-007' == 'RFQ-2026.001.1-007'`.
+> Restoring the OLD prefix assertion under the IDENTICAL injection passes 2/2, demonstrating the
+> regression was invisible to it.
+
+The assertion is `rfq_number.startswith("RFQ-2026.001")`. Migration 0070 (PR #86) changed RFQ
+numbers from `RFQ-{job_no}-{NNN}` to `RFQ-{job_no}.{site_phase}-{NNN}` — but a site-bearing number
+for job `2026.001` at site `1` (`RFQ-2026.001.1-003`) ALSO starts with the literal string
+`"RFQ-2026.001"`, so this test would pass identically whether or not the site segment is present,
+malformed, or silently dropped. It currently passes only because it happens to be testing against
+the correct shape, not because it can distinguish the correct shape from a regression.
+
+**Fix:** tighten the assertion to match the full number shape, e.g. a regex
+`^RFQ-\d{4}\.\d{3}\.\d+-\d{3}$` or an exact-equals against the expected composed string, so a
+future numbering-format change (or an accidental site_phase drop) red-lights here instead of
+passing silently.
+
+**Tag:** `procurement`, `tests`, `rfq`, `low`.
+
+**Revisit when:** the next `rfq_poll`/RFQ-numbering touch, or the next §30-style test-hardening pass.
+
+Surfaced: 2026-08-11/12 session close (PR #86 review).
+
+## [RESOLVED 2026-08-12 — was OPEN 2026-08-10, low] `tests/test_state_io.py::test_concurrent_writers_lock_serializes_overlap` is a flaky timing test
+
+> **RESOLVED 2026-08-12 — PR #107.** Rewritten to assert MUTUAL EXCLUSION directly (an occupancy
+> counter that must never exceed 1) with an `Event` barrier making the contended ordering
+> deterministic, instead of inferring the lock from wall-clock end times. The old 1ms stagger could
+> invert under load — the second thread acquiring first and finishing immediately — so a WORKING
+> lock was reported red. The 30ms hold stays well inside `state_io`'s 5×50ms retry budget, so the
+> contender retries and wins rather than raising `StateLockTimeoutError`.
+>
+> **Proven:** no-op'ing `with_path_lock` RED-lights it with `lock allowed 2 concurrent writers`.
+> Flake check: 30 unloaded runs + 12 runs under 8 concurrent CPU spinners, 0 failures.
+
+Observed both fail and pass on the **identical commit**, back to back, this session — a genuine timing
+flake, not a code regression. The test asserts that concurrent writers serialize through
+`state_io.with_path_lock`'s sidecar-`.lock` `fcntl` flock by racing real threads/processes and checking
+non-overlap; timing-based concurrency assertions of this shape are inherently sensitive to scheduler
+jitter on a loaded machine. No fix attempted this session — flagging so a future intermittent-red CI run
+on this test isn't mistaken for a real lock regression.
+
+**Fix (not scoped this session):** either widen the timing margins, switch to a deterministic
+synchronization primitive (e.g. a barrier/semaphore instead of a sleep-based race) to prove ordering
+without relying on wall-clock overlap, or mark it `@pytest.mark.flaky`-equivalent with a bounded retry if
+this repo's tooling supports one.
+
+**Tag:** `testing`, `state_io`, `flaky-test`, `low`.
+
+**Revisit when:** this test is next seen red in CI, or the next `shared/state_io.py` touch.
+
+Surfaced: 2026-08-10 session close.
+
+## [RESOLVED 2026-08-12] `its_config_dictionary.md` asserts fail-OPEN for every config read — wrong for send gates [OPEN 2026-07-29, medium]
+
+> **RESOLVED 2026-08-12 — PR #108.** `generate_config_dictionary.py` no longer claims "every read is
+> fail-open to this value" — a phrase that conflated *the read resolves to the default rather than
+> raising* with *the default is permissive*. The generated page now states that the direction depends
+> on what the default IS, and names the split explicitly: `po_send` / `rfq_send` /
+> `subcontract_send` all carry `DEFAULT_POLLING_ENABLED = False` (a missing or unreadable row leaves
+> that send daemon DISABLED, never falling open into transmitting), while `weekly_send` and
+> `progress_send` default `True`. Regenerated and the enablement-manifest sha256 re-recorded.
+
+`docs/references/its_config_dictionary.md` states: *"**Default** is what ITS uses when the row is
+**missing, blank, or unreadable** — every read is fail-open to this value."*
+
+That is **false for the send gates**, which are the reads where it matters most.
+`po_send_poll.py`, `rfq_send_poll.py` and `subcontract_send_poll.py` all set
+`DEFAULT_POLLING_ENABLED = False` (CO-1, PR #585 `45fe4df`: *"a send gate never fails open"*), so
+a missing row fails **safe**. Conversely `progress_send_poll.py:76` and
+`safety_reports/weekly_send_poll.py:69` DO default `True` — those two genuinely fail open, which
+the same sentence obscures by making fail-open sound universal and benign.
+
+It is a **GENERATED file** (`<!-- GENERATED FILE — do not hand-edit -->`); the string lives in
+`scripts/generate_config_dictionary.py`, so this needs a **code PR**, and the regen must be
+followed by re-recording the doc's sha256 in the enablement manifest.
+
+**Trigger:** any `generate_config_dictionary.py` work, or the next send-gate documentation pass.
+
+---
+
+## [RESOLVED 2026-08-12] `verify_cutover.py` VC-01's docstring undercounts `REQUIRED_SECRETS` [OPEN 2026-07-21, low]
+
+> **RESOLVED 2026-08-12 — PR #108.** The VC-01 line now reads the real count and is pinned to it.
+>
+> Note this entry's own number had drifted again: it said the true figure was **21**; measured
+> against live HEAD it is **22**. That is the argument the entry itself made — a hand-counted total
+> in prose cannot hold — so the fix is not another hand-count.
+> `test_vc01_docstring_count_matches_required_secrets` parses the number OUT of the docstring and
+> asserts it equals `len(REQUIRED_SECRETS)`. Reverting the docstring to 18 RED-lights it.
+
+The module docstring's VC-01 summary line (`scripts/verify_cutover.py:33`) says **18** required Keychain
+secrets. Counted against live HEAD on 2026-08-10 the tuple is **21** — `NON_BOX_SECRETS` 11 + `BOX_SECRETS`
+3 + `PO_SECRETS` 1 + `DARK_BEARER_SECRETS` 5 + `OPERATOR_SECRETS` 1. (An earlier note in this file put the
+real number at 20; it predated `ITS_PORTAL_MANIFEST_TOKEN` joining `DARK_BEARER_SECRETS`, so the gap has
+widened since it was written — which is the argument for not leaving a hand-counted total in prose at all.)
+The check itself iterates `REQUIRED_SECRETS`, so the cutover gate is **not** under-enforcing; only the
+summary line is stale. A stale count in the one doc an operator reads at cutover is worth correcting.
+
+**Trigger:** next `verify_cutover.py` touch. **Tag:** `cutover`, `secrets`, `docs-currency`, `low`.
+
+## [RESOLVED 2026-08-12] Enablement sha-pinning covers `docs/references/` too, not just `docs/enablement/` [OPEN 2026-07-29, low]
+
+> **RESOLVED 2026-08-12 — PR #108.** `docs/HOUSE_REFLEXES.md` now documents that the enablement
+> sha-pin reaches OUTSIDE `docs/enablement/`: of the 22 pinned sources, 10 live in
+> `docs/references/` (nine) or `docs/troubleshooting/` (one), and editing any of them reds the
+> docs-currency gate with no hint from the path. The note records that there is no `--record` flag
+> (`build_docs_pdfs.py --check` only reports drift; re-record by hand) and calls out the
+> doubly-bound generated case: `its_config_dictionary.md` must be edited via its generator,
+> regenerated, THEN re-recorded.
+
+`docs/enablement/manifest.yaml` records a sha256 for **22 source files**, and CI
+(`test_docs_pdf` → `build_docs_pdfs --check`) goes RED when any drifts. The commonly-documented
+warning names only `docs/enablement/`. In fact **10 pinned files live under `docs/references/`
+and `docs/troubleshooting/`**: `daemon_reference.md`, `integration_reference.md`,
+`escalation_matrix.md`, `system_architecture.md`, `documentation_index.md`,
+`its_config_dictionary.md`, `security_trust_model.md`, `glossary.md`, `data_model_reference.md`,
+`troubleshooting_guide.md`.
+
+There is **no `--record`/`--update` flag** — `build_docs_pdfs` only offers `--check`. Re-recording
+is manual: `shasum -a 256 <file>` → paste into the matching `sha256:` line. The 2026-07-26→29
+consolidation re-recorded 8 values this way.
+
+**Fix candidates:** (a) add a `--record` mode to `scripts/build_docs_pdfs.py`; (b) at minimum,
+state the true pinned scope wherever the enablement-sha trap is documented. **Trigger:** next
+session that edits a `docs/references/` file, or any `docs_pdf` work.
+
+---
+
+## [RESOLVED 2026-08-12] `picklist-sync` is unreachable from the dashboard's interval-edit verb (DASH-11) [OPEN 2026-07-14, low]
+
+> **RESOLVED 2026-08-12 — PR #110**, via the entry's second option: the exclusion is now documented
+> and PINNED rather than papered over.
+>
+> Adding picklist-sync to the allowlist is not a one-line change — it has no
+> `*.poll_interval_seconds` row at all (its cadence is a literal `<integer>3600</integer>` in its
+> plist), and it is correspondingly absent from install.sh's `poll_interval_config_key` table, which
+> is exactly why the existing parity test passes. The registries AGREE; this is a coverage boundary,
+> not drift. Making it retunable needs a new ITS_Config row, the install.sh entry, and a
+> config-driven plist.
+>
+> `test_picklist_sync_interval_is_deliberately_not_retunable` pins BOTH halves — absent from
+> `INTERVAL_DAEMONS`, and still a plist literal — so a future conversion red-lights and names the
+> enrollment that must follow, instead of the note going stale.
+
+`operator_dashboard/act/daemon_ops.edit_interval` (#570) covers an 8-daemon label allowlist.
+`picklist-sync`'s 3600s cadence is a hardcoded `StartInterval` literal in its plist, outside that allowlist,
+so its interval cannot be edited from the dashboard. Confirmed a coverage gap, not a bug — the daemon itself
+was healthy. Either add it to the allowlist or document the exclusion explicitly, so the operator question
+that surfaced it ("can the dashboard change daemon run intervals?") does not need re-investigating.
+
+**Trigger:** next WS2 daemon-control polish pass. **Tag:** `operator-dashboard`, `picklist-sync`, `low`.
+
+## [RESOLVED 2026-08-12] Dashboard config registry — `subcontract_send` enrolled without its `from_mailbox`/`scheduled_send_local` siblings [OPEN 2026-07-21, low]
+
+> **RESOLVED 2026-08-12 — PR #110.** Both siblings are enrolled;
+> all five `*_send` lanes now carry `polling_enabled` + `from_mailbox` + `scheduled_send_local`.
+> Both rows were already seeded by `scripts/migrations/seed_subcontracts_send_config.py`, so this was
+> console parity, not a new capability.
+>
+> `test_every_send_lane_exposes_all_three_runtime_config_siblings` derives the expectation from the
+> lanes actually present, so the NEXT omission fails for whichever lane is added next. It asserts
+> which KEYS exist, never their VALUES — pinning editable-config content is its own recurring
+> self-defeating-test bug. Deleting the new entry RED-lights it.
+
+`operator_dashboard/act/registry.py` enrolls `subcontracts.subcontract_send.polling_enabled` (line 217) and
+nothing else for that lane. The structurally-identical RFQ lane carries all three keys —
+`po_materials.rfq_send.polling_enabled` (line 268), `po_materials.rfq_send.scheduled_send_local` (line 347),
+`po_materials.rfq_send.from_mailbox` (line 510) — added by the same PR (#627), which gave `subcontract_send`
+only the one key that had already been flagged missing. Line numbers verified against live HEAD 2026-08-10.
+Consequence: an operator can retune the RFQ lane's mailbox and send window from the console, but must edit
+`ITS_Config` directly for the subcontract lane.
+
+**Trigger:** next dashboard registry touch, or the next `subcontract_send` config session. **Tag:**
+`operator-dashboard`, `subcontracts`, `parity-gap`, `low`.
+
+## [RESOLVED 2026-08-12 — was OPEN 2026-08-10, low] `tests/test_publish_daemon.py` — 29 local failures on an unmodified tree that CI runs green
+
+> **RESOLVED 2026-08-12 — no longer reproduces.** Re-run against live HEAD on the host and checkout
+> the entry describes (`~/its` itself, not a worktree): **53 passed, 0 failed**. Also 53/53 from a
+> separate worktree. The DIAGNOSED note's prescribed fix — redirecting the counter's state path to
+> `tmp_path` — is present as the `fence_state` fixture (`tests/test_publish_daemon.py:263-270`,
+> `state_path=tmp_path / "publish_config_read.json"`).
+>
+> Closed on the observable rather than on a root-cause narrative: the 29 failures cannot be
+> reproduced at HEAD, so there is nothing left to diagnose. If they recur, reopen with the failing
+> output attached.
+
+Running the full local suite this session, `tests/test_publish_daemon.py` produced 29 failures on a
+completely clean, unmodified checkout — reproduced identically on a second run. The same file passes in
+CI on the same commit (confirmed via the four-part PR-landing verify elsewhere this session, which reads
+main-branch CI as green). This means **local pre-merge test runs of this file are not currently
+trustworthy** — something about the local macOS environment (working-tree git state the daemon inspects,
+`gh`/`git` auth context, filesystem timing, or a fixture that assumes a CI-shaped sandbox) diverges from
+what CI provides. Not diagnosed this session; no code changed.
+
+**Risk:** a developer relying on `pytest tests/test_publish_daemon.py` locally to gate a real change to
+`scripts/publish_daemon.py` gets 29 false-red results and either wastes time chasing phantom failures or,
+worse, starts ignoring red on this file specifically — which would mask a genuine regression the next time
+one lands.
+
+**Fix (not scoped this session):** diagnose the local-vs-CI divergence (`diagnose` skill territory — an
+SDK/environment-boundary bug class per Op Stds §30) — likely candidates are the daemon's live `git`/`gh`
+introspection calls hitting this repo's actual (dirty, worktree-adjacent) local state versus CI's clean
+checkout, or a missing local env var CI sets. Until diagnosed, treat local runs of this file as
+uninformative and rely on CI.
+
+> **DIAGNOSED 2026-08-10 (overnight reconcile session).** Not git/gh introspection: it is the
+> `tests/conftest.py:531` live-state guard (forensic class #8/#294) firing on the PRODUCTION host.
+> The publish-daemon tests reach `shared/sustained_failure.py:462` → `state_io.with_path_lock` →
+> `Path.open` on `~/its/state/publish_daemon_config_read_failures.json.lock`, and the guard refuses
+> any unit-test write under the live `~/its/state`. CI is green because its checkout is not at
+> `~/its`. The real fix is the guard's own instruction: monkeypatch the counter's path constant to
+> `tmp_path` in those tests (or mark them integration). Small, mechanical, 29 tests.
+
+**Tag:** `testing`, `publish_daemon`, `ci-divergence`, `low`.
+
+**Revisit when:** next `scripts/publish_daemon.py` change needs local test confidence, or bandwidth for a
+dedicated `diagnose` pass.
+
+Surfaced: 2026-08-10 session close.
+---
+
+## [RESOLVED 2026-08-12 — was OPEN 2026-08-11, low] `build_box_roots.py`'s lazy-iteration comment is now stale — #57 fixed the two functions it names
+
+> **RESOLVED 2026-08-12 — PR (this one).** The comment block now records that PR #57 closed both
+> named holes: `shared/box_client.py`'s `list_folder` and `search` each materialize the boxsdk
+> iterator inside `_call` (`_call(lambda: list(...))`), verified at HEAD. The GENERAL lesson is kept
+> as the reusable part — any FUTURE `box_client` addition returning an iterator must force
+> materialization inside `_call`, because `_call(client.foo().get_items)` guards only the
+> CONSTRUCTION while the real HTTP (and the refresh-token exchange) happens one frame outside the
+> translation frame. The local workaround is deliberately retained: correct, free, and it keeps the
+> cutover console's auth path provable without depending on the shared module.
+
+`scripts/migrations/build_box_roots.py:94-99` documents the `shared/box_client.py` lazy-iteration/
+translation gap ("every daemon calling `list_folder` / `search` has the same hole... a candidate
+tech-debt entry") in the present tense. PR #57 closed both named holes — `list_folder` (:648) and
+`search` (:821) now materialize the boxsdk iterator INSIDE `_call`'s translation/retry frame
+(`_call(lambda: list(...))`), per the code comments at those two sites. The migration-script comment
+was not updated and now describes a gap that no longer exists for its two named functions, which will
+mislead the next reader into re-diagnosing an already-fixed bug. (The remaining raw
+`client.folder(...).get_items(...)` call sites — `box_clone_1111a_to_projects.py`,
+`box_build_1111b_blueprint.py`, `reclone_projects_from_1111b.py` — are completed one-time 1111A→1111B
+cutover scripts with no live daemon consumer, out of scope per the dont-harden-dormant reflex.)
+
+**Fix:** update the comment block to note #57 closed `list_folder`/`search`; keep the general
+"materialize lazy boxsdk collections inside `_call`" guidance for any FUTURE addition to
+`shared/box_client.py` — that part of the lesson is still correct and reusable.
+
+**Tag:** `docs`, `box`, `code-comment-drift`, `low`.
+
+**Revisit when:** next `scripts/migrations/build_box_roots.py` or `shared/box_client.py` touch.
+
+Surfaced: 2026-08-11 session close.
+
+## [RESOLVED 2026-08-12 — was OPEN 2026-08-10, low] `docs/doctrine_manifest.yaml`'s `workstreams: slugs` list is stale — undercounts real blueprint workstreams, and M5's coverage matching misses case/hyphen variants
+
+> **RESOLVED 2026-08-12 — PR (this one).** `workstreams` now reads `count: 10` with all ten slugs,
+> verified against both `../its-blueprint/workstreams/` (10 subdirectories) and that directory's
+> README.md table (10 rows) — the two agree exactly. Four were missing: `field_ops`,
+> `progress_reports`, `operator_dashboard` (all three built and LIVE) and `urs_marine_portal`.
+>
+> **On the case/hyphen half of this entry:** M5 already tries three spellings per slug
+> (`slug`, `slug.replace("_","-")`, `slug.replace("_","")`) against the exec repo's CLAUDE.md +
+> doc_conventions.md, so hyphen variants were never the blocker — the stale LIST was. The
+> drift_note now records that the slugs are workstream TAGS, not directory names, and that the
+> mapping is not mechanical (`field_ops` ← `field-ops-portal`, `progress_reports` ←
+> `progress-reporting`). `urs_marine_portal` is EXPECTED to report as uncovered: it is the
+> Customer-2 template workstream with no execution-repo code, exactly the correctly-unbuilt case M5
+> exists to surface. M5 is informational, never blocking, so this adds a coverage line and no gate risk.
+>
+> **The missing control, now added:** nothing read `count` at all — M5 iterates `slugs` alone — so
+> the field was unenforced documentation and drifted as such.
+> `test_workstream_count_matches_the_slug_list` asserts `count == len(slugs)` (and rejects
+> duplicates); setting count back to 6 RED-lights it.
+
+Cross-repo supersession check (session-close routine) against the fetched blueprint
+`origin/main`: the blueprint currently has 10 workstream directories (`ai-employee-capabilities`,
+`email-triage`, `field-ops-portal`, `operator-dashboard`, `progress-reporting`,
+`purchase-orders`, `safety-portal`, `safety-reports`, `subcontracts`, `urs-marine-portal`), but
+`docs/doctrine_manifest.yaml`'s `workstreams.slugs` list still reads `count: 6` with only
+`safety_reports, safety_portal, email_triage, purchase_orders, subcontracts,
+ai_employee_capabilities` — missing **`progress_reports`, `field_ops`, `operator_dashboard`, and
+`urs_marine_portal`** entirely, all four of which are real, live, exec-acknowledged workstreams
+(CLAUDE.md carries a "What's stubbed vs. real" row for each of the first three; `urs_marine` is
+explicitly out-of-repo-scope by design — a different, future customer). This was already flagged
+once before and not completed: `docs/tech_debt_closed.md`'s closed Progress-Reporting §51 entry
+names "propagate `docs/doctrine_manifest.yaml` ... the blueprint `workstreams.slugs`/`count` if
+the canonical set is updated" as a fix step at the v20 doctrine bump — that step was never done.
+
+Running `scripts/check_doctrine_drift.py` confirms the consequence: its `check_workstream_coverage`
+(M5) can only check slugs actually IN the list, so it is structurally blind to drift on
+`progress_reports`/`field_ops`/`operator_dashboard`/`urs_marine_portal` today. Separately, M5's
+own matching against the two slugs it DOES check is too narrow: it flags both `email_triage` and
+`ai_employee_capabilities` as "no exec-repo mention" even though CLAUDE.md mentions "Email Triage
+workstream" in prose — the check's variant set (`slug`, `slug.replace("_","-")`,
+`slug.replace("_","")`) is case-sensitive and doesn't handle a space-separated Title Case
+mention, so it false-negatives on a real acknowledgment. (`ai_employee_capabilities` may be a
+genuine gap — it reads as a cross-cutting capabilities catalog, not a coded module, and does not
+appear verbatim in CLAUDE.md under any casing.)
+
+**Fix:** update `workstreams.slugs`/`count` in `docs/doctrine_manifest.yaml` to the current 10
+(or however many are exec-scoped), and loosen `check_workstream_coverage`'s matching to be
+case-insensitive and space/hyphen/underscore-insensitive. Both are `scripts/`-code changes, out
+of this session-close pass's scope.
+
+**Tag:** `doctrine-manifest`, `cross-repo`, `docs`, `low`.
+
+**Revisit when:** next doctrine-manifest touch, or the next `doc-reconciliation-auditor` pass.
+
+Surfaced: 2026-08-10 session close (cross-repo supersession check).
+
 ## [RESOLVED 2026-08-12 — was OPEN 2026-08-10, high] Materials-manifest + expected-materials correctness cluster — nine audit-confirmed defects, lane is LIVE
 
 > **RESOLVED — eight of nine at HEAD; the ninth carved out, not dropped.** Closed by PR #66
