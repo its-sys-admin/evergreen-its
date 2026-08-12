@@ -48,7 +48,14 @@ type ReportBody = {
   deliveries: { event_date: string; item: string; vendor: string; qty: string }[];
   material_incidents: { material: string; issue: string }[];
   photos: { available: PhotoPick[]; selected: PhotoPick[]; auto_selected: boolean };
-  schedule: null;
+  // Mirrors worker/wire-types.ts ProductionReportResponse["schedule"] — null until a schedule
+  // is committed, then the grouped sections plus the behind-schedule set.
+  schedule: null | {
+    sections: { name: string; items: { label: string; percent: number | null }[] }[];
+    behind: { name: string; section: string; finish_date: string; percent: number; is_contract_milestone: boolean }[];
+    today: string;
+    task_count: number;
+  };
   office: {
     header: { ess_management: string; subcontractors: string[]; mobilization_date: string };
     safety: Record<string, { month: number; to_date: number }>;
@@ -128,8 +135,28 @@ async function seedTime(uuid: string, hours: number, amends: string | null = nul
   ).bind(uuid, JOB, FROM + 7200, hours, FROM + 7200, "pm.one", amends).run();
 }
 
+
+async function seedTask(over: Record<string, unknown> = {}): Promise<void> {
+  const d: Record<string, unknown> = {
+    task_uuid: `t-${Math.abs(hash(JSON.stringify(over)))}`, job_id: JOB, section: "Mechanical",
+    name: "Piles", match_key: "mechanical\npiles", percent_done: 0, schedule_percent: null,
+    last_marked_by: null, start_date: null, finish_date: null, baseline_finish_date: null,
+    is_milestone: 0, is_contract_milestone: 0, is_delivery: 0, delivered_date: null,
+    sort_order: 10, active: 1, ...over,
+  };
+  await env.DB.prepare(
+    `INSERT INTO job_schedule_tasks (task_uuid, job_id, section, name, match_key, percent_done,
+      schedule_percent, last_marked_by, start_date, finish_date, baseline_finish_date,
+      is_milestone, is_contract_milestone, is_delivery, delivered_date, sort_order, active)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)`,
+  ).bind(d.task_uuid, d.job_id, d.section, d.name, d.match_key, d.percent_done, d.schedule_percent,
+         d.last_marked_by, d.start_date, d.finish_date, d.baseline_finish_date, d.is_milestone,
+         d.is_contract_milestone, d.is_delivery, d.delivered_date, d.sort_order, d.active).run();
+}
+
 beforeEach(async () => {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM job_schedule_tasks"),
     env.DB.prepare("DELETE FROM job_weekly_report_inputs"),
     env.DB.prepare("DELETE FROM daily_photo_pool"),
     env.DB.prepare("DELETE FROM material_receipt_events"),
@@ -538,5 +565,80 @@ describe("weekly report — schedule seam", () => {
     expect(r.schedule).toBeNull();
     // And no fabricated percentage rides along under another name.
     expect(JSON.stringify(r)).not.toMatch(/percent_done|progress_pct/);
+  });
+});
+
+// ── page 3: the living schedule task list (0071) ─────────────────────────────
+describe("weekly report — schedule binding", () => {
+  it("stays NULL when the job has no committed schedule", async () => {
+    const r = await body(await internal());
+    expect(r.schedule).toBeNull();
+  });
+
+  it("groups tasks by section in DOCUMENT order, not alphabetical", async () => {
+    await seedTask({ section: "Deliveries", name: "Piers", sort_order: 10, percent_done: 100, schedule_percent: 100 });
+    await seedTask({ section: "Civil", name: "Access road", sort_order: 20, percent_done: 100, schedule_percent: 100 });
+    await seedTask({ section: "Deliveries", name: "Modules", sort_order: 30, percent_done: 0, schedule_percent: 0 });
+    const r = await body(await internal());
+    expect(r.schedule).not.toBeNull();
+    // Deliveries first because its first task has the lowest sort_order — the schedule's own order.
+    expect(r.schedule!.sections.map((s) => s.name)).toEqual(["Deliveries", "Civil"]);
+    expect(r.schedule!.sections[0].items.map((i) => i.label)).toEqual(["Piers", "Modules"]);
+    expect(r.schedule!.task_count).toBe(3);
+  });
+
+  it("reports NULL percent for a task nothing has ever asserted, NOT 0%", async () => {
+    // percent_done is NOT NULL DEFAULT 0, so 0 alone cannot mean "not reported".
+    await seedTask({ name: "Never touched", percent_done: 0, schedule_percent: null, last_marked_by: null });
+    await seedTask({ name: "Schedule said zero", sort_order: 20, percent_done: 0, schedule_percent: 0 });
+    await seedTask({ name: "Human marked zero", sort_order: 30, percent_done: 0, last_marked_by: "pm.one" });
+    const items = (await body(await internal())).schedule!.sections[0].items;
+    expect(items.find((i) => i.label === "Never touched")!.percent).toBeNull();
+    expect(items.find((i) => i.label === "Schedule said zero")!.percent).toBe(0);
+    expect(items.find((i) => i.label === "Human marked zero")!.percent).toBe(0);
+  });
+
+  it("excludes soft-deleted tasks", async () => {
+    await seedTask({ name: "Live", sort_order: 10 });
+    await seedTask({ name: "Removed", sort_order: 20, active: 0 });
+    const r = await body(await internal());
+    expect(r.schedule!.sections[0].items.map((i) => i.label)).toEqual(["Live"]);
+  });
+
+  it("files a task with no section under Other rather than dropping it", async () => {
+    await seedTask({ section: null, name: "Unphased task" });
+    const r = await body(await internal());
+    expect(r.schedule!.sections[0].name).toBe("Other");
+    expect(r.schedule!.sections[0].items[0].label).toBe("Unphased task");
+  });
+
+  it("flags only tasks past their finish date AND short of 100%, oldest slip first", async () => {
+    await seedTask({ name: "Late badly", finish_date: "2020-01-01", percent_done: 40, sort_order: 10 });
+    await seedTask({ name: "Late mildly", finish_date: "2020-06-01", percent_done: 90, sort_order: 20 });
+    await seedTask({ name: "Late but done", finish_date: "2020-01-01", percent_done: 100, sort_order: 30 });
+    await seedTask({ name: "Future", finish_date: "2099-01-01", percent_done: 0, sort_order: 40 });
+    await seedTask({ name: "No finish date", finish_date: null, percent_done: 0, sort_order: 50 });
+    const behind = (await body(await internal())).schedule!.behind;
+    expect(behind.map((b) => b.name)).toEqual(["Late badly", "Late mildly"]);
+    expect(behind[0].finish_date).toBe("2020-01-01");
+  });
+
+  it("marks a slipped CONTRACT milestone as one", async () => {
+    await seedTask({ name: "Mechanical completion", finish_date: "2020-01-01", percent_done: 10, is_contract_milestone: 1 });
+    const behind = (await body(await internal())).schedule!.behind;
+    expect(behind[0].is_contract_milestone).toBe(true);
+  });
+
+  it("derives behind-schedule against the server's Pacific date", async () => {
+    await seedTask({ name: "X", finish_date: "2020-01-01", percent_done: 0 });
+    const r = await body(await internal());
+    expect(r.schedule!.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("is NOT windowed to the week — the schedule is the job's whole plan", async () => {
+    // A task finishing years before this report's week must still appear on page 3.
+    await seedTask({ name: "Early phase", finish_date: "2020-01-01", percent_done: 100, schedule_percent: 100 });
+    const r = await body(await internal());
+    expect(r.schedule!.sections[0].items[0].label).toBe("Early phase");
   });
 });
