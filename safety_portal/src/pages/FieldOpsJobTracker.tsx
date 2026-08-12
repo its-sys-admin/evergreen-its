@@ -347,6 +347,7 @@ export function FieldOpsJobTracker({
   initialJobId,
   onJobViewChange,
   onOpenMaterials,
+  onOpenWeeklyReport,
 }: {
   onBack: () => void;
   /** R7 — deep-link straight into a job's detail (the My Tasks "Log time" quick action / job-group
@@ -360,6 +361,7 @@ export function FieldOpsJobTracker({
   /** PR2 — deep link from the job detail's expected-materials section into the per-job Materials
    *  page. Absent (no cap.materials.receive) → the section renders without the button. */
   onOpenMaterials?: (jobId: string) => void;
+  onOpenWeeklyReport?: (jobId: string) => void;
 }) {
   const [view, setView] = useState<"list" | "detail">("list");
   const [jobs, setJobs] = useState<api.JobRow[]>([]);
@@ -1692,6 +1694,22 @@ export function FieldOpsJobTracker({
           jobId={job.job_id}
           onOpenMaterials={onOpenMaterials ? () => onOpenMaterials(job.job_id) : undefined}
         />
+
+        {/* 0067 — the office's weekly-report inputs (the sections D1 cannot derive). Deep-link
+            card beside Materials; rendered only for the office capability, and the Worker
+            re-gates every call regardless of what this hides. */}
+        {onOpenWeeklyReport && (
+          <section className="card dash-section">
+            <h3 className="dash-detail__h2">Weekly production report</h3>
+            <p className="dash-hint">
+              Safety statistics, labor hours by company, pending RFIs and submittals, weather days
+              and photo selection for the client-facing weekly report.
+            </p>
+            <button className="btn" onClick={() => onOpenWeeklyReport(job.job_id)}>
+              Open weekly report inputs →
+            </button>
+          </section>
+        )}
 
         <section className="card dash-section">
           <h3 className="dash-detail__h2">Inspections</h3>

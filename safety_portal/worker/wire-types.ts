@@ -824,3 +824,122 @@ export interface SchedulePreviewResponse {
   page: number;
   png_b64: string;
 }
+
+// ── Weekly Production Report (0067) ──────────────────────────────────────────────────────────
+// The office screen and the Mac compile read the SAME payload from the SAME builder, so these
+// shapes are the single source of truth for both. `worker/fieldops_report.ts` annotates its
+// response with `ProductionReportResponse`, which is what makes a drift between the Worker and
+// the SPA a typecheck failure rather than a runtime surprise on a client's document.
+
+/** One day's weather as the daily report captured it. `inclement` is the OFFICE's marked
+ *  weather-day claim, never inferred from `conditions` — it is a contractual delay claim. */
+export interface WeeklyReportWeatherDay {
+  work_date: string;
+  conditions: string;
+  avg_temp: string;
+  inclement: boolean;
+}
+
+/** A crew the field actually reported, with its PEAK headcount across the week (MAX, not sum —
+ *  the same crew on five days is one crew). Man-hours are absent by design: `personnel` has no
+ *  employer column, so hours cannot be attributed to a subcontractor. */
+export interface WeeklyReportCrew {
+  company: string;
+  workers: number;
+  days: number;
+}
+
+/** A photo offered for curation. Only `status='clean'` pool rows WITH a `box_file_id` appear —
+ *  a row earns that id only on a CLEAN §34 disposition, so an unscreened photo cannot reach a
+ *  client report through this route. */
+export interface WeeklyReportPhoto {
+  pool_id: number;
+  work_date: string;
+  box_file_id: string;
+  caption: string;
+}
+
+export interface WeeklyReportSafetyCount {
+  month: number;
+  to_date: number;
+}
+
+/** The office's Labor Report row. `workers`/`man_hours` are STRINGS so "" (not answered) stays
+ *  distinguishable from "0" (answered zero) — the report prints an empty cell for the former. */
+export interface WeeklyReportLaborRow {
+  company: string;
+  workers: string;
+  man_hours: string;
+}
+
+/** The office-entered record — the three sections D1 structurally cannot derive, plus the two
+ *  judgment calls (weather days, photo curation). */
+export interface WeeklyReportOffice {
+  header: {
+    site_location: string;
+    ess_management: string;
+    mobilization_date: string;
+    subcontractors: string[];
+    prepared_by: string;
+  };
+  safety: Record<string, WeeklyReportSafetyCount>;
+  weather: { inclement_dates: string[]; weather_days_to_date: number };
+  labor: { rows: WeeklyReportLaborRow[] };
+  narrative: { critical_items: string; upcoming_activities: string; hazard_topics: string[] };
+  pending: { rfis: string; submittals: string; ifc_review: string; change_orders: string };
+  /** null = auto-select; [] = explicitly no photos; list = the office's ordered picks. */
+  photos: WeeklyReportPhoto[] | null;
+  /** true only when THIS week's row was saved. A carried-forward week is NOT saved, which is why
+   *  its narrative still re-derives from this week's field text. */
+  saved: boolean;
+  /** The week these values were inherited from, or null. */
+  carried_from: string | null;
+  updated_by: string | null;
+  updated_at: number | null;
+}
+
+/** GET /api/internal/production-report · GET /api/fieldops/weekly-report — one derivation, two
+ *  gate tiers. `schedule` stays null until the ADR-0006 living task list lands. */
+export interface ProductionReportResponse {
+  job_id: string;
+  week: { start: string; end: string; from: number; to: number };
+  job: {
+    project_name: string; address: string; address_city: string; address_state: string;
+    job_no: string; site_phase: number; status: string;
+  } | null;
+  daily_report_count: number;
+  weather: {
+    days: WeeklyReportWeatherDay[];
+    weather_days_week: number;
+    weather_days_to_date: number;
+  };
+  labor: { total_hours: number; crews: WeeklyReportCrew[] };
+  crew_progress: { work_date: string; crew: string; manpower: string; progress: string }[];
+  daily_notes: {
+    work_date: string; tomorrows_goals: string; comments: string;
+    safety_observations: string; manpower_total: string; prepared_by: string;
+  }[];
+  hazard_form_codes: string[];
+  deliveries: {
+    event_date: string; kind: string; item: string; part_number: string;
+    qty: string; unit: string; vendor: string; bol_number: string; carrier: string;
+  }[];
+  material_incidents: { work_date: string; material: string; issue: string; details: string }[];
+  photos: { available: WeeklyReportPhoto[]; selected: WeeklyReportPhoto[]; auto_selected: boolean };
+  schedule: null | { sections: { name: string; items: { label: string; percent: number | null }[] }[] };
+  office: WeeklyReportOffice;
+  generated_at: number;
+}
+
+/** PUT /api/fieldops/weekly-report — omit `photos` entirely to leave curation on auto-select. */
+export interface WeeklyReportSaveBody {
+  job_id: string;
+  week_start: string;
+  header?: Partial<WeeklyReportOffice["header"]>;
+  safety?: Record<string, Partial<WeeklyReportSafetyCount>>;
+  weather?: { inclement_dates?: string[]; weather_days_to_date?: number };
+  labor?: { rows?: WeeklyReportLaborRow[] };
+  narrative?: Partial<WeeklyReportOffice["narrative"]>;
+  pending?: Partial<WeeklyReportOffice["pending"]>;
+  photos?: WeeklyReportPhoto[];
+}

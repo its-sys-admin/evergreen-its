@@ -203,6 +203,17 @@ def test_form_codes_resolve_to_display_names(monkeypatch) -> None:
     assert "-v1" not in data["hazard_topics"][0]
 
 
+def test_a_variant_already_inside_the_name_is_not_appended_twice() -> None:
+    """A live render put this on a client's page: "Toolbox Talk — Severe Weather (Tornadoes, High
+    Winds, Lightning and Flooding) — Severe Weather — Tornadoes, High Winds, Lightning and
+    Flooding". The name and variant say the same thing with different punctuation, so a raw
+    substring check appends the variant anyway. The comparison squashes to alphanumerics."""
+    name = wpr_data._display_form_name("toolbox-talk-severe-weather-v1")
+    head = name.lower()
+    # "severe weather" must appear ONCE, not twice.
+    assert head.count("severe weather") == 1, name
+
+
 def test_unknown_form_code_humanizes_rather_than_leaking_the_code() -> None:
     assert wpr_data._display_form_name("toolbox-talk-not-a-real-form-v3") == "Toolbox Talk Not A Real Form"
 

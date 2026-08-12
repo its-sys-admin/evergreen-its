@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { FieldopsApp } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
+import type { ProductionReportResponse } from "./wire-types";
 import { auditStmt } from "./audit";
 
 // Weekly Production Report — the SEND-FREE, READ-ONLY D1 aggregation behind the client-facing
@@ -285,7 +286,7 @@ export function autoSelectPhotos<T extends { work_date: string }>(available: T[]
 async function buildReportData(
   c: Context<{ Bindings: Env; Variables: Vars }>,
   w: Window,
-) {
+): Promise<ProductionReportResponse> {
   // Daily reports for the week, AMEND-COLLAPSED (exclude any row a later row amends — the 0003
   // amends_uuid chain, same shape as the rollup's time_entries collapse). Windowed on `work_date`,
   // NOT created_at: a report filed late still belongs to the day it describes.
