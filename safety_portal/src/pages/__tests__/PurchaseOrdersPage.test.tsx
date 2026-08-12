@@ -102,6 +102,7 @@ const ESTIMATE_ROW: est.EstimateRow = {
   id: 5,
   est_uuid: "e-5",
   job_no: "2023.126",
+  job_id: "JOB-000001",
   job_name: "Kendall Solar",
   vendor_key: null,
   filename: "apex-quote.pdf",
@@ -246,6 +247,14 @@ beforeEach(() => {
   vi.mocked(useAuth).mockReturnValue(authWith(["cap.po.manage"]));
   vi.mocked(api.fetchPos).mockResolvedValue([]);
   vi.mocked(api.fetchVendors).mockResolvedValue(VENDORS);
+  // 0069 — the disposition screen now resolves the job's Site/phase through this call when the
+  // estimate carries a job_id. Default it so these fold tests, which are about the estimate→PO
+  // hand-off rather than the site, exercise the same path without asserting on it.
+  vi.mocked(api.fetchJobShipTo).mockResolvedValue({
+    job_id: "JOB-000001", job_no: "2023.126", site_phase: 0,
+    ship_to_name: "", ship_to_address: "", ship_to_city: "", ship_to_state: "", ship_to_zip: "",
+    delivery_contact_name: "", delivery_contact_phone: "", delivery_contact_email: "",
+  });
   vi.mocked(api.fetchTerms).mockResolvedValue([]);
   vi.mocked(api.fetchPoConfig).mockResolvedValue(null as never);
   vi.mocked(api.fetchPoMaterials).mockResolvedValue([]);
@@ -288,6 +297,59 @@ describe("PurchaseOrdersPage — tab strip + keep-alive panels", () => {
 });
 
 describe("PurchaseOrdersPage — the estimate→PO fold", () => {
+  it("0069: the disposition seeds Site / phase from the estimate's JOB, not 0", async () => {
+    // THE DEFECT THIS CLOSES. site_phase was hard-seeded to "0" and nothing ever resolved it,
+    // so a PO drafted from an accepted estimate for MH405 (2026.384 site 1) composed
+    // 2026.384.0.x — a contractual number for a site that does not exist. job_no alone cannot
+    // fix it: 2026.384 is ALSO OG593 at site 2. The estimate must carry job_id (0069).
+    vi.mocked(est.fetchEstimates).mockResolvedValue([ESTIMATE_ROW]);
+    vi.mocked(est.fetchEstimate).mockResolvedValue({
+      estimate: { ...ESTIMATE_ROW, job_no: "2026.384", job_id: "JOB-000034" },
+      extraction: null, lines: [], preview_count: 0,
+    });
+    vi.mocked(api.fetchJobShipTo).mockResolvedValue({
+      job_id: "JOB-000034", job_no: "2026.384", site_phase: 1,
+      ship_to_name: "MH405", ship_to_address: "9208 Ridgefield Rd", ship_to_city: "Crystal Lake",
+      ship_to_state: "IL", ship_to_zip: "60012",
+      delivery_contact_name: "", delivery_contact_phone: "", delivery_contact_email: "",
+    });
+
+    const { getByText, getByLabelText } = render(<Harness />);
+    await waitFor(() => expect(api.fetchPos).toHaveBeenCalled());
+    fireEvent.click(getByText("New PO from a vendor estimate"));
+    await waitFor(() => expect(getByText("apex-quote.pdf")).toBeTruthy());
+    fireEvent.click(getByText("Review & import"));
+    await waitFor(() => expect(est.fetchEstimate).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(api.fetchJobShipTo).toHaveBeenCalledWith("JOB-000034"));
+
+    // Seeded from the job — the PO will now compose 2026.384.1.x, not 2026.384.0.x.
+    await waitFor(() =>
+      expect((getByLabelText("Site / phase") as HTMLInputElement).value).toBe("1"),
+    );
+  });
+
+  it("0069: an estimate with NO job_id leaves Site / phase alone (no lookup, no crash)", async () => {
+    // Every estimate uploaded before 0067 has job_id '' and never will have one. The screen
+    // must degrade to the operator-editable default rather than guessing from job_no.
+    vi.mocked(est.fetchEstimates).mockResolvedValue([ESTIMATE_ROW]);
+    vi.mocked(est.fetchEstimate).mockResolvedValue({
+      estimate: { ...ESTIMATE_ROW, job_id: "" },
+      extraction: null, lines: [], preview_count: 0,
+    });
+    vi.mocked(api.fetchJobShipTo).mockClear();
+
+    const { getByText, getByLabelText } = render(<Harness />);
+    await waitFor(() => expect(api.fetchPos).toHaveBeenCalled());
+    fireEvent.click(getByText("New PO from a vendor estimate"));
+    await waitFor(() => expect(getByText("apex-quote.pdf")).toBeTruthy());
+    fireEvent.click(getByText("Review & import"));
+    await waitFor(() => expect(est.fetchEstimate).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(getByText("Confirm & import")).toBeTruthy());
+
+    expect(api.fetchJobShipTo).not.toHaveBeenCalled();
+    expect((getByLabelText("Site / phase") as HTMLInputElement).value).toBe("0");
+  });
+
   it("walks the whole lane: pick on Orders → disposition on Estimates → import → draft OPEN in the builder", async () => {
     vi.mocked(est.fetchEstimates).mockResolvedValue([ESTIMATE_ROW]);
     vi.mocked(est.fetchEstimate).mockResolvedValue({

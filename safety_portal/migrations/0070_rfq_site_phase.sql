@@ -1,0 +1,48 @@
+-- 0070 — make RFQ numbers site-specific (operator ask, 2026-08-11).
+--
+-- THE DEFECT: rfq_number composes as `RFQ-{job_no}-{NNN}`, and job_no is the two-segment
+-- PROJECT number. MH405 (2026.384.1) and OG593 (2026.384.2) are two different SITES of one
+-- project, so today they share a single RFQ sequence and their numbers are indistinguishable
+-- on the vendor's desk, in RFQ_Log, and in the Box filenames.
+--
+-- THE MODEL — identical to 0064's: `rfqs.job_no` STAYS two-segment and the site rides in its
+-- own column, exactly as purchase_orders and subcontracts already do. The number becomes
+-- `RFQ-{job_no}.{site}-{NNN}`, and a site-0 job emits NO segment at all, so every number
+-- already issued keeps its shape.
+--
+-- THE ALTERNATIVE WAS REJECTED FOR A SPECIFIC REASON. Storing the combined identifier in
+-- `rfqs.job_no` and merely widening rfq.ts's JOB_NO_RE looks smaller, but it SILENTLY breaks
+-- the estimate→RFQ auto-bind: worker/po_estimates.ts cross-checks
+-- `SELECT id FROM rfqs WHERE rfq_number = ?1 AND job_no = ?2` against the estimate's own
+-- two-segment job_no. '2026.384' would stop matching '2026.384.1', the bind would return
+-- zero rows, and the round-trip would die with a 200 response and nothing but `rfq_bound:false`
+-- in an audit row to show for it. A failure that leaves the numbering looking perfect is worse
+-- than one that shouts.
+--
+-- SITE 0 EMITS NO SEGMENT, and that is load-bearing rather than cosmetic. The sequence
+-- allocator recovers NNN by measuring past the number's prefix; if site-0 jobs started
+-- emitting `.0`, the existing `RFQ-2026.384-001` would be measured against the longer prefix
+-- `RFQ-2026.384.0-`, yield "1" instead of "001", and mint `RFQ-...-002` beside an existing
+-- `-001`. Two different strings, so the UNIQUE(rfq_number) index would NOT catch it — the
+-- sequence would just be quietly wrong. The allocator is therefore also scoped
+-- `AND site_phase = ?`, so a legacy row is only ever counted for site-0 RFQs.
+--
+-- DEFAULT 0 = "no site segment": every existing draft and issued number keeps composing
+-- exactly what it composes today. There is no backfill and none is possible — `rfqs` holds
+-- no job_id to join `jobs.site_phase` from, because 0056 deliberately SNAPSHOTS the job data
+-- at draft time rather than re-resolving it. A draft created before this migration therefore
+-- generates a site-less number even if it belongs to MH405; the operator re-opens and re-saves
+-- it to pick up the site.
+--
+-- Numbers ALREADY ISSUED are never rewritten. They are printed into Box PDFs, embedded in the
+-- fillable quote form's signed `_ITS_META` block, written to RFQ_Log and the review-row Notes,
+-- and mailed to vendors. The change is forward-only and the two shapes coexist in the ledger.
+--
+-- The HMAC canonical is deliberately UNCHANGED. `rfq_number` is already field 1 of
+-- canonicalRfqJson and its own line in rfqCanonicalString, so the site is transitively
+-- signature-covered; adding site_phase to the canonical would be a lockstep cross-language
+-- break against shared/portal_hmac.RFQ_CANONICAL_HEADER_KEYS for no gain.
+--
+-- DEPLOY ORDER (lockout class #2): apply --remote BEFORE deploying the Worker that SELECTs
+-- this column, or every /api/po/rfqs read 500s.
+ALTER TABLE rfqs ADD COLUMN site_phase INTEGER NOT NULL DEFAULT 0;

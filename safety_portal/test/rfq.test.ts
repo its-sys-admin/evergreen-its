@@ -242,6 +242,42 @@ describe("draft update", () => {
 
 // ── Generate: numbering + the rfq:v1 canonical ────────────────────────────────
 describe("generate", () => {
+  it("0070: two SITES of one project get INDEPENDENT sequences", async () => {
+    // THE POINT OF THE CHANGE. MH405 and OG593 are 2026.384 sites 1 and 2; before this they
+    // shared one sequence and produced numbers a vendor could not tell apart.
+    const s1 = await makeQueued(admin, { job_no: "2026.384", site_phase: 1 });
+    expect(s1.rfq_number).toBe("RFQ-2026.384.1-001");
+    const s2 = await makeQueued(admin, { job_no: "2026.384", site_phase: 2 });
+    expect(s2.rfq_number).toBe("RFQ-2026.384.2-001"); // NOT -002
+    const s1b = await makeQueued(admin, { job_no: "2026.384", site_phase: 1 });
+    expect(s1b.rfq_number).toBe("RFQ-2026.384.1-002"); // site 1 continues on its own
+    expect((await rfqRow(s1.id))!.site_phase).toBe(1); // persisted, not just composed
+    // job_no itself stays TWO-segment — 0064's model, and what keeps the estimate auto-bind
+    // (which joins on rfqs.job_no) working.
+    expect((await rfqRow(s1.id))!.job_no).toBe("2026.384");
+  });
+
+  it("0070: a site-0 job keeps the legacy site-less number and its own sequence", async () => {
+    // Site 0 must emit NO segment. If it emitted `.0`, the allocator — which measures PAST the
+    // prefix — would read an already-issued `RFQ-2026.900-001` against the longer
+    // `RFQ-2026.900.0-` and mint `-002` beside an existing `-001`: two DIFFERENT strings, so
+    // UNIQUE(rfq_number) would not catch it and the sequence would be silently wrong.
+    const a = await makeQueued(admin, { job_no: "2026.900" });
+    expect(a.rfq_number).toBe("RFQ-2026.900-001");
+    const b = await makeQueued(admin, { job_no: "2026.900", site_phase: 0 });
+    expect(b.rfq_number).toBe("RFQ-2026.900-002"); // explicit 0 == omitted: same family
+    const c = await makeQueued(admin, { job_no: "2026.900", site_phase: 4 });
+    expect(c.rfq_number).toBe("RFQ-2026.900.4-001"); // site-bearing family starts fresh
+  });
+
+  it("0070: an out-of-range site is refused, not silently clamped", async () => {
+    for (const bad of [-1, 10000, 1.5, "2"]) {
+      const res = await p(admin, "/api/po/rfqs", draftBody({ site_phase: bad }));
+      expect(res.status, `site_phase ${JSON.stringify(bad)}`).toBe(400);
+      expect(((await res.json()) as any).error).toBe("invalid_site_phase");
+    }
+  });
+
   it("allocates per-job sequence numbers; the stored hmac recomputes over the canonical (sorted vendor_keys, NO price keys)", async () => {
     const a = await makeQueued(admin);
     expect(a.rfq_number).toBe("RFQ-2026.001-001");

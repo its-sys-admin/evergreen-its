@@ -3,6 +3,7 @@ import * as est from "../lib/estimates";
 import {
   createDraft,
   deletePoDraft,
+  fetchJobShipTo,
   fetchVendors,
   formatCents,
   parseDollarsToCents,
@@ -94,6 +95,26 @@ export function EstimateDispositionPage({
         setDetail(d);
         setJobNo(d.estimate.job_no);
         setVendorKey(d.estimate.vendor_key ?? "");
+        // 0064/0069 — seed Site/phase from the JOB, not from 0. job_no alone cannot resolve
+        // it (2026.384 is both MH405 site 1 and OG593 site 2), which is why the estimate now
+        // carries job_id. Without this every estimate-imported PO for a multi-site project
+        // composes 2026.384.0.x instead of 2026.384.1.x — a contractual number for a site
+        // that does not exist.
+        //
+        // Best-effort and non-blocking, matching the PO builder: a 404 or a read failure
+        // leaves the operator-editable input alone rather than gating the disposition. The
+        // ship-to block rides along because the same call already returns it and the screen
+        // otherwise makes the reviewer hand-type the state.
+        if (d.estimate.job_id) {
+          fetchJobShipTo(d.estimate.job_id)
+            .then((sh) => {
+              setSitePhase(String(sh.site_phase ?? 0));
+              if (sh.ship_to_state) setShipToState(sh.ship_to_state.toUpperCase());
+            })
+            .catch(() => {
+              /* convenience only — the Site/phase and state inputs stay operator-editable */
+            });
+        }
         // Pre-accept every extracted line — the reviewer UNCHECKS what the source
         // contradicts (mirrors the green-by-default read of a clean quote, but every
         // line stays individually confirmable against the preview).
