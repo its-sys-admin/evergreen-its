@@ -726,7 +726,20 @@ def _process_pending_rfq(
             return True
 
     try:
-        # 3 — Box folder (§45): the PO lane's OWN ROOT → job → "RFQs".
+        # 3 — Box folder (§45): the PO lane's OWN ROOT → job → "RFQs". The job_no
+        # fallback SUCCEEDS quietly where the PO lane fails loud on a blank name, so
+        # the container it grows is invisible to the project-name-keyed archive —
+        # WARN whenever the fallback engages (wiring audit 2026-08-12).
+        if not str(rfq.get("job_name") or "").strip():
+            error_log.log(
+                Severity.WARN, SCRIPT_NAME,
+                f"RFQ {rfq_number}: job_name is blank — filing under job_no "
+                f"{str(rfq.get('job_no') or '')!r}. That per-job container is INVISIBLE "
+                f"to the Track 6 archive (it keys off the project name); fix the job "
+                f"name in the portal and relocate the folder before archiving this job.",
+                error_code="rfq_job_name_fallback",
+                correlation_id=correlation_id,
+            )
         folder_id = _resolve_rfq_box_folder(
             str(rfq.get("job_name") or rfq.get("job_no") or "")
         )
@@ -902,7 +915,11 @@ def _file_one_vendor(
     )
 
     # RFQ_Pending_Review row (idempotent via the Notes rfq_id+vendor join) + the
-    # inline attach of BOTH files (best-effort — Box is the SoR).
+    # inline attach of BOTH files (best-effort — Box is the SoR). The attaches run on
+    # EVERY service, not fresh-append-only (wiring audit 2026-08-12, the #98 posture) —
+    # a crash between add_rfq_review_row and the attach self-heals on re-serve. The
+    # Notes form-id seed stays create-time (rewriting Notes on replay risks clobbering
+    # operator edits; the narrow lost-form-id window matches the PO lane's Notes posture).
     existing = rfq_review.find_row_by_rfq_vendor(rfq_id, vendor_key)
     if existing is not None:
         review_row_id = int(existing["_row_id"])
@@ -929,13 +946,13 @@ def _file_one_vendor(
                 rfq_id, rfq_number, vendor_key, box_form_file_id
             ),
         )
-        _attach_file_best_effort(review_row_id, filename, pdf, correlation_id)
-        if box_form_file_id and form_bytes is not None:
-            _attach_file_best_effort(
-                review_row_id,
-                rfq_naming.rfq_form_filename(rfq_number, vendor_name),
-                form_bytes, correlation_id, content_type=_XLSX_MIME,
-            )
+    _attach_file_best_effort(review_row_id, filename, pdf, correlation_id)
+    if box_form_file_id and form_bytes is not None:
+        _attach_file_best_effort(
+            review_row_id,
+            rfq_naming.rfq_form_filename(rfq_number, vendor_name),
+            form_bytes, correlation_id, content_type=_XLSX_MIME,
+        )
 
     # RFQ_Log (rfq, vendor) row (idempotent by RFQ Number + Vendor Key — the
     # crash-retry find-or-skip the mark-filed replay contract depends on). The kwargs

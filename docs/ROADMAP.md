@@ -203,7 +203,8 @@ BOX          ITS Archive   / <Job Name> / {Safety, Progress, Purchase Orders, Su
 (`po_materials.box.portal_root_folder_id`; its per-job folder carries `RFQs/` + `Vendor Quotes/`)
 and the subcontract lane since 2026-08-12 (`subcontracts.box.portal_root_folder_id`), while
 `safety_reports.box.portal_root_folder_id` remains the *shared* Box root for safety +
-materials manifests, so moving `<safety root>/<Job>` still carries those. Retained deliberately: the flat
+materials manifests + the ADR-0006 schedule PDFs (`Schedules/`), so moving
+`<safety root>/<Job>` still carries those. Retained deliberately: the flat
 `*_Log` / `*_Pending_Review` ledgers, WSR/WPR review rows, the `ITS_Active_Jobs*` rows (flagged
 `Archived`, never deleted), `ITS DATA/<Project>`, `ITS Photos/`, and all D1.
 

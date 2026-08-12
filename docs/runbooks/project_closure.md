@@ -138,7 +138,7 @@ closed job; which parts should change is exactly what the closure-policy proposa
 | `ITS_Active_Jobs` / `ITS_Active_Jobs_Progress` rows | In-sheet, flagged Inactive/Archived (by design — the history; never delete) |
 | Per-job "Purchase Orders" / "RFQs" / "Subcontracts" sheets | On **Archived**, their per-job FOLDERS relocate to `ITS — Archive / <Job> / <Workstream>/`; on Inactive, in place |
 | PO_Log / RFQ_Log / Estimate_Log / Subcontract_Log rows + procurement review rows | Flat ledgers, in place (live commercial records, retained by design) |
-| The job's Box tree (week PDFs, packets, PO/RFQ/quote/subcontract files) | On **Archived**, the four per-job Box containers (Safety, Progress, Purchase Orders, Subcontracts) relocate to `ITS Archive / <Job> /` via `box_client.move_folder` — the PO root's job folder carries the RFQ/quote files, the safety root's carries the materials manifests; `ITS DATA` / `ITS Photos` stay in place |
+| The job's Box tree (week PDFs, packets, PO/RFQ/quote/subcontract files, manifests, schedule PDFs) | On **Archived**, the four per-job Box containers (Safety, Progress, Purchase Orders, Subcontracts) relocate to `ITS Archive / <Job> /` via `box_client.move_folder` — the PO root's job folder carries the RFQ/quote files; the safety root's carries every per-submission PDF, the materials manifests and the imported schedule PDFs; `ITS DATA` / `ITS Photos` stay in place |
 | D1 field-ops records (time entries, tasks, equipment history, checklists, …) | D1, retained (payroll-grade source records; only the guarded prune/purge paths above ever remove anything) |
 
 ### Task D — Removing a job entirely (destructive — NOT closure; escalate)
