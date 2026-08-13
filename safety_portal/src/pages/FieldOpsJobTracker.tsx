@@ -12,6 +12,7 @@ import { JobDailyRequirementsSection } from "../components/JobDailyRequirementsS
 import { statusLabel, lifecycleLabel } from "../lib/labels";
 import { JobArchivePanel } from "../components/JobArchivePanel";
 import { formatJobNumber, splitJobNumber, JOB_NUMBER_MAX_LENGTH } from "../lib/jobNumber";
+import { fmtHours, jobPillClass, loggedHours, openTaskCount, taskPillClass } from "../lib/jobtracker_view";
 
 // R7 — a load-failure that owns a working Retry (never a dead banner, never a lying empty state).
 interface RetryableError {
@@ -23,23 +24,6 @@ interface RetryableError {
 function fmtDateTime(epochSeconds: number | null): string {
   if (!epochSeconds) return "—";
   return new Date(epochSeconds * 1000).toLocaleString();
-}
-
-function fmtHours(hours: number | null): string {
-  if (hours == null || isNaN(hours)) return "—";
-  return hours.toFixed(2);
-}
-
-function jobPillClass(s: string): string {
-  if (s === "active") return "dash-pill dash-pill--ok";
-  if (s === "on_hold") return "dash-pill dash-pill--warn";
-  return "dash-pill"; // closed (and anything else)
-}
-
-function taskPillClass(s: string): string {
-  if (s === "in_progress") return "dash-pill dash-pill--warn";
-  if (s === "done") return "dash-pill dash-pill--ok";
-  return "dash-pill"; // open
 }
 
 const STATUS_OPTIONS: { value: api.JobStatusFilter; label: string }[] = [
@@ -185,7 +169,7 @@ function CcEditor({
       ))}
       <button
         type="button"
-        className="btn--secondary"
+        className="btn btn--secondary"
         aria-label={`Add ${label}`}
         disabled={ccs.length >= MAX_CC}
         onClick={() => onChange([...ccs, ""])}
@@ -298,7 +282,7 @@ function RoutingFields({
         <div className="dash-row">
           <button
             type="button"
-            className="btn--secondary"
+            className="btn btn--secondary"
             onClick={() =>
               set({
                 safety_contact_name: routing.stakeholder_name,
@@ -320,7 +304,7 @@ function RoutingFields({
         <div className="dash-row">
           <button
             type="button"
-            className="btn--secondary"
+            className="btn btn--secondary"
             onClick={() =>
               set({
                 progress_contact_name: routing.safety_contact_name,
@@ -707,7 +691,7 @@ export function FieldOpsJobTracker({
   function LoadMoreBtn({ leg }: { leg: "task" | "time" | "insp" }) {
     return (
       <div className="dash-row dash-load-more">
-        <button onClick={() => loadMoreLeg(leg)} disabled={detailLoading} className="btn--secondary">
+        <button onClick={() => loadMoreLeg(leg)} disabled={detailLoading} className="btn btn--secondary">
           {detailLoading ? "Loading..." : "Load more"}
         </button>
       </div>
@@ -1156,6 +1140,63 @@ export function FieldOpsJobTracker({
     setActionBusy(false);
   }
 
+  // ── Section rail + scroll-spy ─────────────────────────────────────────────────────────────────
+  // Computed at TOP level — hooks cannot live inside the detail branch below. Entries are
+  // filtered by what this session can actually see, so a capability-hidden section never leaves
+  // a dead link, and the spy observes exactly the filtered set. Order mirrors the page.
+  const canArchiveViewer = caps.includes("cap.job.archive");
+  const canSeeMaterials = caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage");
+  const railSections = selectedJob
+    ? [
+        { id: "jd-manage", label: "Manage", on: canAssignTasks },
+        { id: "jd-client", label: "Client", on: Boolean(selectedJob.client) },
+        { id: "jd-crew", label: "Crew", on: true },
+        { id: "jd-tasks", label: "Tasks", on: true },
+        { id: "jd-time", label: "Time", on: true },
+        { id: "jd-equipment", label: "Equipment", on: true },
+        { id: "jd-materials", label: "Materials", on: canSeeMaterials },
+        { id: "jd-schedule", label: "Schedule", on: Boolean(onOpenSchedule) },
+        { id: "jd-weekly", label: "Weekly report", on: Boolean(onOpenWeeklyReport) },
+        { id: "jd-inspections", label: "Inspections", on: true },
+        { id: "jd-daily", label: "Daily requirements", on: canChecklist },
+        // The archive block itself is double-gated (cap + worker-withheld job.archive);
+        // the rail entry follows the same pair so it can never point at a hidden section.
+        { id: "jd-danger", label: "Danger zone", on: canArchiveViewer && selectedJob.archive != null },
+      ].filter((s) => s.on)
+    : [];
+  const railIds = railSections.map((s) => s.id).join("|");
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+
+  // Scroll-spy for the rail — the WeeklyReportPage device. Guarded: jsdom has no
+  // IntersectionObserver, and the rail is a convenience — without it the links still
+  // work, they just do not light up.
+  useEffect(() => {
+    if (view !== "detail" || !selectedJob) return;
+    if (typeof IntersectionObserver === "undefined") return;
+    const ids = railIds === "" ? [] : railIds.split("|");
+    const seen = new Map<string, number>();
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) seen.set(e.target.id, e.intersectionRatio);
+        let best: string | null = null;
+        let bestRatio = 0;
+        for (const id of ids) {
+          const r = seen.get(id) ?? 0;
+          if (r > bestRatio) { bestRatio = r; best = id; }
+        }
+        if (best) setActiveSection(best);
+      },
+      { rootMargin: "-72px 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] },
+    );
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) obs.observe(el);
+    }
+    return () => obs.disconnect();
+    // selectedJob keys re-observation after every reload (the sections remount);
+    // railIds keys it when the filtered set itself changes (e.g. a client appears).
+  }, [view, selectedJob, railIds]);
+
   if (view === "detail" && selectedJob) {
     const job = selectedJob;
     // R7 — assign-picker option state, mirroring the Worker's checkTaskTarget: an assign-only
@@ -1182,21 +1223,20 @@ export function FieldOpsJobTracker({
     // Both counts are honest about being partial: tasks and time entries are paged (the
     // "Load more" legs), so these describe what is on screen, not the job's lifetime
     // totals. That is why nothing here is framed as a percentage or a total.
-    const openTaskCount = job.tasks.filter((t) => t.status !== "done").length;
-    // A VOIDED entry is a correction to zero, so excluding it is the same arithmetic the
-    // strike-through already shows. `hours` is nullable (an open clock-in has none yet).
-    const loggedHours = job.time_entries.reduce(
-      (sum, e) => sum + (e.voided ? 0 : (e.hours ?? 0)),
-      0,
-    );
+    // The voided→0 / null-hours→0 arithmetic lives (tested) in lib/jobtracker_view.
+    const openTasks = openTaskCount(job.tasks);
+    const hoursLogged = loggedHours(job.time_entries);
     return (
       <PageShell onHome={onBack} wide>
         <div className="dash-back-btn">
-          <button onClick={handleBack} className="btn--secondary">← Back to jobs</button>
+          <button onClick={handleBack} className="btn btn--secondary">← Back to jobs</button>
         </div>
 
+        {/* Eyebrow + h1 — the house heading pair (Schedule/WPR precedent): surface name in the
+            eyebrow, job identity in the h1. The eyebrow's gold rule is this page's one gold. */}
+        <p className="page__heading--eyebrow">Job tracker</p>
         <div className="dash-detail__head">
-          <h2 className="page__heading">{job.project_name}</h2>
+          <h1 className="page__heading">{job.project_name}</h1>
           {/* Lifecycle, NOT status: `status` collapses inactive+archived into 'closed', so this
               pill read "Inactive" on an archived job. The class still keys off `status` — the
               pill COLOUR is a two-state open/closed signal and is unchanged. */}
@@ -1218,9 +1258,9 @@ export function FieldOpsJobTracker({
             </li>
             <li className="job-hero__stat">
               <span
-                className={`job-hero__figure${openTaskCount > 0 ? " job-hero__figure--alert" : ""}`}
+                className={`job-hero__figure${openTasks > 0 ? " job-hero__figure--alert" : ""}`}
               >
-                {openTaskCount}
+                {openTasks}
               </span>
               <span className="job-hero__label">Open tasks</span>
             </li>
@@ -1229,46 +1269,26 @@ export function FieldOpsJobTracker({
               <span className="job-hero__label">Equipment</span>
             </li>
             <li className="job-hero__stat">
-              <span className="job-hero__figure">{fmtHours(loggedHours)}</span>
+              <span className="job-hero__figure">{fmtHours(hoursLogged)}</span>
               <span className="job-hero__label">Hours logged</span>
             </li>
           </ul>
         </div>
 
-        {/* SECTION RAIL — nineteen blocks in one column need an index. Same device and
-            the same 1024px breakpoint as the weekly report's rail: a chip scroller on a
-            phone, a sticky column on a laptop. Entries are filtered by what this session
-            can actually see, so a capability-hidden section never leaves a dead link. */}
-        <nav className="job-rail" aria-label="Job sections">
-          {[
-            { id: "jd-manage", label: "Manage", on: canAssignTasks },
-            { id: "jd-client", label: "Client", on: Boolean(job.client) },
-            { id: "jd-crew", label: "Crew", on: true },
-            { id: "jd-tasks", label: "Tasks", on: true },
-            { id: "jd-time", label: "Time", on: true },
-            { id: "jd-equipment", label: "Equipment", on: true },
-            { id: "jd-schedule", label: "Schedule", on: Boolean(onOpenSchedule) },
-            { id: "jd-weekly", label: "Weekly report", on: Boolean(onOpenWeeklyReport) },
-            { id: "jd-inspections", label: "Inspections", on: true },
-          ]
-            .filter((s) => s.on)
-            .map((s) => (
-              <a key={s.id} className="job-rail__link" href={`#${s.id}`}>
-                {s.label}
-              </a>
-            ))}
-        </nav>
-
         {setupBanner === job.job_id && (
-          <section className="card dash-section" aria-label="Finish setting up job">
-            <strong>Finish setting up {job.job_id}</strong> — assign crew, equipment, tasks, and the
-            expected materials below to get this job ready.{" "}
-            <button type="button" className="btn--secondary" onClick={() => setSetupBanner(null)}>Done</button>
+          <section className="wpr-banner wpr-banner--ok" aria-label="Finish setting up job">
+            <span>
+              <strong>Finish setting up {job.job_id}</strong> — assign crew, equipment, tasks, and the
+              expected materials below to get this job ready.{" "}
+              <button type="button" className="btn btn--secondary" onClick={() => setSetupBanner(null)}>Done</button>
+            </span>
           </section>
         )}
 
         {actionMsg && (
-          <p className={`banner ${actionMsg.ok ? "banner--ok" : "banner--err"}`}>{actionMsg.text}</p>
+          <p className={`wpr-banner ${actionMsg.ok ? "wpr-banner--ok" : "wpr-banner--warn"}`} role="status">
+            {actionMsg.text}
+          </p>
         )}
         {detailError && (
           <SectionError message={detailError.text} onRetry={detailError.retry} what="refreshing this job" />
@@ -1277,9 +1297,39 @@ export function FieldOpsJobTracker({
           <SectionError message={pickerError} onRetry={() => void reloadPickers()} what="loading picker options" />
         )}
 
+        {/* SECTION RAIL + BODY — the weekly report's two-column shell: a horizontal chip
+            scroller under the hero on a phone, a sticky vertical index beside one column
+            of cards from 1024px. Entries come pre-filtered (railSections, top level), so a
+            capability-hidden section never leaves a dead link; the scroll-spy lights the
+            item for the section in view. */}
+        <div className="job-shell">
+          <nav className="job-rail" aria-label="Job sections">
+            {railSections.map((s) => (
+              <a
+                key={s.id}
+                className="job-rail__link"
+                href={`#${s.id}`}
+                aria-current={(activeSection ?? railSections[0]?.id) === s.id ? "true" : undefined}
+                onClick={(e) => {
+                  // A fragment navigation fires popstate, and App's popstate handler
+                  // REMOUNTS the routed page (losing scroll + state) — so the rail
+                  // scrolls directly and never touches history. Live-verified: the
+                  // bare-anchor version reloaded the whole detail on every chip tap.
+                  e.preventDefault();
+                  document.getElementById(s.id)?.scrollIntoView();
+                }}
+              >
+                {s.label}
+              </a>
+            ))}
+          </nav>
+          <div className="job-shell__body">
+
         {canAssignTasks && (
-          <section className="card dash-section">
-            <h3 className="dash-detail__h2" id="jd-manage">Manage job</h3>
+          <section className="card dash-section" id="jd-manage">
+            <header className="job-sec__head">
+              <h2 className="job-sec__title">Manage job</h2>
+            </header>
             <form onSubmit={submitAddTask} className="dash-row" aria-label="Add a task">
               <input
                 value={taskDesc}
@@ -1355,8 +1405,8 @@ export function FieldOpsJobTracker({
                     <form onSubmit={submitEditContacts} aria-label="Edit routing and contacts">
                       <RoutingFields routing={editRouting} onChange={setEditRouting} />
                       <div className="dash-row">
-                        <button type="submit" disabled={actionBusy} className="btn--primary">Save routing</button>{" "}
-                        <button type="button" onClick={() => setEditContactsOpen(false)} className="btn--secondary">Cancel</button>
+                        <button type="submit" disabled={actionBusy} className="btn btn--primary">Save routing</button>{" "}
+                        <button type="button" onClick={() => setEditContactsOpen(false)} className="btn btn--secondary">Cancel</button>
                       </div>
                     </form>
                   ) : (
@@ -1366,7 +1416,7 @@ export function FieldOpsJobTracker({
                         setEditRouting(routingFormFromJob(job));
                         setEditContactsOpen(true);
                       }}
-                      className="btn--edit"
+                      className="btn btn--edit"
                     >
                       Edit job details
                     </button>
@@ -1377,14 +1427,11 @@ export function FieldOpsJobTracker({
           </section>
         )}
 
-        {/* Archive lives in its OWN section at the bottom of the manage area — deliberately away
-            from the routine active/inactive selector above. That one is day-to-day; this relocates
-            the job's folders across two external systems. The panel renders nothing at all unless
-            the viewer holds cap.job.archive (the worker withholds the block, so this is not a
-            UI-only gate). */}
         {job.client && (
-          <section className="card dash-section">
-            <h3 className="dash-detail__h2" id="jd-client">Client</h3>
+          <section className="card dash-section" id="jd-client">
+            <header className="job-sec__head">
+              <h2 className="job-sec__title">Client</h2>
+            </header>
             <div>{job.client.name}</div>
             <div className="muted">
               {[job.client.contact, job.client.phone, job.client.email].filter(Boolean).join(" · ") || "—"}
@@ -1392,13 +1439,14 @@ export function FieldOpsJobTracker({
           </section>
         )}
 
-        <section className="card dash-section">
-          <h3 className="dash-detail__h2" id="jd-crew">
-            Assigned crew ({job.crew.length})
+        <section className="card dash-section" id="jd-crew">
+          <header className="job-sec__head">
+            <h2 className="job-sec__title">Assigned crew</h2>
+            <span className="job-sec__count">{job.crew.length} on crew</span>
             {setupBanner === job.job_id && job.crew.length === 0 && (
-              <span className="dash-pill dash-pill--warn"> needs crew</span>
+              <span className="dash-pill dash-pill--warn">needs crew</span>
             )}
-          </h3>
+          </header>
           {job.crew.length ? (
             <div className="dash-chips">
               {job.crew.map((p) => (
@@ -1418,7 +1466,14 @@ export function FieldOpsJobTracker({
               ))}
             </div>
           ) : (
-            <div className="dash-unavail">No crew assigned.</div>
+            <div className="sched-empty">
+              <p className="sched-empty__title">No crew on this job</p>
+              <p>
+                {canAssignCrew
+                  ? "Assign someone with the picker below."
+                  : "People placed on this job will appear here."}
+              </p>
+            </div>
           )}
           {canAssignCrew && (
             <form onSubmit={submitAssignCrew} className="dash-row" aria-label="Assign crew to job">
@@ -1434,13 +1489,17 @@ export function FieldOpsJobTracker({
                     <option key={p.id} value={p.id}>{p.name}{p.trade ? ` · ${p.trade}` : ""}</option>
                   ))}
               </select>{" "}
-              <button type="submit" disabled={actionBusy} className="btn--primary">Add to crew</button>
+              <button type="submit" disabled={actionBusy} className="btn btn--primary">Add to crew</button>
             </form>
           )}
         </section>
 
-        <section className="card dash-section">
-          <h3 className="dash-detail__h2" id="jd-tasks">Tasks</h3>
+        <section className="card dash-section" id="jd-tasks">
+          <header className="job-sec__head">
+            <h2 className="job-sec__title">Tasks</h2>
+            {/* "shown", never a total — the tasks leg is paged (see the hero comment). */}
+            <span className="job-sec__count">{openTasks} open · {job.tasks.length} shown</span>
+          </header>
           {job.tasks.length ? (
             <ul className="dash-tasklist">
               {job.tasks.map((t) => {
@@ -1503,13 +1562,23 @@ export function FieldOpsJobTracker({
               })}
             </ul>
           ) : (
-            <div className="dash-unavail">No tasks.</div>
+            <div className="sched-empty">
+              <p className="sched-empty__title">No tasks yet</p>
+              <p>
+                {canAssignTasks
+                  ? "Add the first task with the form above."
+                  : "Tasks assigned on this job will appear here."}
+              </p>
+            </div>
           )}
           {taskCursor && <LoadMoreBtn leg="task" />}
         </section>
 
-        <section className="card dash-section">
-          <h3 className="dash-detail__h2" id="jd-time">Time entries</h3>
+        <section className="card dash-section" id="jd-time">
+          <header className="job-sec__head">
+            <h2 className="job-sec__title">Time entries</h2>
+            <span className="job-sec__count">{fmtHours(hoursLogged)} h logged</span>
+          </header>
           {/* R7 — a closed job (legacy status 'closed' ⟺ jobs.active=0, which the Worker's
               time-write job guard rejects) says so instead of silently dropping the form.
               G2.3 — EXCEPT in amend mode: corrections are deliberately allowed on a closed job
@@ -1525,7 +1594,7 @@ export function FieldOpsJobTracker({
                   <SectionError message={myCrewError} onRetry={loadMyCrew} what="loading your crew" />
                 )}
                 {amendTarget && (
-                  <div className="banner banner--ok" role="status">
+                  <div className="wpr-banner wpr-banner--ok" role="status">
                     Correcting the {fmtHours(amendTarget.hours)}h entry for {amendTarget.personnel_name ?? "Job-level"} recorded{" "}
                     {fmtDateTime(amendTarget.recorded_at)} — saving creates a corrected copy; the original stays in the record.{" "}
                     <button type="button" className="btn btn--secondary" onClick={resetTimeForm}>
@@ -1604,7 +1673,7 @@ export function FieldOpsJobTracker({
                     placeholder="Notes (optional)"
                     maxLength={2000}
                   />{" "}
-                  <button type="submit" disabled={actionBusy} className="btn--primary">
+                  <button type="submit" disabled={actionBusy} className="btn btn--primary">
                     {amendTarget ? "Save correction" : "Log time"}
                   </button>
                 </form>
@@ -1630,13 +1699,13 @@ export function FieldOpsJobTracker({
                     recorder-or-manager, worker-computed) — Edit stays on a voided row (amending a
                     void is the recovery path); Void hides there (a void of a void is meaningless). */}
                 {job.time_entries.map((t) => (
-                  <tr key={t.uuid} className="dash-row" style={t.voided ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
+                  <tr key={t.uuid} className={t.voided ? "dash-row job-time--voided" : "dash-row"}>
                     <td className="dash-table__name">
                       {t.personnel_name ?? "Job-level"}
                       {t.voided ? (
                         <>
                           {" "}
-                          <span className="dash-pill dash-pill--danger" style={{ textDecoration: "none" }}>voided</span>
+                          <span className="dash-pill dash-pill--danger">voided</span>
                         </>
                       ) : t.amended ? (
                         <>
@@ -1651,7 +1720,7 @@ export function FieldOpsJobTracker({
                     <td data-cell="Recorded">{fmtDateTime(t.recorded_at)}</td>
                     <td data-cell="Notes">{t.notes ?? ""}</td>
                     {job.time_entries.some((x) => x.can_amend) && (
-                      <td data-cell="Fix" style={{ textDecoration: "none" }}>
+                      <td data-cell="Fix">
                         {t.can_amend && (
                           <>
                             <button
@@ -1717,18 +1786,26 @@ export function FieldOpsJobTracker({
               </tbody>
             </table>
           ) : (
-            <div className="dash-unavail">No time logged.</div>
+            <div className="sched-empty">
+              <p className="sched-empty__title">No time logged</p>
+              <p>
+                {canLogTime && job.status !== "closed"
+                  ? "Log the first hours with the form above."
+                  : "Hours logged against this job will appear here."}
+              </p>
+            </div>
           )}
           {timeCursor && <LoadMoreBtn leg="time" />}
         </section>
 
-        <section className="card dash-section">
-          <h3 className="dash-detail__h2" id="jd-equipment">
-            Equipment on site ({job.equipment_on_site.length})
+        <section className="card dash-section" id="jd-equipment">
+          <header className="job-sec__head">
+            <h2 className="job-sec__title">Equipment on site</h2>
+            <span className="job-sec__count">{job.equipment_on_site.length} on site</span>
             {setupBanner === job.job_id && job.equipment_on_site.length === 0 && (
-              <span className="dash-pill dash-pill--warn"> needs equipment</span>
+              <span className="dash-pill dash-pill--warn">needs equipment</span>
             )}
-          </h3>
+          </header>
           {job.equipment_on_site.length ? (
             <div className="dash-chips">
               {job.equipment_on_site.map((e) => (
@@ -1736,7 +1813,14 @@ export function FieldOpsJobTracker({
               ))}
             </div>
           ) : (
-            <div className="dash-unavail">No equipment on site.</div>
+            <div className="sched-empty">
+              <p className="sched-empty__title">No equipment on site</p>
+              <p>
+                {canFieldEquip
+                  ? "Move a unit here with the picker below."
+                  : "Equipment moved to this job will appear here."}
+              </p>
+            </div>
           )}
           {canFieldEquip && (
             <form onSubmit={submitAssignEquip} className="dash-row" aria-label="Assign equipment to job">
@@ -1750,7 +1834,7 @@ export function FieldOpsJobTracker({
                   <option key={eq.id} value={eq.id}>{eq.name}{eq.identifier ? ` · ${eq.identifier}` : ""}</option>
                 ))}
               </select>{" "}
-              <button type="submit" disabled={actionBusy} className="btn--primary">Move here</button>
+              <button type="submit" disabled={actionBusy} className="btn btn--primary">Move here</button>
             </form>
           )}
         </section>
@@ -1764,8 +1848,8 @@ export function FieldOpsJobTracker({
             on a job with a BOM it put every expected line straight onto a page that already
             carries nineteen sections. The drawer means materials are one tap away instead
             of always in the way — the posture the Schedule page's copy already uses. */}
-        {(caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage")) && (
-        <details className="sched-drawer" aria-label="Expected materials">
+        {canSeeMaterials && (
+        <details className="sched-drawer" id="jd-materials" aria-label="Expected materials">
           <summary>
             Materials
             <span className="sched-drawer__note">Expected lines, loads and delivery marks</span>
@@ -1783,13 +1867,15 @@ export function FieldOpsJobTracker({
             see it (schedule visibility is all-roles, decision 4); the import affordances on
             the page itself re-gate on cap.jobtracker.manage server-side. */}
         {onOpenSchedule && (
-          <section className="card dash-section">
-            <h3 className="dash-detail__h2" id="jd-schedule">Schedule</h3>
+          <section className="card dash-section job-link" id="jd-schedule">
+            <header className="job-sec__head">
+              <h2 className="job-sec__title">Schedule</h2>
+            </header>
             <p className="dash-hint">
               The job&apos;s living task list — what the project schedule says is happening,
               with dates, milestones and deliveries.
             </p>
-            <button className="btn" onClick={() => onOpenSchedule(job.job_id)}>
+            <button className="btn btn--secondary" onClick={() => onOpenSchedule(job.job_id)}>
               Open schedule →
             </button>
           </section>
@@ -1799,20 +1885,25 @@ export function FieldOpsJobTracker({
             card beside Materials; rendered only for the office capability, and the Worker
             re-gates every call regardless of what this hides. */}
         {onOpenWeeklyReport && (
-          <section className="card dash-section">
-            <h3 className="dash-detail__h2" id="jd-weekly">Weekly production report</h3>
+          <section className="card dash-section job-link" id="jd-weekly">
+            <header className="job-sec__head">
+              <h2 className="job-sec__title">Weekly production report</h2>
+            </header>
             <p className="dash-hint">
               Safety statistics, labor hours by company, pending RFIs and submittals, weather days
               and photo selection for the client-facing weekly report.
             </p>
-            <button className="btn" onClick={() => onOpenWeeklyReport(job.job_id)}>
+            <button className="btn btn--secondary" onClick={() => onOpenWeeklyReport(job.job_id)}>
               Open weekly report inputs →
             </button>
           </section>
         )}
 
-        <section className="card dash-section">
-          <h3 className="dash-detail__h2" id="jd-inspections">Inspections</h3>
+        <section className="card dash-section" id="jd-inspections">
+          <header className="job-sec__head">
+            <h2 className="job-sec__title">Inspections</h2>
+            <span className="job-sec__count">{job.inspections.length} shown</span>
+          </header>
           {job.inspections.length ? (
             /* --stack + data-cell: this was the one table on the page without the
                kit's phone treatment, so three columns scrolled sideways instead of
@@ -1836,26 +1927,60 @@ export function FieldOpsJobTracker({
               </tbody>
             </table>
           ) : (
-            <div className="dash-unavail">No inspections.</div>
+            <div className="sched-empty">
+              <p className="sched-empty__title">No inspections yet</p>
+              <p>Inspections performed on this job&apos;s equipment will appear here.</p>
+            </div>
           )}
           {inspCursor && <LoadMoreBtn leg="insp" />}
         </section>
 
-        {/* D4 — per-job daily-form requirements (self-contained section; cap.checklist.manage). */}
-        {canChecklist && <JobDailyRequirementsSection jobId={job.job_id} />}
+        {/* D4 — per-job daily-form requirements (self-contained section; cap.checklist.manage).
+            The wrapper div only carries the rail anchor — the component owns its section. */}
+        {canChecklist && (
+          <div id="jd-daily">
+            <JobDailyRequirementsSection jobId={job.job_id} />
+          </div>
+        )}
 
         {/* DANGER ZONE — last, not ninth of nineteen. Archiving relocates seven
             containers across Smartsheet and Box; it used to render between the routing
             form and the client card, in the middle of the reading order. A destructive
-            action belongs at the end, behind its own heading. JobArchivePanel renders
-            null without cap.job.archive, so this whole block self-hides. */}
-        <div className="job-danger">
-          <p className="job-danger__label">Danger zone</p>
-          <JobArchivePanel
-            job={job}
-            canArchive={(user?.capabilities ?? []).includes("cap.job.archive")}
-            onChanged={reloadDetail}
-          />
+            action belongs at the end, behind its own heading. The WRAPPER is gated on the
+            same pair the panel checks (cap.job.archive + the worker-withheld job.archive):
+            the panel alone self-hiding left every other viewer a bare red "Danger zone"
+            label over nothing. */}
+        {canArchiveViewer && job.archive && (
+          <div className="job-danger" id="jd-danger">
+            <p className="job-danger__label">Danger zone</p>
+            <JobArchivePanel
+              job={job}
+              canArchive={canArchiveViewer}
+              onChanged={reloadDetail}
+            />
+          </div>
+        )}
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // A PENDING detail open (deep link, list click, post-create route-in) renders the detail
+  // chrome with skeletons. Without this branch the component fell through and put the whole
+  // JOB LIST on screen for the load window of every cold /jobs/:id visit. The failure path
+  // already resets view to "list" (openJobById), so this branch cannot dead-end.
+  if (view === "detail") {
+    return (
+      <PageShell onHome={onBack} wide>
+        <div className="dash-back-btn">
+          <button onClick={handleBack} className="btn btn--secondary">← Back to jobs</button>
+        </div>
+        <p className="page__heading--eyebrow">Job tracker</p>
+        <div aria-busy="true" aria-label="Loading job">
+          <div className="sched-skel" />
+          <div className="sched-skel" />
+          <div className="sched-skel" />
         </div>
       </PageShell>
     );
@@ -1920,7 +2045,7 @@ export function FieldOpsJobTracker({
               </div>
               <RoutingFields routing={createRouting} onChange={setCreateRouting} showName={false} safetyCcContacts={deliveryContacts} />
               <div className="dash-row">
-                <button type="submit" disabled={actionBusy} className="btn--primary">Create</button>{" "}
+                <button type="submit" disabled={actionBusy} className="btn btn--primary">Create</button>{" "}
                 <button
                   type="button"
                   onClick={() => {
@@ -1931,19 +2056,21 @@ export function FieldOpsJobTracker({
                     setNewJobClientId("");
                     setNewJobClient("");
                   }}
-                  className="btn--secondary"
+                  className="btn btn--secondary"
                 >
                   Cancel
                 </button>
               </div>
             </form>
           ) : (
-            <button onClick={() => setNewJobOpen(true)} className="btn--primary">+ New job</button>
+            <button onClick={() => setNewJobOpen(true)} className="btn btn--primary">+ New job</button>
           )}
         </div>
       )}
       {actionMsg && (
-        <p className={`banner ${actionMsg.ok ? "banner--ok" : "banner--err"}`}>{actionMsg.text}</p>
+        <p className={`wpr-banner ${actionMsg.ok ? "wpr-banner--ok" : "wpr-banner--warn"}`} role="status">
+          {actionMsg.text}
+        </p>
       )}
       {/* R7 never-silent: list failures carry a working Retry, and the error is mutually exclusive
           with the empty state (an error must never masquerade as "no jobs"). */}
@@ -2000,7 +2127,7 @@ export function FieldOpsJobTracker({
 
           {cursor && (
             <div className="dash-row dash-load-more">
-              <button onClick={loadMore} disabled={loading} className="btn--secondary">
+              <button onClick={loadMore} disabled={loading} className="btn btn--secondary">
                 {loading ? "Loading..." : "Load more"}
               </button>
             </div>
