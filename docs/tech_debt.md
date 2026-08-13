@@ -16,8 +16,41 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## [OPEN 2026-08-13, high] Public-window exposure remediation DEFERRED — repo is PRIVATE; history rewrite pending any re-publicization
 
-**Tag:** `safety-portal`, `frontend`, `css`, `design`.
+The exec repo was PUBLIC from creation (2026-07-25) to 2026-08-13, when a four-lens exposure screen
+plus an operator directive flipped it PRIVATE. **No secrets leaked** (gitleaks-green, confirmed by
+two independent screen lenses; the `test.pm` README credential verified DEAD on the live portal —
+401, absent from prod D1). What leaked was real PII / business-data in tracked `.json`/`.md` and —
+mostly — git HISTORY: the Evergreen org chart with exec emails, two personal cell numbers, the
+purchaser legal entity/address/invoice routing, real filled PO PDFs, the vendor roster with
+pricing, project BOMs, verbatim PO/subcontract legal terms, and a still-server-served dangling
+commit (`a98bc0e`, the halted vendor-backup PR #128). Full detail (kept out of this file to avoid
+re-enumerating specifics): auto-memory `repo-was-public-exposure-window`, workflow
+`wf_d0daac04-960` journal, and the 2026-08-13 session-log addendum.
+
+**Operator decision (2026-08-13): handle the exposure by staying PRIVATE; do NOT rewrite history
+now.** Rationale: the repo is private with 0 forks, so a rewrite retrieves no already-scraped copy
+and only matters before re-publicization or before adding a collaborator who shouldn't see history.
+
+**Deferred / still open:**
+- A git history rewrite (`git filter-repo` + force-push, **operator-run** — force-push is
+  CC-hook-blocked) MUST run BEFORE the repo is ever made public again or shared with a new
+  collaborator. Steps staged at `scratchpad/REMEDIATION-operator-run.md` (deliberately uncommitted).
+- The dangling commit `a98bc0e` is git-unremovable server-side; only a **GitHub Support purge**
+  (or the rewrite orphaning it) erases it.
+- **Branch protection is DISABLED** while the repo is private on the free plan — direct push-to-main
+  is no longer server-blocked; restore via GitHub Pro or keep the manual poll-CI-then-merge
+  discipline used for PRs #128/#129.
+- Treat the Coker/KSI/Bonacci/Deeplake schedule-fixture anonymization map as **BURNED** (`main`
+  commit `40c5535` published the reversal).
+
+**Tag:** `security`, `exposure`, `host-migration`, `repo-topology`, `high`.
+
+**Revisit when:** BEFORE any decision to make the repo public again or add a collaborator; or when
+GitHub Pro / branch protection is restored.
+
+Surfaced: 2026-08-13 exposure screen + operator private-flip decision.
 
 ## Manifest-import merge-mode and shipping-log-commit live-fires deferred [OPEN 2026-08-11, medium]
 
