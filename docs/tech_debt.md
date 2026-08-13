@@ -2784,3 +2784,43 @@ Playwright-layer.
 computed-style checks) of a Safety Portal SPA change, or someone has spare time to bisect the cause.
 
 Surfaced: 2026-08-12 portal design session.
+
+**Update 2026-08-12 evening (PR #119) — the diagnostic step above was run, and it isolated the
+layer.** With Claude-in-Chrome also unavailable this session, a bare `playwright` install (1.62.1)
+into the scratchpad, driving the already-cached `~/Library/Caches/ms-playwright` webkit-2336 build
+directly with no MCP server in the loop, took clean full-page screenshots at 390/768/1024/1440 —
+the exact recipe this entry's own "Fix shape" predicted. **The practical blocker this entry
+describes (visual verification is numeric-only) is RESOLVED** — real pixel-level screenshots are
+available again, just via bare Playwright instead of the MCP tool. **Still genuinely open, lower
+priority:** why the Playwright MCP server/wrapper itself times out on this host is still
+undiagnosed — narrowed to MCP-layer specifically (not Playwright, not WebKit, not this host's
+Playwright install in general), but the MCP server's own logs/config were not inspected. Revisit
+only if the bare-driver workaround itself breaks, or someone wants the MCP tool's convenience back.
+
+## [OPEN 2026-08-12, low] `WeeklyReportPage`'s rail fix has no page-local regression test (the fragment-nav/popstate remount class)
+
+PR #119 found a real bug class in in-page nav anchors: a bare `<a href="#section">` is still a real
+browser navigation — the tap fires `popstate`, the App shell bumps `popEpoch`, and the routed page
+**remounts** (full reload, scroll reset to 0; live-proven in headless WebKit, `popped:1`
+`remounted:true`). On `WeeklyReportPage` the consequence is worse than annoyance: the remount
+silently discards an unsaved draft (`beforeunload` only covers real unloads).
+
+**PR #119 fixed BOTH known instances in the same commit** — the job-detail rail AND
+`WeeklyReportPage`'s rail (`WeeklyReportPage.tsx` ~:415-424) each got
+`onClick={e => { e.preventDefault(); document.getElementById(id)?.scrollIntoView(); }}` — and a
+same-day sweep (`grep 'href={\`#\|href="#' safety_portal/src --include='*.tsx'`) found **no other
+fragment-anchor site in the SPA**. What remains open is only this: the regression test asserting
+`fireEvent.click(...)` returns `false` (defaultPrevented) covers the JOB-DETAIL rail
+(`FieldOpsJobTracker.test.tsx`, "a rail chip tap scrolls in place"); `WeeklyReportPage`'s own suite
+has no equivalent, so a future refactor of ITS rail could silently reintroduce the draft-loss path.
+
+**Fix shape:** one test in `WeeklyReportPage`'s suite mirroring the job-detail one. And the class
+reflex for review: any NEW in-page `<a href="#…">` in `safety_portal/src` needs the preventDefault
+treatment (auto-memory `fragment-anchors-remount-the-spa`).
+
+**Tag:** `safety-portal`, `frontend`, `test-coverage`, `progress-reporting`.
+
+**Revisit when:** the next session touches `WeeklyReportPage` or its tests.
+
+Surfaced: 2026-08-12 evening, PR #119 job-detail design pass part three (entry corrected same
+night — the first draft wrongly claimed WeeklyReportPage's fix was deferred out of #119).
