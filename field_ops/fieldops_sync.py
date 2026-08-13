@@ -45,9 +45,16 @@ Failure modes
 - Missing base URL or bearer → FAIL-CLOSED: do NOT sync; CRITICAL (won't self-heal) +
   ERROR heartbeat. 401 on pending-jobs → CRITICAL; other transport error → ERROR; both
   leave every job dirty for the next cycle.
-- Per-job fence: `PicklistViolationError` / `SmartsheetValidationError` (permanent) → a
+- Per-job fence: `PicklistViolationError` / `SmartsheetValidationError` /
+  `SmartsheetPermissionError` / `SmartsheetNotFoundError` (all permanent) → a
   `progress_reports` Review-Queue row (carrying the partial-commit state — which sheet failed and
-  whether safety already mirrored), job left dirty; `PortalAuthError` on the mark-mirrored
+  whether safety already mirrored), job left dirty. The last two were added 2026-08-13: a §46
+  share change or a deleted tracker sheet used to fall to the transient arm and log "re-projects
+  next cycle" forever — no ticket, no CRITICAL, no operator ever told, on a retry that could
+  never succeed. Every Review-Queue write on this path now goes through `review_queue.safe_add`
+  (never `add`): the ticket is best-effort, so a Review-Queue outage can no longer abort the
+  cycle and skip the later mirror passes, the heartbeat and the watchdog marker.
+  `PortalAuthError` on the mark-mirrored
   write-back (401, non-transient) → CRITICAL (`fieldops_mark_mirrored_unauthorized`, see runbook
   Symptom E), job left dirty; any other `SmartsheetError` / `PortalTransportError` (transient) →
   ERROR-logged, job left dirty. One bad job never kills the cycle.
@@ -885,6 +892,11 @@ def _mirror_job(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         # PERMANENT — the row will never succeed as-is (a bad lifecycle value, an HTTP-400
         # reject). Route to the Review Queue; leave the job dirty (the operator has a ticket).
@@ -1026,7 +1038,8 @@ def _route_to_review(
         if mirrored_safety
         else "nothing mirrored yet — failed on the safety sheet"
     )
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream="progress_reports",
         summary=(
             f"field-ops up-sync: PERMANENT failure mirroring job {job_id!r} on the {failed_sheet} "
@@ -1146,6 +1159,11 @@ def _mirror_hours_pass(base_url: str, bearer: str) -> dict[str, int]:
         except (
             picklist_validation.PicklistViolationError,
             smartsheet_client.SmartsheetValidationError,
+            # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+            # the fault fell to the transient arm below and logged "re-projects next cycle"
+            # forever — no ticket, no CRITICAL, no operator ever told.
+            smartsheet_client.SmartsheetPermissionError,
+            smartsheet_client.SmartsheetNotFoundError,
         ) as exc:
             out["reviewed"] += 1
             _route_hours_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
@@ -1193,6 +1211,11 @@ def _mirror_hours_pass(base_url: str, bearer: str) -> dict[str, int]:
             except (
                 picklist_validation.PicklistViolationError,
                 smartsheet_client.SmartsheetValidationError,
+                # A §46 share change or a deleted tracker sheet is PERMANENT: without these
+                # two the fault fell to the transient arm and logged "re-projects next
+                # cycle" forever — no ticket, no CRITICAL, no operator ever told.
+                smartsheet_client.SmartsheetPermissionError,
+                smartsheet_client.SmartsheetNotFoundError,
             ) as exc:
                 out["reviewed"] += 1
                 _route_hours_to_review(
@@ -1242,7 +1265,8 @@ def _route_hours_to_review(
     *, phase: str, entry_uuid: str | None = None,
 ) -> None:
     """Route a PERMANENTLY-failed hours mirror to ITS_Review_Queue (workstream progress_reports)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream="progress_reports",
         summary=(
             f"field-ops Hours Log up-sync: PERMANENT failure ({phase}) for job {job_id!r} "
@@ -1385,6 +1409,11 @@ def _reconcile_job_with_equipment(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_equipment_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
@@ -1426,6 +1455,11 @@ def _reconcile_job_with_equipment(
         except (
             picklist_validation.PicklistViolationError,
             smartsheet_client.SmartsheetValidationError,
+            # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+            # the fault fell to the transient arm below and logged "re-projects next cycle"
+            # forever — no ticket, no CRITICAL, no operator ever told.
+            smartsheet_client.SmartsheetPermissionError,
+            smartsheet_client.SmartsheetNotFoundError,
         ) as exc:
             out["reviewed"] += 1
             _route_equipment_to_review(
@@ -1462,6 +1496,11 @@ def _reconcile_job_zeroed(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_equipment_to_review(job_id, project_name, exc, correlation_id, phase="find-sheet")
@@ -1497,6 +1536,11 @@ def _retire_equipment(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_equipment_to_review(job_id, project_name, exc, correlation_id, phase="retire")
@@ -1517,7 +1561,8 @@ def _route_equipment_to_review(
 ) -> None:
     """Route a PERMANENTLY-failed equipment mirror to ITS_Review_Queue (workstream
     progress_reports)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream="progress_reports",
         summary=(
             f"field-ops Equipment snapshot up-sync: PERMANENT failure ({phase}) for job {job_id!r} "
@@ -1660,6 +1705,11 @@ def _reconcile_job_with_materials(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_material_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
@@ -1710,6 +1760,11 @@ def _reconcile_job_with_materials(
         except (
             picklist_validation.PicklistViolationError,
             smartsheet_client.SmartsheetValidationError,
+            # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+            # the fault fell to the transient arm below and logged "re-projects next cycle"
+            # forever — no ticket, no CRITICAL, no operator ever told.
+            smartsheet_client.SmartsheetPermissionError,
+            smartsheet_client.SmartsheetNotFoundError,
         ) as exc:
             out["reviewed"] += 1
             _route_material_to_review(
@@ -1746,6 +1801,11 @@ def _reconcile_job_zeroed_materials(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_material_to_review(job_id, project_name, exc, correlation_id, phase="find-sheet")
@@ -1782,6 +1842,11 @@ def _retire_materials(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_material_to_review(job_id, project_name, exc, correlation_id, phase="retire")
@@ -1802,7 +1867,8 @@ def _route_material_to_review(
 ) -> None:
     """Route a PERMANENTLY-failed material mirror to ITS_Review_Queue (workstream
     progress_reports)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream="progress_reports",
         summary=(
             f"field-ops Material List up-sync: PERMANENT failure ({phase}) for job {job_id!r} "
@@ -2040,6 +2106,11 @@ def _reconcile_job_incidents(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_incident_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
@@ -2081,6 +2152,11 @@ def _reconcile_job_incidents(
         except (
             picklist_validation.PicklistViolationError,
             smartsheet_client.SmartsheetValidationError,
+            # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+            # the fault fell to the transient arm below and logged "re-projects next cycle"
+            # forever — no ticket, no CRITICAL, no operator ever told.
+            smartsheet_client.SmartsheetPermissionError,
+            smartsheet_client.SmartsheetNotFoundError,
         ) as exc:
             out["reviewed"] += 1
             _route_incident_to_review(
@@ -2110,7 +2186,8 @@ def _route_incident_to_review(
 ) -> None:
     """Route a PERMANENTLY-failed incident mirror to ITS_Review_Queue (workstream
     progress_reports)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream="progress_reports",
         summary=(
             f"field-ops Material Incidents up-sync: PERMANENT failure ({phase}) for job {job_id!r} "
@@ -2205,6 +2282,11 @@ def _reconcile_job_receipts(
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
+        # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+        # the fault fell to the transient arm below and logged "re-projects next cycle"
+        # forever — no ticket, no CRITICAL, no operator ever told.
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
         _route_receipt_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
@@ -2250,6 +2332,11 @@ def _reconcile_job_receipts(
         except (
             picklist_validation.PicklistViolationError,
             smartsheet_client.SmartsheetValidationError,
+            # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
+            # the fault fell to the transient arm below and logged "re-projects next cycle"
+            # forever — no ticket, no CRITICAL, no operator ever told.
+            smartsheet_client.SmartsheetPermissionError,
+            smartsheet_client.SmartsheetNotFoundError,
         ) as exc:
             out["reviewed"] += 1
             _route_receipt_to_review(
@@ -2280,7 +2367,8 @@ def _route_receipt_to_review(
 ) -> None:
     """Route a PERMANENTLY-failed receipt mirror to ITS_Review_Queue (workstream
     progress_reports)."""
-    review_queue.add(
+    review_queue.safe_add(
+        script_name=SCRIPT_NAME,
         workstream="progress_reports",
         summary=(
             f"field-ops Material Receipts up-sync: PERMANENT failure ({phase}) for job {job_id!r} "

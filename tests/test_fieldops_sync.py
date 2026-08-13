@@ -1678,3 +1678,87 @@ def test_sync_gate_transient_error_resolves_to_default(mocker):
     mocker.patch("field_ops.fieldops_sync.error_log.log")
 
     assert fieldops_sync._sync_enabled() is fieldops_sync.DEFAULT_SYNC_ENABLED
+
+
+# ── D14/D15 resilience (2026-08-13) ────────────────────────────────────────────────────────────
+#
+# D14 — every Review-Queue write in this daemon goes through `safe_add`, never `add`. `add`
+# propagates SmartsheetError BY CONTRACT, and each `_route_*_to_review` is invoked from inside an
+# unfenced `except` handler which `_sync_inside_lock` calls unfenced in turn — so a Review-Queue
+# blip aborted the cycle after the failing pass, skipping every LATER mirror pass, the heartbeat
+# and the watchdog marker. The ticket is best-effort; the cycle is not.
+#
+# D15 — the permanent-exception tuples listed only PicklistViolationError +
+# SmartsheetValidationError, so a §46 share change (SmartsheetPermissionError) or a deleted
+# tracker sheet (SmartsheetNotFoundError) fell to the transient arm and logged "re-projects next
+# cycle" forever, on a retry that could never succeed.
+
+
+def test_a_review_queue_outage_never_takes_the_cycle_with_it(_patch):
+    """A Review-Queue write failure must not abort the cycle — the ticket is best-effort.
+
+    Before the safe_add swap this RED-lit with the SmartsheetError escaping `_sync_inside_lock`.
+    """
+    _patch["materials_enabled"].return_value = True
+    _patch["material_snapshot"].return_value = _mat_snap([_mat_row("u-10")])
+    _patch["upsert_mat"].side_effect = smartsheet_client.SmartsheetValidationError("HTTP 400")
+    # …and the Review-Queue itself is down while we try to file the ticket for it.
+    _patch["review"].side_effect = smartsheet_client.SmartsheetError("review queue unreachable")
+
+    stats = fieldops_sync._sync_inside_lock()  # must NOT raise
+
+    assert stats.materials_reviewed == 1
+    # The cycle still completed: heartbeat row + watchdog marker are what watchdog Check C reads,
+    # and skipping them is how a Review-Queue blip used to masquerade as a dead daemon.
+    _patch["hb_row"].assert_called()
+    _patch["marker"].assert_called()
+
+
+def test_no_review_queue_write_in_this_daemon_can_raise():
+    """AST tooth: zero `review_queue.add(` call nodes — every site must be `safe_add`.
+
+    A substring scan is not reach; this walks the tree so a re-introduced `add(` fails here with
+    its line number rather than surfacing as a mystery aborted cycle in production.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path(fieldops_sync.__file__).read_text()
+    offenders = [
+        node.lineno
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "review_queue"
+    ]
+    assert offenders == [], (
+        f"review_queue.add (raises by contract) at fieldops_sync.py lines {offenders} — "
+        "use review_queue.safe_add so a Review-Queue outage cannot abort the mirror cycle"
+    )
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        smartsheet_client.SmartsheetPermissionError("HTTP 403"),
+        smartsheet_client.SmartsheetNotFoundError("HTTP 404"),
+    ],
+    ids=["permission_403", "not_found_404"],
+)
+def test_a_permission_or_missing_sheet_fault_is_permanent_not_transient(_patch, exc):
+    """A §46 share change / deleted sheet must ticket, not retry forever.
+
+    Both used to land in the transient arm: `errors` incremented, "re-projects next cycle"
+    logged, and no ticket — on a retry that can never succeed without operator action.
+    """
+    _patch["materials_enabled"].return_value = True
+    _patch["material_snapshot"].return_value = _mat_snap([_mat_row("u-10")])
+    _patch["ensure_mat_sheet"].side_effect = exc
+
+    stats = fieldops_sync._sync_inside_lock()
+
+    assert stats.materials_reviewed == 1, "a permanent fault must route to review"
+    assert stats.materials_errors == 0, "…and must NOT be counted as a transient error"
+    _patch["review"].assert_called()
