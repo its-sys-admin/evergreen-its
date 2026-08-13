@@ -9,6 +9,8 @@ import { call, get, post, provision, login, seedJob } from "./helpers";
 // called requireCapability on them — the portal's core submit + form-request surfaces gated on
 // bare requireSession. This suite locks the enforcement added at worker/index.ts:
 //   • POST /api/submit                          → cap.form.submit
+//   • GET  /api/recent                          → cap.form.submit   (added 2026-08-13 — the
+//     one member of the family this pass MISSED; it gated on bare requireSession alone)
 //   • POST /api/submissions/:uuid/request-pdf   → cap.form.request
 //   • GET  /api/submissions/:uuid/status        → cap.form.request
 //   • GET  /api/submissions/:uuid/pdf           → cap.form.request
@@ -93,8 +95,46 @@ describe("no-lockout regression — every seeded role still passes (the 0013/002
     }
   });
 
+  it("GET /api/recent (cap.form.submit): all three roles still get Amend prefill", async () => {
+    const uuid = crypto.randomUUID();
+    expect((await post(submitter, "/api/submit", { ...submitBody(), submission_uuid: uuid })).status).toBe(200);
+    for (const cookie of [submitter, manager, admin]) {
+      const res = await get(cookie, `/api/recent?job=${JOB}&form=jha&date=2026-07-01`);
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect((await res.json<{ submission: { submission_uuid: string } | null }>()).submission?.submission_uuid).toBe(uuid);
+    }
+  });
+
+  it("CROSS-ACTOR prefill is INTENDED — a colleague loads your submission, and that is the workflow", async () => {
+    // Operator decision 2026-08-13, pinned here so nobody "hardens" this into an ownership
+    // scope later: anyone who can submit a form may load and amend a PEER's prior submission
+    // on the same job. The capability gate narrows WHO may prefill; it deliberately does not
+    // narrow prefill to your own rows.
+    const uuid = crypto.randomUUID();
+    expect((await post(submitter, "/api/submit", { ...submitBody(), submission_uuid: uuid })).status).toBe(200);
+    const res = await get(manager, `/api/recent?job=${JOB}&form=jha&date=2026-07-01`);
+    expect(res.status).toBe(200);
+    const body = await res.json<{ submission: { submission_uuid: string; values: unknown } | null }>();
+    expect(body.submission?.submission_uuid, "a peer's submission must be prefillable").toBe(uuid);
+    expect(body.submission?.values).toEqual({ hazards: "none" });
+  });
+
+  it("prefill is NOT age-bounded — a submission near the 90-day retention edge still prefills", async () => {
+    // Operator decision 2026-08-13: no age window. The row is retained 90 days regardless, so
+    // reaching back costs nothing; a shorter window would remove a working capability to buy
+    // nothing. This fails the moment someone adds a created_at floor to /api/recent.
+    const uuid = crypto.randomUUID();
+    expect((await post(submitter, "/api/submit", { ...submitBody(), submission_uuid: uuid })).status).toBe(200);
+    const old = Math.floor(Date.now() / 1000) - 89 * 86_400;
+    await env.DB.prepare("UPDATE submissions SET created_at = ?1 WHERE submission_uuid = ?2").bind(old, uuid).run();
+    const res = await get(submitter, `/api/recent?job=${JOB}&form=jha&date=2026-07-01`);
+    expect(res.status).toBe(200);
+    expect((await res.json<{ submission: { submission_uuid: string } | null }>()).submission?.submission_uuid).toBe(uuid);
+  });
+
   it("anon is still 401 on every gated route (the session gate stays FIRST)", async () => {
     expect((await call("/api/submit", { method: "POST", body: JSON.stringify(submitBody()) })).status).toBe(401);
+    expect((await call(`/api/recent?job=${JOB}&form=jha&date=2026-07-01`)).status).toBe(401);
     expect((await call(`/api/filed?job_id=${JOB}`)).status).toBe(401);
     expect((await call("/api/filed/months?job_id=x")).status).toBe(401);
     expect((await call("/api/submissions/some-uuid/status")).status).toBe(401);
@@ -111,6 +151,8 @@ describe("the gate is REAL — a revoked grant 403s immediately (per-request res
     expect(res.status).toBe(403);
     const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM submissions").first<{ n: number }>();
     expect(n!.n).toBe(0);
+    // …and prefill rides the SAME capability, so it 403s off the same revocation.
+    expect((await get(submitter, `/api/recent?job=${JOB}&form=jha&date=2026-07-01`)).status).toBe(403);
     // …and the OTHER capability's surfaces are untouched by the revocation (independent gates).
     expect((await get(submitter, `/api/filed?job_id=${JOB}`)).status).toBe(200);
     await regrant("submitter", "cap.form.submit");
