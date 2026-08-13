@@ -2047,31 +2047,52 @@ do); recorded here rather than repointing `system.operator_email`, which was off
 `system.operator_email` to `seths@evergreenmirror.com`, the one address Resend will currently
 deliver to. **Trigger: raised to next session — do not wait for the CL-10 cutover slot.**
 
-## `GET /api/recent` is session-scoped but not ownership-scoped — any authenticated portal user can read any job's latest submission payload [OPEN 2026-08-07]
+## Portal has no user↔job access model — every authenticated role can read every job's data [OPEN 2026-08-13]
 
-**Re-filed from the archived "Safety Portal M1" entry on 2026-08-07.** M1's headline defect (a submitter
-silently overwriting a peer's PENDING submission with no audit trail) no longer exists at HEAD — cross-actor
-overwrite is refused with a 409 `uuid_conflict` (`safety_portal/worker/index.ts:857`) and every replace writes
-an atomic audit row (`:924`). That entry was archived because a security-sounding headline which is false at
-HEAD distorts every read of the portal's security posture. **This narrower residual survives and is filed here
-under its own honest title so it is not lost with the archive.**
+**Supersedes the `GET /api/recent` entry (2026-08-07), whose proposed fix was not implementable.**
+That entry said to "scope the `/api/recent` query by the caller's job access (the same predicate the
+rest of the field-ops read routes use)". **No such predicate exists anywhere in the portal**, verified
+2026-08-13: `users` carries only `id / username / password_hash / created_at` (migration 0001) with no
+job linkage, and `GET /api/jobs` (`worker/index.ts:698`) serves **every active job** to any
+authenticated session. The only user↔job linkage in the schema is `personnel.username` →
+`task_assignments.job_id` (migration 0014), which is *task assignment* in the URS/field-ops lane —
+using it as an access predicate would lock a foreman out of his own job the moment he has no open task.
 
-`app.get("/api/recent", requireSession, …)` (`safety_portal/worker/index.ts:623`) gates on a valid session but
-applies **no per-job ownership predicate** — the SELECT is scoped only by job / form / date. Any authenticated
-user can therefore pull any active job's latest `submission_uuid` + payload (the Amend-prefill path). This is
-an authorization gap, not an authentication one: the caller must be logged in, so it is not remotely
-exploitable, but the portal's user population now includes **subcontractors**, which widens who "any
-authenticated user" means relative to when M1 was first written (2026-06-09).
+**Two operator decisions closed the parts that were NOT defects** (2026-08-13):
 
-**Fix:** scope the `/api/recent` query by the caller's job access (the same predicate the rest of the
-field-ops read routes use), or reject a request for a job the session has no claim on. **Adversarial review is
-definition-of-done here** — this is a D1 read-route fed by client-supplied identifiers, exactly the surface
-`portal-worker-security-reviewer` exists for; unit tests structurally cannot find an authorization gap.
-Coordinate with in-flight Worker edits before touching `index.ts`.
+- **Cross-actor prefill is INTENDED.** Anyone who can submit a form may load and amend a colleague's
+  prior submission on the same job — that is the field workflow for safety forms and daily field
+  reports alike. Scoping `/api/recent` to `actor_username` would have broken it. Pinned by
+  `test/vestigial-caps.test.ts` ("CROSS-ACTOR prefill is INTENDED").
+- **Prefill is deliberately NOT age-bounded.** It reaches back the full
+  `SUBMISSION_RETENTION_DAYS` (90). The row is retained that long regardless, and the lookup is an
+  exact seek on `idx_submissions_lookup` with `LIMIT 1`, so reaching back costs neither storage nor
+  time; a shorter window would remove a working capability to buy nothing measurable. Pinned by
+  ("prefill is NOT age-bounded").
 
-**Revisit when:** the next Worker security-hardening pass, or before the subcontractor user population grows
-beyond the current pilot set. **Tag:** `safety-portal`, `security`, `authorization`, `worker`, `medium`.
+**What was fixed:** `/api/recent` now gates on `cap.form.submit`, matching `POST /api/submit`. It was
+the ONE member of the form family the CS4 Slice-4 enforcement pass missed — its seven siblings all
+gate on a capability while it gated on bare `requireSession`. Per that pass's own lockout analysis the
+role vocabulary is CLOSED and all three roles hold the capability, so **it locks out nobody**; what it
+buys is the fail-closed posture (unknown role / D1 blip → empty capability set → 403) and the ability
+for a future scoped role to withhold prefill.
 
+**What SURVIVES, and it is the honest residual:** the capability gate is **not** an authorization
+scope-down. With no job-access model and all three roles holding every form capability, any
+authenticated user still reads any job's payload. Closing that means **building an access model** — a
+scoped role, or a real user→job membership table — which is a product decision about how the portal
+should partition data now that subcontractors hold accounts, not a code cleanup. It is NOT remotely
+exploitable (a valid session is required), which is why it is filed rather than escalated.
+
+**Fix (when the decision is taken):** introduce the membership/scoped-role model, then apply the
+predicate uniformly to `/api/jobs`, `/api/recent`, `/api/filed`, and the field-ops read routes — all of
+which share the same unscoped posture. Doing it for `/api/recent` alone would be security theatre.
+**Adversarial review is definition-of-done** (`portal-worker-security-reviewer`).
+
+**Tag:** `safety-portal`, `security`, `authorization`, `worker`, `product-decision`, `medium`.
+
+**Revisit when:** the subcontractor population grows beyond the pilot set, or any customer asks for
+job-level data partitioning.
 
 ## [OPEN 2026-08-07, high] Manifest import went live with the parser-eval go-live precondition WAIVED — the parser has never run against a real document on the production host
 

@@ -702,8 +702,32 @@ app.get("/api/jobs", requireSession, async (c) => {
   return c.json({ jobs: results });
 });
 
-/** GET /api/recent?job=&form=&date= — the latest prior submission for Amend prefill. */
-app.get("/api/recent", requireSession, async (c) => {
+/** GET /api/recent?job=&form=&date= — the latest prior submission for Amend prefill.
+ *
+ *  NO AGE BOUND, deliberately (operator decision 2026-08-13). Prefill reaches back as far as
+ *  the row exists — SUBMISSION_RETENTION_DAYS (90) — and that costs nothing: the row is kept
+ *  for 90 days regardless, for Box-verification and forensics, and the lookup is an exact seek
+ *  on idx_submissions_lookup(job_id, form_code, work_date, created_at) with LIMIT 1. A shorter
+ *  window was considered and rejected: it would have removed a working capability to buy
+ *  nothing measurable.
+ *
+ *  Cross-actor prefill is likewise INTENDED, not a leak — anyone who can submit a form may load
+ *  and amend a colleague's prior submission on the same job. That is the field workflow.
+ *
+ *  What changed here is only the gate: `cap.form.submit`, matching POST /api/submit. This route
+ *  was the one member of the form family the CS4 Slice-4 enforcement pass missed — its seven
+ *  siblings (/api/submit, the three /api/submissions/:uuid/* routes, /api/filed,
+ *  /api/filed/months, /api/request-pdfs) all gate on a capability while this gated on bare
+ *  requireSession. Per that pass's own lockout analysis the role vocabulary is CLOSED and all
+ *  three roles (admin/manager/submitter) hold cap.form.submit, so this LOCKS OUT NOBODY today.
+ *  What it buys is the same fail-closed posture (unknown role / D1 blip → empty capability set
+ *  → 403) and the ability for a future scoped role to actually withhold prefill.
+ *
+ *  It is NOT an authorization scope-down: there is no user↔job access model in this portal
+ *  (users carries no job linkage and /api/jobs serves every active job to any session), so
+ *  every authenticated role can still read any job's payload. That residual is a product
+ *  decision — a scoped role or a real job-access model — tracked in docs/tech_debt.md. */
+app.get("/api/recent", requireSession, requireCapability("cap.form.submit"), async (c) => {
   const job = c.req.query("job") ?? "";
   const form = c.req.query("form") ?? "";
   const date = c.req.query("date") ?? "";
