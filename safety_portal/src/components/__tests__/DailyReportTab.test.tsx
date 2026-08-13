@@ -82,7 +82,6 @@ const DETAIL: jobs.JobDetailResponse = {
     // Track 6: `archive` is a REQUIRED field on JobDetail, so every mock must carry it.
     // null = this job has never entered the archive workflow.
     archive: null,
-    progress: 0,
     job_no: "",
     site_phase: 0,
     routing: {

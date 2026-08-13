@@ -121,7 +121,6 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_password: "The password doesn't meet the requirements.",
   invalid_role: "That isn't a valid role.",
   invalid_project_name: "Enter a project name.",
-  invalid_progress: "Progress must be a whole number from 0 to 100.",
   invalid_lifecycle: "That isn't a valid job state.",
   // 409, not 400 — the intent is valid and the route is wrong (the use_amend_route shape).
   // Reachable only from a stale bundle or a direct call: the current UI cannot select "Archived".

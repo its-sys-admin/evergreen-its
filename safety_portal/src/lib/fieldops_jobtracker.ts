@@ -143,7 +143,6 @@ export interface JobRouting {
 export async function createJob(
   body: {
     project_name: string;
-    progress?: number;
     /** Link an EXISTING client. Mutually exclusive with new_client (the Worker 400s on both). */
     client_id?: number;
     new_client?: NewJobClient;
