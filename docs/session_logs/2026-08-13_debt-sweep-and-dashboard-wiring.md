@@ -329,3 +329,25 @@ and confirmed carrying the `appearance: none` rule. The dashboard daemon was res
 - `.claude/agents/pr-landed-verifier.md`, `.claude/agents/codeql-fp-triager.md` — the two agent
   briefs most directly touched by the repo-identity classification pass (blueprint-fork `--repo`
   caveat; DORMANT marking pending CodeQL re-enablement).
+
+## Addendum (same day, after close): the vendor backup, and the repo going private
+
+The operator's call on `logs/migrations/po_vendors_backup_20260810.json` (the VC-07 blocker)
+arrived in two steps, both recorded: first COMMIT conditioned on "no conflict or issue" — a scan
+of all 33 vendor rows found zero contact PII and zero credential-like strings, and PR #128 was
+opened; then the bar TIGHTENED to "any actual vendor/Evergreen information stays off GitHub,"
+which the file fails on content (the real vendor roster, addresses, terms arrangements,
+procurement notes naming an employee). #128 was halted UNMERGED, its branch deleted — the file
+never reached main; the commit's ~3-minute public-branch window occurred against a repo with
+zero forks and zero watchers. The final ruling widened to the repository itself: **the operator
+directed a repo-wide exposure screen with removal of anything exposed, and the repo was taken
+PRIVATE** — instantly removing all history from public view, and aligning with CLAUDE.md's own
+customer-repos-are-private model, which the public visibility had quietly contradicted since the
+2026-07-25 migration. Trade-off surfaced at flip time: the account is a free plan, so branch
+protection does NOT enforce while private (GitHub Pro or re-publicizing restores it); merge
+discipline is manual CI-poll-then-merge meanwhile. The keep-local mechanics: `.gitignore` gains
+`logs/migrations/*_backup_*.json`, the ledger entry closes as option (b), Check Y's VC-07
+exclusion comment updates (green now; enrollment a VC-02-style scope candidate). A four-lens
+exposure screen of the whole repo (data files / docs / code constants / git history) ran the
+same hour; its findings are recorded in the PR that landed this addendum. This addendum is the
+session-log record for that PR; no separate log.

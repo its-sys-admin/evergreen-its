@@ -37,6 +37,12 @@ logs/**/*.log
 # purpose — `logs/**/*.gz`, NOT `logs/**`, which would swallow the git-TRACKED audit
 # output under logs/migrations/ (box_build_*.txt / reclone_*.txt / *.json — none .gz).
 logs/**/*.gz
+# Table-backup DUMPS under logs/migrations/ are LOCAL-ONLY by operator ruling
+# (2026-08-13): unlike the tracked reclone/box-build AUDIT reports above, a backup
+# dump carries actual business records (the po_vendors one: Evergreen's real vendor
+# roster + terms notes), which stay on disk and off GitHub. Pattern, not filename,
+# so the next dump inherits the ruling.
+logs/migrations/*_backup_*.json
 *.local.json
 .env
 .env.*
