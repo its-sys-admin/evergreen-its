@@ -303,14 +303,71 @@ def _filter_dispatch_candidates(
 _WEEKDAY_MAP = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4, "SAT": 5, "SUN": 6}
 
 
+#: What a malformed window falls back to. Named so the WARN can say it out loud.
+DEFAULT_SCHEDULED_WINDOW = (0, time(7, 0))  # MON 07:00
+
+
 def _parse_scheduled_spec(spec: str) -> tuple[int, time]:
-    """Parse `MON 07:00` → (0, time(7, 0)). Defaults (MON 07:00) on parse failure."""
+    """Parse `MON 07:00` → (0, time(7, 0)). Falls back to MON 07:00 on parse failure.
+
+    Fails OPEN to the default deliberately — a bad window must never wedge a send lane — but it is
+    no longer SILENT. This engine is shared by all FIVE external-send daemons (weekly_send,
+    progress_send, po_send, rfq_send, subcontract_send), so a typo in any one lane's
+    `scheduled_send_local` used to move that lane's approval window with no trace: the operator
+    sets `TUE 09:00`, mistypes it, and the lane quietly keeps dispatching Monday 07:00 with nothing
+    to distinguish that from a deliberate Monday setting.
+    """
+    weekday, tod, _ = parse_scheduled_spec_checked(spec)
+    return weekday, tod
+
+
+def parse_scheduled_spec_checked(spec: str) -> tuple[int, time, str]:
+    """`_parse_scheduled_spec`, plus a machine reason when the spec did not parse.
+
+    Returns `(weekday, time, reason)`; `reason` is `""` on a clean parse. It names WHAT was wrong,
+    because an unknown weekday token and a malformed time are different typos with the same silent
+    outcome today, and the operator has to fix a specific cell.
+    """
+    raw = (spec or "").strip()
+    if not raw:
+        return (*DEFAULT_SCHEDULED_WINDOW, "empty value")
+    parts = raw.split()
+    if len(parts) != 2:
+        return (*DEFAULT_SCHEDULED_WINDOW, f"expected '<DAY> <HH:MM>', got {raw!r}")
+    wd_token, hhmm = parts
+    weekday = _WEEKDAY_MAP.get(wd_token.upper())
+    if weekday is None:
+        return (
+            *DEFAULT_SCHEDULED_WINDOW,
+            f"unknown weekday {wd_token!r} (expected one of {', '.join(_WEEKDAY_MAP)})",
+        )
     try:
-        wd, hhmm = spec.strip().split()
-        h, m = hhmm.split(":")
-        return _WEEKDAY_MAP[wd.upper()], time(int(h), int(m))
-    except (KeyError, ValueError):
-        return 0, time(7, 0)
+        hour_s, minute_s = hhmm.split(":")
+        tod = time(int(hour_s), int(minute_s))
+    except ValueError:
+        return (*DEFAULT_SCHEDULED_WINDOW, f"malformed time {hhmm!r} (expected HH:MM, 24-hour)")
+    return weekday, tod, ""
+
+
+def warn_if_scheduled_spec_malformed(config: DaemonConfig, spec: str) -> None:
+    """Log ONCE per cycle when the configured send window did not parse.
+
+    WARN, not ERROR: the lane still runs on the default, so this is a misconfiguration to correct,
+    not an outage to page for. The error_code is stable so a runbook can key on it.
+    """
+    _, _, reason = parse_scheduled_spec_checked(spec)
+    if not reason:
+        return
+    weekday, tod = DEFAULT_SCHEDULED_WINDOW
+    day = next(k for k, v in _WEEKDAY_MAP.items() if v == weekday)
+    error_log.log(
+        Severity.WARN,
+        config.script_name,
+        f"{config.cfg_scheduled_send_local} = {spec!r} did not parse ({reason}); this lane is "
+        f"falling back to {day} {tod.strftime('%H:%M')} — fix the ITS_Config cell, because the "
+        f"approval window actually in effect is NOT the one configured",
+        error_code="scheduled_send_window_malformed",
+    )
 
 
 def _is_scheduled_window(now_local: datetime, spec: str) -> bool:
@@ -501,6 +558,9 @@ def poll_inside_lock(
     scheduled_spec = _read_str_setting(
         config, config.cfg_scheduled_send_local, config.default_scheduled_send_local
     )
+    # Say so ONCE per cycle if the window did not parse. Placed here, not inside the parser, so a
+    # malformed spec produces one WARN per cycle rather than one per candidate row.
+    warn_if_scheduled_spec_malformed(config, scheduled_spec)
 
     for row in candidates:
         row_id = row["_row_id"]
