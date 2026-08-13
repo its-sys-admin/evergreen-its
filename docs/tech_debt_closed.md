@@ -11,6 +11,28 @@ Resolved/closed/delivered/superseded entries moved out of the live `docs/tech_de
 
 > See `docs/tech_debt.md` for the live (open) set.
 
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-11, low] Untracked `logs/migrations/po_vendors_backup_20260810.json` keeps VC-07 (git-clean) permanently red
+
+> **RESOLVED 2026-08-13 — the operator ruled COMMIT (option a), landed same day.** The
+> data-sensitivity call the entry deferred to Seth: commit-over-gitignore, conditioned on "no
+> conflict or issue." Pre-commit scan of all 33 vendor rows against the PUBLIC repo: **zero**
+> rows carry any contact name/email/phone (the seed predates Teala's vendor list — every
+> contact field is empty), zero email/phone/credential-like strings anywhere in the file —
+> it is company-level directory data (vendor names, business addresses, supply categories,
+> terms-profile notes), matching the already-tracked `logs/migrations/*` siblings. Not
+> gitignored (`git check-ignore` exit 1; the `*backup*` name matches no ignore rule), tracked
+> proven via `git ls-files` per the gitignore-swallow reflex. Check Y's VC-07 exclusion
+> comment (`scripts/watchdog.py`) updated in the same PR: VC-07 is green now and sits with
+> VC-02 as an enrollment CANDIDATE — a scope decision deliberately not taken here.
+
+`logs/migrations/*` reports/dumps are normally committed (the 1111B-cutover `reclone_*` reports and
+`box_build_1111b_report.txt` are all tracked) but this vendor-table backup dump (25,840 bytes, a full
+`ITS_Vendors`-shaped `results` array) sat untracked with no producing script left in the tree —
+likely a one-off manual dump. `scripts/verify_cutover.py`'s VC-07 (`repo on main, working tree
+clean`) failed on it indefinitely; Check Y's exclusion comment cited it by name as the reason VC-07
+stayed out of the daily sweep. The fix was a data-sensitivity call, not a mechanical one: commit it
+(the convention), or gitignore-and-delete if vendor contact data shouldn't ride git history.
+
 ## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] Safari/WebKit ignores `min-height` on native `<select>` — the kit's 44px tap-target floor silently fails portal-wide in the operator's own browser
 
 > **RESOLVED 2026-08-13 — PR #122.** The kit-level pass the entry

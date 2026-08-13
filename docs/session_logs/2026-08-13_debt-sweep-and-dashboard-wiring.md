@@ -329,3 +329,15 @@ and confirmed carrying the `appearance: none` rule. The dashboard daemon was res
 - `.claude/agents/pr-landed-verifier.md`, `.claude/agents/codeql-fp-triager.md` — the two agent
   briefs most directly touched by the repo-identity classification pass (blueprint-fork `--repo`
   caveat; DORMANT marking pending CodeQL re-enablement).
+
+## Addendum (same day, after close): the vendor-backup call
+
+The operator ruled COMMIT on `logs/migrations/po_vendors_backup_20260810.json` (the VC-07
+blocker), conditioned on "no conflict or issue." Checked before landing: the repo is PUBLIC, so
+all 33 vendor rows were scanned — zero contact names/emails/phones (every contact field empty;
+the seed predates the vendor list), zero credential-like strings; the content is company-level
+directory data matching the already-tracked `logs/migrations/*` siblings; not gitignored, and
+`git ls-files` proves it tracked post-add. Check Y's VC-07 exclusion comment updated in the same
+PR (green now; enrollment stays a deliberate scope decision, VC-02-style); the 2026-08-11 ledger
+entry moved to the closed archive. This addendum is the session-log record for that PR; no
+separate log.

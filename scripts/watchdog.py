@@ -3182,8 +3182,11 @@ def _check_stale_job_archives() -> CheckResult:
 #                    the row AND the daemon. Enrolling it is a scope decision, not a fix.
 #   VC-04 / VC-05    duplicate Check C (daemon-health / marker staleness) and Check A (stale
 #                    review queue). A second opinion on the same signal is noise, not coverage.
-#   VC-07 git        fails RIGHT NOW on an untracked `logs/migrations/*.json`. It would be red
-#                    from the first sweep, indefinitely.
+#   VC-07 git        was red on an untracked `logs/migrations/*.json` until 2026-08-13, when
+#                    the operator ruled commit-over-gitignore (the file is contact-empty vendor
+#                    directory data; PII/credential-scanned before landing). Green today, so it
+#                    now sits with VC-02 as an enrollment CANDIDATE — a scope decision, not a
+#                    fix; it stays excluded until someone makes that call deliberately.
 #   VC-08 portal     shells out to `npx wrangler --remote`: far too heavy and too flaky for a
 #                    daily unattended sweep, and Check Q already covers portal fetch outages.
 #   VC-09 heartbeat  fails for a KNOWN, TRACKED reason — the Healthchecks.io dead-man's switch
