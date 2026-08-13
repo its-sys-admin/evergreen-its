@@ -16,6 +16,33 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## Safari/WebKit ignores `min-height` on native `<select>` — the kit's 44px tap-target floor silently fails portal-wide in the operator's own browser [OPEN 2026-08-12, low]
+
+The kit's inline-row rule (`global.css` `div.dash-row select { min-height: 44px; … }`) and the
+job-detail shell's part-three floor (`schedule-report.css` `.job-shell__body :is(input…, select)`)
+both declare the 44px minimum — and WebKit lays native menulist selects out at ~19–25px anyway,
+because Safari does not honour height/min-height on `appearance: auto` selects. Text inputs are
+fine (they measure ≥44px); ONLY selects fall short, and only in Safari/WebKit — Chrome honours the
+rule. Measured 2026-08-12 during the part-three headless WebKit render pass (Playwright,
+`verify_jobdetail.js`): every select on the job detail (assign-to, lifecycle, crew picker,
+log-time pickers, equipment picker, daily-requirements kind) at 19–25px tall while every input and
+button cleared 44px. The operator browses in Safari, so the "zero tap targets under 44px" bar from
+the #99/#109 commit messages holds in Chrome and quietly fails on the operator's own machine.
+
+**Fix shape** (deliberate, kit-level — not a per-page patch): a portal-wide select treatment with
+`appearance: none` + explicit padding + a custom chevron (background SVG data-URI), which makes
+height rules bind in WebKit. That restyles EVERY select in the app at once, so it wants its own
+pass with the four-width measurement, not a rider on a page PR. The related `ChipX` remove control
+(17×14px, shared component, deliberate two-step-confirm micro-control) is a separate judgment call
+for the same pass.
+
+**Revisit when:** the next design pass touches form controls kit-wide, or field users report
+mis-taps on selects in Safari.
+
+Surfaced: 2026-08-12 job-detail design pass (part three) headless WebKit verification.
+
+**Tag:** `safety-portal`, `frontend`, `css`, `design`.
+
 ## Manifest-import merge-mode and shipping-log-commit live-fires deferred [OPEN 2026-08-11, medium]
 
 The 2026-08-11 day session finished the manifest lane's real merge (server-enforced ambiguity
@@ -2757,3 +2784,43 @@ Playwright-layer.
 computed-style checks) of a Safety Portal SPA change, or someone has spare time to bisect the cause.
 
 Surfaced: 2026-08-12 portal design session.
+
+**Update 2026-08-12 evening (PR #119) — the diagnostic step above was run, and it isolated the
+layer.** With Claude-in-Chrome also unavailable this session, a bare `playwright` install (1.62.1)
+into the scratchpad, driving the already-cached `~/Library/Caches/ms-playwright` webkit-2336 build
+directly with no MCP server in the loop, took clean full-page screenshots at 390/768/1024/1440 —
+the exact recipe this entry's own "Fix shape" predicted. **The practical blocker this entry
+describes (visual verification is numeric-only) is RESOLVED** — real pixel-level screenshots are
+available again, just via bare Playwright instead of the MCP tool. **Still genuinely open, lower
+priority:** why the Playwright MCP server/wrapper itself times out on this host is still
+undiagnosed — narrowed to MCP-layer specifically (not Playwright, not WebKit, not this host's
+Playwright install in general), but the MCP server's own logs/config were not inspected. Revisit
+only if the bare-driver workaround itself breaks, or someone wants the MCP tool's convenience back.
+
+## [OPEN 2026-08-12, low] `WeeklyReportPage`'s rail fix has no page-local regression test (the fragment-nav/popstate remount class)
+
+PR #119 found a real bug class in in-page nav anchors: a bare `<a href="#section">` is still a real
+browser navigation — the tap fires `popstate`, the App shell bumps `popEpoch`, and the routed page
+**remounts** (full reload, scroll reset to 0; live-proven in headless WebKit, `popped:1`
+`remounted:true`). On `WeeklyReportPage` the consequence is worse than annoyance: the remount
+silently discards an unsaved draft (`beforeunload` only covers real unloads).
+
+**PR #119 fixed BOTH known instances in the same commit** — the job-detail rail AND
+`WeeklyReportPage`'s rail (`WeeklyReportPage.tsx` ~:415-424) each got
+`onClick={e => { e.preventDefault(); document.getElementById(id)?.scrollIntoView(); }}` — and a
+same-day sweep (`grep 'href={\`#\|href="#' safety_portal/src --include='*.tsx'`) found **no other
+fragment-anchor site in the SPA**. What remains open is only this: the regression test asserting
+`fireEvent.click(...)` returns `false` (defaultPrevented) covers the JOB-DETAIL rail
+(`FieldOpsJobTracker.test.tsx`, "a rail chip tap scrolls in place"); `WeeklyReportPage`'s own suite
+has no equivalent, so a future refactor of ITS rail could silently reintroduce the draft-loss path.
+
+**Fix shape:** one test in `WeeklyReportPage`'s suite mirroring the job-detail one. And the class
+reflex for review: any NEW in-page `<a href="#…">` in `safety_portal/src` needs the preventDefault
+treatment (auto-memory `fragment-anchors-remount-the-spa`).
+
+**Tag:** `safety-portal`, `frontend`, `test-coverage`, `progress-reporting`.
+
+**Revisit when:** the next session touches `WeeklyReportPage` or its tests.
+
+Surfaced: 2026-08-12 evening, PR #119 job-detail design pass part three (entry corrected same
+night — the first draft wrongly claimed WeeklyReportPage's fix was deferred out of #119).

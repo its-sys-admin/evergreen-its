@@ -1606,6 +1606,7 @@ button.sched-task__prog:hover {
   .sched-mark,
   .sched-drawer,
   .wpr__rail,
+  .job-rail,
   .wpr-save {
     display: none !important;
   }
@@ -1625,7 +1626,8 @@ button.sched-task__prog:hover {
     min-width: 0;
   }
 
-  .wpr {
+  .wpr,
+  .job-shell {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -1867,11 +1869,32 @@ button.sched-task__prog:hover {
   color: var(--c-muted);
 }
 
-/* ── The section rail ─────────────────────────────────────────────────────
-   Nineteen sections need an index. A horizontal chip scroller at EVERY width — the
-   weekly report's rail becomes a sticky column on a laptop because it sits beside a
-   form; this one sits above a single column of cards, where a vertical rail would have
-   nothing to align to. */
+/* ── The shell and its section rail (part three) ──────────────────────────
+   Nineteen sections need an index. Part three adopts the weekly report's full
+   two-column shell (operator-ratified, reversing part two's chips-at-every-width
+   choice): a horizontal chip scroller under the hero on a phone; from 1024px a sticky
+   vertical index in a 196px column with the cards in a body column beside it — which
+   gives the rail exactly the thing to align to that part two said it lacked. Active
+   state is BRG ink + a BRG rail mark, NOT the weekly report's gold: this page's one
+   gold is the eyebrow's rule. */
+.job-shell {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.job-shell__body {
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .job-shell {
+    grid-template-columns: 196px minmax(0, 1fr);
+    column-gap: var(--space-6);
+  }
+}
+
 .job-rail {
   position: sticky;
   top: 0;
@@ -1917,8 +1940,33 @@ button.sched-task__prog:hover {
   border-color: var(--c-brg);
 }
 
-/* The rail is sticky, so an anchored heading would otherwise land underneath it. */
-.dash-detail__h2[id] {
+@media (min-width: 1024px) {
+  .job-rail {
+    top: var(--space-4);
+    flex-direction: column;
+    overflow: visible;
+    padding: 0;
+    border-left: 2px solid var(--c-line);
+  }
+
+  .job-rail__link {
+    border: none;
+    background: transparent;
+    border-radius: 0;
+    margin-left: -2px;
+    border-left: 2px solid transparent;
+    white-space: normal;
+  }
+
+  .job-rail__link[aria-current="true"] {
+    border-left-color: var(--c-brg);
+    background: var(--c-white);
+  }
+}
+
+/* The rail is sticky, so an anchored section would otherwise land underneath it.
+   Ids live on the SECTION wrappers now (the scroll-spy needs section-sized targets). */
+.job-shell__body [id] {
   scroll-margin-top: 76px;
 }
 
@@ -1940,6 +1988,73 @@ button.sched-task__prog:hover {
   text-transform: uppercase;
   color: var(--c-danger);
   margin: 0 0 var(--space-2);
+}
+
+/* ── Section heads (part three) ───────────────────────────────────────────
+   The weekly report's card-head recipe: display-face BRG title with the section's one
+   number beside it in the BODY face (the .sched-group__count posture — a count is
+   data, so it never rides the signage face). Ids live on the section wrappers. */
+.job-sec__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-2);
+}
+
+.job-sec__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-lg);
+  letter-spacing: 0.02em;
+  color: var(--c-brg);
+  margin: 0;
+}
+
+.job-sec__count {
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Link cards (part three) ──────────────────────────────────────────────
+   The two sections that NAVIGATE AWAY (Schedule, Weekly report) carry the house
+   entry-point accent — the same BRG left rail the schedule's group heads and drawer
+   summaries use — so navigation reads as navigation rather than content. */
+.job-link {
+  border-left: 3px solid var(--c-brg);
+}
+
+/* ── Voided time rows (part three) ────────────────────────────────────────
+   Was three inline styles on the row, the pill and the Fix cell. Same computed result:
+   the row strikes through and recedes; the "voided" pill and the Fix cell's controls
+   opt back out so they stay legible. */
+.job-time--voided {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.job-time--voided .dash-pill,
+.job-time--voided [data-cell="Fix"] {
+  text-decoration: none;
+}
+
+/* ── Controls inside the shell (part three) ───────────────────────────────
+   The weekly report's input floor, scoped to this page's body column: comfortable tap
+   targets (checkboxes/radios excluded — a 44px checkbox balloons) and the kit's
+   visible focus. */
+.job-shell__body :is(input:not([type="checkbox"]):not([type="radio"]), select) {
+  min-height: 44px;
+}
+
+.job-shell__body :is(input, select):focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 1px;
+  border-color: var(--c-brg);
 }
 
 /* ── Materials: the outstanding rollup ────────────────────────────────────

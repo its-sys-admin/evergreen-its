@@ -5,7 +5,7 @@
  * per-leg Load more. Mirrors FieldOpsEquipment.test.tsx: mock both fetchers before render,
  * resetAllMocks, query by specific classes.
  */
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/fieldops_jobtracker", async (importOriginal) => {
@@ -1420,6 +1420,131 @@ describe("FieldOpsJobTracker — R7 deep link (initialJobId)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Design pass, part three — the detail chrome: pending-detail skeletons (the deep-link
+// fall-through fix), the capability-filtered section rail with live anchors, and the
+// scroll-spy that lights the rail item for the section in view.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("FieldOpsJobTracker — part-three chrome (skeleton, rail, scroll-spy)", () => {
+  const ARCHIVE_NONE: api.JobArchiveStatus = {
+    state: "none", direction: "", requested_at: null, completed_at: null, attempts: 0, containers: [],
+  };
+
+  async function openRail(detail: api.JobDetail = DETAIL, props: { onOpenSchedule?: () => void; onOpenWeeklyReport?: () => void } = {}) {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.fetchJobDetail).mockResolvedValue({ job: detail, cursors: NO_CURSORS, viewer_personnel: VIEWER });
+    const utils = render(<FieldOpsJobTracker onBack={() => {}} {...props} />);
+    await waitFor(() => expect(utils.container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(utils.container.querySelector(".dash-card--click")!);
+    await waitFor(() => expect(utils.container.querySelector(".job-rail")).not.toBeNull());
+    return utils;
+  }
+
+  function assertAnchorsResolve(container: HTMLElement) {
+    // Anchor integrity: a rail link must never point at an id that is not on the page.
+    const links = Array.from(container.querySelectorAll<HTMLAnchorElement>(".job-rail__link"));
+    expect(links.length).toBeGreaterThan(0);
+    for (const a of links) {
+      const id = a.getAttribute("href")!.slice(1);
+      expect(container.querySelector(`[id="${id}"]`), `#${id} has no section on the page`).not.toBeNull();
+    }
+  }
+
+  it("a PENDING detail open renders skeletons in the detail chrome, never the job list", async () => {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.fetchJobDetail).mockReturnValue(new Promise(() => {})); // never settles
+    const { container } = render(<FieldOpsJobTracker onBack={() => {}} initialJobId="JOB-A" />);
+    await waitFor(() => expect(container.querySelectorAll(".sched-skel")).toHaveLength(3));
+    expect(container.querySelector('[aria-label="Loading job"]')).not.toBeNull();
+    // The fall-through this branch replaces put the whole JOB LIST on screen for the
+    // load window of every cold /jobs/:id visit.
+    expect(container.querySelectorAll(".dash-card--click")).toHaveLength(0);
+  });
+
+  it("read-only rail: capability-hidden sections leave no link, and every anchor resolves", async () => {
+    const { container } = await openRail();
+    const labels = Array.from(container.querySelectorAll(".job-rail__link")).map((a) => a.textContent);
+    expect(labels).toEqual(["Client", "Crew", "Tasks", "Time", "Equipment", "Inspections"]);
+    assertAnchorsResolve(container);
+    // Before any scroll the FIRST chip lights (the WPR at-top posture), so the rail
+    // never sits with nothing current.
+    expect(container.querySelector('.job-rail__link[aria-current="true"]')?.textContent).toBe("Client");
+  });
+
+  it("a rail chip tap scrolls in place — never a fragment navigation (the popstate remount trap)", async () => {
+    // jsdom has no scrollIntoView; install one so the handler's scroll call is observable.
+    const scrollSpy = vi.fn();
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      const { container } = await openRail();
+      const detailCalls = vi.mocked(api.fetchJobDetail).mock.calls.length;
+      // fireEvent.click returns FALSE when the handler preventDefault()ed — the whole
+      // point: a real fragment navigation fires popstate, and App's popstate handler
+      // remounts the routed page (on the weekly report that silently discards drafts).
+      expect(fireEvent.click(container.querySelector('.job-rail__link[href="#jd-tasks"]')!)).toBe(false);
+      expect(scrollSpy).toHaveBeenCalled();
+      expect(vi.mocked(api.fetchJobDetail).mock.calls.length).toBe(detailCalls); // no remount refetch
+      expect(container.querySelector(".job-shell")).not.toBeNull(); // still on the detail
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
+  });
+
+  it("full caps + callbacks put every section on the rail (Danger needs job.archive too)", async () => {
+    vi.mocked(useAuth).mockReturnValue(
+      authWith([
+        "cap.jobtracker.manage", "cap.checklist.manage", "cap.crew.assign", "cap.equipment.field",
+        "cap.time.log", "cap.tasks.own", "cap.materials.receive", "cap.job.archive",
+      ]),
+    );
+    const { container } = await openRail(
+      { ...DETAIL, archive: ARCHIVE_NONE },
+      { onOpenSchedule: () => {}, onOpenWeeklyReport: () => {} },
+    );
+    const labels = Array.from(container.querySelectorAll(".job-rail__link")).map((a) => a.textContent);
+    expect(labels).toEqual([
+      "Manage", "Client", "Crew", "Tasks", "Time", "Equipment", "Materials",
+      "Schedule", "Weekly report", "Inspections", "Daily requirements", "Danger zone",
+    ]);
+    assertAnchorsResolve(container);
+  });
+
+  it("the danger zone (label included) is GONE for a viewer without cap.job.archive", async () => {
+    const { container } = await openRail();
+    // The wrapper used to render unconditionally, leaving every non-archive viewer a
+    // bare red "Danger zone" label over nothing.
+    expect(container.querySelector(".job-danger")).toBeNull();
+    expect(container.textContent ?? "").not.toContain("Danger zone");
+  });
+
+  it("scroll-spy lights the rail item whose section owns the viewport", async () => {
+    let spyCb: IntersectionObserverCallback | null = null;
+    class FakeIO {
+      constructor(cb: IntersectionObserverCallback) { spyCb = cb; }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIO);
+    try {
+      const { container } = await openRail();
+      expect(spyCb).not.toBeNull();
+      act(() => {
+        spyCb!(
+          [{ target: { id: "jd-tasks" }, intersectionRatio: 0.9 }] as unknown as IntersectionObserverEntry[],
+          undefined as unknown as IntersectionObserver,
+        );
+      });
+      const lit = container.querySelector('.job-rail__link[aria-current="true"]');
+      expect(lit?.textContent).toBe("Tasks");
+      expect(lit?.getAttribute("href")).toBe("#jd-tasks");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // G2.6 — task due dates: the add-task form's optional date input + the shared due/Overdue
 // rendering (myTasksShared.TaskDue) on BOTH the detail task rows and the list card's open-task
 // preview. Overdue = NOT done AND due_date < Pacific-today; a done task never warns.
@@ -1592,7 +1717,9 @@ describe("FieldOpsJobTracker — G2.3 time amend/void", () => {
     const voidedRow = Array.from(container.querySelectorAll("tbody tr")).find((r) =>
       r.textContent?.includes("voided"),
     ) as HTMLElement;
-    expect(voidedRow.style.textDecoration).toBe("line-through");
+    // The strike-through moved from an inline style to the stylesheet (part three):
+    // the class is the contract now, and .job-time--voided carries line-through + opacity.
+    expect(voidedRow.classList.contains("job-time--voided")).toBe(true);
     expect(queryByLabelText("Edit time entry te-v")).not.toBeNull(); // amend-a-void = the recovery path
     expect(queryByLabelText("Void time entry te-v")).toBeNull(); // a void of a void is meaningless
     expect(queryByLabelText("Void time entry te-c")).not.toBeNull();
