@@ -111,6 +111,103 @@ would have been correctly scoped, and repointing them would have broken a workin
 entry asked for an operator-confirmed pass classifying each of the ~15 surfaces (README badge,
 CLAUDE.md, context-pack, six agent briefs, the hook test's fixture strings) as live-dev-reference,
 stale, or dual-repo.
+## [RESOLVED 2026-08-13] `config_actuator`'s broad `except Exception` sites make an incident slower to root-cause (DASH-6) [OPEN 2026-07-14, low]
+
+> **RESOLVED 2026-08-13 — PR #124** (`2a13b10`). The blanket pass the entry asked for was NOT done,
+> deliberately: verified at HEAD, **nine of the twelve** `except Exception` sites already carried a
+> distinct error_code. Churning nine healthy handlers to reach three real ones is the wrong trade.
+> The three that genuinely mis-directed remediation are fixed:
+>
+> - **A Keychain READ failure was reported as an ABSENT secret.** `_resolve_creds` swallowed any
+>   exception and returned `None`, so the caller logged `creds_unresolved` ("missing … config
+>   bearer") — aiming the §43 runbook at re-provisioning a secret that exists and merely could not
+>   be read. Now `config_actuator.keychain_read_failed`; still fails CLOSED.
+> - **The only fully-silent swallow in the file** (`except Exception: pass` around the failed-stamp)
+>   left the portal Status Monitor showing the request in flight FOREVER with zero trace. Now
+>   `config_actuator.stamp_failed` at WARN — deliberately WARN so it can never outrank or mask the
+>   paired failure CRITICAL.
+> - **A stage-0 git-sync failure borrowed the bad-edit-data code.** It reported through
+>   `config_actuator.failed.validated`, whose runbook entry says "Tier-2: re-do the edit in the
+>   portal" — wrong and unsafe routing for a code/deploy-surface fault (Seth, high-class). `_fail`
+>   gained a `code_stage` kwarg so the ITS_Errors code can differ from the PORTAL stage: the stamp
+>   still sends `failed_stage='validated'` (the Worker's enum is fixed) while the code says
+>   `failed.sync_main`.
+>
+> Runbook signal table updated for all three; `failed.validated` re-scoped to bad-edit-data ONLY.
+> Control proven: reverting all three RED-lights all three tests, the git one failing as
+> `assert 'config_actuator.failed.sync_main' in [... 'config_actuator.failed.validated' ...]`.
+>
+> **Accepted trade-off:** splitting the code mints a new `(script, error_code)` `alert_dedupe` key,
+> so one incident tripping both paths can page twice per window. Judged worth it — mis-routed
+> remediation is worse than an extra email.
+
+`po_materials/config_actuator.py` carries a dozen-plus `except Exception as exc:  # noqa: BLE001` sites,
+each deliberately broad per its own in-code comment ("any actuation failure is terminal+alerted", "never
+wedge the cycle"). The 2026-07-14 live error-chase of a `config_actuator`-attributed `ITS_Errors` row needed
+a source read to conclude it was benign (a gate flipped before its matching Worker secret/route was
+deployed) — the row's `error_code` and message alone did not say so. Individually the broad catches are
+justified; collectively they cost a diagnosis. A pass giving each site a specific `error_code`/message would
+make the next incident legible from the `ITS_Errors` row alone.
+
+**Trigger:** next `config_actuator` touch, or a recurrence of an unlabeled `config_actuator` error.
+**Tag:** `po_materials`, `observability`, `operator-dashboard`, `low`.
+
+## [RESOLVED 2026-08-13] Safety Portal — `scheduled_send_local` not seeded + silent fail-open on malformed value [OPEN 2026-06-08]
+
+> **RESOLVED 2026-08-13 — PR #125** (`941b19c`). The entry was HALF STALE and its live half had
+> WIDENED.
+>
+> **Gap (1) — "not seeded" — was already fixed AND mis-scoped.**
+> `safety_reports.weekly_send.scheduled_send_local` IS seeded by
+> `scripts/migrations/seed_daemon_gate_config.py:205-213`; that seeder is in `standup.py`'s
+> `_SEEDERS` run list; `verify_cutover` VC-03 enrolls it `non_empty`; and watchdog **Check Y** now
+> asserts it against the LIVE sheet on the daily tier. The entry's premise ("not in
+> `seed_its_config.py`") pointed at the `global`-key bootstrap, which is not where per-workstream
+> rows belong.
+>
+> **Gap (2) — the silent fail-open — was real and had grown from ONE lane to FIVE.** The parser
+> moved out of `weekly_send_poll` into the shared `send_poll_core` after the entry was written, so
+> it is now imported by every external-send daemon (safety, progress, PO, RFQ, subcontracts). A
+> mistyped window silently reverted that lane to `MON 07:00`, indistinguishable from a deliberate
+> Monday setting.
+>
+> Now: still fails OPEN (wedging a send lane on a bad string would be worse) but never SILENT.
+> `parse_scheduled_spec_checked` returns a machine reason naming WHICH typo (empty / wrong arity /
+> unknown weekday / malformed time), and `warn_if_scheduled_spec_malformed` logs once per CYCLE at
+> WARN with code `scheduled_send_window_malformed`, naming both the lane's own config key and the
+> window actually in effect. Control proven: restoring the silent parser RED-lights 11 assertions.
+
+`safety_reports.weekly_send.scheduled_send_local` (ITS_Config; e.g. `"MON 07:00"` — the Pacific weekday/time window in which `Approve for Scheduled Send` rows dispatch) is read live each cycle by `weekly_send_poll._read_str_setting` → `_parse_scheduled_spec` → `_is_scheduled_window`. Two minor gaps: (1) it is **not** in `scripts/seed_its_config.py` (added manually to the mirror) — a fresh tenant build would lack the row and fall back to the `DEFAULT_SCHEDULED_SEND_LOCAL = "MON 07:00"` constant (functionally safe, but undocumented in the seeder). (2) `_parse_scheduled_spec` **silently** coerces any malformed value (bad weekday, bad time, empty) to `(MON, 07:00)` with **no log** — an operator typo'd window would quietly send Monday 07:00 instead of erroring. The fallback is intentional + tested (`test_parse_scheduled_spec_defaults_on_malformed`), but it's a quiet-failure footgun for an operator-tuned schedule.
+
+**Proposed fix:** (a) add the row to `seed_its_config.py`; (b) WARN-log to ITS_Errors when `_parse_scheduled_spec` hits the `except` branch (still fall back, but surface the bad value). ~30 min. **Revisit when:** next seeder pass or weekly_send hardening. Surfaced 2026-06-08 (operator asked to confirm the config-driven schedule during mirror activation).
+
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-10, low] Daily report's "Confirm receipt" button remains one-click, asymmetric with the now-two-tap delivery marks
+
+> **RESOLVED — verified 2026-08-13, no longer reproduces.** Re-checked against live HEAD during
+> the tech-debt triage sweep: the one-click asymmetry the entry describes is not present in the
+> current daily-report UI. Closed on the observable; if it resurfaces, reopen with the screen and
+> the click path.
+
+PR #45 made the three delivery-mark buttons (Delivered / Partially delivered / Not delivered) two-tap
+(arm → confirm, 6s expiry) because a mark is an append-only ledger event with no delete path — a mis-tap
+is permanent. `DailyReportTab.confirmReceipt` (the M1 receive route — expected→received, idempotent-safe
+409 on repeat, distinct code path from the delivery-mark buttons) still records on a **single** click. The
+two-tap change deliberately covered only the three delivery marks per the operator's specific request this
+session; the asymmetry was not an oversight but was also not evaluated for whether the same append-only
+argument applies to Confirm-receipt.
+
+**Fix (not scoped, needs an operator call):** if Confirm-receipt should get the same two-tap treatment,
+it's a small follow-up reusing the `(line,kind)`-keyed arm/confirm pattern from #45. If the 409-idempotent
+repeat-safety of the M1 receive route is judged sufficient protection against a mis-tap (unlike the
+ledger-append marks, a repeat Confirm-receipt click is a no-op, not a duplicate event), this can be closed
+as intentional.
+
+**Tag:** `field-ops`, `materials`, `ux`, `low`.
+
+**Revisit when:** an operator/field report of an accidental Confirm-receipt tap, or the next
+`DailyReportTab.tsx` materials-section touch.
+
+Surfaced: 2026-08-10 session close (PR4 completion session).
 
 ## [RESOLVED 2026-08-12 — was OPEN 2026-08-11, low] BOM-corpus extraction/reconciliation tooling used for the 218-part materials analysis is not committed anywhere
 
