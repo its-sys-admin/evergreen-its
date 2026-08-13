@@ -121,11 +121,14 @@ moves are the three low-class ones in Symptom A/B/C below.
 | Signal (ITS_Errors `error_code` / Daemon_Health) | Meaning | Who |
 |---|---|---|
 | daemon dark, `polling_enabled=false` | ships dark by design | Tier-2 flip **iff** activation already approved, else Seth |
-| `config_actuator.creds_unresolved` | missing base URL / `ITS_PORTAL_CONFIG_TOKEN` | Seth (secrets — high-class) |
+| `config_actuator.creds_unresolved` | base URL / `ITS_PORTAL_CONFIG_TOKEN` genuinely **absent or blank** | Seth (secrets — high-class) |
+| `config_actuator.keychain_read_failed` | the bearer may well EXIST but could not be **read** (locked/denied Keychain). Do NOT re-provision the secret — unlock the Keychain and re-run | Seth (secrets — high-class) |
 | `config_actuator.deploy_blocked_pending_migrations` | unapplied D1 migrations; edits stay queued | Seth (apply migrations) |
 | `config_actuator.migration_check_failed` | can't verify D1 (fail-closed) | Seth (Cloudflare auth) |
-| `config_actuator.failed.validated` | bad edit data (reason names it) | Tier-2 re-do edit in portal |
+| `config_actuator.failed.validated` | **bad edit data ONLY** (reason names it) | Tier-2 re-do edit in portal |
+| `config_actuator.failed.sync_main` | stage-0 git sync to main failed (dirty/detached worktree). Previously mis-reported as `.failed.validated`, sending the operator to re-do an edit that was never the problem | Seth (code/deploy — high-class) |
 | `config_actuator.failed.tested` / `.failed.live` | CI/merge or deploy fault | Seth (code/deploy — high-class) |
+| `config_actuator.stamp_failed` (WARN) | the run finished but the portal could not be stamped, so the Status Monitor still shows the request **in flight**. The paired `failed.*` CRITICAL carries the real cause | Tier-2 re-check the Status Monitor once the portal is reachable |
 | `config_actuator.stale_reclaimed` | a prior cycle died mid-actuation; artifact unwedged | Tier-2 re-submit if still wanted |
 | new terms version won't render (legal) | `legal_review` pending — Layer A refuses it; activate via the "Make a version current" control | Seth (legal judgment — high-class) |
 | a subcontract won't generate for a Trade (exhibit legal) | that Trade's current Article II version is `legal_review` pending — Layer A refuses it; activate via "Make a version current" (Exhibit A) | Seth (legal judgment — high-class) |

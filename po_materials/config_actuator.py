@@ -232,7 +232,15 @@ def _resolve_creds() -> _Creds | TransientUnavailable | None:
         return None
     try:
         bearer = keychain.get_secret(KC_BEARER)
-    except Exception:  # noqa: BLE001 — any keychain failure is a fail-closed halt
+    except Exception as exc:  # noqa: BLE001 — any keychain failure is a fail-closed halt
+        # Still fail closed, but say WHICH failure. The caller's `creds_unresolved` reads
+        # "missing Worker base URL or config bearer", which aims §43 remediation at
+        # re-provisioning a secret that may well exist and simply could not be READ.
+        error_log.log(
+            Severity.ERROR, SCRIPT_NAME,
+            f"config bearer Keychain read FAILED (the secret is not necessarily absent): {exc!r}",
+            error_code="config_actuator.keychain_read_failed",
+        )
         return None
     if not bearer:
         return None
@@ -356,7 +364,9 @@ def _check_failure_detail(check: dict) -> str:
     try:
         log = _gh("run", "view", "--job", m.group(1), "--log-failed")
     except Exception:  # noqa: BLE001 — the detail is a bonus, never load-bearing
-        return name
+        # Say the detail is MISSING rather than returning a bare job name that reads like a
+        # diagnosis. Zero new error rows; the ambiguity just disappears from the row itself.
+        return f"{name} (log detail unavailable)"
     for line in log.splitlines():
         if _LOG_SIGNAL_RE.search(line):
             msg = line.split("\t")[-1].strip()          # drop gh's 'job\tstep\t' prefix
@@ -472,9 +482,18 @@ def _stamp(creds: _Creds, request_id: int, status: str) -> None:
     portal_client.stamp_config(creds.base_url, creds.bearer, request_id=request_id, status=status)
 
 
-def _fail(creds: _Creds, request_id: int, stage: str, reason: str) -> None:
+def _fail(
+    creds: _Creds, request_id: int, stage: str, reason: str, *, code_stage: str | None = None
+) -> None:
     """Terminal failure: stamp failed(stage, reason) + an operator CRITICAL (detect-and-alert).
-    Both best-effort — a stamp/log failure must not mask the original error."""
+    Both best-effort — a stamp/log failure must not mask the original error.
+
+    `code_stage` splits the ITS_Errors error_code from the PORTAL stage when the two disagree.
+    The Worker's stage enum is fixed, so a stage-0 git-sync failure must still stamp
+    `failed_stage='validated'` — but routing it to `config_actuator.failed.validated` sent the
+    operator to the runbook's "Tier-2: re-do the edit in the portal" entry, which is wrong and
+    unsafe for a git/deploy-surface fault (Seth, high-capability class). The stamp keeps the
+    Worker's vocabulary; the error_code tells the truth."""
     # §54 backstop: `reason` can carry a raw git/gh/wrangler stderr tail (see `_exc_reason`), and the
     # stamp_config leg lands `failure_reason` on the portal Status Monitor — a sink that BYPASSES
     # error_log's own redact choke point. Redact here so neither leg egresses an accidental token/PII.
@@ -486,12 +505,21 @@ def _fail(creds: _Creds, request_id: int, stage: str, reason: str) -> None:
             creds.base_url, creds.bearer, request_id=request_id,
             status="failed", failed_stage=stage, failure_reason=reason,
         )
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # NEVER silent. A failed stamp leaves the portal Status Monitor showing this request
+        # still in flight forever with no trace anywhere. Logged AFTER the CRITICAL below would
+        # be too late to read in order, so it goes here — but at WARN, so it can never outrank
+        # or mask the original failure it is reporting alongside.
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"could not stamp request {request_id} failed({stage}) on the portal — the Status "
+            f"Monitor will keep showing it in flight: {exc!r}",
+            error_code="config_actuator.stamp_failed",
+        )
     error_log.log(
         Severity.CRITICAL, SCRIPT_NAME,
         f"config request {request_id} FAILED at stage {stage!r}: {reason}",
-        error_code=f"config_actuator.failed.{stage}",
+        error_code=f"config_actuator.failed.{code_stage or stage}",
     )
 
 
@@ -516,7 +544,10 @@ def _actuate(creds: _Creds, request: dict[str, Any], stats: ConfigStats) -> None
     try:
         _reset_to_main()
     except Exception as exc:  # noqa: BLE001
-        _fail(creds, request_id, "validated", f"could not sync to main: {_exc_reason(exc)}")
+        _fail(
+            creds, request_id, "validated",
+            f"could not sync to main: {_exc_reason(exc)}", code_stage="sync_main",
+        )
         stats.failed += 1
         return
 

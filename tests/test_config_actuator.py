@@ -547,3 +547,75 @@ def test_read_str_setting_expected_errors_stay_silent(mocker):
         mocker.patch.object(ca.smartsheet_client, "get_setting", side_effect=exc)
         assert ca._read_str_setting("k", "fb") == "fb"
     assert log.call_count == 0
+
+
+# ── DASH-6 legibility (2026-08-13) ─────────────────────────────────────────────────────────────
+#
+# The entry asked for a blanket "label every broad except" pass. Most sites already carried a
+# distinct code; only these three were genuinely illegible, and each mis-directed remediation in a
+# specific way. Fixing the three beats a blanket sweep that would churn nine healthy handlers.
+
+
+def test_a_keychain_read_error_is_not_reported_as_an_absent_secret(stub, mocker):
+    """A Keychain FAILURE and an ABSENT secret need different remediation.
+
+    `_resolve_creds` swallowed both and returned None, so the caller logged `creds_unresolved`
+    ("missing Worker base URL or config bearer") either way — aiming the §43 runbook at
+    re-provisioning a secret that may exist and merely could not be read.
+    """
+    mocker.stopall()
+    mocker.patch.object(ks, "check_system_state", return_value=ks.SystemState.ACTIVE)
+    log = mocker.patch.object(ca.error_log, "log")
+    mocker.patch.object(ca.creds_resolution, "read_base_url", return_value="https://portal.test")
+    mocker.patch.object(ca.keychain, "get_secret", side_effect=RuntimeError("keychain locked"))
+
+    assert ca._resolve_creds() is None  # still fails CLOSED
+
+    codes = [c.kwargs.get("error_code") for c in log.call_args_list]
+    assert "config_actuator.keychain_read_failed" in codes, (
+        f"a Keychain read error must be distinguishable from an absent secret; got {codes}"
+    )
+
+
+def test_a_failed_portal_stamp_is_never_silent(stub):
+    """The only fully-silent swallow in the file: `except Exception: pass` around the stamp.
+
+    A failed stamp leaves the portal Status Monitor showing the request in flight forever with
+    zero trace. The WARN must not displace the original CRITICAL — both are asserted.
+    """
+    stub["pending"].return_value = [{"id": 7}]
+    stub["claim"].return_value = _row(rid=7)
+    stub["apply"].side_effect = ca.config_apply.ConfigApplyError("bad rate")
+    stub["stamp"].side_effect = RuntimeError("portal unreachable")
+
+    out = ca.config_once()
+
+    assert out.failed == 1
+    codes = _codes(stub)
+    assert "config_actuator.stamp_failed" in codes, f"silent stamp failure; got {codes}"
+    assert any(c and c.startswith("config_actuator.failed.") for c in codes), (
+        "the stamp WARN must not mask the original failure CRITICAL"
+    )
+
+
+def test_a_stage0_git_failure_does_not_borrow_the_bad_edit_data_code(stub):
+    """A git-sync fault is a code/deploy-surface fault (Seth), not a bad-edit-data fault (Tier-2).
+
+    Stage 0 reported through `config_actuator.failed.validated`, whose runbook entry says
+    "re-do the edit in the portal" — wrong, and unsafe routing for a git failure. The PORTAL
+    stamp must still say `validated` (the Worker's stage enum is fixed); only the error_code splits.
+    """
+    stub["pending"].return_value = [{"id": 9}]
+    stub["claim"].return_value = _row(rid=9)
+    stub["reset"].side_effect = ca.subprocess.CalledProcessError(1, "git", stderr=b"detached HEAD")
+
+    out = ca.config_once()
+
+    assert out.failed == 1
+    codes = _codes(stub)
+    assert "config_actuator.failed.sync_main" in codes, f"got {codes}"
+    assert "config_actuator.failed.validated" not in codes, (
+        "a git-sync failure must not route to the bad-edit-data runbook entry"
+    )
+    # …and the portal still receives the stage name its enum knows.
+    assert stub["stamp"].call_args.kwargs["failed_stage"] == "validated"
