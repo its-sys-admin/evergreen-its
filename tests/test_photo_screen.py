@@ -315,3 +315,33 @@ def test_live_clamd_end_to_end_clean_photo():
     res = photo_screen.screen_photo(_jpeg(), clamav_enabled=True)
     assert res.disposition == "clean"
     assert res.layer == "L3"
+
+
+# ---- 0074: make_thumbnail (the WPR picker thumb) ---------------------------
+
+
+def _big_jpeg(px: int = 2000) -> bytes:
+    import io as _io
+
+    from PIL import Image
+    img = Image.new("RGB", (px, px // 2), (10, 120, 200))
+    out = _io.BytesIO()
+    img.save(out, format="JPEG", quality=90)
+    return out.getvalue()
+
+
+def test_make_thumbnail_produces_bounded_jpeg_with_320_long_edge():
+    import io as _io
+
+    from PIL import Image
+    thumb = photo_screen.make_thumbnail(_big_jpeg())
+    assert thumb is not None
+    assert thumb[:3] == b"\xff\xd8\xff"
+    assert len(thumb) <= 40_000  # the Worker-side THUMB_MAX_BYTES bound
+    w, h = Image.open(_io.BytesIO(thumb)).size
+    assert max(w, h) <= photo_screen.THUMB_LONG_EDGE
+
+
+def test_make_thumbnail_never_raises_on_garbage():
+    assert photo_screen.make_thumbnail(b"not an image at all") is None
+    assert photo_screen.make_thumbnail(b"") is None

@@ -663,6 +663,46 @@ def test_photo_box_upload_failure_is_best_effort(stub, mocker):
 
 
 # ---- no photo field: unchanged behavior ----------------------------------
+# ---- 0074: pool registrations returned for the site-photos bridge ---------
+def test_clean_photo_returns_pool_registrations(stub, mocker):
+    stub["load_def"].return_value = PHOTO_DEFINITION
+    mocker.patch.object(
+        intake.box_client, "upload_bytes_or_new_version", return_value={"id": "p1"}
+    )
+    sub = dict(BASE_SUB, payload_json=_payload([_photo_obj(_jpeg_b64())]))
+    result = intake.process_portal_submission(sub)
+
+    assert result.status == "processed"
+    regs = result.site_photo_registrations
+    assert regs is not None and len(regs) == 1
+    assert regs[0]["box_file_id"] == "p1"
+    assert "front.jpg" in regs[0]["caption"]
+    # The thumb decodes to a real JPEG derived from the clean re-encode, bounded.
+    import base64 as _b64
+    thumb = _b64.b64decode(regs[0]["thumb_b64"])
+    assert thumb[:3] == b"\xff\xd8\xff" and len(thumb) <= 40_000
+
+
+def test_photo_box_failure_returns_no_registrations(stub, mocker):
+    # The best-effort fence: upload fails → WARN (existing behaviour) AND the result
+    # carries NO registrations — portal_poll must not register photos Box never got.
+    stub["load_def"].return_value = PHOTO_DEFINITION
+    mocker.patch.object(
+        intake.box_client, "upload_bytes_or_new_version",
+        side_effect=RuntimeError("box down"),
+    )
+    sub = dict(BASE_SUB, payload_json=_payload([_photo_obj(_jpeg_b64())]))
+    result = intake.process_portal_submission(sub)
+    assert result.status == "processed"
+    assert result.site_photo_registrations is None
+
+
+def test_no_photos_yields_no_registrations(stub):
+    result = intake.process_portal_submission(dict(BASE_SUB))
+    assert result.status == "processed"
+    assert result.site_photo_registrations is None
+
+
 def test_no_photo_field_files_normally(stub):
     # The default DEFINITION has no photo field → screened_photos empty, no Box photo tree.
     result = intake.process_portal_submission(dict(BASE_SUB))
