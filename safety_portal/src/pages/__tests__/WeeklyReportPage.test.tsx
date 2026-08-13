@@ -51,8 +51,8 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
     ],
     photos: {
       available: [
-        { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles" },
-        { pool_id: 2, work_date: "2026-08-12", box_file_id: "b2", caption: "Trench" },
+        { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles", has_thumb: false },
+        { pool_id: 2, work_date: "2026-08-12", box_file_id: "b2", caption: "Trench", has_thumb: false },
       ],
       selected: [{ pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles" }],
       auto_selected: true,

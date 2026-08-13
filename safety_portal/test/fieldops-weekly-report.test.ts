@@ -31,6 +31,7 @@ const qs = (over: Record<string, string> = {}): string => {
 };
 
 type PhotoPick = { pool_id: number; box_file_id: string; caption: string; work_date: string };
+type PhotoOffered = PhotoPick & { has_thumb: boolean };
 type ReportBody = {
   job_id: string;
   week: { start: string; end: string; from: number; to: number };
@@ -47,7 +48,7 @@ type ReportBody = {
   hazard_form_codes: string[];
   deliveries: { event_date: string; item: string; vendor: string; qty: string }[];
   material_incidents: { material: string; issue: string }[];
-  photos: { available: PhotoPick[]; selected: PhotoPick[]; auto_selected: boolean };
+  photos: { available: PhotoOffered[]; selected: PhotoPick[]; auto_selected: boolean };
   // Mirrors worker/wire-types.ts ProductionReportResponse["schedule"] — null until a schedule
   // is committed, then the grouped sections plus the behind-schedule set.
   schedule: null | {
@@ -129,10 +130,11 @@ async function seedOtherForm(
 
 async function seedPhoto(
   workDate: string, status: string, boxFileId: string | null, claimedBy: string | null = null,
+  over: { thumbB64?: string | null; caption?: string | null } = {},
 ): Promise<number> {
   const r = await env.DB.prepare(
-    "INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, hmac, box_file_id, created_at, claimed_by_submission) VALUES (?,?,?,?,?,?,?,?)",
-  ).bind(JOB, workDate, "pm.one", status, "deadbeef", boxFileId, FROM + 10, claimedBy).run();
+    "INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, hmac, box_file_id, created_at, claimed_by_submission, thumb_b64, caption) VALUES (?,?,?,?,?,?,?,?,?,?)",
+  ).bind(JOB, workDate, "pm.one", status, "deadbeef", boxFileId, FROM + 10, claimedBy, over.thumbB64 ?? null, over.caption ?? null).run();
   return Number(r.meta.last_row_id);
 }
 
@@ -478,6 +480,20 @@ describe("weekly report — the JHA labor seed", () => {
 
 // ── photos: the screening control, and the three-state contract ─────────────
 describe("weekly report — photos", () => {
+  it("flags has_thumb on offered photos and prefers the pool caption over the payload ref caption (0074)", async () => {
+    const withThumb = await seedPhoto("2026-08-08", "clean", "box-t", "sub-x", { thumbB64: "AAAA", caption: "Pool caption wins" });
+    const bare = await seedPhoto("2026-08-09", "clean", "box-b");
+    // The claiming submission's ref carries a caption too — the pool column must outrank it.
+    await seedDaily("2026-08-08", { additional_photos: [{ pool_id: withThumb, caption: "payload caption" }] }, { uuid: "sub-x" });
+    const r = await body(await internal());
+    const offered = r.photos.available;
+    expect(offered.find((x) => x.pool_id === withThumb)).toMatchObject({ has_thumb: true, caption: "Pool caption wins" });
+    expect(offered.find((x) => x.pool_id === bare)).toMatchObject({ has_thumb: false, caption: "" });
+    // selected picks keep the stored 4-key shape — has_thumb never rides a saved selection.
+    for (const sel of r.photos.selected) expect("has_thumb" in sel).toBe(false);
+  });
+
+
   it("offers ONLY clean, Box-filed photos — the screening control", async () => {
     const clean = await seedPhoto("2026-08-08", "clean", "box-111");
     await seedPhoto("2026-08-09", "pending", null);          // not screened yet

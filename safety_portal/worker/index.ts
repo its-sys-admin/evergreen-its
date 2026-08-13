@@ -55,7 +55,7 @@ import {
 import { validateCategory, validateDefinition, validateParentGrouping } from "./publishValidation";
 import { pruneOldData, writePruneMeta } from "./prune";
 import { buildSubmissionInsert } from "./submission";
-import { PHOTO_MAX_BYTES, b64DecodedLen, photoMagicOk, isPhotoItem, B64_RE } from "./photo_bounds";
+import { PHOTO_MAX_BYTES, THUMB_MAX_BYTES, b64DecodedLen, photoMagicOk, isPhotoItem, B64_RE } from "./photo_bounds";
 import catalog from "../catalog.json";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1719,6 +1719,28 @@ app.post("/api/internal/item-photos/:id/result", requireInternalToken, async (c)
 // (ITS Photos/daily/<job_id>/<work_date>/), and POSTs the disposition back here.
 const DAILY_PHOTO_RESULT_STATUSES = new Set(["clean", "refused"]);
 
+/** Validate a thumb_b64 candidate END-TO-END at WRITE time: base64 shape + length-validity
+ *  (B64_RE alone admits len ≡ 1 mod 4 — e.g. "AAAAA" — which atob() throws on at SERVE time,
+ *  and a stored bad thumb is a PERMANENT per-photo 500: the status='pending' guard makes the
+ *  disposition unrepeatable; adversarial review 2026-08-13, MEDIUM), decoded-size bound, and
+ *  JPEG magic (make_thumbnail only ever emits JPEG — anything else is not a thumb we made).
+ *  Returns the machine reason, or null when valid. */
+function thumbB64Problem(thumb: string): string | null {
+  if (!B64_RE.test(thumb) || thumb.length % 4 !== 0) return "thumb_invalid";
+  if (b64DecodedLen(thumb) > THUMB_MAX_BYTES) return "thumb_too_large";
+  let bytes: string;
+  try {
+    bytes = atob(thumb);
+  } catch {
+    return "thumb_invalid";
+  }
+  if (bytes.length > THUMB_MAX_BYTES) return "thumb_too_large";
+  if (bytes.length < 3 || bytes.charCodeAt(0) !== 0xff || bytes.charCodeAt(1) !== 0xd8 || bytes.charCodeAt(2) !== 0xff) {
+    return "thumb_not_jpeg";
+  }
+  return null;
+}
+
 /**
  * GET /api/internal/daily-photos/pending — the unscreened pool queue, oldest-first.
  * Serves claimed AND unclaimed pending rows alike (a claim changes ownership, not
@@ -1786,6 +1808,16 @@ app.post("/api/internal/daily-photos/:id/result", requireInternalToken, async (c
   if (status === "refused" && boxFileId) {
     return c.json({ error: "invalid_result", detail: "box_file_id_forbidden" }, 400);
   }
+  // thumb_b64 (0074): OPTIONAL on clean — a small screened thumbnail derived from the §34 clean
+  // re-encode; FORBIDDEN on refused (a refused photo leaves no image trace, same shape as the
+  // box_file_id contract above). Bounded + base64-shape-checked (Invariant 2); an ABSENT thumb is
+  // fine (older Mac builds / thumbnailing failure degrade to the thumbless card, never an error).
+  const thumbB64 = typeof body.thumb_b64 === "string" && body.thumb_b64 ? body.thumb_b64 : null;
+  if (thumbB64 !== null) {
+    if (status === "refused") return c.json({ error: "invalid_result", detail: "thumb_forbidden" }, 400);
+    const thumbErr = thumbB64Problem(thumbB64);
+    if (thumbErr) return c.json({ error: "invalid_result", detail: thumbErr }, 400);
+  }
 
   const row = await c.env.DB
     .prepare("SELECT id, job_id, work_date, status FROM daily_photo_pool WHERE id = ?1")
@@ -1803,9 +1835,9 @@ app.post("/api/internal/daily-photos/:id/result", requireInternalToken, async (c
     c.env.DB
       .prepare(
         "UPDATE daily_photo_pool SET status = ?1, photo_json = NULL, box_file_id = ?2, " +
-          "screened_at = unixepoch() WHERE id = ?3 AND status = 'pending'",
+          "thumb_b64 = ?4, screened_at = unixepoch() WHERE id = ?3 AND status = 'pending'",
       )
-      .bind(status, boxFileId, photoId),
+      .bind(status, boxFileId, photoId, thumbB64),
     auditStmtIfChanged(c, "portal_poll", "daily_photo_result", row.job_id, {
       daily_photo_id: photoId,
       job_id: row.job_id,
@@ -1816,6 +1848,112 @@ app.post("/api/internal/daily-photos/:id/result", requireInternalToken, async (c
     }),
   ]);
   return c.json({ ok: true, found: (res[0]?.meta?.changes ?? 0) > 0 });
+});
+
+/**
+ * POST /api/internal/daily-photos/register — the SITE-PHOTOS BRIDGE (0074, Track B 2026-08-13).
+ *
+ * The daily report's INLINE `site_photos` ride the submission payload, are §34-screened by the
+ * Mac's intake, filed to Box under the submission's own folder, and embedded in the daily PDF —
+ * but they never had a pool row, so the WPR photo picker (which reads ONLY daily_photo_pool)
+ * structurally could not offer them. After filing, portal_poll POSTs each clean site photo here
+ * and the row becomes WPR-offerable exactly like a screened additional_photos row.
+ *
+ * TRUST SHAPE (Invariant 2 — daemon input is untrusted too): the body names ONLY the submission
+ * uuid and per-photo {box_file_id, caption?, thumb_b64?}. job_id / work_date / uploaded_by are
+ * derived SERVER-SIDE from the submissions row — the daemon cannot place a photo on a job or day
+ * its submission does not belong to. Unknown submission → 404 (nothing stored).
+ *
+ * The 1..8 bound is PER CALL (the Mac's photo_screen caps site photos at 8 per submission at
+ * the source; repeated calls with fresh box_file_ids are bearer-trusted like box_file_id itself).
+ *
+ * IDEMPOTENT by (claimed_by_submission, box_file_id): intake re-runs re-upload the same
+ * deterministic Box filenames as new VERSIONS of the SAME file ids, so a replay's INSERTs are
+ * structural no-ops (guarded WHERE NOT EXISTS; the changes()-gated audit stays silent too).
+ *
+ * Rows are born status='clean' (their §34 screening already happened at intake), photo_json NULL
+ * (no bytes, ever — only the thumb), CLAIMED by their submission (prune-immune like any claimed
+ * manifest; they die only via the orphan-claim rule when the submission row itself goes), with
+ * origin='site_photos' and the hmac sentinel 'registered:v1' (nothing reads hmac off non-pending
+ * rows — the pending screening queue serves status='pending' only, which these never are).
+ */
+app.post("/api/internal/daily-photos/register", requireInternalToken, async (c) => {
+  let body: Record<string, unknown>;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (typeof body !== "object" || (body as unknown) === null || Array.isArray(body)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  const submissionUuid =
+    typeof body.submission_uuid === "string" && body.submission_uuid.length > 0 && body.submission_uuid.length <= 64
+      ? body.submission_uuid
+      : "";
+  if (!submissionUuid) return c.json({ error: "invalid_register", detail: "submission_uuid" }, 400);
+  const photosRaw = body.photos;
+  // 1..8 entries — MAX_PHOTOS_PER_SUBMISSION mirror (photo_screen.py); an empty register is a
+  // caller bug, not a no-op to swallow.
+  if (!Array.isArray(photosRaw) || photosRaw.length < 1 || photosRaw.length > 8) {
+    return c.json({ error: "invalid_register", detail: "photos" }, 400);
+  }
+  type RegPhoto = { box_file_id: string; caption: string | null; thumb_b64: string | null };
+  const photos: RegPhoto[] = [];
+  for (const item of photosRaw) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      return c.json({ error: "invalid_register", detail: "photo_shape" }, 400);
+    }
+    const rec = item as Record<string, unknown>;
+    const boxFileId =
+      typeof rec.box_file_id === "string" && rec.box_file_id.length > 0 && rec.box_file_id.length <= 200
+        ? rec.box_file_id
+        : "";
+    if (!boxFileId) return c.json({ error: "invalid_register", detail: "box_file_id" }, 400);
+    const caption = typeof rec.caption === "string" && rec.caption ? rec.caption.slice(0, 300) : null;
+    const thumb = typeof rec.thumb_b64 === "string" && rec.thumb_b64 ? rec.thumb_b64 : null;
+    if (thumb !== null) {
+      const thumbErr = thumbB64Problem(thumb);
+      if (thumbErr) return c.json({ error: "invalid_register", detail: thumbErr }, 400);
+    }
+    photos.push({ box_file_id: boxFileId, caption, thumb_b64: thumb });
+  }
+
+  // Server-derived placement: the submission row is the authority for job/date/actor.
+  const sub = await c.env.DB
+    .prepare("SELECT job_id, work_date, actor_username FROM submissions WHERE submission_uuid = ?1")
+    .bind(submissionUuid)
+    .first<{ job_id: string; work_date: string; actor_username: string }>();
+  if (!sub) return c.json({ error: "unknown_submission" }, 404);
+
+  // ONE batch: per-photo guarded idempotent INSERT, each with its changes()-gated audit row (W4).
+  const stmts: D1PreparedStatement[] = [];
+  for (const ph of photos) {
+    stmts.push(
+      c.env.DB
+        .prepare(
+          "INSERT INTO daily_photo_pool " +
+            "(job_id, work_date, uploaded_by, status, photo_json, hmac, box_file_id, " +
+            " screened_at, claimed_by_submission, origin, caption, thumb_b64) " +
+            "SELECT ?1, ?2, ?3, 'clean', NULL, 'registered:v1', ?4, unixepoch(), ?5, 'site_photos', ?6, ?7 " +
+            "WHERE NOT EXISTS (SELECT 1 FROM daily_photo_pool " +
+            "                   WHERE claimed_by_submission = ?5 AND box_file_id = ?4)",
+        )
+        .bind(sub.job_id, sub.work_date, sub.actor_username, ph.box_file_id, submissionUuid, ph.caption, ph.thumb_b64),
+    );
+    stmts.push(
+      auditStmtIfChanged(c, "portal_poll", "daily_photo_register", sub.job_id, {
+        submission_uuid: submissionUuid,
+        box_file_id: ph.box_file_id,
+        job_id: sub.job_id,
+        work_date: sub.work_date,
+      }),
+    );
+  }
+  const res = await c.env.DB.batch(stmts);
+  let registered = 0;
+  for (let i = 0; i < res.length; i += 2) registered += (res[i]?.meta?.changes ?? 0) > 0 ? 1 : 0;
+  return c.json({ ok: true, registered, skipped: photos.length - registered });
 });
 
 /**
