@@ -150,19 +150,6 @@ files are operator-facing on the day.
 
 ---
 
-## `config_actuator`'s broad `except Exception` sites make an incident slower to root-cause (DASH-6) [OPEN 2026-07-14, low]
-
-`po_materials/config_actuator.py` carries a dozen-plus `except Exception as exc:  # noqa: BLE001` sites,
-each deliberately broad per its own in-code comment ("any actuation failure is terminal+alerted", "never
-wedge the cycle"). The 2026-07-14 live error-chase of a `config_actuator`-attributed `ITS_Errors` row needed
-a source read to conclude it was benign (a gate flipped before its matching Worker secret/route was
-deployed) — the row's `error_code` and message alone did not say so. Individually the broad catches are
-justified; collectively they cost a diagnosis. A pass giving each site a specific `error_code`/message would
-make the next incident legible from the `ITS_Errors` row alone.
-
-**Trigger:** next `config_actuator` touch, or a recurrence of an unlabeled `config_actuator` error.
-**Tag:** `po_materials`, `observability`, `operator-dashboard`, `low`.
-
 ## Operator dashboard — native-app repackaging decision captured, not built (DASH-10) [OPEN 2026-07-14, low]
 
 Operator directed **Option A** for a future WS2 session: repackage the dashboard as a native macOS `.app`
@@ -754,12 +741,6 @@ Not urgent today (a new job's Hours Log starts empty and low-volume by design �
 **PR-3.** `graph_client._put_upload_chunk` mirrors `_request`'s retry shape (429/503 back off + retry; a hang fails fast as `GraphTimeoutError` without consuming the budget) and the chunk loop **honors `nextExpectedRanges`** so an interrupted transfer *can* resume to a server-reported offset within a single call. What is **deferred**: (a) no **session-resume across `send_one_row` calls** — a chunk failure that escapes the retry budget aborts the whole upload (the draft is left UNSENT in Drafts, fail-toward-not-sending), and the next poll cycle re-creates a fresh draft from byte 0 rather than resuming the prior `uploadUrl`; (b) no **explicit upload-session cancel** (`DELETE uploadUrl`) on abort — the abandoned draft + session simply expire (Graph TTL); (c) the anti-stall guard forces linear progress if a 200 body reports a non-advancing range rather than retrying the same range. Acceptable because a 3–150 MB packet uploads in a handful of chunks, restart-from-zero is cheap at that size, and the External Send Gate is unaffected (a failed upload never sends a partial packet).
 
 **Tag:** `safety-reports`, `graph`, `upload-session`, `retry`. **Revisit when:** live telemetry shows recurring mid-upload failures on large packets (then add cross-cycle session resume + an explicit cancel), or packet sizes grow toward the 150 MB ceiling where restart-from-zero becomes expensive.
-
-## Safety Portal — `scheduled_send_local` not seeded + silent fail-open on malformed value [OPEN 2026-06-08]
-
-`safety_reports.weekly_send.scheduled_send_local` (ITS_Config; e.g. `"MON 07:00"` — the Pacific weekday/time window in which `Approve for Scheduled Send` rows dispatch) is read live each cycle by `weekly_send_poll._read_str_setting` → `_parse_scheduled_spec` → `_is_scheduled_window`. Two minor gaps: (1) it is **not** in `scripts/seed_its_config.py` (added manually to the mirror) — a fresh tenant build would lack the row and fall back to the `DEFAULT_SCHEDULED_SEND_LOCAL = "MON 07:00"` constant (functionally safe, but undocumented in the seeder). (2) `_parse_scheduled_spec` **silently** coerces any malformed value (bad weekday, bad time, empty) to `(MON, 07:00)` with **no log** — an operator typo'd window would quietly send Monday 07:00 instead of erroring. The fallback is intentional + tested (`test_parse_scheduled_spec_defaults_on_malformed`), but it's a quiet-failure footgun for an operator-tuned schedule.
-
-**Proposed fix:** (a) add the row to `seed_its_config.py`; (b) WARN-log to ITS_Errors when `_parse_scheduled_spec` hits the `except` branch (still fall back, but surface the bad value). ~30 min. **Revisit when:** next seeder pass or weekly_send hardening. Surfaced 2026-06-08 (operator asked to confirm the config-driven schedule during mirror activation).
 
 ## `smartsheet-python-sdk` upper-bound pin (CI-break stopgap) [OPEN 2026-06-08]
 
@@ -2424,63 +2405,39 @@ Surfaced: 2026-08-10 session close (PR4 completion session).
 > see `docs/handoffs/2026-08-11_morning-operator-checklist.md`. The manifest parser eval stays
 > WAIVED — the corpus is not on this host (memory: estimate-corpus-lives-on-dev-mac).
 
-## [OPEN 2026-08-10, low] Daily report's "Confirm receipt" button remains one-click, asymmetric with the now-two-tap delivery marks
+## fieldops_sync mirror resilience — D16 sustained-failure enrolment + D17 row-cap counts [OPEN 2026-08-13, low]
 
-PR #45 made the three delivery-mark buttons (Delivered / Partially delivered / Not delivered) two-tap
-(arm → confirm, 6s expiry) because a mark is an append-only ledger event with no delete path — a mis-tap
-is permanent. `DailyReportTab.confirmReceipt` (the M1 receive route — expected→received, idempotent-safe
-409 on repeat, distinct code path from the delivery-mark buttons) still records on a **single** click. The
-two-tap change deliberately covered only the three delivery marks per the operator's specific request this
-session; the asymmetry was not an oversight but was also not evaluated for whether the same append-only
-argument applies to Confirm-receipt.
+**Narrowed from the 2026-08-10 entry. D14 + D15 SHIPPED in PR #123 (`aa930e7`); D16 + D17 survive.**
 
-**Fix (not scoped, needs an operator call):** if Confirm-receipt should get the same two-tap treatment,
-it's a small follow-up reusing the `(line,kind)`-keyed arm/confirm pattern from #45. If the 409-idempotent
-repeat-safety of the M1 receive route is judged sufficient protection against a mis-tap (unlike the
-ledger-append marks, a repeat Confirm-receipt click is a no-op, not a duplicate event), this can be closed
-as intentional.
+**D14 — DONE.** All six `review_queue.add` sites are now `safe_add`. `add` propagates
+`SmartsheetError` by contract and each `_route_*_to_review` is called from inside an unfenced
+`except` handler, so a Review-Queue blip *while filing a ticket* aborted the cycle after the failing
+pass — skipping every later mirror pass, the heartbeat row AND the watchdog marker, which made a
+Review-Queue outage present to watchdog Check C as a dead daemon. An AST tooth
+(`test_no_review_queue_write_in_this_daemon_can_raise`) now fails with a line number if `add` returns.
 
-**Tag:** `field-ops`, `materials`, `ux`, `low`.
+**D15 — DONE, and the original entry undercounted by nearly half.** It named 8 sites; live HEAD had
+**FIFTEEN**, across three indentation levels — the job/hours/equipment passes were omitted from the
+entry entirely. All 15 tuples now include `SmartsheetPermissionError` + `SmartsheetNotFoundError`, so
+a §46 share change or a deleted tracker sheet tickets instead of logging "re-projects next cycle"
+forever on a retry that could never succeed.
 
-**Revisit when:** an operator/field report of an accidental Confirm-receipt tap, or the next
-`DailyReportTab.tsx` materials-section touch.
+**D16 — STILL OPEN.** The three SECONDARY fetches are not enrolled in the sustained-failure ladder:
+`fieldops_sync.py` materials (~:1618), incidents (~:1893), receipts (~:2349) — only the PRIMARY
+pending-jobs fetch escalates. A persistently failing secondary fetch therefore logs ERROR every
+cycle and never reaches CRITICAL. The paired half — a watchdog view of a persistently `DEGRADED`
+fieldops_sync heartbeat — needs a **new watchdog check letter** (Z, or a documented re-use), which
+is a decision rather than a code change, and is why this was deliberately not bundled into #123.
 
-Surfaced: 2026-08-10 session close (PR4 completion session).
+**D17 — STILL OPEN.** The `check_row_cap` calls at ~:1214 / :1448 / :1732 / :2102 / :2272 all omit
+the `row_count=` argument their signature offers (cf. `progress_reports/material_receipts.py:362`),
+so each re-reads the sheet to count rows it has just written. Cheap to fix, purely a wasted read.
 
-## [OPEN 2026-08-10, medium] fieldops_sync mirror resilience — unfenced Review-Queue writes, mis-classed permanent faults, unwatched DEGRADED
+**Fix:** D16 = enrol the three fetches via `sustained_failure.SustainedFailureCounter` (the
+`schedule_poll.py:186-191` pattern) + decide the watchdog letter; D17 = pass the counts already in
+hand. **Tag:** `field-ops`, `resilience`, `watchdog`, `low`.
 
-Four resilience gaps in the five §51 mirror passes, all audit-confirmed at HEAD 2c9b8ef:
-
-- **D14 — `review_queue.add` is unfenced at six sites** (`fieldops_sync.py:996/:1212/:1487/:1802/
-  :2110/:2280`; zero `safe_add` in the file). PR #41 built `review_queue.safe_add` and converted 18
-  sites across five daemons for exactly this defect — a Review-Queue write failure aborts the whole
-  sync cycle after the failing pass, skipping the later mirrors, the heartbeat, and the watchdog
-  marker. The conversion never reached fieldops_sync.
-- **D15 — permanent Smartsheet faults classified transient.** The permanent tuples
-  (:1658/:1708/:1744/:1780/:2038/:2079/:2202/:2247) list only `PicklistViolationError` +
-  `SmartsheetValidationError`; `SmartsheetPermissionError` and `SmartsheetNotFoundError` are
-  siblings, so a §46 share change or a deleted tracker sheet logs "transient — re-projects next
-  cycle" forever, with no ticket and no CRITICAL.
-- **D16 — no sustained-failure enrolment on secondary fetches** (materials :1620, incidents :1895,
-  receipts :2351 log plain ERROR); the DEGRADED heartbeat status is watched by nothing (zero
-  `DEGRADED` hits in the post-#57 watchdog), and the marker still writes, so Check C stays green
-  through a persistent secondary failure.
-- **D17 — `find_*_row` issues one full-sheet GET per item per cycle** (`material_receipts.py:259`,
-  `material_list.py:339`, `material_incidents.py:242`), and every `check_row_cap` call site omits
-  the `row_count=` its signature offers (:1729/:2099/:2269 → a second full read). Tolerable at
-  today's volume; not at the receipts ledger's design volume (15k rows).
-
-**Fix:** D14 is small and precedented (swap to `safe_add`, six sites — the #41 pattern verbatim);
-D15 is a two-line tuple widening per site; D16 = enroll the secondary fetches in
-`SustainedFailureCounter` + a watchdog view of DEGRADED; D17 = thread the roster's row count
-through. D14+D15 fit one PR.
-
-**Tag:** `field-ops`, `resilience`, `section51`, `medium`.
-
-**Revisit when:** the next fieldops_sync touch, or the first time a Review-Queue outage takes the
-heartbeat with it.
-
-Surfaced: 2026-08-10 end-to-end audit; re-confirmed at HEAD 2c9b8ef (overnight reconcile session).
+**Revisit when:** the next `fieldops_sync` touch, or the next watchdog check-letter allocation.
 
 ## [OPEN 2026-08-10, medium] Two designed-but-unbuilt halves of materials tracking: the §51 shipments mirror and the manifest byte-pool prune
 
