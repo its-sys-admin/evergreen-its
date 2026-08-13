@@ -51,6 +51,7 @@ const DELIVERY_CAP = 300;  // delivery events in the week
 const PHOTO_CAP = 200;     // clean photos offered to the office for curation
 const INCIDENT_CAP = 100;  // material incidents in the week
 const SCHEDULE_TASK_CAP = 600; // active schedule tasks on one job (a real solar schedule is ~100-300)
+const JHA_SIGNIN_CAP = 400;    // JHA worker-acknowledgement sign-ins in a week (~12 signers × 7 days, amend-collapsed)
 
 /** Max photos the deterministic auto-selection will place on the report's photo page. */
 export const AUTO_SELECT_MAX = 8;
@@ -359,6 +360,10 @@ async function buildReportData(
   // `not-an-array` — which is not well-formed JSON, so json_type() re-parsing it raises the very
   // error the guard exists to prevent. The two-arg form inspects the element in place and returns
   // NULL for an absent path. (The first fix here used the one-arg form and stayed red.)
+  //
+  // `v.type = 'object'` guards each ELEMENT the same way: a bare JSON-string element dequotes to
+  // raw text that json_extract would re-parse (and raise on). Same fix as jhaSql's — adversarial
+  // review 2026-08-13 found the crash live-reachable through both queries.
   const crewSql = `
     SELECT s.work_date,
            json_extract(v.value, '$.crew_subcontractor') AS crew,
@@ -373,8 +378,45 @@ async function buildReportData(
      WHERE s.job_id = ?1
        AND s.form_code LIKE 'daily-report%'
        AND s.work_date >= ?2 AND s.work_date <= ?3
+       AND v.type = 'object'
        AND NOT EXISTS (SELECT 1 FROM submissions x WHERE x.amends_uuid = s.submission_uuid)
      ORDER BY s.work_date ASC
+     LIMIT ?4
+  `;
+
+  // JHA sign-in rows — the Worker Acknowledgement signature table every JHA carries (worker_name +
+  // company columns; the key is `worker_acknowledgement` in all published versions, jha-v1..v3).
+  // This is the week's record of which COMPANIES were actually on site, so it is the preferred
+  // labor seed: the crew_progress "Crew / Subcontractor" free-text field gets filled with PEOPLE
+  // by some foremen (the Deep Lake people-as-companies bug), while a JHA signer states an employer.
+  //
+  // The array guard is crewSql's two-arg json_type pattern (see the comment above crewSql for why
+  // both halves of it are load-bearing) — PLUS the `v.type = 'object'` element guard: json_each's
+  // per-element `value` for a bare JSON-string element is the DEQUOTED text, which json_extract
+  // then re-parses as a JSON document and raises `malformed JSON`, 500ing the whole report route.
+  // The type filter drops non-object elements before json_extract ever sees them (adversarial
+  // review 2026-08-13, live-reproduced). `.signature` (SVG path data) is deliberately never
+  // selected — nothing here needs it and it must not cross this wire.
+  //
+  // Amend-collapse is REQUIRED here, unlike hazardSql (whose DISTINCT form_code makes duplicates
+  // harmless): a re-signed JHA amendment re-carries the whole signer table, and counting both the
+  // original and the amendment would double every signer on that day.
+  const jhaSql = `
+    SELECT s.work_date,
+           json_extract(v.value, '$.worker_name') AS worker_name,
+           json_extract(v.value, '$.company')     AS company
+      FROM submissions s
+      JOIN json_each(
+             CASE WHEN json_type(s.payload_json, '$.worker_acknowledgement') = 'array'
+                  THEN json_extract(s.payload_json, '$.worker_acknowledgement')
+                  ELSE '[]' END
+           ) v
+     WHERE s.job_id = ?1
+       AND s.form_code LIKE 'jha-%'
+       AND s.work_date >= ?2 AND s.work_date <= ?3
+       AND v.type = 'object'
+       AND NOT EXISTS (SELECT 1 FROM submissions x WHERE x.amends_uuid = s.submission_uuid)
+     ORDER BY s.work_date ASC, s.created_at ASC
      LIMIT ?4
   `;
 
@@ -507,11 +549,12 @@ async function buildReportData(
       FROM jobs WHERE job_id = ?1
   `;
 
-  const [jobRes, dailyRes, crewRes, laborRes, hazardRes, deliveryRes, incidentRes, photoRes, officeRes, priorRes, schedRes] =
+  const [jobRes, dailyRes, crewRes, jhaRes, laborRes, hazardRes, deliveryRes, incidentRes, photoRes, officeRes, priorRes, schedRes] =
     await c.env.DB.batch([
       c.env.DB.prepare(jobSql).bind(w.jobId),
       c.env.DB.prepare(dailySql).bind(w.jobId, w.weekStart, w.weekEnd, DAILY_CAP),
       c.env.DB.prepare(crewSql).bind(w.jobId, w.weekStart, w.weekEnd, CREW_ROWS_CAP),
+      c.env.DB.prepare(jhaSql).bind(w.jobId, w.weekStart, w.weekEnd, JHA_SIGNIN_CAP),
       c.env.DB.prepare(laborSql).bind(w.jobId, w.from, w.to),
       c.env.DB.prepare(hazardSql).bind(w.jobId, w.weekStart, w.weekEnd, HAZARD_CAP),
       c.env.DB.prepare(deliverySql).bind(w.jobId, w.weekStart, w.weekEnd, DELIVERY_CAP),
@@ -525,6 +568,7 @@ async function buildReportData(
   const job = (jobRes.results?.[0] ?? null) as Record<string, unknown> | null;
   const daily = (dailyRes.results ?? []) as Record<string, unknown>[];
   const crew = (crewRes.results ?? []) as Record<string, unknown>[];
+  const jhaRows = (jhaRes.results ?? []) as Record<string, unknown>[];
   const totalHours = (laborRes.results?.[0] as { total_hours: number } | undefined)?.total_hours ?? 0;
   const hazardCodes = ((hazardRes.results ?? []) as { form_code: string }[]).map((r) => r.form_code);
   const deliveries = (deliveryRes.results ?? []) as Record<string, unknown>[];
@@ -535,6 +579,8 @@ async function buildReportData(
 
   const scheduleTasks = (schedRes.results ?? []) as ScheduleTaskRow[];
   const todayPacific = pacificDateString(Date.now());
+
+  const jhaCompanies = aggregateJhaSignins(jhaRows);
 
   const ownRow = (officeRes.results?.[0] ?? null) as OfficeRow | null;
   const priorRow = (priorRes.results?.[0] ?? null) as OfficeRow | null;
@@ -577,9 +623,14 @@ async function buildReportData(
     },
     labor: {
       total_hours: totalHours,
-      // Seed for the office's Labor Report: peak headcount per typed crew name across the week.
-      // MAX, not sum — the same crew reported on five days is one crew, not five.
-      crews: aggregateCrews(crew),
+      // Seed for the office's Labor Report. The week's JHA sign-in table (worker_acknowledgement)
+      // is the record of which COMPANIES were actually on site, so it wins when present; the
+      // foreman's free-text crew_progress rows (which some crews fill with PEOPLE — the Deep Lake
+      // people-as-companies bug) are the fallback. No merging of the two: they are two messy
+      // free-text namespaces and merging would double-list companies. The office's saved
+      // labor_json outranks both — in the consumers, unchanged.
+      crews: jhaCompanies.length > 0 ? jhaCompanies : aggregateCrews(crew),
+      seed_source: jhaCompanies.length > 0 ? ("jha" as const) : ("daily" as const),
     },
     crew_progress: crew.map((r) => ({
       work_date: String(r.work_date ?? ""),
@@ -699,6 +750,82 @@ function aggregateCrews(rows: Record<string, unknown>[]): { company: string; wor
   return [...acc.values()]
     .map((v) => ({ company: v.company, workers: v.workers, days: v.days.size }))
     .sort((a, b) => a.company.localeCompare(b.company));
+}
+
+// ── JHA labor seed ──────────────────────────────────────────────────────────────
+// Canonical label for the self-perform row. A module constant, not config: ITS_Config is
+// Mac-side and unreachable from the Worker, wrangler vars are feature flags, and this is report
+// vocabulary with exactly one honest value — promote it only if it ever must change without a
+// deploy. The prefix match covers every live spelling ("Evergreen", "Evergreen Renewables",
+// "Evergreen renewables", "Evergree " — a real typo in filed JHAs). A genuine third-party company
+// starting "Evergree…" would collapse into this row; none exists in live data, and the office's
+// saved labor table always outranks the seed.
+const EVERGREEN_COMPANY_LABEL = "Evergreen Renewables";
+const EVERGREEN_COMPANY_PREFIX = "evergree";
+// Named signers whose Company cell is blank stay VISIBLE under this row rather than being folded
+// anywhere — the office must notice and resolve them, not have the seed guess an employer (§4).
+const NO_COMPANY_LABEL = "(no company given)";
+
+/** Free-text normalize for grouping: trim + collapse internal whitespace. Case is folded only in
+ *  the grouping KEY so the display keeps a real spelling. */
+function normFree(v: unknown): string {
+  return v === null || v === undefined ? "" : String(v).trim().replace(/\s+/g, " ");
+}
+
+/** Per-company rows from the week's JHA Worker Acknowledgement sign-ins.
+ *
+ *  workers = PEAK across days of the per-day DISTINCT signer-name count for the company — the
+ *  printed column means "workers on site", not worker-days, and the peak mirrors aggregateCrews'
+ *  MAX semantics. The same person signing two JHAs on one day counts once (name-keyed set).
+ *
+ *  Unnamed rows are skipped entirely: the JHA signature table ships min_rows=4, so filed payloads
+ *  carry blank filler rows, and an unnamed row identifies nobody countable.
+ *
+ *  Man-hours are deliberately NOT derived here: `personnel` has no employer column and
+ *  subcontractors create crew + file time too (migration 0027), so any per-company hours split
+ *  would be invented data. The office fills hours; the job-wide total rides beside the table.
+ *
+ *  Row order: Evergreen first, other companies alphabetically, "(no company given)" last. Display
+ *  label per group = the most frequent original spelling (ties: longest, then lexicographically
+ *  smallest) — deterministic, so the same week always renders the same table. */
+function aggregateJhaSignins(rows: Record<string, unknown>[]): { company: string; workers: number; days: number }[] {
+  // A LEADING SPACE cannot survive normFree (it trims), so these sentinel keys can never
+  // collide with a real normalized company name.
+  const EVERGREEN_KEY = " evergreen";
+  const NO_COMPANY_KEY = " none";
+  type Group = { spellings: Map<string, number>; byDay: Map<string, Set<string>> };
+  const groups = new Map<string, Group>();
+  for (const r of rows) {
+    const name = normFree(r.worker_name);
+    if (name === "") continue;
+    const company = normFree(r.company);
+    const lc = company.toLowerCase();
+    const key = company === "" ? NO_COMPANY_KEY
+      : lc.startsWith(EVERGREEN_COMPANY_PREFIX) ? EVERGREEN_KEY
+      : lc;
+    let g = groups.get(key);
+    if (!g) { g = { spellings: new Map(), byDay: new Map() }; groups.set(key, g); }
+    if (company !== "") g.spellings.set(company, (g.spellings.get(company) ?? 0) + 1);
+    const day = String(r.work_date ?? "");
+    const seen = g.byDay.get(day);
+    if (seen) seen.add(name.toLowerCase()); else g.byDay.set(day, new Set([name.toLowerCase()]));
+  }
+  const displayLabel = (key: string, g: Group): string =>
+    key === EVERGREEN_KEY ? EVERGREEN_COMPANY_LABEL
+    : key === NO_COMPANY_KEY ? NO_COMPANY_LABEL
+    : [...g.spellings.entries()]
+        .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || (a[0] < b[0] ? -1 : 1))[0][0];
+  const rank = (k: string): number => (k === EVERGREEN_KEY ? 0 : k === NO_COMPANY_KEY ? 2 : 1);
+  return [...groups.entries()]
+    .map(([key, g]) => ({
+      key,
+      company: displayLabel(key, g),
+      // A group exists only once a named signer landed in it, so byDay is never empty here.
+      workers: Math.max(...[...g.byDay.values()].map((set) => set.size)),
+      days: g.byDay.size,
+    }))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.company.localeCompare(b.company))
+    .map(({ company, workers, days }) => ({ company, workers, days }));
 }
 
 export function registerWeeklyReportRoutes(

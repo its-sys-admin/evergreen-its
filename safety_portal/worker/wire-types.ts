@@ -977,9 +977,12 @@ export interface WeeklyReportWeatherDay {
   inclement: boolean;
 }
 
-/** A crew the field actually reported, with its PEAK headcount across the week (MAX, not sum —
- *  the same crew on five days is one crew). Man-hours are absent by design: `personnel` has no
- *  employer column, so hours cannot be attributed to a subcontractor. */
+/** A labor-seed row. Either a JHA sign-in COMPANY (workers = the week's peak daily count of
+ *  distinct signers under that company) or, when the week has no JHA sign-ins, a crew the field
+ *  typed into crew_progress (workers = peak typed manpower; MAX, not sum — the same crew on five
+ *  days is one crew). Man-hours are absent by design: `personnel` has no employer column and
+ *  subcontractors create crew + file time too (migration 0027), so a per-company hours split
+ *  would be invented data. */
 export interface WeeklyReportCrew {
   company: string;
   workers: number;
@@ -1056,7 +1059,12 @@ export interface ProductionReportResponse {
     weather_days_week: number;
     weather_days_to_date: number;
   };
-  labor: { total_hours: number; crews: WeeklyReportCrew[] };
+  // `seed_source` is REQUIRED, not optional: the builder always knows which derivation produced
+  // `crews`, and optionality would let a consumer silently miss it. "jha" = the week's JHA
+  // worker-acknowledgement sign-ins (preferred — a signer states an employer); "daily" = the
+  // crew_progress free-text fallback. The Mac compile reads only total_hours/crews and ignores
+  // unknown keys.
+  labor: { total_hours: number; crews: WeeklyReportCrew[]; seed_source: "jha" | "daily" };
   crew_progress: { work_date: string; crew: string; manpower: string; progress: string }[];
   daily_notes: {
     work_date: string; tomorrows_goals: string; comments: string;

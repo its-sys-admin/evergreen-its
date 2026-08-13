@@ -558,10 +558,17 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
             <header className="wpr-sec__head">
               <h2 className="wpr-sec__title">Construction labor report</h2>
               <span className="wpr-sec__tag wpr-sec__tag--yours">Yours to fill</span>
+              {carried && <span className="wpr-carried">Carried forward</span>}
             </header>
             <p className="wpr-sec__hint">
-              Crews are seeded from the daily reports. Man-hours cannot be attributed to a company
-              automatically — the roster has no employer field — so enter them here.
+              {/* The seed sentence shows exactly when the SEED is what the table displays — the
+                  same office-rows-empty predicate toDraft uses to choose it. */}
+              {data.office.labor.rows.length === 0 &&
+                (data.labor.seed_source === "jha"
+                  ? "Companies are seeded from this week's JHA sign-ins — workers is each company's peak daily signer count. "
+                  : "Crews are seeded from the daily reports. ")}
+              Man-hours cannot be attributed to a company automatically — the roster has no employer
+              field — so enter them here.
               {" "}The job logged <strong>{data.labor.total_hours}</strong> hours in total this week.
             </p>
             <table className="wpr-table">
