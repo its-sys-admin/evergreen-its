@@ -56,6 +56,7 @@ import { validateCategory, validateDefinition, validateParentGrouping } from "./
 import { pruneOldData, writePruneMeta } from "./prune";
 import { buildSubmissionInsert } from "./submission";
 import { PHOTO_MAX_BYTES, b64DecodedLen, photoMagicOk, isPhotoItem, B64_RE } from "./photo_bounds";
+import { MAX_VALUES_DEPTH, jsonDepthExceeds } from "./json_depth";
 import catalog from "../catalog.json";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -844,6 +845,13 @@ app.post("/api/submit", requireSession, requireCapability("cap.form.submit"), as
     typeof values !== "object" || values === null || Array.isArray(values)
   ) {
     return c.json({ error: "invalid_submission" }, 400);
+  }
+  // Depth bound (Invariant 2): a deeply-nested `values` would, once stored, make SQLite's JSON1
+  // parser raise on EVERY json_extract query over this job's submissions — poisoning the weekly
+  // report for that job/week persistently. Rejected here, before anything is stored; no read-side
+  // guard can close this. See worker/json_depth.ts for the full mechanism.
+  if (jsonDepthExceeds(values, MAX_VALUES_DEPTH)) {
+    return c.json({ error: "invalid_submission", detail: "values_too_deep" }, 400);
   }
   // ── Daily-report role gate (operator directive 2026-07-03) ────────────────
   // The SOP daily field report (every launch:"daily-tab" catalog family, matched on the S4
