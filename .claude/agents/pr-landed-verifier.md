@@ -24,14 +24,14 @@ Caller invokes with a PR number ("verify PR #92 is landed"). If no number, ask o
    ```bash
    REPO=$(git remote get-url origin | sed -E 's|.*[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
    ```
-   Expected values: `SolutionSmith-debug/its` (when cwd is `~/its/`) or `SolutionSmith-debug/its-blueprint` (when cwd is `~/its-blueprint/`). If `$REPO` is empty or unexpected, ask the caller which repo.
+   Expected values: `its-sys-admin/evergreen-its` (when cwd is `~/its/`) or `its-sys-admin/its-blueprint` (when cwd is `~/its-blueprint/`). The blueprint repo is a FORK of `SolutionSmith-debug/its-blueprint` — always pass `--repo "$REPO"` explicitly, never rely on gh's default, which can resolve to the stale fork parent. The pre-cutover repos (`SolutionSmith-debug/its`, last pushed 2026-08-07) are historical; a PR reference in a pre-cutover doc resolves against THEM, not the live repos. If `$REPO` is empty or unexpected, ask the caller which repo.
 
 1. `gh pr view <num> --json mergedAt,mergeCommit,state --repo "$REPO"`
 2. Parse JSON. If checks 1–3 pass, extract `mergeCommit.oid`.
 3. `gh run list --branch main --commit <oid> --json status,conclusion,workflowName,databaseId --limit 5 --repo "$REPO"`
 4. Verify **every** run on the merge commit has `conclusion == "success"`. The actual workflow names on `main` push events:
-   - `SolutionSmith-debug/its` — `ci` workflow (the `ci.yml` file with `name: ci`, producing the `test` job that appears in PR checks) + `CodeQL` workflow.
-   - `SolutionSmith-debug/its-blueprint` — `lint` workflow (frontmatter + crossref lints).
+   - `its-sys-admin/evergreen-its` — `ci` workflow (the `ci.yml` file with `name: ci`, producing the `test` job that appears in PR checks). (No CodeQL runs here — default-setup CodeQL is not currently enabled on this repo; do not wait for one.)
+   - `its-sys-admin/its-blueprint` — `lint` workflow (frontmatter + crossref lints).
    - **`test` and `Analyze` are JOB names** inside the `ci` workflow, not separate workflows on push. Filtering by workflow name `test` will miss the actual run; check all runs instead.
    - If `gh run list` returns 0 runs, CI hasn't started yet — leg 4 fails. Re-check after CI completes.
 

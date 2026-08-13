@@ -11,7 +11,7 @@ A form is **one JSON file** in `safety_portal/forms/<form_code>.json`, consumed 
 
 ## Trigger
 
-Caller specifies the diff source ("working tree" → `git diff`; "staged" → `git diff --cached`; "PR <N>" → `gh pr diff <N> --repo SolutionSmith-debug/its`). Review only hunks under the dispatch paths above.
+Caller specifies the diff source ("working tree" → `git diff`; "staged" → `git diff --cached`; "PR <N>" → `gh pr diff <N> --repo its-sys-admin/evergreen-its`). Review only hunks under the dispatch paths above.
 
 ## Duties
 

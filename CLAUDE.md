@@ -327,7 +327,9 @@ Ship in Phase 0:
   **`test`** (ruff, mypy [blocking], pytest+coverage, doc-conventions lint + doc-index freshness
   [both warn-only], `check_doctrine_drift --strict` [blocking]); **`portal`** (tsc typecheck,
   vitest against real workerd+D1, SPA render-smoke); **`secrets`** (gitleaks, full history).
-  **CodeQL** runs via GitHub default setup (no in-repo workflow file).
+  **CodeQL** ran via GitHub default setup on the pre-cutover repo; it is **not yet re-enabled**
+  on `its-sys-admin/evergreen-its` (operator GitHub-settings action — the `codeql-fp-triager`
+  agent is dormant until then).
 
 Deferred to Customer 2+: Better Stack (log aggregation), 1Password CLI (multi-customer
 secrets), Helicone (LLM observability). Permanent skip: HashiCorp Vault, Snowflake,
@@ -464,7 +466,7 @@ Repo-local subagents live in `.claude/agents/`, auto-discovered; each agent's `d
 Remaining agents have no fixed invocation moment — dispatched by `description` frontmatter; listed so a fresh CC session can discover them:
 
 - **`brief-validator`** — before acting on a chat brief naming specific files/functions/line-ranges or current-state claims; verify every code-shape claim against `~/its` + `~/its-blueprint` first.
-- **`codeql-fp-triager`** — triaging open CodeQL alerts on `SolutionSmith-debug/its`; propose-only dismissals (operator applies) for the 3 known weekly FP patterns with quoted evidence, escalate the rest. A `PreToolUse` hook blocks any dismissal.
+- **`codeql-fp-triager`** — triaging open CodeQL alerts on `its-sys-admin/evergreen-its` (DORMANT until CodeQL default setup is re-enabled there post-migration); propose-only dismissals (operator applies) for the 3 known weekly FP patterns with quoted evidence, escalate the rest. A `PreToolUse` hook blocks any dismissal.
 - **`ops-stds-enforcer`** — reviewing a diff (working tree / staged / PR) against Operational Standards for invariant violations (Send Gate, adversarial input, push-vs-record dedupe, preservation-over-refactor, workspace topology, SDK-vs-Live, version-bump, §42 self-documentation, §§50–54). Delegates `safety_portal/worker/**` hunks to `portal-worker-security-reviewer`.
 - **`portal-worker-security-reviewer`** — reviewing any diff under `safety_portal/worker/**`, `safety_portal/migrations/**`, or `safety_portal/src/lib/auth.tsx`; propose-only security review of the send-free TypeScript boundary (send-free invariant, bound SQL, mutation+audit atomicity, fail-closed auth, immutable-ASSETS headers, migration order, publish state-machine). The TS-surface complement to `ops-stds-enforcer`.
 - **`form-definition-reviewer`** — reviewing any diff touching Safety Portal form definitions or their guards (`safety_portal/forms/**`, `required-content.json`, `catalog.json`, `worker/publishValidation.ts`, `safety_reports/publish_manifest.py`); validates each definition against the live meta-schema + required-content legal floor, runs the three-renderer smoke, applies the new-identity protocol.

@@ -261,3 +261,32 @@ describe("WeeklyReportPage — the office fields D1 cannot derive", () => {
     expect(vi.mocked(saveWeeklyReport).mock.calls[0][0].weather?.inclement_dates).toEqual(["2026-08-12"]);
   });
 });
+
+// The FieldOpsJobTracker rail test's twin (see "a rail chip tap scrolls in place" there).
+// A fragment navigation fires popstate, and App's popstate handler REMOUNTS the routed
+// page — which on THIS page silently discards an unsaved draft (beforeunload only guards
+// real unloads). The fix landed with the job-detail one (PR #119); this pins it locally.
+describe("WeeklyReportPage — rail chips never navigate", () => {
+  it("a rail chip tap scrolls in place and preserves the draft (the popstate remount trap)", async () => {
+    // jsdom has no scrollIntoView; install one so the handler's scroll call is observable.
+    const scrollSpy = vi.fn();
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      await renderPage(payload());
+      // Dirty the draft first — the state a remount would silently destroy.
+      const critical = screen.getByLabelText(/Critical items/) as HTMLTextAreaElement;
+      fireEvent.change(critical, { target: { value: "edited but unsaved" } });
+      const fetches = vi.mocked(fetchWeeklyReport).mock.calls.length;
+      const chip = document.querySelector('.wpr__rail-link[href="#wpr-labor"]')!;
+      // fireEvent.click returns FALSE when the handler preventDefault()ed — the whole point.
+      expect(fireEvent.click(chip)).toBe(false);
+      expect(scrollSpy).toHaveBeenCalled();
+      // No remount: no refetch, and the unsaved edit is still on screen.
+      expect(vi.mocked(fetchWeeklyReport).mock.calls.length).toBe(fetches);
+      expect((screen.getByLabelText(/Critical items/) as HTMLTextAreaElement).value).toBe("edited but unsaved");
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
+  });
+});

@@ -104,8 +104,10 @@ NODES: tuple[MapNode, ...] = (
     MapNode(
         id="spa", label="Safety Portal SPA", kind="ui", lane="field", band="safety",
         band_span=5,
-        blurb="The crews' phones. React app at safety.evergreenmirror.com — daily reports, "
-              "hours, equipment, materials, PO and subcontract drafts all start here.",
+        blurb="The crews' phones AND the office's screens. React app at "
+              "safety.evergreenmirror.com — daily reports, hours, equipment, materials, PO "
+              "and subcontract drafts, vendor-estimate uploads, manifest and schedule "
+              "imports, and the weekly-production-report inputs all start here.",
         script_path="safety_portal/src", runbook="docs/runbooks/safety_portal_forms.md",
     ),
     # ── cloud queue ──────────────────────────────────────────────────────
@@ -113,7 +115,9 @@ NODES: tuple[MapNode, ...] = (
         id="worker", label="Cloudflare Worker + D1", kind="worker", lane="cloud", band="safety",
         band_span=5,
         blurb="The send-free edge station: validates each submission, signs it with an HMAC, "
-              "and queues it in D1. It can hold and serve data — it can never send anything.",
+              "and queues it in D1. It also derives the weekly production-report aggregate "
+              "the Friday compile pulls. It can hold and serve data — it can never send "
+              "anything.",
         script_path="safety_portal/worker/index.ts",
         runbook="docs/runbooks/safety_portal_admin_dashboard.md",
         watchdog_checks=("Q", "V"),
@@ -705,6 +709,11 @@ EDGES: tuple[MapEdge, ...] = (
     MapEdge("weekly_send", "graph", "send_mail — the transmission edge", "send"),
     # progress
     MapEdge("sheet_active_jobs_progress", "progress_weekly_generate", "compile roster", "read"),
+    # The Friday compile PULLS the Worker's send-free production-report aggregate
+    # (GET /api/internal/production-report, migration 0067) — the same pull-edge shape as
+    # every other Worker-draining Mac process on this map.
+    MapEdge("worker", "progress_weekly_generate", "pull production-report aggregate", "pull",
+            port="bearer"),
     MapEdge("progress_weekly_generate", "box", "file progress packet", "write"),
     MapEdge("progress_weekly_generate", "sheet_wpr", "stage review row (PENDING)", "write"),
     MapEdge("sheet_wpr", "progress_send", "APPROVED rows only — F22", "read", port="human approval"),

@@ -111,8 +111,9 @@ jobs:
   # a committed secret must stop the merge. Separate job so it runs in parallel
   # with `test` and surfaces as its own PR check. Uses the pinned gitleaks
   # BINARY rather than gitleaks/gitleaks-action@v2 because that action requires
-  # a paid GITLEAKS_LICENSE for GitHub Organizations (SolutionSmith-debug is an
-  # org). Pin GITLEAKS_VERSION on bumps after reading the release notes.
+  # a paid GITLEAKS_LICENSE for org-owned repos; the pinned binary avoids the
+  # dependency regardless of who owns the repo. Pin GITLEAKS_VERSION on bumps
+  # after reading the release notes.
   secrets:
     runs-on: ubuntu-latest
     steps:

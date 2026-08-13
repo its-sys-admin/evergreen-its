@@ -853,13 +853,15 @@ h3 {
   cursor: pointer;
   vertical-align: baseline;
   /* R7 — the VISUAL stays chip-sized; the ::before overlay below expands the EFFECTIVE tap
-     target to ~40px (a ~15px glyph was a destructive-action touch hazard, A4). */
+     target to ≥44px on both axes (2026-08 kit pass; the earlier -12px overlay measured
+     ~41×38 against the ~17×14 glyph — under the floor a destructive-adjacent control
+     owes, even though the sub-44 first tap only ARMS and auto-disarms). */
   position: relative;
 }
 .chip-x::before {
   content: "";
   position: absolute;
-  inset: -12px;
+  inset: -15px -14px;
 }
 .chip-x:hover { background: #fdecea; }
 .chip-x:disabled { opacity: 0.45; cursor: default; }
@@ -2136,3 +2138,54 @@ h3,
 .modal__field { display: block; margin: 0.9rem 0 0.4rem; }
 .modal__field input { width: 100%; margin-top: 0.3rem; }
 .modal__actions { justify-content: flex-end; }
+
+/* ══ Select controls (2026-08 kit pass) — the 44px floor that actually binds ══
+   Safari/WebKit ignores height/min-height on `appearance:auto` menulist selects, so the
+   kit's declared 44px tap-target floor (the .dash-row rule above, the job-shell floor)
+   silently failed on EVERY select in the operator's own browser while inputs and buttons
+   complied. `appearance:none` is what makes the box rules bind — and it drops the native
+   arrow, so the kit paints its own chevron.
+
+   Layered on purpose, two rules with different jobs:
+
+   1. The bare-`select` FALLBACK below is (0,0,1) so it loses, per property, to every
+      family rule above (.field__input keeps its 48px/--tap and 10px padding; the
+      .dash-row rule keeps its 44px/8px) and only fully styles the handful of selects
+      that had NO family at all (table-cell pickers on the manifest/schedule check
+      screens). Heights stay harmonized WITHIN each row family.
+
+   2. The chevron rule is deliberately (0,3,1): the family rules set the `background`
+      SHORTHAND (background: var(--c-white)), which expands to background-image:none —
+      at anything lower the chevron would be silently erased by cascade. `:not(.btn)`
+      exempts the one select dressed as a button (AccountsPage role changer), which
+      keeps its native arrow and .btn skin; the :not([multiple]):not([size]) guards are
+      free insurance (no such select exists today — appearance:none would break them).
+
+   Chevron ink is BRG (#013d2b — 12.33:1 on white, tokens.css ledger); a data: URI can't
+   resolve var(), so the hex is hardcoded here and tracks --c-brg by convention. */
+select {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background-color: var(--c-white);
+  color: var(--c-black);
+  font: inherit;
+}
+
+select:not([multiple]):not([size]):not(.btn) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23013d2b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+/* Focus parity with the kit's inputs — low specificity, so family focus rules (e.g.
+   .field__input:focus-visible) stay authoritative where they exist. */
+select:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 1px;
+  border-color: var(--c-brg);
+}
