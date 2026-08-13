@@ -11,6 +11,33 @@ Resolved/closed/delivered/superseded entries moved out of the live `docs/tech_de
 
 > See `docs/tech_debt.md` for the live (open) set.
 
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-11, low] Untracked `logs/migrations/po_vendors_backup_20260810.json` keeps VC-07 (git-clean) permanently red
+
+> **RESOLVED 2026-08-13 — the operator ruled LOCAL-ONLY (option b), after briefly ruling commit.**
+> The full arc, recorded honestly: the operator first ruled commit-over-gitignore conditioned on
+> "no conflict or issue"; a PII/credential scan of all 33 vendor rows came back clean (every
+> contact field empty, zero credential-like strings) and PR #128 was opened. The operator then
+> TIGHTENED the bar — any actual vendor/Evergreen information stays off GitHub — which the file
+> fails on content (the real vendor roster, business addresses, terms arrangements, procurement
+> notes naming an employee). #128 was halted UNMERGED and its branch deleted; the file never
+> reached main. Exposure honesty: the commit sat on a public branch for ~3 minutes (repo then had
+> 0 forks / 0 watchers); the same operator directive then took the WHOLE repo private (it had
+> been public — itself contrary to CLAUDE.md's customer-repos-are-private model), so even the
+> dangling commit is no longer publicly reachable. Resolution: `.gitignore` gains
+> `logs/migrations/*_backup_*.json` (pattern, not filename, so future dumps inherit the ruling —
+> with a comment distinguishing backup DUMPS from the tracked reclone/box-build AUDIT reports);
+> the file stays on disk; `git status --porcelain` omits ignored files, so VC-07 goes green.
+> Check Y's VC-07 exclusion comment updated to match (enrollment now a VC-02-style scope
+> candidate, deliberately not taken).
+
+`logs/migrations/*` reports/dumps are normally committed (the 1111B-cutover `reclone_*` reports and
+`box_build_1111b_report.txt` are all tracked) but this vendor-table backup dump (25,840 bytes, a full
+`ITS_Vendors`-shaped `results` array) sat untracked with no producing script left in the tree —
+likely a one-off manual dump. `scripts/verify_cutover.py`'s VC-07 (`repo on main, working tree
+clean`) failed on it indefinitely; Check Y's exclusion comment cited it by name as the reason VC-07
+stayed out of the daily sweep. The fix was a data-sensitivity call, not a mechanical one: commit it
+(the convention), or gitignore-and-keep-local if vendor data shouldn't ride git history.
+
 ## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] Safari/WebKit ignores `min-height` on native `<select>` — the kit's 44px tap-target floor silently fails portal-wide in the operator's own browser
 
 > **RESOLVED 2026-08-13 — PR #122.** The kit-level pass the entry

@@ -2415,25 +2415,6 @@ confirmed stable.
 
 Surfaced: 2026-08-11 session close (Check Y's own scope-exclusion note, PR #65).
 
-## [OPEN 2026-08-11, low] Untracked `logs/migrations/po_vendors_backup_20260810.json` keeps VC-07 (git-clean) permanently red
-
-`logs/migrations/*` reports/dumps are normally committed (the 1111B-cutover `reclone_*` reports and
-`box_build_1111b_report.txt` are all tracked) but this vendor-table backup dump (25,840 bytes, a full
-`ITS_Vendors`-shaped `results` array carrying vendor names/addresses/contacts) sits untracked with no
-producing script left in the tree (`grep -rn po_vendors_backup scripts/` is empty) — likely a one-off
-manual dump. `scripts/verify_cutover.py`'s VC-07 (`repo on main, working tree clean`) fails on it
-indefinitely; Check Y's own exclusion comment (`scripts/watchdog.py:3172`) now cites it by name as the
-reason VC-07 stays out of the daily sweep.
-
-**Fix:** a data-sensitivity call, not a mechanical one — either (a) commit it, matching the established
-`logs/migrations/*` convention, or (b) gitignore `logs/migrations/*_backup_*.json` (or similar) and
-delete this instance, if vendor contact data shouldn't ride git history. Either resolves VC-07.
-
-**Tag:** `git-hygiene`, `verify_cutover`, `low`.
-
-**Revisit when:** next `verify_cutover.py`/VC-07 touch, or when Seth makes the commit-vs-gitignore call.
-
-Surfaced: 2026-08-11 session close.
 
 ## [OPEN 2026-08-11, medium] The internal-pool portal_client families have no §30 live-integration smoke — manifest, estimate, RFQ AND schedule wrappers alike
 
