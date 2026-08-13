@@ -13,7 +13,7 @@ Resolved/closed/delivered/superseded entries moved out of the live `docs/tech_de
 
 ## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] Safari/WebKit ignores `min-height` on native `<select>` — the kit's 44px tap-target floor silently fails portal-wide in the operator's own browser
 
-> **RESOLVED 2026-08-13 — the debt-sweep/dashboard-wiring PR.** The kit-level pass the entry
+> **RESOLVED 2026-08-13 — PR #122.** The kit-level pass the entry
 > prescribed, verbatim: a two-rule layered treatment appended to `global.css` — a bare-`select`
 > fallback at (0,0,1) (44px floor + kit box, losing per-property to `.field__input`'s 48px and
 > the `.dash-row` rule so heights stay harmonized WITHIN each row family) and a
@@ -42,7 +42,7 @@ the same pass.
 
 ## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] `WeeklyReportPage`'s rail fix has no page-local regression test (the fragment-nav/popstate remount class)
 
-> **RESOLVED 2026-08-13 — the debt-sweep/dashboard-wiring PR.** The one test the entry asked
+> **RESOLVED 2026-08-13 — PR #122.** The one test the entry asked
 > for, cloned from the job-detail twin: "a rail chip tap scrolls in place and preserves the
 > draft (the popstate remount trap)" in `WeeklyReportPage.test.tsx` — dirties the draft first,
 > asserts `fireEvent.click` returns `false` (preventDefault fired), `scrollIntoView` called,
@@ -81,7 +81,7 @@ to the MCP layer specifically — not Playwright, not WebKit, not this host's in
 
 ## [RESOLVED 2026-08-13 — was OPEN 2026-08-10, medium] Post-reconciliation residual: ~15 surfaces still name `SolutionSmith-debug/its` — unclassified as live-`dev`-remote references vs. stale assertions
 
-> **RESOLVED 2026-08-13 — the debt-sweep/dashboard-wiring PR ran the classification pass the
+> **RESOLVED 2026-08-13 — PR #122 ran the classification pass the
 > entry asked for, with the ambiguity it preserved now settled by evidence.** The deciding
 > fact: CodeQL is triage-dead against BOTH slugs from this host — `its-sys-admin/evergreen-its`
 > has no analyses ("no analysis found"; default setup never re-enabled post-migration) and the
