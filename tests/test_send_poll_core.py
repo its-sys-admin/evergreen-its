@@ -427,3 +427,70 @@ def test_recovered_retries_are_summarized_once_per_pass(approver_scenario, mocke
     _run(s["cfg"])
 
     assert _codes(s["log"]).count("smartsheet_retry_recovered") == 1
+
+
+# ---- malformed scheduled window: fail OPEN, but never SILENT (2026-08-13) -----
+#
+# `_parse_scheduled_spec` swallowed every parse failure and returned MON 07:00 with no log, no
+# error_code, and no way to tell a typo from a deliberate Monday setting. This engine is shared by
+# ALL FIVE external-send daemons (weekly_send, progress_send, po_send, rfq_send, subcontract_send),
+# so a mistyped window silently moved that lane's approval window. It still falls back — wedging a
+# send lane on a bad string would be worse — but it now says so.
+
+
+@pytest.mark.parametrize(
+    "spec,expect_reason_fragment",
+    [
+        ("", "empty value"),
+        ("   ", "empty value"),
+        ("MON", "expected '<DAY> <HH:MM>'"),
+        ("MON 07:00 EXTRA", "expected '<DAY> <HH:MM>'"),
+        ("MONDAY 07:00", "unknown weekday"),
+        ("XYZ 07:00", "unknown weekday"),
+        ("MON 0700", "malformed time"),
+        ("MON 25:00", "malformed time"),
+        ("MON aa:bb", "malformed time"),
+    ],
+)
+def test_a_malformed_window_reports_why_and_still_falls_back(spec, expect_reason_fragment):
+    wd, tod, reason = send_poll_core.parse_scheduled_spec_checked(spec)
+    assert (wd, tod) == send_poll_core.DEFAULT_SCHEDULED_WINDOW, "must still fail OPEN"
+    assert expect_reason_fragment in reason, f"reason {reason!r} does not name the fault"
+
+
+@pytest.mark.parametrize("spec", ["MON 07:00", "fri 14:30", "  SUN 23:59  "])
+def test_a_well_formed_window_reports_no_reason(spec):
+    _, _, reason = send_poll_core.parse_scheduled_spec_checked(spec)
+    assert reason == "", f"clean spec reported a fault: {reason!r}"
+
+
+def test_a_malformed_window_is_warned_once_naming_the_lane_and_the_fallback(mocker):
+    """The WARN must identify WHICH lane and WHAT window is actually in effect.
+
+    Without the lane's own config key an operator with five send daemons cannot tell which
+    ITS_Config cell to fix.
+    """
+    log = mocker.patch.object(send_poll_core.error_log, "log")
+    config = mocker.Mock()
+    config.script_name = "weekly_send_poll"
+    config.cfg_scheduled_send_local = "safety_reports.weekly_send.scheduled_send_local"
+
+    send_poll_core.warn_if_scheduled_spec_malformed(config, "TEU 09:00")
+
+    log.assert_called_once()
+    kwargs, args = log.call_args.kwargs, log.call_args.args
+    assert kwargs.get("error_code") == "scheduled_send_window_malformed"
+    message = " ".join(str(a) for a in args)
+    assert "safety_reports.weekly_send.scheduled_send_local" in message, "must name the cell"
+    assert "MON 07:00" in message, "must name the window actually in effect"
+
+
+def test_a_well_formed_window_logs_nothing(mocker):
+    log = mocker.patch.object(send_poll_core.error_log, "log")
+    config = mocker.Mock()
+    config.script_name = "weekly_send_poll"
+    config.cfg_scheduled_send_local = "safety_reports.weekly_send.scheduled_send_local"
+
+    send_poll_core.warn_if_scheduled_spec_malformed(config, "TUE 09:00")
+
+    log.assert_not_called()
