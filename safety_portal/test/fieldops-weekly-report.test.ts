@@ -41,7 +41,7 @@ type ReportBody = {
     weather_days_week: number;
     weather_days_to_date: number;
   };
-  labor: { total_hours: number; crews: { company: string; workers: number; days: number }[] };
+  labor: { total_hours: number; crews: { company: string; workers: number; days: number }[]; seed_source: string };
   crew_progress: { work_date: string; crew: string; manpower: string; progress: string }[];
   daily_notes: { work_date: string; tomorrows_goals: string; comments: string; prepared_by: string }[];
   hazard_form_codes: string[];
@@ -114,10 +114,17 @@ async function accountCookie(username: string, role: "submitter" | "manager" | "
   return login(username, password);
 }
 
-async function seedOtherForm(formCode: string, workDate: string, values: Record<string, unknown> = {}): Promise<void> {
+async function seedOtherForm(
+  formCode: string,
+  workDate: string,
+  values: Record<string, unknown> = {},
+  opts: { uuid?: string; amendsUuid?: string | null } = {},
+): Promise<string> {
+  const uuid = opts.uuid ?? `o-${formCode}-${workDate}`;
   await env.DB.prepare(
-    "INSERT INTO submissions (submission_uuid, job_id, form_code, work_date, payload_json, created_at, actor_username, box_verified) VALUES (?,?,?,?,?,?,?,1)",
-  ).bind(`o-${formCode}-${workDate}`, JOB, formCode, workDate, JSON.stringify(values), FROM + 100, "pm.one").run();
+    "INSERT INTO submissions (submission_uuid, job_id, form_code, work_date, payload_json, created_at, actor_username, amends_uuid, box_verified) VALUES (?,?,?,?,?,?,?,?,1)",
+  ).bind(uuid, JOB, formCode, workDate, JSON.stringify(values), FROM + 100, "pm.one", opts.amendsUuid ?? null).run();
+  return uuid;
 }
 
 async function seedPhoto(
@@ -326,6 +333,146 @@ describe("weekly report — derived data", () => {
     expect(r.deliveries[0]).toMatchObject({
       event_date: "2026-08-11", item: "Torque tube", vendor: "TerraSmart", qty: "40",
     });
+  });
+});
+
+// ── the JHA labor seed ──────────────────────────────────────────────────────
+// Fixtures reproduce the REAL filed mess from Deep Lake (2026-08-12/13): Evergreen spelled four
+// ways including a typo, ESS cased three ways, trailing spaces, a blank company, and the
+// min_rows=4 unnamed filler row the signature table always ships.
+describe("weekly report — the JHA labor seed", () => {
+  const JHA_DAY_1 = {
+    worker_acknowledgement: [
+      { worker_name: "Devin Jones", company: "Evergreen", signature: "M 0 0 L 9 9" },
+      { worker_name: "Joe Ryan", company: "Evergreen Renewables", signature: "M 0 0" },
+      { worker_name: "Jason Moore", company: "Evergreen renewables", signature: "M 0 0" },
+      { worker_name: "Mike Cole", company: "Evergree ", signature: "M 0 0" },
+      { worker_name: "Sam Reed", company: "Ess", signature: "M 0 0" },
+      { worker_name: "Al Ortiz", company: "T rex ", signature: "M 0 0" },
+      { worker_name: "Omar rios leon", company: "", signature: "M 0 0" },
+      { worker_name: "", company: "", signature: "" }, // min_rows filler — must not count
+    ],
+  };
+  const JHA_DAY_2 = {
+    worker_acknowledgement: [
+      { worker_name: "Devin Jones", company: "Evergreen", signature: "M 0 0" },
+      { worker_name: "Joe Ryan", company: "evergreen", signature: "M 0 0" },
+      { worker_name: "Sam Reed", company: "ESS", signature: "M 0 0" },
+      { worker_name: "Kay Bell", company: "ESS", signature: "M 0 0" },
+    ],
+  };
+
+  it("collapses every Evergreen spelling — typo included — into one canonical row, listed first", async () => {
+    await seedOtherForm("jha-v3", "2026-08-08", JHA_DAY_1, { uuid: "jha-d1" });
+    await seedOtherForm("jha-v3", "2026-08-09", JHA_DAY_2, { uuid: "jha-d2" });
+    const r = await body(await internal());
+    const evergreen = r.labor.crews.filter((c) => c.company.toLowerCase().startsWith("evergree"));
+    // Day 1 has FOUR distinct Evergreen signers (the peak); day 2 has two.
+    expect(evergreen).toEqual([{ company: "Evergreen Renewables", workers: 4, days: 2 }]);
+    expect(r.labor.crews[0].company).toBe("Evergreen Renewables");
+    expect(r.labor.seed_source).toBe("jha");
+  });
+
+  it("groups messy subcontractor spellings, labels by the most frequent, and keeps companyless signers visible last", async () => {
+    await seedOtherForm("jha-v3", "2026-08-08", JHA_DAY_1, { uuid: "jha-d1" });
+    await seedOtherForm("jha-v3", "2026-08-09", JHA_DAY_2, { uuid: "jha-d2" });
+    const r = await body(await internal());
+    // Exactly four rows: Evergreen, ESS, T rex, (no company given) — no row for the unnamed filler.
+    expect(r.labor.crews).toHaveLength(4);
+    const ess = r.labor.crews.find((c) => c.company.toLowerCase() === "ess");
+    // "Ess" ×1 + "ESS" ×2 → label "ESS"; day-2 peak is 2 distinct signers.
+    expect(ess).toEqual({ company: "ESS", workers: 2, days: 2 });
+    const trex = r.labor.crews.find((c) => c.company.startsWith("T rex"));
+    expect(trex).toEqual({ company: "T rex", workers: 1, days: 1 });
+    expect(r.labor.crews[r.labor.crews.length - 1]).toEqual({ company: "(no company given)", workers: 1, days: 1 });
+  });
+
+  it("counts a signer once per day across multiple same-day JHAs and takes the week's peak", async () => {
+    await seedOtherForm("jha-v3", "2026-08-08", {
+      worker_acknowledgement: [
+        { worker_name: "Devin Jones", company: "Evergreen", signature: "s" },
+        { worker_name: "Joe Ryan", company: "Evergreen", signature: "s" },
+      ],
+    }, { uuid: "jha-am" });
+    await seedOtherForm("jha-v3", "2026-08-08", {
+      worker_acknowledgement: [
+        { worker_name: "devin jones", company: "Evergreen Renewables", signature: "s" }, // same person, second JHA
+      ],
+    }, { uuid: "jha-pm" });
+    const r = await body(await internal());
+    expect(r.labor.crews).toEqual([{ company: "Evergreen Renewables", workers: 2, days: 1 }]);
+  });
+
+  it("prefers JHA sign-ins over crew_progress when both exist — the Deep Lake people-as-companies bug", async () => {
+    await seedDaily("2026-08-08", {
+      crew_progress: [
+        { crew_subcontractor: "Devin Jones", manpower: null, todays_progress: "Drove piles" },
+        { crew_subcontractor: "Joe Ryan", manpower: null, todays_progress: "Trenching" },
+      ],
+    });
+    await seedOtherForm("jha-v3", "2026-08-08", JHA_DAY_2, { uuid: "jha-d2" });
+    const r = await body(await internal());
+    expect(r.labor.seed_source).toBe("jha");
+    expect(r.labor.crews.some((c) => c.company === "Devin Jones")).toBe(false);
+    // The narrative leg still carries the typed rows — only the labor SEED switched source.
+    expect(r.crew_progress.map((c) => c.crew)).toEqual(["Devin Jones", "Joe Ryan"]);
+  });
+
+  it("falls back to the crew_progress seed when the week has no JHA sign-ins", async () => {
+    await seedDaily("2026-08-08", {
+      crew_progress: [{ crew_subcontractor: "Pro Panel", manpower: 9, todays_progress: "Racking" }],
+    });
+    const r = await body(await internal());
+    expect(r.labor.seed_source).toBe("daily");
+    expect(r.labor.crews).toEqual([{ company: "Pro Panel", workers: 9, days: 1 }]);
+  });
+
+  it("tolerates a JHA whose worker_acknowledgement is not an array", async () => {
+    await seedOtherForm("jha-v3", "2026-08-08", { worker_acknowledgement: "not-an-array" });
+    const r = await body(await internal());
+    expect(r.labor.crews).toEqual([]);
+    expect(r.labor.seed_source).toBe("daily");
+  });
+
+  it("drops a bare-string ELEMENT inside the array instead of 500ing the route — adversarial review 2026-08-13", async () => {
+    // json_each dequotes a JSON-string element to raw text; json_extract re-parsing that raises
+    // `malformed JSON` and used to 500 BOTH report routes. The v.type='object' guard drops it.
+    await seedOtherForm("jha-v3", "2026-08-08", {
+      worker_acknowledgement: [
+        "Devin Jones", // hostile / malformed: a scalar where an object belongs
+        42,
+        { worker_name: "Real Signer", company: "Acme", signature: "s" },
+      ],
+    });
+    const res = await internal();
+    expect(res.status).toBe(200);
+    const r = await body(res);
+    expect(r.labor.crews).toEqual([{ company: "Acme", workers: 1, days: 1 }]);
+  });
+
+  it("drops a bare-string crew_progress ELEMENT too — the same construct, same guard", async () => {
+    await seedDaily("2026-08-08", {
+      crew_progress: [
+        "hostile scalar",
+        { crew_subcontractor: "Pro Panel", manpower: 9, todays_progress: "Racking" },
+      ],
+    });
+    const res = await internal();
+    expect(res.status).toBe(200);
+    const r = await body(res);
+    expect(r.labor.crews).toEqual([{ company: "Pro Panel", workers: 9, days: 1 }]);
+    expect(r.crew_progress).toHaveLength(1);
+  });
+
+  it("amend-collapses JHA submissions — only the amendment's signers count", async () => {
+    const first = await seedOtherForm("jha-v3", "2026-08-08", JHA_DAY_1, { uuid: "jha-orig" });
+    await seedOtherForm("jha-v3", "2026-08-08", JHA_DAY_2, { uuid: "jha-fix", amendsUuid: first });
+    const r = await body(await internal());
+    // JHA_DAY_2 alone: Evergreen ×2, ESS ×2 — none of DAY_1's seven signers.
+    expect(r.labor.crews).toEqual([
+      { company: "Evergreen Renewables", workers: 2, days: 1 },
+      { company: "ESS", workers: 2, days: 1 },
+    ]);
   });
 });
 

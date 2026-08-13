@@ -119,6 +119,27 @@ Those come from the **weekly report screen**, not from the field. Two cases:
 The office's typed values always win over anything the system assembled. A section the office
 **clears on purpose stays cleared** — it is not re-filled on the next compile.
 
+## Symptom 5b — "The labor table lists people instead of companies"
+
+The Construction Labor table is **seeded** — the office's saved rows always win, and when none are
+saved the screen proposes rows derived from the field's paperwork. The seed prefers the week's
+**JHA sign-in table** (each signer states an employer; every Evergreen spelling collapses into one
+"Evergreen Renewables" row, and the workers count is that company's peak daily signer count). Only
+when the week has no JHA sign-ins does it fall back to the daily report's free-text
+"Crew / Subcontractor" column — which some foremen fill with people's names, which is how person
+rows appear. The screen's hint under the table names which source seeded it.
+
+- **An UNSAVED week self-heals** — reopen the screen and the seed re-derives from the JHAs.
+- **A saved bad table** does not: open that week on the weekly report screen, Remove the person
+  rows, add the real companies, Save, then **Compile Now**. Note a saved bad table also **carries
+  forward into later unsaved weeks** (the section shows "Carried forward" when it did) until it is
+  corrected once.
+- **A "(no company given)" row** means a signer left the JHA Company cell blank — fill in or fold
+  that person into the right company row before approving; the seed will not guess an employer.
+- **Man-hours are always yours to enter** — the roster has no employer field, so hours cannot be
+  attributed to a company automatically. The job-wide total shown beside the table is the honest
+  reference.
+
 ## Symptom 6 — "A photo I did not want is on the report" / "the photo page is empty"
 
 The report auto-picks up to 8 photos spread across the week's days. On the weekly report screen you

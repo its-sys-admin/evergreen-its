@@ -36,7 +36,7 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
       { work_date: "2026-08-10", conditions: "Clear", avg_temp: "79", inclement: false },
       { work_date: "2026-08-12", conditions: "Heavy rain", avg_temp: "71", inclement: false },
     ], weather_days_week: 0, weather_days_to_date: 7 },
-    labor: { total_hours: 122, crews: [{ company: "Pro Panel", workers: 9, days: 3 }] },
+    labor: { total_hours: 122, crews: [{ company: "Pro Panel", workers: 9, days: 3 }], seed_source: "daily" as const },
     crew_progress: [],
     daily_notes: [
       { work_date: "2026-08-10", tomorrows_goals: "Drive rows 19-24", comments: "",
@@ -185,6 +185,35 @@ describe("WeeklyReportPage — provenance and warnings", () => {
   it("states the no-schedule case rather than implying zero progress", async () => {
     await renderPage(payload());
     expect(screen.getByText(/No schedule is imported for this job/)).toBeTruthy();
+  });
+
+  it("badges the Labor section too on a carried week — carried labor rows outrank the seed and must not look freshly derived", async () => {
+    const p = payload();
+    p.office.carried_from = "2026-08-01";
+    p.office.labor.rows = [{ company: "Stale Sub LLC", workers: "9", man_hours: "540" }];
+    await renderPage(p);
+    const labor = document.getElementById("wpr-labor");
+    expect(labor).toBeTruthy();
+    expect(labor!.querySelector(".wpr-carried")?.textContent).toBe("Carried forward");
+  });
+
+  it("names the JHA sign-ins as the seed source when the seed is JHA-derived", async () => {
+    const p = payload();
+    p.labor = { total_hours: 122, crews: [{ company: "Evergreen Renewables", workers: 4, days: 2 }], seed_source: "jha" };
+    await renderPage(p);
+    expect(screen.getByText(/seeded from this week's JHA sign-ins/)).toBeTruthy();
+  });
+
+  it("names the daily reports when the week had no JHA sign-ins", async () => {
+    await renderPage(payload());
+    expect(screen.getByText(/seeded from the daily reports/)).toBeTruthy();
+  });
+
+  it("drops the seed sentence entirely once office labor rows exist — the seed is no longer what displays", async () => {
+    const p = payload();
+    p.office.labor.rows = [{ company: "Pro Panel", workers: "9", man_hours: "540" }];
+    await renderPage(p);
+    expect(screen.queryByText(/seeded from/)).toBeNull();
   });
 });
 
