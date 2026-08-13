@@ -27,7 +27,7 @@ def test_hook_exists_and_executable():
 
 def test_blocks_dismiss_patch():
     r = _run(
-        "gh api -X PATCH repos/SolutionSmith-debug/its/code-scanning/alerts/12 "
+        "gh api -X PATCH repos/its-sys-admin/evergreen-its/code-scanning/alerts/12 "
         "-f state=dismissed -f dismissed_reason=false_positive "
         '-f dismissed_comment="Pattern A: keychain service name"'
     )
@@ -41,12 +41,12 @@ def test_blocks_dismiss_subcommand_form():
 
 
 def test_allows_listing_open_alerts():
-    r = _run('gh api "repos/SolutionSmith-debug/its/code-scanning/alerts?state=open" --paginate')
+    r = _run('gh api "repos/its-sys-admin/evergreen-its/code-scanning/alerts?state=open" --paginate')
     assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_allows_reading_single_alert():
-    r = _run('gh api "repos/SolutionSmith-debug/its/code-scanning/alerts/12"')
+    r = _run('gh api "repos/its-sys-admin/evergreen-its/code-scanning/alerts/12"')
     assert r.returncode == 0, r.stdout + r.stderr
 
 

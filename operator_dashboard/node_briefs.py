@@ -65,8 +65,10 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
         what=(
             "The portal's back end: it serves the app crews load, holds their login accounts and "
             "audit trail, and is where the field-ops records — hours, tasks, inspections — live "
-            "first before mirroring up to Smartsheet as standing trackers. A daily pass trims "
-            "aged rows to stay under the 10 GB ceiling, but only ones already filed to Box."
+            "first before mirroring up to Smartsheet as standing trackers. It also assembles the "
+            "weekly production-report aggregate the office reviews and the Friday compile pulls. "
+            "A daily pass trims aged rows to stay under the 10 GB ceiling, but only ones already "
+            "filed to Box."
             "\n\n"
             "Day-to-day there is nothing to run, start, stop, or gate — Cloudflare keeps it "
             "alive. If submissions stop reaching the Mac, check the pulling daemon's heartbeat: "

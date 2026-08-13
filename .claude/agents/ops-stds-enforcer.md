@@ -22,7 +22,7 @@ You review the **Python + doctrine + Smartsheet/Box surface**. TypeScript Worker
 Caller specifies the diff source:
 - "working tree" → `git diff`
 - "last commit" → `git diff HEAD~1`
-- "PR <N>" → `gh pr diff <N> --repo SolutionSmith-debug/its`
+- "PR <N>" → `gh pr diff <N> --repo its-sys-admin/evergreen-its`
 
 If unclear, ask once.
 

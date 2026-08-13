@@ -14,7 +14,7 @@ You are the Safety Portal **Worker security reviewer** for ITS — the TypeScrip
 Caller specifies the diff source:
 - "working tree" → `git diff`
 - "staged" → `git diff --cached`
-- "PR <N>" → `gh pr diff <N> --repo SolutionSmith-debug/its`
+- "PR <N>" → `gh pr diff <N> --repo its-sys-admin/evergreen-its`
 
 Review ONLY hunks under `safety_portal/worker/**`, `safety_portal/migrations/**`, or `safety_portal/src/lib/auth.tsx`. If the diff has none, say so and stop (the Python/doctrine surface is `ops-stds-enforcer`'s job).
 

@@ -11,6 +11,107 @@ Resolved/closed/delivered/superseded entries moved out of the live `docs/tech_de
 
 > See `docs/tech_debt.md` for the live (open) set.
 
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] Safari/WebKit ignores `min-height` on native `<select>` — the kit's 44px tap-target floor silently fails portal-wide in the operator's own browser
+
+> **RESOLVED 2026-08-13 — the debt-sweep/dashboard-wiring PR.** The kit-level pass the entry
+> prescribed, verbatim: a two-rule layered treatment appended to `global.css` — a bare-`select`
+> fallback at (0,0,1) (44px floor + kit box, losing per-property to `.field__input`'s 48px and
+> the `.dash-row` rule so heights stay harmonized WITHIN each row family) and a
+> `select:not([multiple]):not([size]):not(.btn)` chevron rule at (0,3,1) (`appearance:none` +
+> BRG data-URI chevron — the specificity is what stops the families' `background:` shorthands
+> from cascading the chevron away). The one select dressed as a button (AccountsPage role
+> changer) is excluded and keeps its native look. **Measured in headless WebKit (Safari's
+> engine) at 390/768/1024/1440:** all 15 job-detail selects ≥44px (previously 19–25px),
+> chevron present, zero horizontal overflow; the AccountsPage `.field__input` select held its
+> 48px `--tap`. The same pass took the `ChipX` judgment call: the `::before` overlay grew from
+> `inset:-12px` (~41×38 effective) to `inset:-15px -14px` (≥44×44), zero layout shift,
+> verified via `elementFromPoint` hits at ±21px on all four axes.
+
+The kit's inline-row rule (`global.css` `div.dash-row select { min-height: 44px; … }`) and the
+job-detail shell's part-three floor (`schedule-report.css` `.job-shell__body :is(input…, select)`)
+both declare the 44px minimum — and WebKit lays native menulist selects out at ~19–25px anyway,
+because Safari does not honour height/min-height on `appearance: auto` selects. Text inputs are
+fine (they measure ≥44px); ONLY selects fall short, and only in Safari/WebKit — Chrome honours the
+rule. Measured 2026-08-12 during the part-three headless WebKit render pass (Playwright,
+`verify_jobdetail.js`): every select on the job detail at 19–25px tall while every input and
+button cleared 44px. The operator browses in Safari, so the "zero tap targets under 44px" bar from
+the #99/#109 commit messages held in Chrome and quietly failed on the operator's own machine.
+Original fix shape (followed exactly): portal-wide `appearance: none` + explicit padding + a
+custom chevron, its own pass with the four-width measurement; ChipX a separate judgment call for
+the same pass.
+
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] `WeeklyReportPage`'s rail fix has no page-local regression test (the fragment-nav/popstate remount class)
+
+> **RESOLVED 2026-08-13 — the debt-sweep/dashboard-wiring PR.** The one test the entry asked
+> for, cloned from the job-detail twin: "a rail chip tap scrolls in place and preserves the
+> draft (the popstate remount trap)" in `WeeklyReportPage.test.tsx` — dirties the draft first,
+> asserts `fireEvent.click` returns `false` (preventDefault fired), `scrollIntoView` called,
+> no refetch, and the unsaved edit still on screen. The class reflex lives on in auto-memory
+> (`fragment-anchors-remount-the-spa`).
+
+PR #119 found a real bug class in in-page nav anchors: a bare `<a href="#section">` is still a real
+browser navigation — the tap fires `popstate`, the App shell bumps `popEpoch`, and the routed page
+**remounts** (full reload, scroll reset to 0; live-proven in headless WebKit). On `WeeklyReportPage`
+the consequence was worse than annoyance: the remount silently discards an unsaved draft
+(`beforeunload` only covers real unloads). PR #119 fixed BOTH known instances in the same commit
+(job-detail rail + `WeeklyReportPage`'s rail) and a same-day sweep found no other fragment-anchor
+site in the SPA; only the page-local regression test remained, closed above. (Entry was corrected
+the night it was filed — the first draft wrongly claimed WeeklyReportPage's fix was deferred out
+of #119.)
+
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-12, low] Playwright screenshots are broken in this dev environment — visual verification of Safety Portal SPA changes is numeric-only
+
+> **RESOLVED 2026-08-13 — closed as delivered by its own 2026-08-12-evening update.** The
+> practical blocker (visual verification numeric-only) was resolved during PR #119: a bare
+> `playwright` install (1.62.1) driving the cached `~/Library/Caches/ms-playwright`
+> webkit-2336 build directly — no MCP server in the loop — takes clean full-page screenshots
+> at all four widths, and has now done so across two sessions (auto-memory
+> `playwright-mcp-broken-bare-webkit-works`). The residual ("why does the MCP wrapper time
+> out") names only a conditional-never action — "revisit only if the bare-driver workaround
+> itself breaks" — which is this archive's definition of finished work, not open work. If the
+> workaround ever breaks, file a fresh entry scoped to the MCP-layer diagnosis.
+
+`browser_take_screenshot` (and the underlying navigate-then-screenshot flow) timed out on every
+attempt during the 2026-08-12 portal design session, including against a throwaway single-`<h1>`
+static page — ruling out a Safety-Portal-specific cause. The working substitute that session was
+Playwright's non-screenshot evaluation surface (computed styles, `getBoundingClientRect`,
+overflow checks, tap-target dimensions at 390/768/1024/1440). The 2026-08-12-evening update ran
+the entry's own first diagnostic step (reproduce outside the MCP wrapper) and isolated the fault
+to the MCP layer specifically — not Playwright, not WebKit, not this host's install.
+
+## [RESOLVED 2026-08-13 — was OPEN 2026-08-10, medium] Post-reconciliation residual: ~15 surfaces still name `SolutionSmith-debug/its` — unclassified as live-`dev`-remote references vs. stale assertions
+
+> **RESOLVED 2026-08-13 — the debt-sweep/dashboard-wiring PR ran the classification pass the
+> entry asked for, with the ambiguity it preserved now settled by evidence.** The deciding
+> fact: CodeQL is triage-dead against BOTH slugs from this host — `its-sys-admin/evergreen-its`
+> has no analyses ("no analysis found"; default setup never re-enabled post-migration) and the
+> `its-sys-admin` token 403s on `SolutionSmith-debug/its` — so "correctly still targets dev"
+> was not a live possibility for the triager. Classification applied: (b) REPOINTED — all six
+> `.claude/agents/*.md` briefs, `CLAUDE.md` (agent line + the observability claim, which now
+> states CodeQL is NOT yet re-enabled and the triager is dormant), `README.md` badge + blueprint
+> link, `docs/operations/cutover_checklist.md` CL-23 verify command,
+> `tests/test_hook_block_codeql_dismiss.py` fixtures, and the `ci.yml` gitleaks comment
+> (reworded owner-neutral); the `pr-landed-verifier` brief also gained the blueprint-fork
+> caveat (bare `gh` commands there resolve to the stale fork parent — always `--repo`).
+> (a) LEFT with the old name: nothing qualifies as a live `dev`-remote reference. LEFT AS
+> HISTORICAL RECORD: session logs, memory-archive, closed tech-debt entries, the §42 comments
+> in `scripts/watchdog.py`/`tests/test_watchdog.py` narrating the Check-S fix, and
+> `context-pack/repo-overview.md` (a dated snapshot frozen at 2026-06-12 — retiring or
+> refreshing context-pack is its own call, not a rename). Re-enabling CodeQL default setup on
+> `its-sys-admin/evergreen-its` remains an operator GitHub-settings action, recorded in the
+> dormancy notes rather than as debt.
+
+PR #13 (`23ca3d1`, 2026-08-07) fixed watchdog Check S's `GH_MAIN_CI_REPO` hardcode, and PR #15
+(`ed03877`, same day) reconciled the two repositories that had diverged while both were pushed
+to — `origin` now names `its-sys-admin/evergreen-its`. Neither PR swept every string reference to
+the old name, deliberately: several surfaces could have been legitimately correct if they intended
+to keep pointing at the `dev` remote — in particular, if CodeQL default-setup scanning genuinely
+still ran against `SolutionSmith-debug/its`, `codeql-fp-triager` and its dismissal-block test
+would have been correctly scoped, and repointing them would have broken a working control. The
+entry asked for an operator-confirmed pass classifying each of the ~15 surfaces (README badge,
+CLAUDE.md, context-pack, six agent briefs, the hook test's fixture strings) as live-dev-reference,
+stale, or dual-repo.
+
 ## [RESOLVED 2026-08-12 — was OPEN 2026-08-11, low] BOM-corpus extraction/reconciliation tooling used for the 218-part materials analysis is not committed anywhere
 
 > **RESOLVED 2026-08-12 — PR #106.** The tooling is committed as

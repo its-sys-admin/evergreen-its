@@ -1,6 +1,6 @@
 # ITS — Integrated Technical System (Execution Layer)
 
-[![ci](https://github.com/SolutionSmith-debug/its/actions/workflows/ci.yml/badge.svg)](https://github.com/SolutionSmith-debug/its/actions/workflows/ci.yml)
+[![ci](https://github.com/its-sys-admin/evergreen-its/actions/workflows/ci.yml/badge.svg)](https://github.com/its-sys-admin/evergreen-its/actions/workflows/ci.yml)
 
 ITS is a Claude-powered "computer employee" for construction and renewables firms — it turns
 field submissions, project data, and documents into filed records and human-approved reports
@@ -10,7 +10,7 @@ maintained in its own private repo. **Evergreen Renewables is Customer 0** — f
 and design partner; this repo is Evergreen-specific.
 
 This is the **execution layer**. The **planning layer** lives in a separate Claude.ai project
-("ITS Foundation & Planning") and in the [`its-blueprint`](https://github.com/SolutionSmith-debug/its-blueprint)
+("ITS Foundation & Planning") and in the [`its-blueprint`](https://github.com/its-sys-admin/its-blueprint)
 repo (doctrine + mission files); this repo implements what is decided there. If a claim here
 contradicts the blueprint doctrine (Operational Standards v21, Foundation Mission v11), **the
 blueprint wins**.

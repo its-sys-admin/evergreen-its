@@ -260,7 +260,7 @@ through Phase C go/no-go BEFORE this list starts),
   account — bogus usernames only).
 - [ ] **CL-23 — branch protection intact on the deploy path:** `main`
   requires `test` + `portal` + `secrets`.
-  Verify: `gh api repos/SolutionSmith-debug/its/branches/main/protection --jq
+  Verify: `gh api repos/its-sys-admin/evergreen-its/branches/main/protection --jq
   '.required_status_checks.contexts'` lists all three.
 
 ### Workstream enables — safest-first, send paths LAST

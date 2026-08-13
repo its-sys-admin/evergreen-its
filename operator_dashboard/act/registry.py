@@ -694,6 +694,16 @@ CLASS_E_DISPLAY += [
         "Estimate extraction — Tier 1 (deterministic templates)",
         _LADDER_NOTE,
     ),
+    # The PDF tier's spreadsheet twin (estimate_parse.parse_xlsx_estimate) — same ladder,
+    # same qualification gate. It was the one ladder key with NO console row at all, so an
+    # operator auditing the ladder saw three of four tiers (the same one-sibling-omitted
+    # class PR #110 closed for the send lanes).
+    DisplayEntry(
+        "po_materials.estimate_extract.tier1_xlsx_enabled",
+        "po_materials",
+        "Estimate extraction — Tier 1 xlsx (deterministic spreadsheet grid)",
+        _LADDER_NOTE,
+    ),
     DisplayEntry(
         "po_materials.estimate_extract.tier2_enabled",
         "po_materials",

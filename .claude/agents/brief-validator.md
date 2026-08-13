@@ -31,7 +31,7 @@ Caller hands you a brief (text or file path). Verify every code-shape claim.
    - Function / class name → `Grep` for `def <name>` or `class <name>` in the named file
    - Line range → `Read` that range, confirm relevance
    - State claim → read the actual code; check whether the claim holds
-   - PR ref → `gh pr view <N> --json state,mergedAt --repo SolutionSmith-debug/its` (lightweight check; do not full-verify — that's `pr-landed-verifier`'s job)
+   - PR ref → `gh pr view <N> --json state,mergedAt --repo its-sys-admin/evergreen-its` (lightweight check; do not full-verify — that's `pr-landed-verifier`'s job)
    - Doctrine ref → confirm the cited file exists in `~/its-blueprint/doctrine/` and contains the cited section
 
 4. **Report each claim as CONFIRMED / PRESCRIPTIVE / DISCREPANCY**, with the brief's exact wording vs the actual state.
