@@ -164,7 +164,18 @@ export function WeeklyPhotoUpload(props: {
       {uploads.length > 0 && (
         <ul className="wpr-upload__chips">
           {uploads.map((u) => (
-            <li key={u.pool_id} className={`wpr-upload__chip wpr-upload__chip--${u.status}`}>
+            <li
+              key={u.pool_id}
+              // Static class lookup, not a template suffix: the phantom-CSS guard (rightly)
+              // cannot verify a dynamic class name, and 'pending' rides the base chip style.
+              className={
+                u.status === "clean"
+                  ? "wpr-upload__chip wpr-upload__chip--clean"
+                  : u.status === "refused"
+                    ? "wpr-upload__chip wpr-upload__chip--refused"
+                    : "wpr-upload__chip"
+              }
+            >
               {dayLabel(u.work_date)} —{" "}
               {u.status === "pending" ? "Screening…" : u.status === "clean" ? "In the pool ✓" : "Refused by screening"}
             </li>
