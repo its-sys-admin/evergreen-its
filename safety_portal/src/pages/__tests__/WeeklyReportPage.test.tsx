@@ -118,7 +118,7 @@ describe("WeeklyReportPage — the schedule binding", () => {
     const p = payload();
     p.schedule = {
       sections: [{ name: "Mechanical", items: [{ label: "Piles", percent: 95 }] }],
-      behind, today: "2026-08-14", task_count: 1,
+      behind, today: "2026-08-14", task_count: 1, truncated: false,
     };
     return p;
   };
@@ -214,6 +214,27 @@ describe("WeeklyReportPage — provenance and warnings", () => {
     p.office.labor.rows = [{ company: "Pro Panel", workers: "9", man_hours: "540" }];
     await renderPage(p);
     expect(screen.queryByText(/seeded from/)).toBeNull();
+  });
+});
+
+describe("WeeklyReportPage — the schedule mesh + truncation (A5)", () => {
+  it("links to the schedule page from the page-3 hint when the opener is passed", async () => {
+    const onOpenSchedule = vi.fn();
+    vi.mocked(fetchWeeklyReport).mockResolvedValue(payload());
+    render(<WeeklyReportPage jobId="JOB-1" onBack={() => {}} onOpenSchedule={onOpenSchedule} />);
+    await waitFor(() => expect(screen.getByText(/Report header/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/Open the schedule page/));
+    expect(onOpenSchedule).toHaveBeenCalledWith("JOB-1");
+  });
+
+  it("warns when page 3 is a partial table", async () => {
+    const p = payload();
+    p.schedule = {
+      sections: [{ name: "Mechanical", items: [{ label: "Piles", percent: 95 }] }],
+      behind: [], today: "2026-08-14", task_count: 600, truncated: true,
+    };
+    await renderPage(p);
+    expect(screen.getByText(/shows the first 600 tasks/)).toBeTruthy();
   });
 });
 

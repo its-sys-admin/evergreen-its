@@ -65,7 +65,8 @@ beforeEach(() => {
   // Default: a submitter → the Daily tab renders the not-a-manager explanatory copy, no fetches.
   vi.mocked(useAuth).mockReturnValue(authWith(["cap.tasks.own"]));
   // Default: no assigned inspections → the S6 section renders nothing.
-  vi.mocked(checklist.fetchAssignedInspections).mockResolvedValue({ inspections: [], linked: true });
+  vi.mocked(checklist.fetchAssignedInspections).mockResolvedValue({ inspections: [],
+  linked: true });
   // Default: empty crew list (AddCrewSection's auxiliary fetch).
   vi.mocked(personnel.fetchMyCrew).mockResolvedValue([]);
   // D2 Daily-tab defaults: an empty filed map + a minimal detail (placed tests supply the
@@ -84,6 +85,7 @@ const JOB_DETAIL: jobtracker.JobDetailResponse = {
   job: {
     job_id: "JOB-A", project_name: "Alpha", status: "active", lifecycle: "active", archive: null, client: null,
     crew: [], tasks: [], time_entries: [], equipment_on_site: [], inspections: [],
+  schedule: null,
     job_no: "",
     site_phase: 0,
     routing: {
@@ -435,7 +437,8 @@ describe("FieldOpsMyTasks — S6 assigned inspections", () => {
 
   it("renders nothing when there are no assigned inspections (confirmed empty)", async () => {
     tasksOk([]);
-    vi.mocked(checklist.fetchAssignedInspections).mockResolvedValue({ inspections: [], linked: true });
+    vi.mocked(checklist.fetchAssignedInspections).mockResolvedValue({ inspections: [],
+  linked: true });
     const { container } = render(<FieldOpsMyTasks onBack={() => {}} onOpenForm={vi.fn()} />);
     await waitFor(() => expect(container.querySelector(".dash-unavail")).not.toBeNull());
     expect(container.querySelector('[aria-label="Assigned inspections"]')).toBeNull();

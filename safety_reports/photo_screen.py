@@ -240,6 +240,30 @@ def iter_photo_fields(definition: dict) -> list[tuple[str, str, int]]:
     return out
 
 
+THUMB_LONG_EDGE = 320
+THUMB_JPEG_QUALITY = 70
+
+
+def make_thumbnail(clean_jpeg: bytes) -> bytes | None:
+    """Small picker thumbnail (≤~25KB JPEG) from the §34 CLEAN RE-ENCODE — NEVER the raw
+    upload (a thumbnail of unscreened bytes would be serving the attacker's file at small
+    size). Rides the daily-photo result post / site-photo register so the WPR screen can
+    show an image instead of a blind date+caption pick (0074; operator-approved relaxation
+    of the record-only posture, thumbnails only).
+
+    Fenced: ANY failure returns None — a thumb is optional display metadata, and its
+    absence degrades to the thumbless card, never an error or a blocked disposition."""
+    try:
+        img = Image.open(io.BytesIO(clean_jpeg))
+        img.thumbnail((THUMB_LONG_EDGE, THUMB_LONG_EDGE))
+        normalized = img.convert("RGB") if img.mode not in ("RGB", "L") else img
+        out = io.BytesIO()
+        normalized.save(out, format="JPEG", quality=THUMB_JPEG_QUALITY)
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 — optional metadata; never let a thumb sink a disposition
+        return None
+
+
 def build_caption(name: str, taken_at: str, gps: str) -> str:
     """Build a display caption from the UNTRUSTED EXIF sidecar (mirrors the SPA's join:
     `[taken_at(T→space), gps]` plus the original filename). Pure string — the caller MUST

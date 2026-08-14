@@ -575,3 +575,39 @@ describe("deactivate idempotency (cycles + receipts — the schedule-task shape)
     expect((await p(admin, "/api/fieldops/payments/receipts/999999/deactivate")).status).toBe(404);
   });
 });
+
+// ── A7: the summary reduction (GET /api/fieldops/payments/summary) ─────────────────
+describe("payments summary (A7) — same derive, reduced; the ADR posture pinned", () => {
+  it("403s manager and submitter — payment data stays behind cap.payments.manage", async () => {
+    expect((await g(manager, "/api/fieldops/payments/summary?job_id=JOB-A")).status).toBe(403);
+    expect((await g(sub, "/api/fieldops/payments/summary?job_id=JOB-A")).status).toBe(403);
+  });
+
+  it("reduces the full read: overdue count + worst state + next due, and has_terms honesty", async () => {
+    // No terms yet — the honest empty card.
+    const empty = await g(admin, "/api/fieldops/payments/summary?job_id=JOB-A");
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toMatchObject({ has_terms: false, cycle_count: 0, overdue_count: 0, worst_state: null, next_due: null });
+
+    await saveTerms();
+    // An OVERDUE cycle (billed long ago, no receipts) + an AWAITING one due far ahead.
+    await createCycle({ label: "PP #1", invoice_amount_cents: 100_000, invoice_submitted_date: "2024-01-01" });
+    await createCycle({ label: "PP #2", invoice_amount_cents: 50_000, invoice_submitted_date: "2099-01-01" });
+    const res = await g(admin, "/api/fieldops/payments/summary?job_id=JOB-A");
+    const body = (await res.json()) as {
+      has_terms: boolean; cycle_count: number; overdue_count: number;
+      worst_state: string | null; next_due: { label: string; due_date: string } | null;
+    };
+    expect(body.has_terms).toBe(true);
+    expect(body.cycle_count).toBe(2);
+    expect(body.overdue_count).toBeGreaterThanOrEqual(1);
+    // The ladder is ACTION-gated, not elapsed-time-only: suspension becomes due only after
+    // the nonpayment notice is SENT, so an untouched ancient cycle sits at the first
+    // actionable rung — exactly what the card should lead with.
+    expect(body.worst_state).toBe("nonpayment_notice_due");
+    expect(body.next_due).toMatchObject({ label: "PP #2" });
+    // The full read still serves the identical cycles (the summary is a reduction, not a fork).
+    const full = await readPayments();
+    expect(full.cycles).toHaveLength(2);
+  });
+});

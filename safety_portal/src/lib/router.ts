@@ -59,6 +59,9 @@ export type AppRoute =
   // jobId REQUIRED for the same reason as materials — the weekly report is always per-job.
   | { view: "fieldops-weekly-report"; jobId: string }
   | { view: "fieldops-tasks"; tab?: MyTasksTab }
+  // jobId OPTIONAL — the page has its own job drop-down (the Site Tasks surface); a job-less
+  // entry shows the picker defaulting to the viewer's placement.
+  | { view: "fieldops-site-tasks"; jobId?: string }
   | { view: "fieldops-inspections" }
   | { view: "fieldops-equipment" }
   | { view: "fieldops-personnel" };
@@ -98,6 +101,10 @@ export const VIEW_CAPS: Record<AppRoute["view"], string | null> = {
   // (the 0060 manifest precedent — no new cap for an office-desk screen); the Worker re-gates.
   "fieldops-weekly-report": "cap.jobtracker.manage",
   "fieldops-tasks": "cap.tasks.own",
+  // Both task models on one job-scoped page: the schedule list already reads under this cap
+  // (ADR-0006 decision 4 — all roles), and the assigned-tasks leg is the job-detail exposure.
+  // Mark-off / status writes re-gate server-side (cap.schedule.mark / cap.tasks.own).
+  "fieldops-site-tasks": "cap.jobtracker.read",
   "fieldops-inspections": "cap.checklist.manage",
   "fieldops-equipment": "cap.equipment.field",
   "fieldops-personnel": "cap.personnel.read",
@@ -153,6 +160,19 @@ export function parseRoute(loc: { pathname: string; search: string }): AppRoute 
   if (path === "/tasks") return { view: "fieldops-tasks" };
   if (path === "/tasks/assigned") return { view: "fieldops-tasks", tab: "assigned" };
   if (path === "/tasks/daily") return { view: "fieldops-tasks", tab: "daily" };
+
+  if (path === "/site-tasks") return { view: "fieldops-site-tasks" };
+  const stMatch = /^\/site-tasks\/([^/]+)$/.exec(path);
+  if (stMatch) {
+    let raw: string;
+    try {
+      raw = decodeURIComponent(stMatch[1]);
+    } catch {
+      return null; // malformed percent-encoding → unrecognized
+    }
+    const jobId = cleanParam(raw);
+    return jobId ? { view: "fieldops-site-tasks", jobId } : null;
+  }
 
   if (path === "/jobs") return { view: "fieldops-jobs" };
   // Materials BEFORE the bare /jobs/:id matcher. That matcher anchors on a slash-free segment so
@@ -244,6 +264,8 @@ export function formatRoute(route: AppRoute): string {
       return `/jobs/${encodeURIComponent(route.jobId)}/schedule`;
     case "fieldops-weekly-report":
       return `/jobs/${encodeURIComponent(route.jobId)}/weekly-report`;
+    case "fieldops-site-tasks":
+      return route.jobId ? `/site-tasks/${encodeURIComponent(route.jobId)}` : "/site-tasks";
     case "fill": {
       const p = route.prefill;
       if (!p) return "/submit";

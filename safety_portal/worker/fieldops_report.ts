@@ -691,6 +691,9 @@ async function buildReportData(
       behind: behindSchedule(scheduleTasks, todayPacific),
       today: todayPacific,
       task_count: scheduleTasks.length,
+      // A5: the read is capped at SCHEDULE_TASK_CAP — when the cap bites, page 3 is a PARTIAL
+      // table and must say so rather than silently printing a subset as the whole schedule.
+      truncated: scheduleTasks.length >= SCHEDULE_TASK_CAP,
     },
     office,
     generated_at: Math.floor(Date.now() / 1000),
