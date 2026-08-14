@@ -60,9 +60,6 @@ const MAX_SITE_PHASE = 9999;
 // simply not settable through this route.
 const LIFECYCLE_SETTABLE = new Set(["active", "inactive"]);
 
-function clampPct(n: number): number {
-  return Math.max(0, Math.min(100, Math.round(n)));
-}
 
 /** lifecycle → the legacy `active` int (the dropdown/down-sync flag): only 'active' is live. */
 function lifecycleToActive(lifecycle: string): number {
@@ -262,7 +259,6 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
       // the Project Name. body.job_id is ignored.
       const projectName = typeof body.project_name === "string" ? body.project_name.trim() : "";
       if (projectName.length < 1 || projectName.length > MAX_NAME) return c.json({ error: "invalid_project_name" }, 400);
-      const progress = typeof body.progress === "number" && Number.isFinite(body.progress) ? clampPct(body.progress) : 0;
 
       const routed = parseRouting(body);
       if (!routed.ok) return c.json({ error: routed.error }, 400);
@@ -367,7 +363,9 @@ export function registerJobWriteRoutes(app: FieldopsApp, gates: FieldopsGates): 
                        ?15, ?16, ?17, ?18, ?19)`,
             )
             .bind(
-              jobId, projectName, progress, clientId,
+              // jobs.progress: retired %-estimate (operator-locked 2026-07-01) — the column
+              // stays (NOT NULL DEFAULT 0, harmless) but no client value is honored.
+              jobId, projectName, 0, clientId,
               r.address, r.stakeholder_name, r.stakeholder_email, r.stakeholder_phone,
               r.safety_contact_name, r.safety_contact_email, JSON.stringify(r.safety_cc),
               r.progress_contact_name, r.progress_contact_email, JSON.stringify(r.progress_cc),

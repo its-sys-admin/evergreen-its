@@ -110,7 +110,6 @@ const JOBS: api.JobRow[] = [
     project_name: "Alpha",
     status: "active",
     lifecycle: "active",
-    progress: 40,
     client_name: "Acme Co",
     crew: [{ id: 1, name: "Alice Chen", trade: "operator" }],
     open_tasks: [{ id: 1, description: "Dig footings", status: "open", personnel_name: "Alice Chen", due_date: null }],
@@ -120,7 +119,6 @@ const JOBS: api.JobRow[] = [
     project_name: "Bravo",
     status: "on_hold",
     lifecycle: "inactive",
-    progress: 0,
     client_name: null,
     crew: [],
     open_tasks: [],
@@ -133,7 +131,6 @@ const DETAIL: api.JobDetail = {
   status: "active",
   lifecycle: "active",
   archive: null,
-  progress: 60,
   job_no: "2026.123",
   site_phase: 0,
   routing: {

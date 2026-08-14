@@ -72,6 +72,15 @@ function parseEpoch(raw: string | undefined): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
+// Per-module copy (the fieldops_manifests/po_attachments convention — a shared util module for
+// 6 lines has been declined before; keep them byte-identical).
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 function parseIsoDate(raw: string | undefined): string | null {
   if (raw === undefined || !ISO_DATE.test(raw)) return null;
   return raw;
@@ -487,7 +496,8 @@ async function buildReportData(
   // (0037: the pool row itself has no caption column), so it is looked up per photo.
   const photoSql = `
     SELECT dp.id AS pool_id, dp.work_date, dp.box_file_id,
-           COALESCE((
+           (dp.thumb_b64 IS NOT NULL) AS has_thumb,
+           COALESCE(NULLIF(dp.caption, ''), (
              SELECT json_extract(v.value, '$.caption')
                FROM submissions s2,
                     json_each(
@@ -573,9 +583,10 @@ async function buildReportData(
   const hazardCodes = ((hazardRes.results ?? []) as { form_code: string }[]).map((r) => r.form_code);
   const deliveries = (deliveryRes.results ?? []) as Record<string, unknown>[];
   const incidents = (incidentRes.results ?? []) as Record<string, unknown>[];
+  // has_thumb rides as 0/1 from SQLite; normalize to a real boolean at the wire boundary.
   const photosAvailable = ((photoRes.results ?? []) as {
-    pool_id: number; work_date: string; box_file_id: string; caption: string;
-  }[]);
+    pool_id: number; work_date: string; box_file_id: string; caption: string; has_thumb: number;
+  }[]).map((r) => ({ ...r, has_thumb: r.has_thumb === 1 }));
 
   const scheduleTasks = (schedRes.results ?? []) as ScheduleTaskRow[];
   const todayPacific = pacificDateString(Date.now());
@@ -853,6 +864,38 @@ export function registerWeeklyReportRoutes(
     const w = parseWindow((k) => c.req.query(k));
     if (typeof w === "string") return c.json({ error: w }, 400);
     return c.json(await buildReportData(c, w), 200);
+  });
+
+  // ── GET /api/fieldops/daily-photo/:id/thumb — the ONE image-serving route (0074). ────────────
+  // Serves the SMALL screened thumbnail of a CLEAN pool row so the WPR picker stops choosing
+  // photos blind. This deliberately relaxes the 0037 Option-D "record-only, no serving route"
+  // posture — for thumbnails only (operator-approved 2026-08-13): the thumb is derived Mac-side
+  // from the §34 CLEAN RE-ENCODE, never the raw upload, and ORIGINAL bytes are still never
+  // served (pending rows' photo_json is untouchable here — the query reads thumb_b64 only).
+  // Gate = the WPR screen's own read gate (session + cap.jobtracker.manage), po_estimates
+  // preview shape: b64 → bytes, private/no-store (the global /api/* no-store agrees).
+  app.get("/api/fieldops/daily-photo/:id/thumb", requireSession, requireCapability("cap.jobtracker.manage"), async (c) => {
+    const photoId = parseInt(c.req.param("id"), 10);
+    if (isNaN(photoId) || photoId < 1) return c.json({ error: "invalid_id" }, 400);
+    const row = await c.env.DB
+      .prepare("SELECT status, thumb_b64 FROM daily_photo_pool WHERE id = ?1")
+      .bind(photoId)
+      .first<{ status: string; thumb_b64: string | null }>();
+    // Clean-with-thumb only; anything else — unknown row, pending, refused, thumbless — is one
+    // indistinguishable 404 (no state oracle).
+    if (!row || row.status !== "clean" || !row.thumb_b64) return c.json({ error: "not_found" }, 404);
+    let bytes: Uint8Array;
+    try {
+      bytes = b64ToBytes(row.thumb_b64);
+    } catch {
+      return c.json({ error: "internal_error" }, 500);
+    }
+    return new Response(bytes as unknown as BodyInit, {
+      headers: {
+        "content-type": "image/jpeg",
+        "cache-control": "private, no-store",
+      },
+    });
   });
 
   // ── The office screen's save ──────────────────────────────────────────────────

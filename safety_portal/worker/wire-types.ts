@@ -57,7 +57,6 @@ export interface JobRow {
   /** LEGACY. Retained because the list's status filter and its index key off it. */
   status: string;
   lifecycle: JobLifecycle;
-  progress: number;
   client_name: string | null;
   crew: CrewMember[];
   open_tasks: OpenTask[];
@@ -205,7 +204,6 @@ export interface JobDetail {
   /** Archive workflow state — `cap.job.archive` holders ONLY; null for everyone else, the same
    *  least-privilege shape as `routing`. */
   archive: JobArchiveStatus | null;
-  progress: number;
   /** The Evergreen YYYY.NNN PROJECT number ('' when unassigned) — 0057. NOT the full
    *  identifier: the site segment rides in `site_phase`. */
   job_no: string;
@@ -999,6 +997,13 @@ export interface WeeklyReportPhoto {
   caption: string;
 }
 
+/** An OFFERED photo (the `available` list only): adds whether a screened thumbnail exists so the
+ *  picker can show an image (0074). `selected` entries keep the stored 4-key WeeklyReportPhoto
+ *  shape — has_thumb is a live pool fact, not part of the office's saved selection. */
+export interface WeeklyReportPhotoOffered extends WeeklyReportPhoto {
+  has_thumb: boolean;
+}
+
 export interface WeeklyReportSafetyCount {
   month: number;
   to_date: number;
@@ -1076,7 +1081,7 @@ export interface ProductionReportResponse {
     qty: string; unit: string; vendor: string; bol_number: string; carrier: string;
   }[];
   material_incidents: { work_date: string; material: string; issue: string; details: string }[];
-  photos: { available: WeeklyReportPhoto[]; selected: WeeklyReportPhoto[]; auto_selected: boolean };
+  photos: { available: WeeklyReportPhotoOffered[]; selected: WeeklyReportPhoto[]; auto_selected: boolean };
   /** Page 3. NULL when the job has no committed schedule (0071) — the renderer prints its
    *  honest empty state. `percent: null` on an item is the table's "never reported" state (no
    *  portal mark, no committed schedule value), which prints as an em dash, never 0%. */

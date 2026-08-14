@@ -879,3 +879,122 @@ describe("daily photo — material-line binding (0063)", () => {
     expect(refs).toBe("ref_unknown_key");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 0074 — origin vocabulary on upload + thumbnails (result post + the ONE serving route).
+// ─────────────────────────────────────────────────────────────────────────────
+const SMALL_THUMB = b64([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+
+describe("0074 — upload origin (closed vocabulary, capability-keyed)", () => {
+  it("defaults an origin-less upload to 'field' — byte-identical to pre-0074", async () => {
+    const id = await uploadOk(manager);
+    const row = await env.DB.prepare("SELECT origin FROM daily_photo_pool WHERE id=?1").bind(id).first<{ origin: string }>();
+    expect(row!.origin).toBe("field");
+  });
+
+  it("rejects any unknown origin value — including 'site_photos', which only the internal register route mints", async () => {
+    for (const bad of ["site_photos", "office", 42, ""]) {
+      const res = await upload(admin, { origin: bad });
+      expect(res.status, `origin=${String(bad)}`).toBe(400);
+      expect((await json<{ error: string }>(res)).error).toBe("invalid_origin");
+    }
+  });
+
+  it("gates origin='office_wpr' on cap.jobtracker.manage — a manager passes the role gate but not the cap", async () => {
+    const denied = await upload(manager, { origin: "office_wpr" });
+    expect(denied.status).toBe(403);
+    const ok = await upload(admin, { origin: "office_wpr" });
+    expect(ok.status, await ok.clone().text()).toBe(201);
+    const { pool_id } = await json<{ pool_id: number }>(ok);
+    const row = await env.DB.prepare("SELECT origin FROM daily_photo_pool WHERE id=?1").bind(pool_id).first<{ origin: string }>();
+    expect(row!.origin).toBe("office_wpr");
+  });
+
+  it("bridge rows do not consume the uploader's per-day cap", async () => {
+    // Fill the day to the cap with site_photos bridge rows for the same (job, date, uploader).
+    for (let i = 0; i < POOL_CAP_PER_DAY; i += 1) {
+      await env.DB.prepare(
+        "INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac, origin, claimed_by_submission, box_file_id) " +
+          "VALUES ('JOB-A', ?1, 'mgr.mo', 'clean', NULL, 'registered:v1', 'site_photos', 'sub-x', ?2)",
+      ).bind(DATE, `bx-${i}`).run();
+    }
+    // The crew lead's own upload still fits — bridge rows are excluded from the count.
+    await uploadOk(manager);
+  });
+});
+
+describe("0074 — thumb_b64 on the result post", () => {
+  it("stores a small thumb on a clean disposition and serves it on the thumb route", async () => {
+    const id = await uploadOk(manager);
+    const res = await postDailyResult(id, { status: "clean", box_file_id: "box-t1", thumb_b64: SMALL_THUMB });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const row = await env.DB.prepare("SELECT thumb_b64, photo_json FROM daily_photo_pool WHERE id=?1").bind(id)
+      .first<{ thumb_b64: string | null; photo_json: string | null }>();
+    expect(row!.thumb_b64).toBe(SMALL_THUMB);
+    expect(row!.photo_json).toBeNull(); // delete-on-screen unchanged
+
+    const serve = await get(admin, `/api/fieldops/daily-photo/${id}/thumb`);
+    expect(serve.status).toBe(200);
+    expect(serve.headers.get("content-type")).toBe("image/jpeg");
+    expect(serve.headers.get("cache-control")).toContain("no-store");
+    expect(new Uint8Array(await serve.arrayBuffer())[0]).toBe(0xff);
+  });
+
+  it("forbids a thumb on refused and bounds an oversized one", async () => {
+    const a = await uploadOk(manager);
+    const refused = await postDailyResult(a, { status: "refused", thumb_b64: SMALL_THUMB });
+    expect(refused.status).toBe(400);
+    expect((await json<{ detail: string }>(refused)).detail).toBe("thumb_forbidden");
+
+    const big = btoa("x".repeat(41_000));
+    const over = await postDailyResult(a, { status: "clean", box_file_id: "b", thumb_b64: big });
+    expect(over.status).toBe(400);
+    expect((await json<{ detail: string }>(over)).detail).toBe("thumb_too_large");
+    // Row untouched by both rejections — still pending with bytes.
+    const row = await poolRow(a);
+    expect(row.status).toBe("pending");
+    expect(row.photo_json).not.toBeNull();
+  });
+
+  it("a thumbless clean result still lands (older Mac builds degrade to the thumbless card)", async () => {
+    const id = await uploadOk(manager);
+    const res = await postDailyResult(id, { status: "clean", box_file_id: "box-nt" });
+    expect(res.status).toBe(200);
+    expect((await poolRow(id)).status).toBe("clean");
+  });
+});
+
+describe("0074 — GET /api/fieldops/daily-photo/:id/thumb (the one serving route)", () => {
+  it("404s everything that is not clean-with-thumb — unknown, pending, thumbless, refused — indistinguishably", async () => {
+    const pending = await uploadOk(manager);
+    const thumbless = await uploadOk(manager);
+    await postDailyResult(thumbless, { status: "clean", box_file_id: "b1" });
+    const refused = await uploadOk(manager);
+    await postDailyResult(refused, { status: "refused", detail: "L2:test" });
+    for (const id of [999_999, pending, thumbless, refused]) {
+      const res = await get(admin, `/api/fieldops/daily-photo/${id}/thumb`);
+      expect(res.status, `id=${id}`).toBe(404);
+    }
+  });
+
+  it("requires the WPR screen's own capability — manager (no cap.jobtracker.manage) is refused", async () => {
+    const id = await uploadOk(manager);
+    await postDailyResult(id, { status: "clean", box_file_id: "b", thumb_b64: SMALL_THUMB });
+    const res = await get(manager, `/api/fieldops/daily-photo/${id}/thumb`);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("0074 — thumb validity on the result post (review 2026-08-13)", () => {
+  it("rejects an atob-invalid thumb and a non-JPEG thumb at write time — never a stored serve-time 500", async () => {
+    const id = await uploadOk(manager);
+    const badLen = await postDailyResult(id, { status: "clean", box_file_id: "b", thumb_b64: "AAAAA" });
+    expect(badLen.status).toBe(400);
+    expect((await json<{ detail: string }>(badLen)).detail).toBe("thumb_invalid");
+    const gif = await postDailyResult(id, { status: "clean", box_file_id: "b", thumb_b64: btoa("GIF89a\x01\x00") });
+    expect(gif.status).toBe(400);
+    expect((await json<{ detail: string }>(gif)).detail).toBe("thumb_not_jpeg");
+    // Both rejections left the row pending — the disposition is still repeatable.
+    expect((await poolRow(id)).status).toBe("pending");
+  });
+});

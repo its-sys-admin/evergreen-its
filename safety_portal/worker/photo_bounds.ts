@@ -9,6 +9,10 @@
 // screening) before any Box upload or render. Never log photo bytes.
 
 export const PHOTO_MAX_BYTES = 400_000; // decoded bytes, per photo (client targets ≤ this)
+// Screened THUMBNAIL bound (0074): the Mac derives ~320px JPEG q70 thumbs (~15-25KB) from the §34
+// clean re-encode; 40KB decoded is comfortably above that and far below anything original-sized,
+// so an oversized "thumb" is structurally rejectable at the result/register routes.
+export const THUMB_MAX_BYTES = 40_000;
 export const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export function b64DecodedLen(s: string): number {

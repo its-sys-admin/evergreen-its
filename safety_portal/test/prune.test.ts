@@ -613,20 +613,30 @@ async function seedDailyPhoto(over: {
   photoJson?: string | null;
   createdAt?: number;
   claimedBy?: string | null;
+  origin?: string;
 } = {}): Promise<number> {
   const r = await env.DB
     .prepare(
-      "INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac, created_at, claimed_by_submission) " +
-        "VALUES ('JOB-1','2026-01-01','mgr.mo',?1,?2,'h',?3,?4) RETURNING id",
+      "INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac, created_at, claimed_by_submission, origin) " +
+        "VALUES ('JOB-1','2026-01-01','mgr.mo',?1,?2,'h',?3,?4,?5) RETURNING id",
     )
     .bind(
       over.status ?? "pending",
       over.photoJson === undefined ? "{}" : over.photoJson,
       over.createdAt ?? NOW,
       over.claimedBy ?? null,
+      over.origin ?? "field",
     )
     .first<{ id: number }>();
   return r!.id;
+}
+/** A saved weekly report selecting the given pool ids (the 0074 prune exemption source). */
+async function seedWprSelection(poolIds: number[], jobId = "JOB-1", weekStart = "2025-12-27"): Promise<void> {
+  const photos = poolIds.map((id) => ({ pool_id: id, box_file_id: "b" + id, caption: "", work_date: "2026-01-01" }));
+  await env.DB
+    .prepare("INSERT INTO job_weekly_report_inputs (job_id, week_start, photos_json) VALUES (?1, ?2, ?3)")
+    .bind(jobId, weekStart, JSON.stringify(photos))
+    .run();
 }
 async function dailyIds(): Promise<number[]> {
   const r = await env.DB.prepare("SELECT id FROM daily_photo_pool ORDER BY id").all<{ id: number }>();
@@ -671,6 +681,56 @@ describe("pruneOldData — DR daily_photo_pool unclaimed/orphan rider", () => {
 
     expect(res.dailyPhotos).toBe(1);
     expect(await dailyIds()).toEqual([inFlight]);
+  });
+
+  // ── 0074: retention split + selected-refs exemption ──────────────────────────
+  it("retains an unclaimed office_wpr upload for 90d where a field row dies at 7d", async () => {
+    const office = await seedDailyPhoto({ status: "clean", photoJson: null, createdAt: NOW - 8 * DAY, origin: "office_wpr" });
+    await seedDailyPhoto({ status: "clean", photoJson: null, createdAt: NOW - 8 * DAY }); // field, dies
+    const res = await pruneOldData(env.DB, NOW);
+    expect(res.failedStages).toEqual([]);
+    expect(res.dailyPhotos).toBe(1);
+    expect(await dailyIds()).toEqual([office]);
+  });
+
+  it("deletes an unclaimed office_wpr upload past 90d", async () => {
+    await seedDailyPhoto({ status: "clean", photoJson: null, createdAt: NOW - 91 * DAY, origin: "office_wpr" });
+    const res = await pruneOldData(env.DB, NOW);
+    expect(res.dailyPhotos).toBe(1);
+    expect(await dailyIds()).toEqual([]);
+  });
+
+  it("a STUCK-PENDING office_wpr row still dies at 7d — it holds bytes and can never be selected", async () => {
+    await seedDailyPhoto({ status: "pending", createdAt: NOW - 8 * DAY, origin: "office_wpr" });
+    const res = await pruneOldData(env.DB, NOW);
+    expect(res.dailyPhotos).toBe(1);
+    expect(await dailyIds()).toEqual([]);
+  });
+
+  it("NEVER deletes a row selected in a saved weekly report — any origin, any age, orphaned or not", async () => {
+    const sel = await seedDailyPhoto({ status: "clean", photoJson: null, createdAt: NOW - 400 * DAY });
+    const orphanSel = await seedDailyPhoto({
+      status: "clean", photoJson: null, createdAt: NOW - 400 * DAY, claimedBy: "uuid-gone",
+    });
+    await seedWprSelection([sel, orphanSel]);
+    const res = await pruneOldData(env.DB, NOW);
+    expect(res.dailyPhotos).toBe(0);
+    expect(await dailyIds()).toEqual([sel, orphanSel]);
+  });
+
+  it("a photos_json entry WITHOUT pool_id cannot NULL-poison the exemption into a full-stage disable", async () => {
+    // One malformed selection entry (no pool_id). If the NOT-IN subquery let its NULL through,
+    // NOTHING would ever be deleted again — the silent-disable class the jobs-stage comment
+    // documents. The 8d field row proves the stage still bites.
+    await env.DB
+      .prepare("INSERT INTO job_weekly_report_inputs (job_id, week_start, photos_json) VALUES ('JOB-1','2025-12-20',?1)")
+      .bind(JSON.stringify([{ box_file_id: "b-no-pool-id", caption: "", work_date: "2026-01-01" }]))
+      .run();
+    await seedDailyPhoto({ status: "clean", photoJson: null, createdAt: NOW - 8 * DAY });
+    const res = await pruneOldData(env.DB, NOW);
+    expect(res.failedStages).toEqual([]);
+    expect(res.dailyPhotos).toBe(1);
+    expect(await dailyIds()).toEqual([]);
   });
 
   it("a throw in the daily_photo_pool stage is isolated + NAMED (GS2 fence)", async () => {
