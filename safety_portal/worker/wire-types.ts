@@ -1153,6 +1153,21 @@ export type PaymentState =
   | "suspension_notice_sent"
   | "paid";
 
+/** GET /api/fieldops/payments/summary — the job detail's payments card (A7). A REDUCTION of
+ *  the full payments read (same loadCycleViews derive), cap.payments.manage only; the jobs
+ *  list/detail responses carry zero payment fields (ADR-0006 decision 7). */
+export interface PaymentsSummaryResponse {
+  job_id: string;
+  has_terms: boolean;
+  cycle_count: number;
+  /** Cycles in any overdue-family state (overdue → suspension_notice_sent). */
+  overdue_count: number;
+  /** The worst state present, by escalation order; null when nothing is overdue. */
+  worst_state: PaymentState | null;
+  next_due: { label: string; due_date: string; balance_cents: number | null } | null;
+  today: string;
+}
+
 /** The job's terms row as served. WHO columns (created_by/updated_by) deliberately never
  *  serve — raw account usernames stay Worker-side (the W9 posture), and the Payments card
  *  has no who-edited display. */

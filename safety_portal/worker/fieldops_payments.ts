@@ -11,6 +11,8 @@ import type {
   PaymentReceiptRow,
   PaymentsResponse,
   PaymentTermsDefaultResponse,
+  PaymentState,
+  PaymentsSummaryResponse,
   PaymentTermsRow,
 } from "./wire-types";
 
@@ -187,10 +189,14 @@ export function registerPaymentRoutes(app: FieldopsApp, gates: FieldopsGates): v
   // Terms (or null) + active cycles in display order, each with its active receipts and
   // the DERIVED state (payments_derive, server `today` Pacific — the same calendar the
   // delivered mark stamps). project_name because the section is deep-linkable.
-  app.get("/api/fieldops/payments", ...gate, async (c) => {
-    const jobId = typeof c.req.query("job_id") === "string" ? (c.req.query("job_id") ?? "") : "";
-    const jobErr = await requireJob(c, jobId); // 400 bad shape / 404 unknown job
-    if (jobErr) return jobErr;
+  /** The ONE derive fold both payment reads share (A7): batch-read terms/cycles/receipts,
+   *  group, derive each cycle's state. Extracted verbatim from the GET so the summary route
+   *  can never drift from the full read's math. */
+  async function loadCycleViews(c: Parameters<typeof requireJob>[0], jobId: string): Promise<{
+    terms: TermsDbRow | null;
+    cycles: PaymentCycleView[];
+    projectName: string | null;
+  }> {
     const [termsRes, cyclesRes, receiptsRes, jobRow] = await c.env.DB.batch([
       c.env.DB.prepare(`SELECT ${TERMS_COLS} FROM job_payment_terms WHERE job_id = ?1`).bind(jobId),
       c.env.DB
@@ -238,14 +244,62 @@ export function registerPaymentRoutes(app: FieldopsApp, gates: FieldopsGates): v
         days_overdue: d.days_overdue, days_until_due: d.days_until_due, paid_late: d.paid_late,
       };
     });
-    const payload: PaymentsResponse = {
-      terms,
-      cycles,
-      project_name:
+    return {
+      terms, cycles,
+      projectName:
         ((jobRow.results?.[0] as { project_name?: string } | undefined)?.project_name) ?? null,
+    };
+  }
+
+  app.get("/api/fieldops/payments", ...gate, async (c) => {
+    const jobId = typeof c.req.query("job_id") === "string" ? (c.req.query("job_id") ?? "") : "";
+    const jobErr = await requireJob(c, jobId); // 400 bad shape / 404 unknown job
+    if (jobErr) return jobErr;
+    const { terms, cycles, projectName } = await loadCycleViews(c, jobId);
+    const payload: PaymentsResponse = { terms, cycles, project_name: projectName };
+    return c.json(payload, 200);
+  });
+
+  // ── GET /api/fieldops/payments/summary?job_id — the job detail's payments CARD (A7). ─────────
+  // Same gate (cap.payments.manage, admin-only), same derive (loadCycleViews) — a REDUCTION of
+  // the full read, never a second derivation. ADR-0006 decision 7 ("payment data appears in no
+  // other route's response") holds by the letter: this is a route WITHIN the payments family,
+  // and the jobs list/detail responses carry zero payment fields — the SPA fires this fetch
+  // only when the session holds the capability.
+  app.get("/api/fieldops/payments/summary", ...gate, async (c) => {
+    const jobId = typeof c.req.query("job_id") === "string" ? (c.req.query("job_id") ?? "") : "";
+    const jobErr = await requireJob(c, jobId);
+    if (jobErr) return jobErr;
+    const { terms, cycles } = await loadCycleViews(c, jobId);
+    // Escalation order, worst-first — the card leads with the state that asks for action.
+    const ESCALATION: PaymentState[] = [
+      "suspension_notice_sent", "suspension_notice_due",
+      "nonpayment_notice_sent", "nonpayment_notice_due", "overdue",
+    ];
+    const overdueSet = new Set<PaymentState>(ESCALATION);
+    const overdue = cycles.filter((cy) => overdueSet.has(cy.state));
+    let worst: PaymentState | null = null;
+    for (const st of ESCALATION) {
+      if (cycles.some((cy) => cy.state === st)) { worst = st; break; }
+    }
+    // Next due = the earliest not-yet-due-or-due-soon cycle with a due date.
+    const upcoming = cycles
+      .filter((cy) => (cy.state === "awaiting" || cy.state === "due_soon") && cy.due_date !== null)
+      .sort((a, b) => (a.due_date! < b.due_date! ? -1 : 1))[0] ?? null;
+    const payload: PaymentsSummaryResponse = {
+      job_id: jobId,
+      has_terms: terms !== null,
+      cycle_count: cycles.length,
+      overdue_count: overdue.length,
+      worst_state: worst,
+      next_due: upcoming
+        ? { label: upcoming.label, due_date: upcoming.due_date!, balance_cents: upcoming.balance_cents }
+        : null,
+      today: pacificDateString(Date.now()),
     };
     return c.json(payload, 200);
   });
+
 
   // ── GET /api/fieldops/payments/terms-default?job_id — the same-client prefill. ──────
   // Operator decision 6: a new job's terms start from the SAME CLIENT's most recent

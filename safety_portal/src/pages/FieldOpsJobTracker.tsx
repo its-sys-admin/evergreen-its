@@ -9,6 +9,7 @@ import { SectionRail } from "../components/SectionRail";
 import { useScrollSpy } from "../lib/useScrollSpy";
 import { ChipX } from "../components/ChipX";
 import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection";
+import { JobPaymentsCard } from "../components/JobPaymentsCard";
 import { InlineRowMsg, SectionError, TaskDue, errMsg, type RowFeedback } from "../components/myTasksShared";
 import { JobDailyRequirementsSection } from "../components/JobDailyRequirementsSection";
 import { statusLabel, lifecycleLabel } from "../lib/labels";
@@ -1146,6 +1147,7 @@ export function FieldOpsJobTracker({
   // Computed at TOP level — hooks cannot live inside the detail branch below. Entries are
   // filtered by what this session can actually see, so a capability-hidden section never leaves
   // a dead link, and the spy observes exactly the filtered set. Order mirrors the page.
+  const canPayments = caps.includes("cap.payments.manage"); // A7: the payments card (admin-only cap)
   const canArchiveViewer = caps.includes("cap.job.archive");
   const canSeeMaterials = caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage");
   const railSections = selectedJob
@@ -1158,6 +1160,7 @@ export function FieldOpsJobTracker({
         { id: "jd-equipment", label: "Equipment", on: true },
         { id: "jd-materials", label: "Materials", on: canSeeMaterials },
         { id: "jd-schedule", label: "Schedule", on: Boolean(onOpenSchedule) },
+        { id: "jd-payments", label: "Payments", on: canPayments },
         { id: "jd-weekly", label: "Weekly report", on: Boolean(onOpenWeeklyReport) },
         { id: "jd-inspections", label: "Inspections", on: true },
         { id: "jd-daily", label: "Daily requirements", on: canChecklist },
@@ -1843,6 +1846,13 @@ export function FieldOpsJobTracker({
               Open schedule →
             </button>
           </section>
+        )}
+
+        {canPayments && (
+          <JobPaymentsCard
+            jobId={job.job_id}
+            onOpenSchedule={onOpenSchedule ? () => onOpenSchedule(job.job_id) : undefined}
+          />
         )}
 
         {/* 0067 — the office's weekly-report inputs (the sections D1 cannot derive). Deep-link
