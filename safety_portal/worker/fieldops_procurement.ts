@@ -25,6 +25,12 @@ import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobPr
 // section (Invariant 1 — approval lives on the workspace share lists, enforced Mac-side by
 // F22; 0051's header states send/execute approval is NOT a portal capability).
 //
+// ACCEPTED RESIDUAL RISK (adversarial review 2026-08-13): job_id and job_no are BOTH snapshots
+// with no cross-consistency check — a tampered admin-tier draft call could pair a real job_no
+// with a different job's job_id and surface the document on the wrong job's section (display-
+// misleading only; numbering/HMAC/filing unaffected). Character-for-character the posture
+// purchase_orders.job_id and subcontracts.job_id already carry; creation is admin-cap-gated.
+//
 // RFQs joined by rfqs.job_id (0075) — captured at draft time from now on; PRE-0075 rows carry
 // '' and will never appear here (no backfill is possible — 0070's header; resolving by job_no
 // would be the 0064 wrong-site corruption). The SPA hint states this.
