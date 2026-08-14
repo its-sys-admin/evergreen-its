@@ -13,6 +13,7 @@ import { InlineRowMsg, SectionError, TaskDue, errMsg, type RowFeedback } from ".
 import { JobDailyRequirementsSection } from "../components/JobDailyRequirementsSection";
 import { statusLabel, lifecycleLabel } from "../lib/labels";
 import { JobArchivePanel } from "../components/JobArchivePanel";
+import { JobProcurementSection } from "../components/JobProcurementSection";
 import { formatJobNumber, splitJobNumber, JOB_NUMBER_MAX_LENGTH } from "../lib/jobNumber";
 import { fmtHours, jobPillClass, loggedHours, openTaskCount, taskPillClass } from "../lib/jobtracker_view";
 
@@ -335,6 +336,8 @@ export function FieldOpsJobTracker({
   onOpenMaterials,
   onOpenSchedule,
   onOpenWeeklyReport,
+  onOpenPurchaseOrders,
+  onOpenSubcontracts,
 }: {
   onBack: () => void;
   /** R7 — deep-link straight into a job's detail (the My Tasks "Log time" quick action / job-group
@@ -353,6 +356,9 @@ export function FieldOpsJobTracker({
    *  rides that cap) → the card doesn't render. */
   onOpenSchedule?: (jobId: string) => void;
   onOpenWeeklyReport?: (jobId: string) => void;
+  /** A8: deep links into the procurement lanes (view-level caps re-gate in App). */
+  onOpenPurchaseOrders?: () => void;
+  onOpenSubcontracts?: () => void;
 }) {
   const [view, setView] = useState<"list" | "detail">("list");
   const [jobs, setJobs] = useState<api.JobRow[]>([]);
@@ -1148,6 +1154,8 @@ export function FieldOpsJobTracker({
   // a dead link, and the spy observes exactly the filtered set. Order mirrors the page.
   const canArchiveViewer = caps.includes("cap.job.archive");
   const canSeeMaterials = caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage");
+  // A8: the lanes' own admin caps gate the Procurement section — no new capability minted.
+  const canProcurement = caps.includes("cap.po.manage") || caps.includes("cap.subcontracts.manage");
   const railSections = selectedJob
     ? [
         { id: "jd-manage", label: "Manage", on: canAssignTasks },
@@ -1157,6 +1165,7 @@ export function FieldOpsJobTracker({
         { id: "jd-time", label: "Time", on: true },
         { id: "jd-equipment", label: "Equipment", on: true },
         { id: "jd-materials", label: "Materials", on: canSeeMaterials },
+        { id: "jd-procurement", label: "Procurement", on: canProcurement },
         { id: "jd-schedule", label: "Schedule", on: Boolean(onOpenSchedule) },
         { id: "jd-weekly", label: "Weekly report", on: Boolean(onOpenWeeklyReport) },
         { id: "jd-inspections", label: "Inspections", on: true },
@@ -1830,6 +1839,14 @@ export function FieldOpsJobTracker({
         {/* ADR-0006 PR-4 — the per-job Schedule deep-link card, beside Materials. All roles
             see it (schedule visibility is all-roles, decision 4); the import affordances on
             the page itself re-gate on cap.jobtracker.manage server-side. */}
+        {canProcurement && (
+          <JobProcurementSection
+            jobId={job.job_id}
+            onOpenPurchaseOrders={onOpenPurchaseOrders ? () => onOpenPurchaseOrders() : undefined}
+            onOpenSubcontracts={onOpenSubcontracts ? () => onOpenSubcontracts() : undefined}
+          />
+        )}
+
         {onOpenSchedule && (
           <section className="card dash-section job-link" id="jd-schedule">
             <header className="job-sec__head">

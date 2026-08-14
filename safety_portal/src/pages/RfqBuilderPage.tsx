@@ -314,6 +314,8 @@ export function RfqBuilderPage() {
     if (items.length === 0) return "Add at least one line item.";
     if (vendorKeys.length === 0) return "Pick at least one vendor.";
     return {
+      // 0075: the id the picker resolved — captured instead of thrown away (the 0069 lesson).
+      job_id: jobId || undefined,
       job_no: jobNo.trim(),
       site_phase: parseInt(sitePhase, 10),
       job_name: jobName.trim() || undefined,

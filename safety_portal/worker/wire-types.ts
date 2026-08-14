@@ -51,6 +51,51 @@ export interface OpenTask {
  *  `lifecycle`. Lockstep with `JOB_LIFECYCLES` in worker/constants.ts. */
 export type JobLifecycle = "active" | "inactive" | "archived";
 
+/** Per-job Procurement rows (Track A8; worker/fieldops_procurement.ts). Lane arrays are NULL
+ *  when the session lacks that lane's own capability — absence of permission, not absence of
+ *  paper. Statuses ≥ approved are a CACHE of Mac/Smartsheet state (poll latency). */
+export interface JobProcurementPo {
+  id: number;
+  po_number: string | null;
+  revision: number;
+  supersede_seq: number;
+  status: string;
+  total_cents: number;
+  updated_at: number;
+  filed: boolean;
+  vendor_name: string | null;
+}
+
+export interface JobProcurementRfq {
+  id: number;
+  rfq_number: string | null;
+  status: string;
+  due_date: string | null;
+  updated_at: number;
+  vendor_count: number;
+  sent_count: number;
+  responded_count: number;
+}
+
+export interface JobProcurementSub {
+  id: number;
+  sc_number: string | null;
+  revision: number;
+  supersede_seq: number;
+  status: string;
+  trade: string;
+  contract_price_cents: number;
+  updated_at: number;
+  filed: boolean;
+  sub_name: string | null;
+}
+
+export interface JobProcurementResponse {
+  purchase_orders: JobProcurementPo[] | null;
+  rfqs: JobProcurementRfq[] | null;
+  subcontracts: JobProcurementSub[] | null;
+}
+
 export interface JobRow {
   job_id: string;
   project_name: string;
