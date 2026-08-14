@@ -309,6 +309,21 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
     const photoErr = validateSinglePhoto(photo);
     if (photoErr) return c.json({ error: "invalid_photo", detail: photoErr }, 400);
 
+    // origin (0074): CLOSED vocabulary — absent → 'field' (the crew flow, byte-identical to
+    // pre-0074); 'office_wpr' → an upload from the weekly-report screen, allowed only to holders
+    // of that screen's own capability (cap.jobtracker.manage — today ≡ admins, who already pass
+    // the role gate above; the cap check keys the gate on MEANING, not the current role math).
+    // 'site_photos' is NEVER accepted here — bridge rows are minted only by the internal
+    // register route. origin is a RETENTION hint (prune keeps office uploads 90d vs 7d), not
+    // trust-bearing, so it deliberately stays OUTSIDE the signed photo_json / HMAC canonical —
+    // the Mac verifier is untouched.
+    let origin: "field" | "office_wpr" = "field";
+    if (body.origin !== undefined) {
+      if (body.origin !== "office_wpr") return c.json({ error: "invalid_origin" }, 400);
+      if (!c.get("capabilities").has("cap.jobtracker.manage")) return c.json({ error: "forbidden" }, 403);
+      origin = "office_wpr";
+    }
+
     const jobErr = await requireJob(c, jobId); // 400 bad shape / 404 unknown job
     if (jobErr) return jobErr;
     const scopeErr = await requireJobScope(c, jobId, SCOPE_BYPASS_CAPS); // 403 outside own placement
@@ -403,17 +418,22 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
           // The 0063 binding columns are threaded INTO this INSERT…SELECT, never written by a
           // follow-up UPDATE: the caps ride this statement's own WHERE, so a second write would
           // sit outside the atomic fold and could land on a row the caps had refused.
+          // The per-day cap EXCLUDES origin='site_photos': bridge rows are minted for the FIELD
+          // actor by the internal register route after intake files a daily report's inline
+          // photos, and letting them consume the uploader's 40/day would starve the crew lead's
+          // own additional uploads on a photo-heavy day.
           `INSERT INTO daily_photo_pool (job_id, work_date, uploaded_by, status, photo_json, hmac,
-                                         line_uuid, receipt_event_id)
-           SELECT ?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7
+                                         line_uuid, receipt_event_id, origin)
+           SELECT ?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8
            WHERE (SELECT COUNT(*) FROM daily_photo_pool
-                  WHERE job_id = ?1 AND work_date = ?2 AND uploaded_by = ?3 AND status != 'refused')
+                  WHERE job_id = ?1 AND work_date = ?2 AND uploaded_by = ?3 AND status != 'refused'
+                    AND origin != 'site_photos')
                  < ${POOL_CAP_PER_DAY}
              AND (SELECT COUNT(*) FROM daily_photo_pool WHERE status = 'pending')
                  < ${POOL_PENDING_GLOBAL_MAX}
            RETURNING id`,
         )
-        .bind(jobId, workDate, actor, photoJson, hmac, lineUuid, receiptEventId),
+        .bind(jobId, workDate, actor, photoJson, hmac, lineUuid, receiptEventId, origin),
       auditStmtIfChanged(c, actor, "daily_photo_add", jobId, {
         job_id: jobId,
         work_date: workDate,
@@ -427,7 +447,7 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
       // COUNTs post-hoc — best-effort DIAGNOSTICS only (the G2.3 changes()===0 pattern): the
       // counts pick the response, they never gate the write (the fold above already did, atomically).
       const mine = await c.env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM daily_photo_pool WHERE job_id = ?1 AND work_date = ?2 AND uploaded_by = ?3 AND status != 'refused'",
+        "SELECT COUNT(*) AS n FROM daily_photo_pool WHERE job_id = ?1 AND work_date = ?2 AND uploaded_by = ?3 AND status != 'refused' AND origin != 'site_photos'",
       )
         .bind(jobId, workDate, actor)
         .first<{ n: number }>();

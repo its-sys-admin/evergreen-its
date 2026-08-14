@@ -180,6 +180,7 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_work_date: "Pick a valid report date first, then add the photo.",
   pool_cap_reached: "The daily photo limit for this job and date has been reached — remove one to add another.",
   pool_backlogged: "Photo screening is backed up right now — try adding this photo again in a few minutes.",
+  invalid_origin: "This upload source is not recognized — reload the page and add the photo again.",
   photo_claimed: "That photo already belongs to a filed report — it can't be removed from the pool.",
   not_deletable: "That photo was refused by screening — remove it from the list instead.",
   invalid_additional_photos: "The additional-photos list didn't come through correctly — remove and re-add the photos.",

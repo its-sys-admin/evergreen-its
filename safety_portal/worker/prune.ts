@@ -56,6 +56,10 @@ export const ITEM_PHOTO_STUCK_PENDING_DAYS = 7;
 // whose submission uuid does not exist in `submissions` (the crashed-insert / compensated-
 // claim tail, or a manifest whose submission was itself pruned) — dead linkage, deleted.
 export const DAILY_PHOTO_UNCLAIMED_DAYS = 7;
+// office_wpr uploads (0074) live on a WEEKLY document cadence — a Saturday upload compiled the
+// second Friday is already 13d old, and backfill recompiles reach further — so unclaimed office
+// rows retain 90d (the PO-family standard window) instead of the field flow's 7d.
+export const WPR_PHOTO_UNCLAIMED_DAYS = 90;
 // ADR-0004 E1 (vendor-estimate importer, migrations 0054/0055): dispose/refusal delete an
 // estimate's preview pages + original-byte chunks SYNCHRONOUSLY in the route batch, so a
 // TERMINAL po_estimates row (refused/rejected/imported/superseded) normally holds no bytes.
@@ -266,16 +270,32 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
     return stuckN + (orphans.meta.changes ?? 0);
   });
 
-  // daily_photo_pool (DR-photo-pool Slice 2 — see DAILY_PHOTO_UNCLAIMED_DAYS):
-  //   1. UNCLAIMED rows >7d: never referenced by a submission — abandoned pre-submit uploads
-  //      (any status). Deleted; the PENDING subset gets the loud WARN (those still held bytes
-  //      the uploader believed were queued — is the Mac screening loop down?). Claimed rows
-  //      are retained as the filed submission's byte-free photo manifest.
-  //   2. ORPHANED CLAIMS >7d: claimed by a submission uuid absent from `submissions` (the
+  // daily_photo_pool (DR-photo-pool Slice 2; retention split + selected-refs exemption 0074):
+  //   1. STUCK-PENDING rows >7d (unclaimed, any origin): still hold BYTES; the loud WARN
+  //      (is the Mac screening loop down?). A pending row can't be in any saved selection.
+  //   2. NON-PENDING UNCLAIMED rows: field flow keeps the 7d abandonment window; office_wpr
+  //      uploads retain 90d (weekly-cadence — see WPR_PHOTO_UNCLAIMED_DAYS). Rows SELECTED in a
+  //      saved weekly report are exempt (SELECTED_POOL_IDS below). Claimed rows are retained as
+  //      the filed submission's byte-free photo manifest; bridge rows are claimed at birth.
+  //   3. ORPHANED CLAIMS >7d: claimed by a submission uuid absent from `submissions` (the
   //      crashed-insert / compensated-claim tail, or a manifest whose submission was itself
-  //      pruned) — dead linkage, deleted. Age-guarded by the same cutoff so a claim landing
-  //      milliseconds before its submission INSERT can never be swept mid-flight.
+  //      pruned) — dead linkage, deleted unless selected. Age-guarded by the same cutoff so a
+  //      claim landing milliseconds before its submission INSERT can never be swept mid-flight.
   const dailyPhotoCutoff = nowSec - DAILY_PHOTO_UNCLAIMED_DAYS * DAY_S;
+  const wprPhotoCutoff = nowSec - WPR_PHOTO_UNCLAIMED_DAYS * DAY_S;
+  // Selected-refs exemption (0074): a pool row the office SELECTED in any saved weekly report
+  // (job_weekly_report_inputs.photos_json) is load-bearing for the picker + recompiles and never
+  // ages out here. (The compile itself would survive without this — photos_json stores
+  // box_file_id ALONGSIDE pool_id by design — but a vanished row would un-offer the pick and
+  // confuse the screen.) NULL DISCIPLINE: json_extract can yield NULL (a photos_json entry
+  // without pool_id), and one NULL inside a NOT-IN subquery poisons the whole predicate to NULL
+  // — nothing would EVER be deleted, a silent full-stage disable (the exact class the jobs-stage
+  // comment below documents). The subquery therefore filters `IS NOT NULL`; pinned by test.
+  const SELECTED_POOL_IDS =
+    "SELECT json_extract(v.value, '$.pool_id') " +
+    "  FROM job_weekly_report_inputs w, json_each(w.photos_json) v " +
+    " WHERE w.photos_json IS NOT NULL " +
+    "   AND json_extract(v.value, '$.pool_id') IS NOT NULL";
   const dailyPhotos = await runStage("daily_photo_pool", failedStages, async () => {
     const pendingStuck = await db
       .prepare(
@@ -284,9 +304,35 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
       )
       .bind(dailyPhotoCutoff)
       .first<{ n: number }>();
-    const unclaimed = await db
-      .prepare("DELETE FROM daily_photo_pool WHERE claimed_by_submission IS NULL AND created_at < ?")
+    // Stuck-PENDING rows die at 7d whatever their origin — they still hold BYTES (the growth
+    // cap this stage exists for), a >7d pending row means the screening loop is down, and a
+    // pending row cannot be in any saved selection (only clean rows are ever offered).
+    const stuckPending = await db
+      .prepare(
+        "DELETE FROM daily_photo_pool WHERE claimed_by_submission IS NULL " +
+          "AND status = 'pending' AND created_at < ?",
+      )
       .bind(dailyPhotoCutoff)
+      .run();
+    // Non-pending unclaimed rows: the field flow keeps its 7d abandonment window; office_wpr
+    // uploads (which no daily report will ever claim) get the 90d weekly-cadence window. Both
+    // honour the selected-refs exemption. Bridge rows (origin='site_photos') are claimed at
+    // birth and never reach either DELETE.
+    const unclaimedField = await db
+      .prepare(
+        "DELETE FROM daily_photo_pool WHERE claimed_by_submission IS NULL " +
+          "AND status != 'pending' AND origin != 'office_wpr' AND created_at < ? " +
+          `AND id NOT IN (${SELECTED_POOL_IDS})`,
+      )
+      .bind(dailyPhotoCutoff)
+      .run();
+    const unclaimedOffice = await db
+      .prepare(
+        "DELETE FROM daily_photo_pool WHERE claimed_by_submission IS NULL " +
+          "AND status != 'pending' AND origin = 'office_wpr' AND created_at < ? " +
+          `AND id NOT IN (${SELECTED_POOL_IDS})`,
+      )
+      .bind(wprPhotoCutoff)
       .run();
     const pendingN = pendingStuck?.n ?? 0;
     if (pendingN > 0) {
@@ -298,11 +344,16 @@ export async function pruneOldData(db: Env["DB"], nowSec: number): Promise<Prune
       .prepare(
         "DELETE FROM daily_photo_pool WHERE claimed_by_submission IS NOT NULL " +
           "AND claimed_by_submission NOT IN (SELECT submission_uuid FROM submissions) " +
-          "AND created_at < ?",
+          `AND created_at < ? AND id NOT IN (${SELECTED_POOL_IDS})`,
       )
       .bind(dailyPhotoCutoff)
       .run();
-    return (unclaimed.meta.changes ?? 0) + (orphans.meta.changes ?? 0);
+    return (
+      (stuckPending.meta.changes ?? 0) +
+      (unclaimedField.meta.changes ?? 0) +
+      (unclaimedOffice.meta.changes ?? 0) +
+      (orphans.meta.changes ?? 0)
+    );
   });
 
   // jobs: an INACTIVE job with no remaining job-level records is dead weight (not in the
