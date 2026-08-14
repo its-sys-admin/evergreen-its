@@ -2776,3 +2776,22 @@ each of #133–#143 and confirm CI `SUCCESS` — not `CANCELLED` — on that PR'
 design deferral, and should close quickly.
 
 Surfaced: 2026-08-13/14 job-tracker unification + WPR program; memory-archive §G90.
+
+## [OPEN 2026-08-14, low] `CLAUDE.md` "What's stubbed vs. real" table is stale for the job-tracker/WPR program — `field_ops/` and `safety_portal/` rows don't mention #131-#143
+
+The 13-PR job-tracker unification + WPR program landed the Site Tasks page (`/site-tasks`, PR
+#136), the site-photos→pool bridge + WPR photo upload (PRs #133/#138/#139), migration 0075's
+per-job Procurement section (PR #142), and the `SectionRail`/`useScrollSpy` extraction (PR #135),
+but none of it made it into `CLAUDE.md`'s `field_ops/` or `safety_portal/` (Worker + SPA) table
+rows this session — a `grep` for `site-tasks`/`SiteTasksPage`/"per-job Procurement" against
+`CLAUDE.md` returns nothing. This is the recurring docs-currency gap class (a program's own PRs
+landing code without a matching CLAUDE.md update); `session-close-maintainer` is deliberately
+scoped to NOT edit `CLAUDE.md` (out of its remit — see its own boundaries), so this is flagged
+here rather than fixed.
+
+**Tag:** `docs`, `docs-currency`, `field_ops`, `safety-portal`.
+
+**Revisit when:** the next `CLAUDE.md`-touching PR, or a dedicated docs-currency pass — check the
+`.ts`-file count too (likely stale after this program's Worker-side additions).
+
+Surfaced: 2026-08-13/14 session-close pass, job-tracker unification + WPR program; memory-archive §G90.
