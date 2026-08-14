@@ -56,6 +56,8 @@ import {
   type WeeklyReportPhoto,
 } from "../lib/fieldops_report";
 import { PageShell } from "../components/PageShell";
+import { SectionRail } from "../components/SectionRail";
+import { useScrollSpy } from "../lib/useScrollSpy";
 
 interface Props {
   jobId: string;
@@ -196,7 +198,8 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
-  const [active, setActive] = useState<string>(SECTIONS[0].id);
+  // Shared scroll-spy; the report starts highlighted on its first section.
+  const active = useScrollSpy(SECTIONS.map((s) => s.id)) ?? SECTIONS[0].id;
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async (ws: string) => {
@@ -223,30 +226,6 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
-  // Scroll-spy for the rail. Guarded: jsdom has no IntersectionObserver, and the rail is a
-  // convenience — without it the links still work, they just do not light up.
-  useEffect(() => {
-    if (typeof IntersectionObserver === "undefined" || !bodyRef.current) return;
-    const seen = new Map<string, number>();
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) seen.set(e.target.id, e.intersectionRatio);
-        let best: string | null = null;
-        let bestRatio = 0;
-        for (const s of SECTIONS) {
-          const r = seen.get(s.id) ?? 0;
-          if (r > bestRatio) { bestRatio = r; best = s.id; }
-        }
-        if (best) setActive(best);
-      },
-      { rootMargin: "-72px 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] },
-    );
-    for (const s of SECTIONS) {
-      const el = document.getElementById(s.id);
-      if (el) obs.observe(el);
-    }
-    return () => obs.disconnect();
-  }, [data]);
 
   // The photo list the report will use: the office's explicit picks, else the server's spread.
   const selectedIds = useMemo(
@@ -405,27 +384,12 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
       {saved && <p className="wpr-banner wpr-banner--ok" role="status">{saved}</p>}
 
       <div className="wpr">
-        <nav className="wpr__rail" aria-label="Report sections">
-          {SECTIONS.map((s) => (
-            <a
-              key={s.id}
-              className="wpr__rail-link"
-              href={`#${s.id}`}
-              aria-current={active === s.id ? "true" : undefined}
-              onClick={(e) => {
-                // A fragment navigation fires popstate, and App's popstate handler
-                // REMOUNTS the routed page — which here DISCARDS an unsaved draft with
-                // no confirm (the beforeunload guard only covers real unloads). So the
-                // rail scrolls directly and never touches history. Live-verified: the
-                // bare-anchor version remounted the report on every chip tap.
-                e.preventDefault();
-                document.getElementById(s.id)?.scrollIntoView();
-              }}
-            >
-              {s.label}
-            </a>
-          ))}
-        </nav>
+        <SectionRail
+          sections={SECTIONS.map((x) => ({ id: x.id, label: x.label }))}
+          activeId={active}
+          ariaLabel="Report sections"
+          classPrefix="wpr__rail"
+        />
 
         <div className="wpr__body" ref={bodyRef}>
           {/* ── page 1: header + safety ─────────────────────────────────────────── */}

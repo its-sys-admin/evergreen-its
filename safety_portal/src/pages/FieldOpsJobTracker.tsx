@@ -5,6 +5,8 @@ import { fetchPersonnelList, assignPersonnel, fetchMyCrew, type PersonnelRow, ty
 import { fetchEquipmentList, moveEquipment } from "../lib/fieldops_equipment";
 import { useAuth } from "../lib/auth";
 import { PageShell } from "../components/PageShell";
+import { SectionRail } from "../components/SectionRail";
+import { useScrollSpy } from "../lib/useScrollSpy";
 import { ChipX } from "../components/ChipX";
 import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection";
 import { InlineRowMsg, SectionError, TaskDue, errMsg, type RowFeedback } from "../components/myTasksShared";
@@ -1164,38 +1166,14 @@ export function FieldOpsJobTracker({
         { id: "jd-danger", label: "Danger zone", on: canArchiveViewer && selectedJob.archive != null },
       ].filter((s) => s.on)
     : [];
-  const railIds = railSections.map((s) => s.id).join("|");
-  const [activeSection, setActiveSection] = useState<string | null>(null);
 
-  // Scroll-spy for the rail — the WeeklyReportPage device. Guarded: jsdom has no
-  // IntersectionObserver, and the rail is a convenience — without it the links still
-  // work, they just do not light up.
-  useEffect(() => {
-    if (view !== "detail" || !selectedJob) return;
-    if (typeof IntersectionObserver === "undefined") return;
-    const ids = railIds === "" ? [] : railIds.split("|");
-    const seen = new Map<string, number>();
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) seen.set(e.target.id, e.intersectionRatio);
-        let best: string | null = null;
-        let bestRatio = 0;
-        for (const id of ids) {
-          const r = seen.get(id) ?? 0;
-          if (r > bestRatio) { bestRatio = r; best = id; }
-        }
-        if (best) setActiveSection(best);
-      },
-      { rootMargin: "-72px 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] },
-    );
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) obs.observe(el);
-    }
-    return () => obs.disconnect();
-    // selectedJob keys re-observation after every reload (the sections remount);
-    // railIds keys it when the filtered set itself changes (e.g. a client appears).
-  }, [view, selectedJob, railIds]);
+  // Scroll-spy via the shared hook (behavior-frozen extraction — same observer options).
+  // observeKey: selectedJob keys re-observation after every reload (the sections remount);
+  // the ids key inside the hook re-observes when the filtered set itself changes.
+  const activeSection = useScrollSpy(railSections.map((s) => s.id), {
+    enabled: view === "detail" && selectedJob !== null,
+    observeKey: selectedJob,
+  });
 
   if (view === "detail" && selectedJob) {
     const job = selectedJob;
@@ -1303,26 +1281,12 @@ export function FieldOpsJobTracker({
             capability-hidden section never leaves a dead link; the scroll-spy lights the
             item for the section in view. */}
         <div className="job-shell">
-          <nav className="job-rail" aria-label="Job sections">
-            {railSections.map((s) => (
-              <a
-                key={s.id}
-                className="job-rail__link"
-                href={`#${s.id}`}
-                aria-current={(activeSection ?? railSections[0]?.id) === s.id ? "true" : undefined}
-                onClick={(e) => {
-                  // A fragment navigation fires popstate, and App's popstate handler
-                  // REMOUNTS the routed page (losing scroll + state) — so the rail
-                  // scrolls directly and never touches history. Live-verified: the
-                  // bare-anchor version reloaded the whole detail on every chip tap.
-                  e.preventDefault();
-                  document.getElementById(s.id)?.scrollIntoView();
-                }}
-              >
-                {s.label}
-              </a>
-            ))}
-          </nav>
+          <SectionRail
+            sections={railSections}
+            activeId={activeSection ?? railSections[0]?.id ?? null}
+            ariaLabel="Job sections"
+            classPrefix="job-rail"
+          />
           <div className="job-shell__body">
 
         {canAssignTasks && (
