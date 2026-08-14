@@ -89,7 +89,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
       // is exactly why the SPA displayed both as "Inactive". The list status FILTER still keys off
       // `status` (unchanged, and it is what idx_jobs_status_name covers); this is display data.
       const sqlJobs = `
-        SELECT j.job_id, j.project_name, j.status, j.lifecycle, j.progress, c.name AS client_name
+        SELECT j.job_id, j.project_name, j.status, j.lifecycle, c.name AS client_name
         FROM jobs j
         LEFT JOIN clients c ON c.id = j.client_id
         WHERE (?1 = 'all' OR j.status = ?1)
@@ -106,7 +106,6 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         project_name: string;
         status: string;
         lifecycle: string;
-        progress: number;
         client_name: string | null;
       }>();
 
@@ -181,7 +180,6 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         // Coerced through coerceLifecycle so a pre-0021 row with a NULL/unknown value renders as
         // 'active' rather than leaking an arbitrary string into the SPA's typed union.
         lifecycle: coerceLifecycle(j.lifecycle),
-        progress: j.progress,
         client_name: j.client_name,
         crew: crewByJob.get(j.job_id) ?? [],
         open_tasks: tasksByJob.get(j.job_id) ?? [],
@@ -210,7 +208,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
       // Evergreen number / structured address and SEED the routing editor with current
       // values (pre-0057 the editor opened blank and a save re-sent only what was typed).
       const sqlHeader = `
-        SELECT j.job_id, j.project_name, j.status, j.lifecycle, j.progress,
+        SELECT j.job_id, j.project_name, j.status, j.lifecycle,
                j.job_no, j.site_phase, j.address, j.address_city, j.address_state, j.address_zip,
                j.stakeholder_name, j.stakeholder_email, j.stakeholder_phone,
                j.safety_contact_name, j.safety_contact_email, j.safety_cc,
@@ -234,7 +232,6 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         archive_completed_at: number | null;
         archive_attempts: number;
         archive_detail: string;
-        progress: number;
         job_no: string;
         site_phase: number;
         address: string;
@@ -424,7 +421,6 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
           project_name: header.project_name,
           status: header.status,
           lifecycle: coerceLifecycle(header.lifecycle),
-          progress: header.progress,
           // 0057 + routing SoR: display + edit-form seeding. CC arrays are stored as
           // JSON text; parse defensively (a malformed cell yields [] — never a throw).
           job_no: header.job_no ?? "",

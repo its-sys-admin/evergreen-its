@@ -72,15 +72,17 @@ describe("POST /api/fieldops/job (create)", () => {
   });
 
   it("stamps the 0017 portal-origin fence + server created_at + canonical=job_id, and audits", async () => {
-    const id = await createOk(admin, { project_name: "New Job", progress: 40 });
+    const id = await createOk(admin, { project_name: "New Job", progress: 40 }); // progress: hostile leftover — must be IGNORED
     expect(id).toMatch(/^JOB-\d{6}$/);
     const row = await jobRow(id);
     expect(row.origin).toBe("portal");
     expect(row.sync_state).toBe("pending");
     expect(row.canonical_job_id).toBe(id); // Slice 6: portal owns the number from birth (not NULL)
     expect(row.active).toBe(1);
+    // jobs.progress retired (operator-locked 2026-07-01): the sent value is IGNORED — the
+    // column (kept, NOT NULL DEFAULT 0) stores 0 regardless.
+    expect(row.progress).toBe(0);
     expect(row.status).toBe("active");
-    expect(row.progress).toBe(40);
     expect(row.created_at).toBeGreaterThan(1_000_000_000); // server unixepoch(), not the ALTER default 0
     expect(await audits("job_create")).toHaveLength(1);
   });
