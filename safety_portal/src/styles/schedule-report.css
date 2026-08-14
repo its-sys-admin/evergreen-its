@@ -1869,6 +1869,18 @@ button.sched-task__prog:hover {
   color: var(--c-muted);
 }
 
+/* A2 — the schedule signal (tracker list card + detail hero). Quiet by design: the hero's
+   schedule stats reuse the job-hero__stat frame; these two are the only new marks. */
+.sched-hero__next {
+  margin: var(--space-2) 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.sched-card__line {
+  margin-top: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── The shell and its section rail (part three) ──────────────────────────
    Nineteen sections need an index. Part three adopts the weekly report's full
    two-column shell (operator-ratified, reversing part two's chips-at-every-width
