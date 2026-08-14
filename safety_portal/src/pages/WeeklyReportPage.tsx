@@ -64,6 +64,9 @@ interface Props {
   onBack: () => void;
   /** Optional so the page keeps its two-prop test signature; App passes it for the home strip. */
   onHome?: () => void;
+  /** Passed for cap.jobtracker.read (A5): the page-3 hint names committing a schedule — this is
+   *  the missing link to the page where that happens. */
+  onOpenSchedule?: (jobId: string) => void;
 }
 
 type Draft = {
@@ -190,7 +193,7 @@ function deliveryKindChip(kind: string): { label: string; className: string } {
   }
 }
 
-export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
+export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Props) {
   const [weekStart, setWeekStart] = useState(() => weekStartFor(new Date()));
   const [data, setData] = useState<ProductionReportResponse | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -584,7 +587,21 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
                   (data.schedule.behind.length
                     ? `, ${data.schedule.behind.length} behind schedule as of ${data.schedule.today} (seeded into Critical Items below).`
                     : ", none behind schedule.")}
+              {onOpenSchedule && (
+                <>
+                  {" "}
+                  <button type="button" className="btn btn--secondary" onClick={() => onOpenSchedule(jobId)}>
+                    Open the schedule page →
+                  </button>
+                </>
+              )}
             </p>
+            {data.schedule?.truncated && (
+              <p className="wpr-banner wpr-banner--warn">
+                The percent table shows the first {data.schedule.task_count} tasks — not the whole
+                schedule. The full list lives on the schedule page.
+              </p>
+            )}
 
             {/* The percent table the report's page 3 renders, shown here because this screen's
                 whole premise is that the office sees what the document will say. Read-only —

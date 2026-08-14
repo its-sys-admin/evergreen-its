@@ -110,6 +110,7 @@ export function JobSchedulePage({
   onHome,
   onOpenJob,
   onOpenMaterials,
+  onOpenWeeklyReport,
 }: {
   jobId: string;
   onHome: () => void;
@@ -118,6 +119,9 @@ export function JobSchedulePage({
    *  delivery CONTEXT but hands receiving off to the materials page — see the note on the
    *  delivery controls below for why the two are deliberately not conflated. */
   onOpenMaterials?: (jobId: string) => void;
+  /** Passed only for cap.jobtracker.manage (A5): the page that OWNS the percentages can reach
+   *  the report that prints them — the missing half of the Schedule ↔ WPR mesh. */
+  onOpenWeeklyReport?: (jobId: string) => void;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -350,6 +354,11 @@ export function JobSchedulePage({
         <button type="button" className="btn btn--secondary" onClick={() => onOpenJob(jobId)}>
           ← Back to job
         </button>
+        {onOpenWeeklyReport && (
+          <button type="button" className="btn btn--secondary" onClick={() => onOpenWeeklyReport(jobId)}>
+            Weekly report inputs →
+          </button>
+        )}
       </div>
 
       {/* The job NAME, not the JOB-###### key (the Materials-page precedent) — the key is a
