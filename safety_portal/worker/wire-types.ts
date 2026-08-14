@@ -64,6 +64,10 @@ export interface JobProcurementPo {
   updated_at: number;
   filed: boolean;
   vendor_name: string | null;
+  /** Portal-marked vendor acceptance (Track D) — rides its own columns; `status` stays 'sent'. */
+  accepted_at: string | null;
+  accepted_by: string | null;
+  change_order_count: number;
 }
 
 export interface JobProcurementRfq {
@@ -88,6 +92,28 @@ export interface JobProcurementSub {
   updated_at: number;
   filed: boolean;
   sub_name: string | null;
+  /** WHO recorded the countersign (status='executed' is the machine's accepted state). */
+  accepted_at: string | null;
+  accepted_by: string | null;
+  change_order_count: number;
+}
+
+/** One change order recorded against a PO or subcontract (Track D). amount_cents is SIGNED —
+ *  a deductive change order is negative. */
+export interface ProcurementChangeOrder {
+  id: number;
+  seq: number;
+  description: string;
+  amount_cents: number;
+  status: "pending" | "approved" | "rejected";
+  created_by: string;
+  created_at: number;
+  decided_by: string | null;
+  decided_at: number | null;
+}
+
+export interface ChangeOrdersResponse {
+  change_orders: ProcurementChangeOrder[];
 }
 
 export interface JobProcurementResponse {

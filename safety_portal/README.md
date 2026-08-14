@@ -60,7 +60,8 @@ its migration fail-closes `resolveCapabilities` → the universal-lockout class 
 | `0062_gayk_weekly_maintenance_checklist` | GAYK/DOYLE pile-driver **weekly maintenance** inspection-library seed — one `generic_inspection` template, 9 duties. CONTENT-ONLY, same shape as `0061`. Seeds NO recurrence row: cadence is a per-job/per-person operator assignment | (#47) | ✅ 2026-08-10 |
 | `0073_job_payments` | ADR-0006 PR-7 payments: `cap.payments.manage` → admin ONLY + `job_payment_terms`/`job_payment_cycles`/`job_payment_receipts` (states DERIVED at read, never stored). Apply BEFORE the Worker carrying `/api/fieldops/payments` deploys — fail-closed `resolveCapabilities` 403s every admin until the capability row lands | (ADR-0006 PR-7) | ☐ pending |
 | `0074_daily_photo_wpr` | WPR photo pipeline (Track B) | #133 | ✅ |
-| `0075_rfq_job_id` | Job-tracker Procurement section (Track A8) | pending | ⬜ |
+| `0075_rfq_job_id` | Job-tracker Procurement section (Track A8) | #142 | ✅ |
+| `0076_procurement_lifecycle` | Procurement lifecycle + change orders (Track D) | pending | ⬜ |
 
 > ⚠️ **This table is behind the migrations directory: `0053`–`0058`, `0060`, and `0063`–`0072`
 > shipped but were never listed here.** Pre-existing drift, not introduced by `0059`/`0061`/`0073`.

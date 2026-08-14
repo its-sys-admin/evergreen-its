@@ -62,6 +62,8 @@ export type AppRoute =
   // jobId OPTIONAL — the page has its own job drop-down (the Site Tasks surface); a job-less
   // entry shows the picker defaulting to the viewer's placement.
   | { view: "fieldops-site-tasks"; jobId?: string }
+  // jobId REQUIRED — procurement tracking is always per-job (Track D).
+  | { view: "fieldops-job-procurement"; jobId: string }
   | { view: "fieldops-inspections" }
   | { view: "fieldops-equipment" }
   | { view: "fieldops-personnel" };
@@ -105,6 +107,10 @@ export const VIEW_CAPS: Record<AppRoute["view"], string | null> = {
   // (ADR-0006 decision 4 — all roles), and the assigned-tasks leg is the job-detail exposure.
   // Mark-off / status writes re-gate server-side (cap.schedule.mark / cap.tasks.own).
   "fieldops-site-tasks": "cap.jobtracker.read",
+  // Track D: the per-job procurement lifecycle screen. Both lane caps are admin-only today and
+  // the route/section re-gate per lane; cap.po.manage is the view key (revisit if the lane caps
+  // ever diverge from one office role).
+  "fieldops-job-procurement": "cap.po.manage",
   "fieldops-inspections": "cap.checklist.manage",
   "fieldops-equipment": "cap.equipment.field",
   "fieldops-personnel": "cap.personnel.read",
@@ -201,6 +207,18 @@ export function parseRoute(loc: { pathname: string; search: string }): AppRoute 
     const jobId = cleanParam(raw);
     return jobId ? { view: "fieldops-job-schedule", jobId } : null;
   }
+  // Procurement — same ordering rule as materials: BEFORE the bare /jobs/:id matcher.
+  const procMatch = /^\/jobs\/([^/]+)\/procurement$/.exec(path);
+  if (procMatch) {
+    let raw: string;
+    try {
+      raw = decodeURIComponent(procMatch[1]);
+    } catch {
+      return null; // malformed percent-encoding → unrecognized
+    }
+    const jobId = cleanParam(raw);
+    return jobId ? { view: "fieldops-job-procurement", jobId } : null;
+  }
   // Weekly report — same ordering rule as materials: BEFORE the bare /jobs/:id matcher.
   const wrMatch = /^\/jobs\/([^/]+)\/weekly-report$/.exec(path);
   if (wrMatch) {
@@ -264,6 +282,8 @@ export function formatRoute(route: AppRoute): string {
       return `/jobs/${encodeURIComponent(route.jobId)}/schedule`;
     case "fieldops-weekly-report":
       return `/jobs/${encodeURIComponent(route.jobId)}/weekly-report`;
+    case "fieldops-job-procurement":
+      return `/jobs/${encodeURIComponent(route.jobId)}/procurement`;
     case "fieldops-site-tasks":
       return route.jobId ? `/site-tasks/${encodeURIComponent(route.jobId)}` : "/site-tasks";
     case "fill": {
