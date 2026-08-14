@@ -1222,14 +1222,29 @@ export function FieldOpsJobTracker({
         </div>
         <p className="dash-card__sub muted">{(job.client?.name ?? "No client")} · {job.job_id}</p>
 
-        {/* HERO — what this job IS, before nineteen sections of controls. Counts only:
-            a job has no single completion number, and inventing one would be a figure
-            nobody could reconcile. Open tasks reads DANGER when there are any, because
-            that is the one number here that asks somebody to do something.
-            Deliberately NOT .dash-progress — the detail view asserts that class is
-            absent, and a meter would be exactly the fabricated number this avoids. */}
+        {/* HERO — what this job IS, before nineteen sections of controls. Counts, plus the
+            MEASURED schedule state when one is committed: the old ban on a completion number
+            here was about the retired jobs.progress GUESS (a slider nobody could reconcile);
+            the schedule percent is the duration-weighted rollup of the committed schedule's
+            own tasks (ADR-0006), the same number page 3 of the weekly report prints. A job
+            with no schedule shows NO figure (the honest state) — and still deliberately NOT
+            .dash-progress (the detail view asserts that class is absent; sched-hero is the
+            schedule family). Open tasks and Late read DANGER because those are the numbers
+            that ask somebody to do something. */}
         <div className="job-hero">
           <ul className="job-hero__stats">
+            {job.schedule !== null && (
+              <li className="job-hero__stat sched-hero__stat">
+                <span className="job-hero__figure">{job.schedule.percent}%</span>
+                <span className="job-hero__label">Schedule done</span>
+              </li>
+            )}
+            {job.schedule !== null && job.schedule.late_count > 0 && (
+              <li className="job-hero__stat sched-hero__stat">
+                <span className="job-hero__figure job-hero__figure--alert">{job.schedule.late_count}</span>
+                <span className="job-hero__label">Late tasks</span>
+              </li>
+            )}
             <li className="job-hero__stat">
               <span className="job-hero__figure">{job.crew.length}</span>
               <span className="job-hero__label">On crew</span>
@@ -1251,6 +1266,11 @@ export function FieldOpsJobTracker({
               <span className="job-hero__label">Hours logged</span>
             </li>
           </ul>
+          {job.schedule?.next_milestone && (
+            <p className="dash-card__sub sched-hero__next">
+              Next milestone: {job.schedule.next_milestone.name} · {job.schedule.next_milestone.date}
+            </p>
+          )}
         </div>
 
         {setupBanner === job.job_id && (
@@ -1836,8 +1856,10 @@ export function FieldOpsJobTracker({
               <h2 className="job-sec__title">Schedule</h2>
             </header>
             <p className="dash-hint">
-              The job&apos;s living task list — what the project schedule says is happening,
-              with dates, milestones and deliveries.
+              {job.schedule === null
+                ? "No schedule imported — upload and commit one on the schedule page to start the living task list."
+                : `${job.schedule.task_count} task(s) · ${job.schedule.percent}% done` +
+                  (job.schedule.late_count > 0 ? ` · ${job.schedule.late_count} late` : "")}
             </p>
             <button className="btn btn--secondary" onClick={() => onOpenSchedule(job.job_id)}>
               Open schedule →
@@ -2072,6 +2094,14 @@ export function FieldOpsJobTracker({
                       <span className="dash-chip" key={p.id}>{p.name}</span>
                     ))}
                   </div>
+                )}
+
+                {job.schedule !== null && (
+                  <p className="dash-card__sub sched-card__line">
+                    {job.schedule.percent}% of schedule
+                    {job.schedule.late_count > 0 ? ` · ${job.schedule.late_count} late` : ""}
+                    {job.schedule.next_milestone ? ` · Next: ${job.schedule.next_milestone.name} ${job.schedule.next_milestone.date}` : ""}
+                  </p>
                 )}
 
                 {job.open_tasks.length > 0 && (

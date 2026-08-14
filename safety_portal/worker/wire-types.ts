@@ -51,6 +51,23 @@ export interface OpenTask {
  *  `lifecycle`. Lockstep with `JOB_LIFECYCLES` in worker/constants.ts. */
 export type JobLifecycle = "active" | "inactive" | "archived";
 
+/** A job's live schedule state, derived per-request from the ADR-0006 living task list
+ *  (worker/schedule_rollup.ts — one shared derivation for list/detail/portfolio). NULL on the
+ *  parent field = no schedule imported (the honest state — never a fabricated percentage; the
+ *  discipline that retired jobs.progress). NOTE: this aggregate is over the WHOLE schedule (no
+ *  600-row cap), so on a very large schedule it can differ from the Schedule page's capped,
+ *  truncation-flagged display. */
+export interface JobScheduleSummary {
+  task_count: number;
+  /** Duration-weighted, floored — schedule_view.weightedPercent parity. */
+  percent: number;
+  /** finish_date < today AND percent_done < 100 — fieldops_report.behindSchedule parity. */
+  late_count: number;
+  next_milestone: { name: string; date: string } | null;
+  /** The Pacific date the late/next derivation used. */
+  today: string;
+}
+
 export interface JobRow {
   job_id: string;
   project_name: string;
@@ -60,6 +77,7 @@ export interface JobRow {
   client_name: string | null;
   crew: CrewMember[];
   open_tasks: OpenTask[];
+  schedule: JobScheduleSummary | null;
 }
 
 export interface JobListResponse {
@@ -220,6 +238,7 @@ export interface JobDetail {
   time_entries: JobTimeEntry[];
   equipment_on_site: EquipmentOnSite[];
   inspections: JobInspection[];
+  schedule: JobScheduleSummary | null;
 }
 
 /** (R7) The session user's own linked ACTIVE roster row — backs the log-time "Me (<name>)"
