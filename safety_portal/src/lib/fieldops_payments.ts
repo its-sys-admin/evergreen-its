@@ -15,6 +15,7 @@
 
 import { ApiError, raiseApiError } from "./errorCopy";
 import type {
+  PaymentsSummaryResponse,
   PaymentCycleCreateResponse,
   PaymentsResponse,
   PaymentTermsDefaultResponse,
@@ -146,4 +147,16 @@ export async function deactivateReceipt(
   id: number,
 ): Promise<{ ok: boolean; id: number; already_inactive?: boolean }> {
   return sendJson("POST", `/api/fieldops/payments/receipts/${id}/deactivate`);
+}
+
+export type { PaymentsSummaryResponse } from "../../worker/wire-types";
+
+/** The job detail's payments card read (A7) — call ONLY when the session holds
+ *  cap.payments.manage (the card is hidden otherwise; the Worker 403s regardless). */
+export async function fetchPaymentsSummary(jobId: string): Promise<PaymentsSummaryResponse> {
+  const res = await fetch(`/api/fieldops/payments/summary?job_id=${encodeURIComponent(jobId)}`, {
+    credentials: "same-origin",
+  });
+  if (!res.ok) return raiseApiError(res);
+  return (await res.json()) as PaymentsSummaryResponse;
 }
