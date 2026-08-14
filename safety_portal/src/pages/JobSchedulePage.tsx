@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import * as api from "../lib/fieldops_schedules";
 import type { ScheduleListRow, ScheduleTaskRow } from "../lib/fieldops_schedules";
 import { ScheduleValidatePage } from "./ScheduleValidatePage";
@@ -8,10 +7,7 @@ import { PaymentsSection } from "./JobSchedulePaymentsSection";
 import { ScheduleTimeline } from "../components/ScheduleTimeline";
 import {
   groupTasks,
-  isLate,
   matchesFilter,
-  progressBar,
-  slipDays,
   summarize,
   todayPacific,
   type ScheduleFilter,
@@ -20,11 +16,9 @@ import { useAuth } from "../lib/auth";
 import { errorText } from "../lib/errorCopy";
 import { PageShell } from "../components/PageShell";
 import { ConfirmDelete } from "../components/ChecklistItemForm";
-import {
-  EMPTY_TASK_FORM,
-  ScheduleTaskEditor,
-  formFromTask,
-} from "../components/ScheduleTaskEditor";
+import { TaskRow } from "../components/ScheduleTaskRow";
+import { EMPTY_TASK_FORM, ScheduleTaskEditor } from "../components/ScheduleTaskEditor";
+import { useScheduleMarks } from "../lib/useScheduleMarks";
 import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection";
 
 // Per-job SCHEDULE page (ADR-0006) — /jobs/:jobId/schedule, the deep-link target from the
@@ -102,7 +96,6 @@ function errText(e: unknown, fallback: string): string {
 }
 
 /** The quick-% chips (operator decision 8). */
-const PERCENT_CHIPS = [0, 25, 50, 75, 100] as const;
 
 const FILTERS: { key: ScheduleFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -153,9 +146,6 @@ export function JobSchedulePage({
   // Mark-off state (canMark only): one in-flight mark at a time keeps double-taps out
   // (the materials-page busy posture); the drafts hold each row's exact-% text and
   // delivered-date pick until its button fires.
-  const [markBusy, setMarkBusy] = useState<number | null>(null);
-  const [exactPct, setExactPct] = useState<Record<number, string>>({});
-  const [deliveredDraft, setDeliveredDraft] = useState<Record<number, string>>({});
 
   // View state. Mark strips open per row and STAY open — end-of-day marking walks several
   // tasks at once, so closing the last one on every tap would fight the actual job. The list
@@ -216,71 +206,12 @@ export function JobSchedulePage({
 
   const hiddenCount = (tasks?.length ?? 0) - groups.reduce((n, g) => n + g.tasks.length, 0);
 
-  /** Optimistically patch one task row, run the mark call, then reload — the reload
-   *  confirms the server's row on success and honestly reverts the optimism on failure. */
-  async function runMark(
-    taskId: number,
-    patch: Partial<ScheduleTaskRow>,
-    callFn: () => Promise<unknown>,
-    failText: string,
-  ) {
-    if (markBusy !== null) return;
-    setMarkBusy(taskId);
-    setMsg(null);
-    setTasks((prev) => (prev ? prev.map((t) => (t.id === taskId ? { ...t, ...patch } : t)) : prev));
-    try {
-      await callFn();
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, failText) });
-    } finally {
-      setMarkBusy(null);
-      loadTasks();
-    }
-  }
+  // Mark-off semantics shared with the Site Tasks page (src/lib/useScheduleMarks — §14).
+  const {
+    markBusy, exactPct, setExactPct, deliveredDraft, setDeliveredDraft,
+    markPercent, markExact, markMilestone, markDelivered,
+  } = useScheduleMarks({ setTasks, reload: loadTasks, setMsg, today });
 
-  function markPercent(t: ScheduleTaskRow, percent: number) {
-    return runMark(
-      t.id,
-      { percent_done: percent },
-      () => api.markScheduleTaskProgress(t.id, percent),
-      "Could not save that progress mark.",
-    );
-  }
-
-  function markExact(t: ScheduleTaskRow) {
-    const raw = (exactPct[t.id] ?? "").trim();
-    const val = Number(raw);
-    // Mirror the Worker's bound locally so a typo fails instantly, not after a round trip.
-    if (!raw.length || !Number.isInteger(val) || val < 0 || val > 100) {
-      setMsg({ ok: false, text: "Progress must be a whole number from 0 to 100." });
-      return;
-    }
-    setExactPct((prev) => ({ ...prev, [t.id]: "" }));
-    void markPercent(t, val);
-  }
-
-  function markMilestone(t: ScheduleTaskRow, done: boolean) {
-    if (done) {
-      return runMark(
-        t.id,
-        { percent_done: 100 },
-        () => api.markScheduleTaskMilestoneDone(t.id),
-        "Could not save that done mark.",
-      );
-    }
-    // Un-checking is a correction — a milestone is binary, so "not done" is 0%.
-    return markPercent(t, 0);
-  }
-
-  function markDelivered(t: ScheduleTaskRow) {
-    const date = deliveredDraft[t.id] ?? t.delivered_date ?? today;
-    return runMark(
-      t.id,
-      { delivered_date: date },
-      () => api.markScheduleTaskDelivered(t.id, date),
-      "Could not save the delivered mark.",
-    );
-  }
 
   async function uploadScheduleFile(file: File) {
     if (uploadBusy) return;
@@ -824,280 +755,3 @@ export function JobSchedulePage({
   );
 }
 
-// ── One task row ────────────────────────────────────────────────────────────────────────
-// A grid row on a laptop, a stacked card on a phone. Deliberately NOT a <table>: the
-// mark-off strip spans the full row width when open, which a table cell cannot do without
-// colspan gymnastics — and cramming those controls into a cell is precisely what made the
-// old page unusable on a phone.
-
-function TaskRow({
-  t,
-  today,
-  canMark,
-  canManage,
-  markBusy,
-  taskBusy,
-  open,
-  onToggle,
-  editing,
-  onEdit,
-  onCancelEdit,
-  onSaveEdit,
-  onRemove,
-  exactPct,
-  setExactPct,
-  deliveredDraft,
-  setDeliveredDraft,
-  markPercent,
-  markExact,
-  markMilestone,
-  markDelivered,
-  onOpenMaterials,
-}: {
-  t: ScheduleTaskRow;
-  today: string;
-  canMark: boolean;
-  canManage: boolean;
-  markBusy: number | null;
-  taskBusy: boolean;
-  open: boolean;
-  onToggle: () => void;
-  editing: boolean;
-  onEdit: () => void;
-  onCancelEdit: () => void;
-  onSaveEdit: (draft: api.ScheduleTaskDraft | string) => void;
-  onRemove: () => Promise<boolean>;
-  exactPct: Record<number, string>;
-  setExactPct: Dispatch<SetStateAction<Record<number, string>>>;
-  deliveredDraft: Record<number, string>;
-  setDeliveredDraft: Dispatch<SetStateAction<Record<number, string>>>;
-  markPercent: (t: ScheduleTaskRow, p: number) => Promise<void>;
-  markExact: (t: ScheduleTaskRow) => void;
-  markMilestone: (t: ScheduleTaskRow, done: boolean) => Promise<void>;
-  markDelivered: (t: ScheduleTaskRow) => Promise<void>;
-  onOpenMaterials?: () => void;
-}) {
-  const late = isLate(t, today);
-  const slip = slipDays(t);
-  const doneRow = t.percent_done >= 100;
-
-  const cls = ["sched-task", late ? "sched-task--late" : "", doneRow ? "sched-task--done" : ""]
-    .filter(Boolean)
-    .join(" ");
-
-  const provenance = [
-    t.schedule_percent !== null && t.schedule_percent !== t.percent_done
-      ? `The schedule document says ${t.schedule_percent}%.`
-      : "",
-    t.last_marked_by_name ? `Last marked by ${t.last_marked_by_name}.` : "",
-    t.predecessors_raw ? `Follows ${t.predecessors_raw}.` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <li className={cls}>
-      <div className="sched-task__main">
-        {t.is_milestone ? (
-          <span className="sched-task__glyph" aria-hidden="true">
-            ◆
-          </span>
-        ) : null}
-        <span className="sched-task__name">{t.name}</span>
-        {t.is_contract_milestone ? (
-          <span className="dash-pill dash-pill--warn">Contract milestone</span>
-        ) : t.is_milestone ? (
-          <span className="dash-pill">Milestone</span>
-        ) : null}
-        {t.is_delivery ? <span className="dash-pill">Delivery</span> : null}
-        {late ? <span className="dash-pill dash-pill--danger">Late</span> : null}
-        {/* Slip is measured against the baseline anchor stamped at the task's first commit —
-            the one field that records that a revision moved this date. Never shown before. */}
-        {slip !== null ? (
-          <span className="dash-pill">
-            {slip > 0 ? `Slipped ${slip}d` : `Pulled in ${Math.abs(slip)}d`}
-          </span>
-        ) : null}
-        {t.delivered_date ? (
-          <span className="dash-pill dash-pill--ok">
-            Delivered {t.delivered_date}
-            {t.delivered_by_name ? ` · ${t.delivered_by_name}` : ""}
-          </span>
-        ) : null}
-      </div>
-
-      <div className="sched-task__dates">
-        {t.start_date ?? "—"} → {t.finish_date ?? "—"}
-      </div>
-      <div className="sched-task__dur">{t.duration_days != null ? `${t.duration_days}d` : "—"}</div>
-
-      {/* One disclosure per row, whichever capability the session holds: the field's
-          mark-off and the office's edit both live behind it, so a row expands in exactly
-          one place. The label names what THIS session can actually do with it. */}
-      {canMark || canManage ? (
-        <button
-          type="button"
-          className="sched-task__prog"
-          aria-label={canMark ? `Update progress for ${t.name}` : `Open task ${t.name}`}
-          aria-expanded={open}
-          onClick={onToggle}
-        >
-          <ProgressReadout percent={t.percent_done} />
-          <span className="sched-task__prog-hint" aria-hidden="true">
-            {open ? "▾" : "▸"}
-          </span>
-        </button>
-      ) : (
-        <div className="sched-task__prog">
-          <ProgressReadout percent={t.percent_done} />
-        </div>
-      )}
-
-      {canMark && open && !editing ? (
-        <div className="sched-mark">
-          <span className="sched-mark__label">Mark progress — {t.name}</span>
-
-          {!t.is_milestone ? (
-            <>
-              {PERCENT_CHIPS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  className="sched-mark__chip"
-                  aria-label={`Mark ${t.name} ${p}%`}
-                  aria-pressed={t.percent_done === p}
-                  disabled={markBusy !== null || t.percent_done === p}
-                  onClick={() => void markPercent(t, p)}
-                >
-                  {p}%
-                </button>
-              ))}
-              <input
-                type="number"
-                min={0}
-                max={100}
-                inputMode="numeric"
-                className="sched-mark__exact"
-                aria-label={`Exact percent for ${t.name}`}
-                placeholder="%"
-                value={exactPct[t.id] ?? ""}
-                disabled={markBusy !== null}
-                onChange={(e) => setExactPct((prev) => ({ ...prev, [t.id]: e.target.value }))}
-              />
-              <button
-                type="button"
-                className="btn btn--secondary"
-                aria-label={`Set exact percent for ${t.name}`}
-                disabled={markBusy !== null || !(exactPct[t.id] ?? "").trim().length}
-                onClick={() => markExact(t)}
-              >
-                Set
-              </button>
-            </>
-          ) : null}
-
-          {t.is_milestone ? (
-            <label className="sched-mark__done">
-              <input
-                type="checkbox"
-                aria-label={`Done ${t.name}`}
-                checked={t.percent_done === 100}
-                disabled={markBusy !== null}
-                onChange={(e) => void markMilestone(t, e.target.checked)}
-              />{" "}
-              Done
-            </label>
-          ) : null}
-
-          {t.is_delivery ? (
-            <>
-              <input
-                type="date"
-                className="sched-mark__date"
-                aria-label={`Delivered date for ${t.name}`}
-                value={deliveredDraft[t.id] ?? t.delivered_date ?? today}
-                disabled={markBusy !== null}
-                onChange={(e) =>
-                  setDeliveredDraft((prev) => ({ ...prev, [t.id]: e.target.value }))
-                }
-              />
-              <button
-                type="button"
-                className="btn btn--secondary"
-                aria-label={`Mark ${t.name} delivered`}
-                disabled={markBusy !== null}
-                onClick={() => void markDelivered(t)}
-              >
-                {t.delivered_date ? "Update date" : "Delivered"}
-              </button>
-              {/* Marking this task delivered records that the SCHEDULE line is done. It does
-                  not record WHAT arrived — that is a receipt against the material ledger, on
-                  the materials page, and the two are separate acts with separate records.
-                  Saying so here, with the way to go and do it, is more honest than implying a
-                  link the data model does not have. */}
-              {onOpenMaterials ? (
-                <button type="button" className="btn btn--secondary" onClick={onOpenMaterials}>
-                  Receive materials →
-                </button>
-              ) : null}
-            </>
-          ) : null}
-
-          {provenance ? <span className="sched-mark__label">{provenance}</span> : null}
-        </div>
-      ) : null}
-
-      {/* The OFFICE half of the same disclosure — a different capability from the field's
-          mark-off, so it is gated separately rather than folded into the strip above. */}
-      {canManage && open && !editing ? (
-        <div className="sched-rowops">
-          <span className="sched-rowops__label">Office</span>
-          <button
-            type="button"
-            className="btn btn--secondary btn--sm"
-            aria-label={`Edit ${t.name}`}
-            disabled={taskBusy}
-            onClick={onEdit}
-          >
-            Edit task
-          </button>
-          <ConfirmDelete
-            actionLabel="Remove task"
-            ariaLabel={`Remove task ${t.name}`}
-            copy="Remove this task from the schedule? Its history is kept, and re-importing the schedule can bring it back."
-            busy={taskBusy}
-            onConfirm={() => void onRemove()}
-          />
-        </div>
-      ) : null}
-
-      {canManage && editing ? (
-        <ScheduleTaskEditor
-          mode="edit"
-          ariaScope={t.name}
-          initial={formFromTask(t)}
-          busy={taskBusy}
-          onSave={onSaveEdit}
-          onCancel={onCancelEdit}
-        />
-      ) : null}
-    </li>
-  );
-}
-
-/** The progress readout: a CSS meter for the eye, the block-character bar for a screen
- *  reader and for print. The text is not decoration — it is the page's actual accessible
- *  rendering of progress, and it is what survives a stylesheet failing to load. */
-function ProgressReadout({ percent }: { percent: number }) {
-  return (
-    <>
-      <span className="sched-task__prog-meter" aria-hidden="true">
-        <span className="sched-task__prog-fill" style={{ width: `${percent}%` }} />
-      </span>
-      <span className="sched-task__prog-pct" aria-hidden="true">
-        {percent}%
-      </span>
-      <span className="u-sr-only">{progressBar(percent)}</span>
-    </>
-  );
-}

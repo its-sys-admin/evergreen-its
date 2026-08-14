@@ -1,5 +1,5 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
-import type { MyTask, MyTasksResponse, ViewerTaskPlacement } from "./wire-types";
+import type { JobTaskRow, JobTasksResponse, MyTask, MyTasksResponse, ViewerTaskPlacement } from "./wire-types";
 
 // Assigned-Tasks tab (P4 field-ops feature) S1 — "My Tasks" READ. The subcontractor / manager sees
 // the one-off tasks assigned to THEM. "Assigned to me" resolves the session's account → its linked
@@ -35,6 +35,8 @@ import type { MyTask, MyTasksResponse, ViewerTaskPlacement } from "./wire-types"
 // Per-account bound. A person's own assigned tasks are few; this cap is a defensive ceiling, not a
 // paginated surface (unlike the Job Tracker's keyset legs).
 const MY_TASKS_CAP = 500;
+// Job-scoped read cap — a real job carries tens of assigned tasks; 500 bounds a pathological one.
+const JOB_TASKS_CAP = 500;
 
 export function registerMyTasksRoutes(app: FieldopsApp, gates: FieldopsGates): void {
   // GET /api/fieldops/tasks/mine — the caller's own assigned tasks across all jobs, with the job's
@@ -93,6 +95,59 @@ export function registerMyTasksRoutes(app: FieldopsApp, gates: FieldopsGates): v
         tasks: res.results ?? [],
         linked: viewerRow !== undefined && viewerRow !== null,
         viewer_placement: viewerPlacement,
+      };
+      return c.json(payload, 200);
+    },
+  );
+
+  // ── GET /api/fieldops/tasks?job_id= — ONE job's assigned tasks (the Site Tasks page). ──────────
+  // Read tier: cap.jobtracker.read — the identical exposure the job-detail response's tasks leg
+  // already grants that capability (fieldops_jobtracker.ts), so no data class widens; this route
+  // exists so the Site Tasks page doesn't over-fetch the detail's five other legs. WHO resolves
+  // through personnel.name (display-name-only, House Reflex §5). `viewer_personnel_id` +
+  // `viewer_privileged` power the client-side own-only gating on the status buttons — the WRITE
+  // route re-enforces ownership server-side either way (its in-WHERE predicate), so these are
+  // display hints, never the boundary.
+  app.get(
+    "/api/fieldops/tasks",
+    gates.requireSession,
+    gates.requireCapability("cap.jobtracker.read"),
+    async (c) => {
+      const jobId = c.req.query("job_id") ?? "";
+      if (!jobId || jobId.length > 64) return c.json({ error: "invalid_job_id" }, 400);
+      const job = await c.env.DB
+        .prepare("SELECT project_name FROM jobs WHERE job_id = ?1")
+        .bind(jobId)
+        .first<{ project_name: string }>();
+      if (!job) return c.json({ error: "unknown_job" }, 404);
+      const username = c.get("session").username;
+      const caps = c.get("capabilities");
+      const viewer = await c.env.DB
+        .prepare(
+          "SELECT id FROM personnel WHERE username = ?1 AND active = 1 ORDER BY id ASC LIMIT 1",
+        )
+        .bind(username)
+        .first<{ id: number }>();
+      // Same ordering contract as /tasks/mine (open-first, dated-first due ASC, then recency).
+      const res = await c.env.DB
+        .prepare(
+          `SELECT t.id, t.description, t.status, t.due_date, t.created_at,
+                  t.personnel_id, p.name AS assignee_name
+           FROM task_assignments t
+           LEFT JOIN personnel p ON p.id = t.personnel_id
+           WHERE t.job_id = ?1
+           ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END ASC,
+                    (t.due_date IS NULL) ASC, t.due_date ASC,
+                    t.created_at DESC, t.id DESC
+           LIMIT ${JOB_TASKS_CAP}`,
+        )
+        .bind(jobId)
+        .all<JobTaskRow>();
+      const payload: JobTasksResponse = {
+        tasks: res.results ?? [],
+        project_name: job.project_name,
+        viewer_personnel_id: viewer?.id ?? null,
+        viewer_privileged: caps.has("cap.jobtracker.manage") || caps.has("cap.tasks.assign"),
       };
       return c.json(payload, 200);
     },

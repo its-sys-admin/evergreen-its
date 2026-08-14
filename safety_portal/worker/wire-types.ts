@@ -502,6 +502,27 @@ export interface ViewerTaskPlacement {
  *  `viewer_placement` collapses the Daily tab's placement waterfall: the tab used to derive its
  *  job from a full jobs-list page (fetchJobList → viewer_current_job); now the one endpoint it
  *  already reads carries the placement. */
+/** One job's assigned task on the Site Tasks page. WHO is personnel.name (display-name-only). */
+export interface JobTaskRow {
+  id: number;
+  description: string;
+  status: "open" | "in_progress" | "done";
+  due_date: string | null;
+  created_at: number;
+  personnel_id: number | null;
+  assignee_name: string | null;
+}
+
+/** GET /api/fieldops/tasks?job_id= — cap.jobtracker.read (the job-detail tasks leg's exposure).
+ *  viewer_personnel_id / viewer_privileged are DISPLAY hints for the own-only status buttons;
+ *  the write route re-enforces ownership in its own WHERE. */
+export interface JobTasksResponse {
+  tasks: JobTaskRow[];
+  project_name: string;
+  viewer_personnel_id: number | null;
+  viewer_privileged: boolean;
+}
+
 export interface MyTasksResponse {
   tasks: MyTask[];
   linked: boolean;
