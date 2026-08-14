@@ -377,6 +377,7 @@ export function App() {
         jobId={route.jobId}
         onBack={() => navigate({ view: "fieldops-jobs", jobId: route.jobId })}
         onHome={home}
+        onOpenSchedule={has("cap.jobtracker.read") ? openJobSchedule : undefined}
       />
     );
   } else if (route.view === "fieldops-job-materials" && allowed) {
@@ -386,6 +387,7 @@ export function App() {
         jobId={route.jobId}
         onHome={home}
         onOpenJob={openJobTracker}
+        onOpenSchedule={has("cap.jobtracker.read") ? openJobSchedule : undefined}
       />
     );
   } else if (route.view === "fieldops-job-schedule" && allowed) {
@@ -396,6 +398,7 @@ export function App() {
         onHome={home}
         onOpenJob={openJobTracker}
         onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
+        onOpenWeeklyReport={has("cap.jobtracker.manage") ? openWeeklyReport : undefined}
       />
     );
   } else if (route.view === "fieldops-tasks" && allowed) {

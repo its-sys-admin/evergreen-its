@@ -56,6 +56,7 @@ type ReportBody = {
     behind: { name: string; section: string; finish_date: string; percent: number; is_contract_milestone: boolean }[];
     today: string;
     task_count: number;
+    truncated: boolean;
   };
   office: {
     header: { ess_management: string; subcontractors: string[]; mobilization_date: string };
@@ -342,6 +343,33 @@ describe("weekly report — derived data", () => {
 // Fixtures reproduce the REAL filed mess from Deep Lake (2026-08-12/13): Evergreen spelled four
 // ways including a typo, ESS cased three ways, trailing spaces, a blank company, and the
 // min_rows=4 unnamed filler row the signature table always ships.
+describe("weekly report — page-3 truncation honesty (A5)", () => {
+  it("flags truncated when the schedule read hits the cap, and not on a normal schedule", async () => {
+    // 601 active tasks — one past SCHEDULE_TASK_CAP.
+    const stmts = [];
+    for (let i = 0; i < 601; i += 1) {
+      stmts.push(
+        env.DB.prepare(
+          "INSERT INTO job_schedule_tasks (task_uuid, job_id, name, match_key, percent_done, sort_order, active) VALUES (?1, ?2, ?3, ?4, 0, ?5, 1)",
+        ).bind(`u-${i}`, JOB, `Task ${i}`, `task ${i}`, i * 10),
+      );
+    }
+    // D1 batch caps: chunk the seeds.
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    const r = await body(await internal());
+    expect(r.schedule).not.toBeNull();
+    expect((r.schedule as { truncated: boolean }).truncated).toBe(true);
+  });
+
+  it("stays false on a normal schedule", async () => {
+    await env.DB.prepare(
+      "INSERT INTO job_schedule_tasks (task_uuid, job_id, name, match_key, percent_done, sort_order, active) VALUES ('u-1', ?1, 'Solo', 'solo', 10, 10, 1)",
+    ).bind(JOB).run();
+    const r = await body(await internal());
+    expect((r.schedule as { truncated: boolean }).truncated).toBe(false);
+  });
+});
+
 describe("weekly report — the JHA labor seed", () => {
   const JHA_DAY_1 = {
     worker_acknowledgement: [

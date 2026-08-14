@@ -1095,6 +1095,8 @@ export interface ProductionReportResponse {
     /** The server's Pacific date the behind-schedule set was derived against. */
     today: string;
     task_count: number;
+    /** True when the read hit SCHEDULE_TASK_CAP — page 3 shows a PARTIAL table (A5). */
+    truncated: boolean;
   };
   office: WeeklyReportOffice;
   generated_at: number;
