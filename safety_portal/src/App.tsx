@@ -369,6 +369,8 @@ export function App() {
         onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
         onOpenSchedule={has("cap.jobtracker.read") ? openJobSchedule : undefined}
         onOpenWeeklyReport={has("cap.jobtracker.manage") ? openWeeklyReport : undefined}
+        onOpenPurchaseOrders={has("cap.po.manage") ? () => navigate({ view: "po-builder" }) : undefined}
+        onOpenSubcontracts={has("cap.subcontracts.manage") ? () => navigate({ view: "subcontract-builder" }) : undefined}
       />
     );
   } else if (route.view === "fieldops-weekly-report" && allowed) {

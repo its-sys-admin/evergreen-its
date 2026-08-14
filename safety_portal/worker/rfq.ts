@@ -146,6 +146,10 @@ function parseLines(raw: unknown): RfqLine[] | string {
 
 // ── Draft body validation ───────────────────────────────────────────────────────
 interface RfqDraftFields {
+  /** The canonical JOB-###### (0075) — captured because the SPA resolves the job BY this id and
+   *  was throwing it away (the exact po_estimates 0069 defect). '' when a caller omits it; the
+   *  per-job Procurement read simply never matches those. Snapshot semantics, no FK. */
+  job_id: string;
   job_no: string;
   /** 0070 — the Evergreen identifier's SITE segment. job_no stays two-segment (0064's model);
    *  this is what makes MH405's and OG593's RFQ numbers distinguishable. */
@@ -168,6 +172,10 @@ interface RfqDraftFields {
 function parseRfqDraftBody(body: Record<string, unknown>): RfqDraftFields | string {
   const job_no = str(body.job_no);
   if (!JOB_NO_RE.test(job_no)) return "invalid_job_no";
+  // 0075 — optional, bounded; existence is deliberately NOT checked (snapshot semantics, like
+  // every other job field here: the drafting office picked the job from the live dropdown).
+  const job_id = str(body.job_id);
+  if (job_id.length > 64) return "invalid_job_id";
   // 0070 — same shape and bounds parseDraftBody enforces on a PO's site_phase (po.ts), so a
   // value that is legal on one procurement lane is legal on the other. job_no itself is NOT
   // widened: 0064's model is that job_no stays two-segment everywhere.
@@ -219,7 +227,7 @@ function parseRfqDraftBody(body: Record<string, unknown>): RfqDraftFields | stri
   }
 
   return {
-    job_no, site_phase, job_name,
+    job_id, job_no, site_phase, job_name,
     ship_to_name, ship_to_address, ship_to_city, ship_to_state, ship_to_zip,
     delivery_contact_name, delivery_contact_phone, delivery_contact_email,
     scope_text, due_date: dd, lines, vendor_keys,
@@ -544,13 +552,13 @@ export function registerRfqRoutes(app: FieldopsApp, gates: RfqGates): void {
         .prepare(
           "INSERT INTO rfqs (rfq_uuid, job_no, site_phase, job_name, ship_to_name, ship_to_address, " +
             "ship_to_city, ship_to_state, ship_to_zip, delivery_contact_name, " +
-            "delivery_contact_phone, delivery_contact_email, scope_text, due_date, status, created_by) " +
-            "VALUES (?1,?2,?15,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'draft',?14) RETURNING id",
+            "delivery_contact_phone, delivery_contact_email, scope_text, due_date, status, created_by, job_id) " +
+            "VALUES (?1,?2,?15,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'draft',?14,?16) RETURNING id",
         )
         .bind(
           rfqUuid, d.job_no, d.job_name, d.ship_to_name, d.ship_to_address, d.ship_to_city,
           d.ship_to_state, d.ship_to_zip, d.delivery_contact_name, d.delivery_contact_phone,
-          d.delivery_contact_email, d.scope_text, d.due_date, actor, d.site_phase,
+          d.delivery_contact_email, d.scope_text, d.due_date, actor, d.site_phase, d.job_id,
         ),
       auditStmt(c, actor, "rfq_draft_create", rfqUuid, {
         rfq_uuid: rfqUuid, job_no: d.job_no, lines: d.lines.length, vendors: d.vendor_keys.length,
@@ -640,13 +648,13 @@ export function registerRfqRoutes(app: FieldopsApp, gates: RfqGates): void {
           "UPDATE rfqs SET job_no=?2, site_phase=?14, job_name=?3, ship_to_name=?4, ship_to_address=?5, " +
             "ship_to_city=?6, ship_to_state=?7, ship_to_zip=?8, delivery_contact_name=?9, " +
             "delivery_contact_phone=?10, delivery_contact_email=?11, scope_text=?12, " +
-            "due_date=?13, updated_at=unixepoch(), draft_version=draft_version+1 " +
+            "due_date=?13, job_id=?15, updated_at=unixepoch(), draft_version=draft_version+1 " +
             "WHERE id=?1 AND status='draft'",
         )
         .bind(
           id, d.job_no, d.job_name, d.ship_to_name, d.ship_to_address, d.ship_to_city,
           d.ship_to_state, d.ship_to_zip, d.delivery_contact_name, d.delivery_contact_phone,
-          d.delivery_contact_email, d.scope_text, d.due_date, d.site_phase,
+          d.delivery_contact_email, d.scope_text, d.due_date, d.site_phase, d.job_id,
         ),
       auditStmtIfChanged(c, actor, "rfq_draft_update", String(id), {
         rfq_id: id, lines: d.lines.length, vendors: d.vendor_keys.length,

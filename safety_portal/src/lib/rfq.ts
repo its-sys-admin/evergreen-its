@@ -83,6 +83,8 @@ export interface RfqDetail {
 /** The writable draft body (create + update share it; worker parseRfqDraftBody). Line
  *  positions are server-assigned from array order. */
 export interface RfqDraftBody {
+  /** 0075 — the canonical JOB-###### the builder already resolves; snapshot, optional. */
+  job_id?: string;
   job_no: string;
   /** 0070 — the site segment. Omit or 0 for a job with no site breakdown. */
   site_phase?: number;

@@ -8,6 +8,7 @@ import { registerPersonnelRoutes } from "./fieldops_personnel";
 import { MAX_ADDRESS } from "./constants";
 import { registerEquipmentRoutes } from "./fieldops_equipment";
 import { registerJobTrackerRoutes } from "./fieldops_jobtracker";
+import { registerJobProcurementRoutes } from "./fieldops_procurement";
 import { registerMaterialsRoutes } from "./fieldops_materials";
 import { auditStmt, isUniqueViolation, auditStmtIfChanged } from "./audit";
 import { registerTimeWriteRoutes } from "./fieldops_time_write";
@@ -556,6 +557,7 @@ registerPersonnelRoutes(app, fieldopsGates);
 registerPersonnelWriteRoutes(app, fieldopsGates);
 registerEquipmentRoutes(app, fieldopsGates);
 registerJobTrackerRoutes(app, fieldopsGates);
+registerJobProcurementRoutes(app, fieldopsGates);
 registerMaterialsRoutes(app, fieldopsGates);
 // — Assigned-Tasks tab (P4 S1) "My Tasks" read (cap.tasks.own) —
 registerMyTasksRoutes(app, fieldopsGates);
