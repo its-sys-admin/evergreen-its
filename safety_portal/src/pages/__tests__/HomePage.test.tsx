@@ -131,7 +131,7 @@ describe("HomePage — R7 sections", () => {
     expect(sectionHeadings(container)).toEqual(["Daily forms", "Field operations"]);
     expect(container.textContent ?? "").not.toContain("Office operations");
     expect(container.textContent ?? "").not.toContain("Administration");
-    expect(cardTitles(container)).toEqual(["Submit a form", "Form Request", "My Tasks", "Job Tracker"]);
+    expect(cardTitles(container)).toEqual(["Submit a form", "Form Request", "My Tasks", "Site Tasks", "Job Tracker"]);
   });
 
   it("every card keeps its exact capability gate (present with the cap, absent without)", () => {

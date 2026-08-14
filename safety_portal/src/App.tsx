@@ -13,6 +13,7 @@ import { JobMaterialsPage } from "./pages/JobMaterialsPage";
 import { JobSchedulePage } from "./pages/JobSchedulePage";
 import { WeeklyReportPage } from "./pages/WeeklyReportPage";
 import { FieldOpsMyTasks } from "./pages/FieldOpsMyTasks";
+import { SiteTasksPage } from "./pages/SiteTasksPage";
 import { FieldOpsInspections } from "./pages/FieldOpsInspections";
 import { FieldOpsEquipment } from "./pages/FieldOpsEquipment";
 import { FieldOpsPersonnel } from "./pages/FieldOpsPersonnel";
@@ -408,6 +409,16 @@ export function App() {
         onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
         initialTab={route.tab}
         onTabChange={(t) => syncRouteUp({ view: "fieldops-tasks", tab: t }, true)}
+      />
+    );
+  } else if (route.view === "fieldops-site-tasks" && allowed) {
+    page = (
+      <SiteTasksPage
+        key={`${popEpoch}:site-tasks`}
+        jobId={route.jobId}
+        onBack={home}
+        onOpenSchedule={has("cap.jobtracker.read") ? openJobSchedule : undefined}
+        onJobChange={(j) => syncRouteUp({ view: "fieldops-site-tasks", jobId: j ?? undefined }, true)}
       />
     );
   } else if (route.view === "fieldops-inspections" && allowed) {

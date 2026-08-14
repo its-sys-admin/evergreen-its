@@ -6,7 +6,7 @@
 // (R1) Errors throw ApiError (src/lib/errorCopy.ts): err.message is human copy, err.code the raw
 // wire code (e.g. 'forbidden_task' when a subcontractor targets a task that isn't theirs).
 import { raiseApiError } from "./errorCopy";
-import type { MyTasksResponse } from "../../worker/wire-types";
+import type { JobTasksResponse, MyTasksResponse } from "../../worker/wire-types";
 
 export { setTaskStatus, type TaskStatus } from "./fieldops_jobtracker";
 
@@ -23,4 +23,15 @@ export async function fetchMyTasks(): Promise<MyTasksResponse> {
   return (
     ((await res.json()) as MyTasksResponse) ?? { tasks: [], linked: false, viewer_placement: null }
   );
+}
+
+export type { JobTaskRow, JobTasksResponse } from "../../worker/wire-types";
+
+/** ONE job's assigned tasks (the Site Tasks page) — cap.jobtracker.read. */
+export async function fetchJobTasks(jobId: string): Promise<JobTasksResponse> {
+  const res = await fetch(`/api/fieldops/tasks?job_id=${encodeURIComponent(jobId)}`, {
+    credentials: "same-origin",
+  });
+  if (!res.ok) return raiseApiError(res);
+  return (await res.json()) as JobTasksResponse;
 }

@@ -9,6 +9,7 @@ export type HomeNav =
   | "forms"
   | "fieldops-jobs"
   | "fieldops-tasks"
+  | "fieldops-site-tasks"
   | "fieldops-inspections"
   | "fieldops-equipment"
   | "fieldops-personnel"
@@ -69,6 +70,16 @@ const HOME_CARDS: HomeCard[] = [
     // R7 (R2 finding) + D2: the card copy names the Daily report — the tab lives here too.
     title: "My Tasks",
     desc: "Your assigned tasks and inspections, plus your Daily report — grouped by job, updated as you work.",
+    section: "field",
+  },
+  {
+    key: "fieldops-site-tasks",
+    cap: "cap.jobtracker.read",
+    badge: "Field Ops",
+    title: "Site Tasks",
+    // Distinct from My Tasks (which is YOUR assignments across jobs): this is one JOB's whole
+    // plate — the schedule's tasks with mark-off, plus every assigned one-off task.
+    desc: "Pick a job and see its whole task list — the schedule's tasks with progress mark-off, plus assigned one-off tasks.",
     section: "field",
   },
   {
