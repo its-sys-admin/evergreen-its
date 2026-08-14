@@ -4,7 +4,8 @@
 // (R1) Errors throw ApiError (src/lib/errorCopy.ts): err.message is HUMAN copy, err.code the raw
 // wire code for page-level branching. Pages must branch on err.code, never err.message.
 import { raiseApiError } from "./errorCopy";
-import type { JobDetailResponse, JobListResponse } from "../../worker/wire-types";
+import type {
+  PortfolioResponse, JobDetailResponse, JobListResponse } from "../../worker/wire-types";
 
 // Wire shapes — SINGLE-SOURCED in worker/wire-types.ts (the Worker types its c.json payloads with
 // the same definitions, so a shape drift fails the typecheck on both sides — and the DailyReportTab
@@ -293,4 +294,13 @@ export async function amendTimeEntry(
     `/api/fieldops/time-entry/${encodeURIComponent(targetUuid)}/amend`,
     body,
   );
+}
+
+export type { PortfolioJob, PortfolioResponse } from "../../worker/wire-types";
+
+/** The tracker list's cross-job strip (A6) — cap.jobtracker.read, same tier as the list. */
+export async function fetchPortfolio(): Promise<PortfolioResponse> {
+  const res = await fetch("/api/fieldops/portfolio", { credentials: "same-origin" });
+  if (!res.ok) return raiseApiError(res);
+  return (await res.json()) as PortfolioResponse;
 }

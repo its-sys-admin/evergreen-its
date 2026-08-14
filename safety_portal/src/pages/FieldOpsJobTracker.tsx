@@ -362,6 +362,17 @@ export function FieldOpsJobTracker({
   // R7 never-silent: list-area failures carry a working Retry (initial load / load-more / a failed
   // detail open all land here); reloadToken re-runs the list effect for the initial-load Retry.
   const [listError, setListError] = useState<RetryableError | null>(null);
+  // A6: the cross-job strip — loaded once per list mount; a failure hides the strip (it is
+  // a convenience layer over the cards, never the record).
+  const [portfolio, setPortfolio] = useState<api.PortfolioResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void api.fetchPortfolio().then(
+      (p) => { if (alive) setPortfolio(p); },
+      () => { if (alive) setPortfolio(null); },
+    );
+    return () => { alive = false; };
+  }, []);
   const [reloadToken, setReloadToken] = useState(0);
   // R7 — the viewer's own placement (worker viewer_current_job): the list badges "Your job".
   const [viewerCurrentJob, setViewerCurrentJob] = useState<string | null>(null);
@@ -2070,6 +2081,34 @@ export function FieldOpsJobTracker({
         )
       ) : (
         <>
+          {portfolio !== null && portfolio.jobs.some((j) => j.late_count > 0 || j.deliveries_due > 0 || j.materials_due > 0 || j.milestones_at_risk > 0) && (
+            <section className="card dash-section sched-portfolio" aria-label="Across all jobs">
+              <header className="job-sec__head">
+                <h2 className="job-sec__title">Across all jobs</h2>
+                <span className="dash-card__sub">week of {portfolio.today} → {portfolio.week_end}</span>
+              </header>
+              <ul className="dash-tasklist">
+                {portfolio.jobs
+                  .filter((j) => j.late_count > 0 || j.deliveries_due > 0 || j.materials_due > 0 || j.milestones_at_risk > 0)
+                  .map((j) => (
+                    <li key={j.job_id}>
+                      <button type="button" className="btn btn--secondary sched-portfolio__job"
+                              onClick={() => { const job = jobs.find((x) => x.job_id === j.job_id); if (job) handleCardClick(job); }}>
+                        {j.project_name}
+                      </button>{" "}
+                      <span className="dash-card__sub">
+                        {[
+                          j.late_count > 0 ? `${j.late_count} late` : null,
+                          j.deliveries_due > 0 ? `${j.deliveries_due} deliveries due` : null,
+                          j.materials_due > 0 ? `${j.materials_due} materials expected` : null,
+                          j.milestones_at_risk > 0 ? `${j.milestones_at_risk} milestone(s) at risk` : null,
+                        ].filter(Boolean).join(" · ")}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
           <div className="dash-grid">
             {jobs.map((job) => (
               <div

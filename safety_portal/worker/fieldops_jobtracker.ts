@@ -1,6 +1,6 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import { encodeCursor, decodeCursor } from "./cursor";
-import { scheduleSummaries } from "./schedule_rollup";
+import { portfolioRollup, scheduleSummaries } from "./schedule_rollup";
 import { pacificDateString } from "./fieldops_recurrence";
 import { coerceLifecycle } from "./constants";
 import type {
@@ -18,6 +18,7 @@ import type {
   OpenTask,
   Task,
   ViewerPersonnel,
+  PortfolioResponse,
 } from "./wire-types";
 
 // Response shapes per BRIEF C (job tracker) — single-sourced in wire-types.ts (the SPA re-exports
@@ -480,6 +481,21 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         cursors: { tasks: tasksCursor, time: timeNext, insp: inspNext },
         viewer_personnel: (viewerRes.results?.[0] as ViewerPersonnel | undefined) ?? null,
       };
+      return c.json(payload, 200);
+    },
+  );
+
+  // ── GET /api/fieldops/portfolio — the tracker list's cross-job strip (A6). ──────────────────
+  // Same read tier as the list (cap.jobtracker.read); one batch over ACTIVE jobs; the
+  // predicates live in schedule_rollup.ts beside the per-job aggregate so strip and cards
+  // can never disagree. No stored state, no new tables.
+  app.get(
+    "/api/fieldops/portfolio",
+    gates.requireSession,
+    gates.requireCapability("cap.jobtracker.read"),
+    async (c) => {
+      const { jobs, today, week_end } = await portfolioRollup(c.env.DB, pacificDateString(Date.now()));
+      const payload: PortfolioResponse = { jobs, today, week_end };
       return c.json(payload, 200);
     },
   );

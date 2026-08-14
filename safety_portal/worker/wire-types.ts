@@ -57,6 +57,29 @@ export type JobLifecycle = "active" | "inactive" | "archived";
  *  discipline that retired jobs.progress). NOTE: this aggregate is over the WHOLE schedule (no
  *  600-row cap), so on a very large schedule it can differ from the Schedule page's capped,
  *  truncation-flagged display. */
+/** GET /api/fieldops/portfolio (A6) — the tracker list's cross-job strip. Active jobs with ≥1
+ *  signal only; predicates shared with the per-job aggregate (worker/schedule_rollup.ts). */
+export interface PortfolioJob {
+  job_id: string;
+  project_name: string;
+  task_count: number;
+  percent: number;
+  late_count: number;
+  /** Undelivered delivery tasks due inside the week — INCLUDING already-overdue ones. */
+  deliveries_due: number;
+  /** Expected-material lines dated inside the week and not yet received. */
+  materials_due: number;
+  /** Unreached milestones due inside 14 days or already past. */
+  milestones_at_risk: number;
+  next_milestone: { name: string; date: string } | null;
+}
+
+export interface PortfolioResponse {
+  jobs: PortfolioJob[];
+  today: string;
+  week_end: string;
+}
+
 export interface JobScheduleSummary {
   task_count: number;
   /** Duration-weighted, floored — schedule_view.weightedPercent parity. */
