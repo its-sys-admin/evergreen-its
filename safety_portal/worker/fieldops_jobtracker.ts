@@ -1,5 +1,7 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import { encodeCursor, decodeCursor } from "./cursor";
+import { scheduleSummaries } from "./schedule_rollup";
+import { pacificDateString } from "./fieldops_recurrence";
 import { coerceLifecycle } from "./constants";
 import type {
   ArchiveDirection,
@@ -158,6 +160,8 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         c.env.DB.prepare(sqlCrew).bind(...pageJobIds),
         c.env.DB.prepare(sqlOpenTasks).bind(...pageJobIds),
       ]);
+      // A2: the live schedule signal, page-scoped (see worker/schedule_rollup.ts).
+      const schedByJob = await scheduleSummaries(c.env.DB, pageJobIds, pacificDateString(Date.now()));
 
       // Group crew + open tasks by job_id, capped ≤NESTED_CAP per job in JS.
       const crewByJob = new Map<string, CrewMember[]>();
@@ -183,6 +187,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         client_name: j.client_name,
         crew: crewByJob.get(j.job_id) ?? [],
         open_tasks: tasksByJob.get(j.job_id) ?? [],
+        schedule: schedByJob.get(j.job_id) ?? null,
       }));
 
       const last = jobsRes.results[jobsRes.results.length - 1];
@@ -469,6 +474,8 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
           time_entries: timeEntries,
           equipment_on_site: (equipRes.results ?? []) as EquipmentOnSite[],
           inspections,
+          // A2: the live schedule signal (one job — same shared derivation as the list).
+          schedule: (await scheduleSummaries(c.env.DB, [header.job_id], pacificDateString(Date.now()))).get(header.job_id) ?? null,
         },
         cursors: { tasks: tasksCursor, time: timeNext, insp: inspNext },
         viewer_personnel: (viewerRes.results?.[0] as ViewerPersonnel | undefined) ?? null,

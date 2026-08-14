@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
-import { call, provision, login, seedJob as seedJobRow, seedPersonnel as seedPersonnelRow } from "./helpers";
+import { call, get, provision, login, seedJob as seedJobRow, seedPersonnel as seedPersonnelRow } from "./helpers";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BRIEF C — Job Tracker tab (cap.jobtracker.read, SUBMITTER + ADMIN).
@@ -435,5 +435,83 @@ describe("GET /api/fieldops/jobs/:job_id — R7 attribution contract", () => {
     // Defaulting the other way would let an unknown value hide a live job and — once the archive
     // path exists — mark it relocatable.
     expect(detail.job.lifecycle).toBe("active");
+  });
+});
+
+// ── A2: the live schedule signal (worker/schedule_rollup.ts) ─────────────────────
+async function seedSchedTask(
+  jobId: string,
+  name: string,
+  over: {
+    duration?: number | null; percent?: number; finish?: string | null; start?: string | null;
+    milestone?: number; active?: number;
+  } = {},
+): Promise<void> {
+  await env.DB
+    .prepare(
+      "INSERT INTO job_schedule_tasks (task_uuid, job_id, name, match_key, duration_days, start_date, finish_date, percent_done, is_milestone, sort_order, active) " +
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 10, ?10)",
+    )
+    .bind(
+      crypto.randomUUID(), jobId, name, name.toLowerCase(),
+      over.duration === undefined ? null : over.duration,
+      over.start ?? null, over.finish ?? null,
+      over.percent ?? 0, over.milestone ?? 0, over.active ?? 1,
+    )
+    .run();
+}
+
+describe("GET /api/fieldops/jobs — the schedule signal (A2)", () => {
+  beforeEach(async () => {
+    await provision("adm.sched", "password123", "admin");
+  });
+
+  it("serves the duration-weighted percent, the late count, and the next unreached milestone", async () => {
+    await seedJobRow("JOB-S");
+    // Weighted mix: a 100-day task at 50% dominates four one-day punch items at 100%.
+    await seedSchedTask("JOB-S", "Mechanical install", { duration: 100, percent: 50 });
+    for (let i = 0; i < 4; i += 1) await seedSchedTask("JOB-S", `Punch ${i}`, { duration: 1, percent: 100 });
+    // A LATE task (finish < today, <100%) and an inactive row that must not count.
+    await seedSchedTask("JOB-S", "Trench east", { duration: 5, percent: 80, finish: "2020-01-01" });
+    await seedSchedTask("JOB-S", "Ghost row", { percent: 0, active: 0 });
+    // Milestones: one unreached in the future (the NEXT), one already done, one in the past.
+    await seedSchedTask("JOB-S", "M1 energize", { milestone: 1, percent: 0, finish: "2099-01-02" });
+    await seedSchedTask("JOB-S", "M0 done", { milestone: 1, percent: 100, finish: "2099-01-01" });
+    await seedSchedTask("JOB-S", "M-past", { milestone: 1, percent: 0, finish: "2020-06-01" });
+
+    const cookie = await login("adm.sched", "password123");
+    const res = await get(cookie, "/api/fieldops/jobs?status=all");
+    const body = (await res.json()) as { jobs: { job_id: string; schedule: { task_count: number; percent: number; late_count: number; next_milestone: { name: string; date: string } | null } | null }[] };
+    const job = body.jobs.find((j) => j.job_id === "JOB-S")!;
+    expect(job.schedule).not.toBeNull();
+    const sched = job.schedule!;
+    expect(sched.task_count).toBe(9); // all ACTIVE rows; the inactive ghost never counts
+    // weightedPercent parity: floor((100*50 + 4*1*100 + 5*80 + 1*0 + 1*100 + 1*0) / (100+4+5+1+1+1))
+    const expected = Math.floor((100 * 50 + 4 * 100 + 5 * 80 + 0 + 100 + 0) / 112);
+    expect(sched.percent).toBe(expected);
+    // Late: "Trench east" (2020 finish, 80%) and "M-past" (2020 finish, 0%).
+    expect(sched.late_count).toBe(2);
+    // Next milestone = the earliest UNREACHED at/after today — never the done one, never the past one.
+    expect(sched.next_milestone).toEqual({ name: "M1 energize", date: "2099-01-02" });
+  });
+
+  it("serves schedule: null for a job with no active schedule tasks — the honest no-schedule state", async () => {
+    await seedJobRow("JOB-N");
+    await seedSchedTask("JOB-N", "Only ghost", { active: 0 });
+    const cookie = await login("adm.sched", "password123");
+    const res = await get(cookie, "/api/fieldops/jobs?status=all");
+    const body = (await res.json()) as { jobs: { job_id: string; schedule: unknown }[] };
+    expect(body.jobs.find((j) => j.job_id === "JOB-N")!.schedule).toBeNull();
+  });
+
+  it("rides the detail response too, from the same shared derivation", async () => {
+    await seedJobRow("JOB-D");
+    await seedSchedTask("JOB-D", "Solo task", { duration: 10, percent: 30 });
+    const cookie = await login("adm.sched", "password123");
+    const res = await get(cookie, "/api/fieldops/jobs/JOB-D");
+    const body = (await res.json()) as { job: { schedule: { percent: number; task_count: number } | null } };
+    expect(body.job.schedule).toEqual(
+      expect.objectContaining({ task_count: 1, percent: 30, late_count: 0 }),
+    );
   });
 });

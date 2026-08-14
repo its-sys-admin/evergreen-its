@@ -86,7 +86,7 @@ beforeEach(() => {
   vi.mocked(checklist.cancelChecklistInstance).mockResolvedValue({ ok: true, id: 41 });
   vi.mocked(checklist.fetchChecklistRecurrences).mockResolvedValue({ recurrences: [] });
   vi.mocked(checklist.deactivateChecklistRecurrence).mockResolvedValue({ ok: true, id: 51 });
-  vi.mocked(fetchJobList).mockResolvedValue({ jobs: [{ job_id: "JOB-A", project_name: "Alpha", status: "active", lifecycle: "active", client_name: null, crew: [], open_tasks: [] }], next_cursor: null });
+  vi.mocked(fetchJobList).mockResolvedValue({ jobs: [{ job_id: "JOB-A", project_name: "Alpha", status: "active", lifecycle: "active", client_name: null, crew: [], open_tasks: [], schedule: null }], next_cursor: null });
 });
 
 describe("FieldOpsInspections — inspections-only Checklists page (D2 retirement)", () => {
