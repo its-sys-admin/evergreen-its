@@ -1057,6 +1057,30 @@ def _process_row(
                 error_code="portal_mark_filed_not_found",
                 correlation_id=result.correlation_id,
             )
+        # 0074 site-photos bridge — register the filed inline photos in the WPR pool.
+        # AFTER mark-filed and §43 BEST-EFFORT FENCED (the *_perjob_sheet_failed posture):
+        # a register failure WARNs and the filing/receipt stand untouched — the miss is
+        # permanent for this cycle (already_filed re-serves carry no registrations) and
+        # the repair is the operator backfill script. Only a genuinely-processed result
+        # carries registrations, so the fence can never fire on a review/quarantine drain.
+        if result.status == "processed" and result.site_photo_registrations:
+            try:
+                portal_client.post_daily_photos_register(
+                    base_url, bearer,
+                    submission_uuid=submission_uuid,
+                    photos=result.site_photo_registrations,
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort; never disturb the filing
+                error_log.log(
+                    Severity.WARN, SCRIPT_NAME,
+                    (
+                        f"site-photo pool registration failed for submission_uuid="
+                        f"{submission_uuid} ({len(result.site_photo_registrations)} photo(s)): "
+                        f"{type(exc).__name__}: {exc!r}"
+                    ),
+                    error_code="portal_site_photo_register_failed",
+                    correlation_id=result.correlation_id,
+                )
 
 
 # ---- PR-4 Part A: request-driven PDF cache servicing ---------------------
@@ -1900,8 +1924,12 @@ def _screen_one_daily_photo(
     # D1 bytes, so the permanent Box record must exist before it). A Box failure
     # raises to the per-item fence: WARN, row stays pending, next cycle retries.
     box_file_id = _file_daily_photo(job_id, work_date, photo_id, result.clean_jpeg or b"")
+    # 0074: derive the picker thumbnail from the §34 clean re-encode (never raw bytes);
+    # None (thumbnailing failed) degrades to a thumbless row — the disposition still lands.
+    thumb = photo_screen.make_thumbnail(result.clean_jpeg or b"")
     found = portal_client.post_daily_photo_result(
         base_url, bearer, photo_id=photo_id, status="clean", box_file_id=box_file_id,
+        thumb_b64=base64.b64encode(thumb).decode("ascii") if thumb is not None else None,
     )
     if not found:
         # Benign: the disposition was already applied by a prior cycle whose ack was

@@ -1034,10 +1034,14 @@ def test_daily_photo_clean_screens_files_to_box_then_posts_back(_patch_all):
     assert up_args[0] == "F4" and up_args[1] == "photo_11.jpg"
     assert up_args[2][:3] == b"\xff\xd8\xff"
     # Box FIRST, then the delete-on-screen post-back naming the Box record.
-    _patch_all["post_daily_result"].assert_called_once_with(
-        "https://portal.example.com", "bearer",
-        photo_id=11, status="clean", box_file_id="box-9",
-    )
+    _patch_all["post_daily_result"].assert_called_once()
+    kw = _patch_all["post_daily_result"].call_args.kwargs
+    assert kw["photo_id"] == 11 and kw["status"] == "clean" and kw["box_file_id"] == "box-9"
+    # 0074: the clean post carries a screened thumbnail derived from the re-encode —
+    # a real JPEG, decoded-bounded, never the raw upload.
+    import base64 as _b64
+    thumb = _b64.b64decode(kw["thumb_b64"])
+    assert thumb[:3] == b"\xff\xd8\xff" and len(thumb) <= 40_000
     _patch_all["review"].assert_not_called()
     # The pass rides the heartbeat notes.
     assert "daily_photos_screened=1" in (_patch_all["hb_row"].call_args.kwargs["notes"] or "")
@@ -1459,3 +1463,70 @@ def test_push_active_jobs_empty_set_is_noop(mocker):
     push = mocker.patch.object(portal_poll.portal_client, "push_jobs")
     portal_poll._push_active_jobs("https://base", "bearer")
     push.assert_not_called()
+
+
+# ---- 0074 site-photos bridge: the fenced register post ----------------------------
+
+
+def _processed_with_registrations(uuid: str = "u1") -> ProcessResult:
+    return ProcessResult(
+        status="processed", message_id=uuid, correlation_id="c",
+        box_link="https://app.box.com/file/f9", box_file_id="f9",
+        site_photo_registrations=[
+            {"box_file_id": "p1", "caption": "front.jpg", "thumb_b64": "AAAA"},
+            {"box_file_id": "p2", "caption": ""},
+        ],
+    )
+
+
+def test_processed_with_registrations_posts_register_after_mark_filed(_patch_all, mocker):
+    reg = mocker.patch.object(
+        portal_poll.portal_client, "post_daily_photos_register",
+        return_value={"ok": True, "registered": 2, "skipped": 0},
+    )
+    _patch_all["get_pending"].return_value = [_row("u1")]
+    _patch_all["process"].return_value = _processed_with_registrations()
+
+    _poll_inside_lock()
+
+    _patch_all["mark_filed"].assert_called_once()
+    reg.assert_called_once_with(
+        "https://portal.example.com", "bearer",
+        submission_uuid="u1",
+        photos=[
+            {"box_file_id": "p1", "caption": "front.jpg", "thumb_b64": "AAAA"},
+            {"box_file_id": "p2", "caption": ""},
+        ],
+    )
+
+
+def test_processed_without_registrations_never_posts_register(_patch_all, mocker):
+    reg = mocker.patch.object(portal_poll.portal_client, "post_daily_photos_register")
+    _patch_all["get_pending"].return_value = [_row("u1")]
+    _patch_all["process"].return_value = _processed()  # site_photo_registrations=None
+
+    _poll_inside_lock()
+
+    _patch_all["mark_filed"].assert_called_once()
+    reg.assert_not_called()
+
+
+def test_register_failure_warns_and_never_disturbs_the_filing(_patch_all, mocker):
+    # §43 best-effort fence: the register post raises; the filing + receipt + seen record
+    # all stand, the cycle stays OK, and a WARN names the miss.
+    mocker.patch.object(
+        portal_poll.portal_client, "post_daily_photos_register",
+        side_effect=portal_poll.portal_client.PortalTransportError("register 503"),
+    )
+    _patch_all["get_pending"].return_value = [_row("u1")]
+    _patch_all["process"].return_value = _processed_with_registrations()
+
+    result = _poll_inside_lock()
+
+    _patch_all["mark_filed"].assert_called_once()
+    assert result.filed == 1 and result.errors == 0
+    warn_codes = [
+        c.kwargs.get("error_code") for c in _patch_all["log"].call_args_list
+        if c.args and c.args[0] == _Sev.WARN
+    ]
+    assert "portal_site_photo_register_failed" in warn_codes
