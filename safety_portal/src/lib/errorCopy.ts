@@ -187,6 +187,7 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_change_order: "A change order needs a description and a whole-cent amount.",
   unknown_document: "That document no longer exists — reload the list.",
   not_pending: "That change order was already decided — reload to see its status.",
+  change_order_seq_conflict: "Someone added a change order at the same moment — reload and add yours again.",
   photo_claimed: "That photo already belongs to a filed report — it can't be removed from the pool.",
   not_deletable: "That photo was refused by screening — remove it from the list instead.",
   invalid_additional_photos: "The additional-photos list didn't come through correctly — remove and re-add the photos.",

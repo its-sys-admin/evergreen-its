@@ -1,7 +1,7 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import type { Context } from "hono";
 import type { Env, Vars } from "./types";
-import { auditStmtIfChanged } from "./audit";
+import { auditStmtIfChanged, isUniqueViolation } from "./audit";
 import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobProcurementSub } from "./wire-types";
 
 // Per-job Procurement read for the Job Tracker (Track A8, operator ask 2026-08-13): the POs,
@@ -199,12 +199,19 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           const res = await c.env.DB.batch([
             c.env.DB
               .prepare(
+                // approved-ONLY (review judgment call): matches the Mac sync's own guard, so a
+                // manual mark can never skip the approval record — a pending_review document
+                // 409s with its state; the office gets it approved first, then marks.
                 "UPDATE purchase_orders SET status='sent', updated_at=unixepoch() " +
-                  "WHERE id=?1 AND status IN ('pending_review','approved')",
+                  "WHERE id=?1 AND status='approved'",
               )
               .bind(id),
             auditStmtIfChanged(c, actor, "po_marked_submitted", String(id), { po_id: id, manual: true }),
             // The predecessor-supersession flip — byte-same rule as the Mac sync's sent-write.
+            // ACCEPTED REPLAY SEMANTICS (review): on a replay whose primary write no-ops (already
+            // sent → the route 409s), this flip can still fire and supersede a predecessor the
+            // earlier attempt missed — deliberate CONVERGENCE toward the correct record (one
+            // in-force document), identical to the sync's own latent shape, never a regression.
             c.env.DB
               .prepare(
                 "UPDATE purchase_orders SET status='superseded', updated_at=unixepoch() " +
@@ -254,8 +261,9 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           const res = await c.env.DB.batch([
             c.env.DB
               .prepare(
+                // approved-ONLY — same rule as the PO lane (see the comment there).
                 "UPDATE subcontracts SET status='sent', updated_at=unixepoch() " +
-                  "WHERE id=?1 AND status IN ('pending_review','approved')",
+                  "WHERE id=?1 AND status='approved'",
               )
               .bind(id),
             auditStmtIfChanged(c, actor, "sc_marked_submitted", String(id), { sc_id: id, manual: true }),
@@ -347,24 +355,32 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
       .first<{ job_id: string }>();
     if (!parent) return c.json({ error: "unknown_document" }, 404);
     const actor = c.get("session").username;
-    const res = await c.env.DB.batch([
-      c.env.DB
-        .prepare(
-          "INSERT INTO procurement_change_orders (job_id, doc_type, doc_id, seq, description, amount_cents, created_by) " +
-            "SELECT ?1, ?2, ?3, COALESCE((SELECT MAX(seq) FROM procurement_change_orders WHERE doc_type=?2 AND doc_id=?3), 0) + 1, ?4, ?5, ?6 " +
-            "RETURNING id, seq",
-        )
-        .bind(parent.job_id, docType, docId, description, amount, actor),
-      auditStmtIfChanged(c, actor, "change_order_create", `${docType}:${docId}`, {
-        doc_type: docType, doc_id: docId, amount_cents: amount,
-      }),
-    ]);
+    let res;
+    try {
+      res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            "INSERT INTO procurement_change_orders (job_id, doc_type, doc_id, seq, description, amount_cents, created_by) " +
+              "SELECT ?1, ?2, ?3, COALESCE((SELECT MAX(seq) FROM procurement_change_orders WHERE doc_type=?2 AND doc_id=?3), 0) + 1, ?4, ?5, ?6 " +
+              "RETURNING id, seq",
+          )
+          .bind(parent.job_id, docType, docId, description, amount, actor),
+        auditStmtIfChanged(c, actor, "change_order_create", `${docType}:${docId}`, {
+          doc_type: docType, doc_id: docId, amount_cents: amount,
+        }),
+      ]);
+    } catch (e) {
+      // The MAX+1 race-loser under UNIQUE(doc_type, doc_id, seq): a clean retriable 409, never
+      // a generic 500 (review W5 — the po_number_conflict pattern).
+      if (isUniqueViolation(e)) return c.json({ error: "change_order_seq_conflict" }, 409);
+      throw e;
+    }
     const row = (res[0].results?.[0] ?? null) as { id: number; seq: number } | null;
     if (!row) return c.json({ error: "internal_error" }, 500);
     return c.json({ ok: true, id: row.id, seq: row.seq }, 201);
   });
 
-  app.post("/api/fieldops/procurement/change-orders/:id/decide", gates.requireSession, async (c) => {
+  app.post("/api/fieldops/procurement/change-orders/:id/decide", gates.requireSession, gates.requireAnyCapability([LANE_CAP_PO, LANE_CAP_SUB]), async (c) => {
     const id = parseInt(c.req.param("id"), 10);
     if (isNaN(id) || id < 1) return c.json({ error: "invalid_id" }, 400);
     let body: Record<string, unknown>;
@@ -373,7 +389,10 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
     } catch {
       return c.json({ error: "bad_request" }, 400);
     }
-    const status = body?.status === "approved" || body?.status === "rejected" ? (body.status as string) : null;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return c.json({ error: "bad_request" }, 400);
+    }
+    const status = body.status === "approved" || body.status === "rejected" ? (body.status as string) : null;
     if (status === null) return c.json({ error: "invalid_status" }, 400);
     const gateErr = await requireCoLaneCap(c, id);
     if (gateErr) return gateErr;
@@ -391,7 +410,7 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
     return c.json({ ok: true });
   });
 
-  app.post("/api/fieldops/procurement/change-orders/:id/deactivate", gates.requireSession, async (c) => {
+  app.post("/api/fieldops/procurement/change-orders/:id/deactivate", gates.requireSession, gates.requireAnyCapability([LANE_CAP_PO, LANE_CAP_SUB]), async (c) => {
     const id = parseInt(c.req.param("id"), 10);
     if (isNaN(id) || id < 1) return c.json({ error: "invalid_id" }, 400);
     const gateErr = await requireCoLaneCap(c, id);
@@ -439,7 +458,9 @@ async function refuseWrongState(
   return c.json({ error: "wrong_state", current_status: row.status }, 409);
 }
 
-/** The CO write gate: resolve the CO's lane, require that lane's own capability. */
+/** The CO write gate: resolve the CO's lane, require that lane's own capability. Runs BEHIND
+ *  the requireAnyCapability([PO, SUB]) middleware floor (review W6) — an uncapable session is
+ *  403d before this SELECT, so row existence never leaks below the lane tier. */
 async function requireCoLaneCap(
   c: Context<{ Bindings: Env; Variables: Vars }>,
   coId: number,

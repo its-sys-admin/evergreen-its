@@ -111,14 +111,20 @@ describe("GET /api/fieldops/jobs/:job_id/procurement", () => {
 const PO_BEARER = "test-po-token"; // == PORTAL_PO_API_TOKEN in the test env (po.test.ts)
 
 describe("procurement lifecycle (Track D)", () => {
-  it("marks a PO submitted from pending_review, flips its predecessor, and converges with the Mac sync", async () => {
+  it("marks an APPROVED PO submitted (pending_review 409s — approval is never skipped), flips its predecessor, and converges with the Mac sync", async () => {
     await seedVendor("VEN-000042");
-    // A sent predecessor + its pending_review successor (a revision chain).
+    // A sent predecessor + its successor (a revision chain).
     await seedPo("JOB-P", { status: "sent", vendorKey: "VEN-000042" });
     const pred = (await env.DB.prepare("SELECT id FROM purchase_orders ORDER BY id DESC LIMIT 1").first<{ id: number }>())!.id;
     await seedPo("JOB-P", { status: "pending_review", vendorKey: "VEN-000042" });
     const succ = (await env.DB.prepare("SELECT id FROM purchase_orders ORDER BY id DESC LIMIT 1").first<{ id: number }>())!.id;
     await env.DB.prepare("UPDATE purchase_orders SET supersedes_po_id=?2 WHERE id=?1").bind(succ, pred).run();
+
+    // A pending_review document cannot skip the approval record — named 409 first.
+    const early = await p(admin, `/api/fieldops/procurement/po/${succ}/lifecycle`, { action: "mark_submitted" });
+    expect(early.status).toBe(409);
+    expect(await early.json()).toMatchObject({ error: "wrong_state", current_status: "pending_review" });
+    await env.DB.prepare("UPDATE purchase_orders SET status='approved' WHERE id=?1").bind(succ).run();
 
     const res = await p(admin, `/api/fieldops/procurement/po/${succ}/lifecycle`, { action: "mark_submitted" });
     expect(res.status, await res.clone().text()).toBe(200);
@@ -242,6 +248,12 @@ describe("change orders (Track D)", () => {
     expect((await p(admin, `/api/fieldops/procurement/change-orders/${coId}/deactivate`, {})).status).toBe(200);
     const list = await g(admin, `/api/fieldops/procurement/po/${poId}/change-orders`);
     expect(((await list.json()) as { change_orders: unknown[] }).change_orders).toEqual([]);
+  });
+
+  it("403s decide/deactivate for a session below the lane tier — no row-existence oracle (review W6)", async () => {
+    // An UNKNOWN id must also 403 (not 404) for the uncapable session — the floor runs first.
+    expect((await p(manager, "/api/fieldops/procurement/change-orders/999999/decide", { status: "approved" })).status).toBe(403);
+    expect((await p(manager, "/api/fieldops/procurement/change-orders/999999/deactivate", {})).status).toBe(403);
   });
 
   it("404s an unknown parent document and 403s the wrong lane cap", async () => {
