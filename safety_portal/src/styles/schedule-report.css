@@ -1881,6 +1881,15 @@ button.sched-task__prog:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* A6 — the tracker list's cross-job strip: one quiet card of worst-first signal lines. */
+.sched-portfolio {
+  margin-bottom: var(--space-4);
+}
+
+.sched-portfolio__job {
+  min-height: var(--tap);
+}
+
 /* ── The shell and its section rail (part three) ──────────────────────────
    Nineteen sections need an index. Part three adopts the weekly report's full
    two-column shell (operator-ratified, reversing part two's chips-at-every-width

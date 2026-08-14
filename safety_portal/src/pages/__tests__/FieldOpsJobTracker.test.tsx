@@ -13,6 +13,7 @@ vi.mock("../../lib/fieldops_jobtracker", async (importOriginal) => {
   return {
     ...actual,
     fetchJobList: vi.fn(),
+    fetchPortfolio: vi.fn(),
     fetchJobDetail: vi.fn(),
     createJob: vi.fn(),
     getDeliveryContacts: vi.fn(),
@@ -70,6 +71,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   // Default: no write caps → read-only shell (existing read tests behave exactly as before).
   vi.mocked(useAuth).mockReturnValue(authWith([]));
+  // A6: the strip fetch fires on every list mount; quiet default keeps prior tests unchanged.
+  vi.mocked(api.fetchPortfolio).mockResolvedValue({ jobs: [], today: "2026-08-13", week_end: "2026-08-19" });
   // Safe empty defaults so the detail-view picker-load effect never rejects; assign tests override.
   vi.mocked(fetchPersonnelList).mockResolvedValue({ personnel: [], latest_entries: [], next_cursor: null });
   vi.mocked(fetchEquipmentList).mockResolvedValue({ equipment: [], next_cursor: null });
@@ -1778,5 +1781,31 @@ describe("A2 — the schedule signal", () => {
     const { container } = await openScheduledDetail(null);
     await waitFor(() => expect(container.textContent).toContain("No schedule imported"));
     expect(container.textContent).not.toContain("Schedule done");
+  });
+});
+
+
+describe("A6 — the cross-job strip", () => {
+  it("renders signal lines and hides itself when every job is quiet", async () => {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.fetchPortfolio).mockResolvedValue({
+      jobs: [
+        { job_id: "JOB-A", project_name: "Alpha", task_count: 40, percent: 55, late_count: 2, deliveries_due: 1, materials_due: 0, milestones_at_risk: 1, next_milestone: null },
+        { job_id: "JOB-B", project_name: "Bravo", task_count: 10, percent: 90, late_count: 0, deliveries_due: 0, materials_due: 0, milestones_at_risk: 0, next_milestone: null },
+      ],
+      today: "2026-08-13", week_end: "2026-08-19",
+    });
+    const { container } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.textContent).toContain("Across all jobs"));
+    expect(container.textContent).toContain("2 late · 1 deliveries due · 1 milestone(s) at risk");
+    // Bravo is signal-less — no line for it.
+    expect(container.querySelectorAll(".sched-portfolio__job")).toHaveLength(1);
+  });
+
+  it("renders no strip at all when the portfolio is quiet or failed", async () => {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    const { container } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    expect(container.querySelector(".sched-portfolio")).toBeNull();
   });
 });
