@@ -99,6 +99,7 @@ const DETAIL: jobs.JobDetailResponse = {
     time_entries: [],
     equipment_on_site: [{ id: 9, name: "Excavator", kind: null, identifier: "EX-1", label: null, read_at: null }],
     inspections: [],
+  schedule: null,
   },
   cursors: { tasks: null, time: null, insp: null },
   viewer_personnel: { id: 1, name: "Mo Manager" },

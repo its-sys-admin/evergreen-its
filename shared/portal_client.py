@@ -63,6 +63,7 @@ ITEM_PHOTOS_PENDING_PATH = "/api/internal/item-photos/pending"
 ITEM_PHOTO_RESULT_PATH_TEMPLATE = "/api/internal/item-photos/{photo_id}/result"
 DAILY_PHOTOS_PENDING_PATH = "/api/internal/daily-photos/pending"
 DAILY_PHOTO_RESULT_PATH_TEMPLATE = "/api/internal/daily-photos/{photo_id}/result"
+DAILY_PHOTOS_REGISTER_PATH = "/api/internal/daily-photos/register"
 PUBLISH_PENDING_PATH = "/api/internal/publish/pending"
 PUBLISH_CLAIM_PATH = "/api/internal/publish/claim"
 PUBLISH_STAMP_PATH = "/api/internal/publish/stamp"
@@ -862,6 +863,7 @@ def get_daily_photos_pending(
 def post_daily_photo_result(
     base_url: str, token: str, *, photo_id: int, status: str,
     box_file_id: str | None = None, detail: str | None = None,
+    thumb_b64: str | None = None,
 ) -> bool:
     """Post one screening disposition: POST /api/internal/daily-photos/:id/result → `found`.
 
@@ -885,12 +887,37 @@ def post_daily_photo_result(
         body["box_file_id"] = box_file_id
     if detail is not None:
         body["detail"] = detail
+    # 0074: optional screened thumbnail (clean only; the Worker 400s it on refused and
+    # bounds it at 40KB decoded). Omitted entirely when None — older Workers ignore
+    # unknown keys, so deploy-order skew degrades to a thumbless row, never an error.
+    if thumb_b64 is not None:
+        body["thumb_b64"] = thumb_b64
     data = _request(
         "POST", base_url,
         DAILY_PHOTO_RESULT_PATH_TEMPLATE.format(photo_id=int(photo_id)), token,
         json_body=body,
     )
     return bool(data.get("found"))
+
+
+def post_daily_photos_register(
+    base_url: str, token: str, *, submission_uuid: str, photos: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Register a filed daily report's §34-screened inline site photos in the WPR photo
+    pool: POST /api/internal/daily-photos/register → {ok, registered, skipped} (0074).
+
+    `photos` is [{box_file_id, caption?, thumb_b64?}, …] (1..8 — the Worker bounds it).
+    The Worker derives job/date/actor SERVER-SIDE from the submissions row and is
+    idempotent on (submission_uuid, box_file_id), so a replay after a lost ack registers
+    0 / skips N — benign. A control-plane write to OUR OWN Worker (outside the External
+    Send Gate, Invariant 1). Raises the typed `PortalTransportError` hierarchy on
+    failure; the CALLER fences it best-effort (a missed registration never un-files the
+    submission — the repair is the operator backfill script)."""
+    data = _request(
+        "POST", base_url, DAILY_PHOTOS_REGISTER_PATH, token,
+        json_body={"submission_uuid": submission_uuid, "photos": photos},
+    )
+    return data
 
 
 # ---- Progress rollup numbers (P6 — the progress weekly-compile's read I/O) ----

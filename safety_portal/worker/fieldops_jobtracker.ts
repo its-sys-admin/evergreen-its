@@ -1,5 +1,7 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import { encodeCursor, decodeCursor } from "./cursor";
+import { portfolioRollup, scheduleSummaries } from "./schedule_rollup";
+import { pacificDateString } from "./fieldops_recurrence";
 import { coerceLifecycle } from "./constants";
 import type {
   ArchiveDirection,
@@ -16,6 +18,7 @@ import type {
   OpenTask,
   Task,
   ViewerPersonnel,
+  PortfolioResponse,
 } from "./wire-types";
 
 // Response shapes per BRIEF C (job tracker) — single-sourced in wire-types.ts (the SPA re-exports
@@ -158,6 +161,8 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         c.env.DB.prepare(sqlCrew).bind(...pageJobIds),
         c.env.DB.prepare(sqlOpenTasks).bind(...pageJobIds),
       ]);
+      // A2: the live schedule signal, page-scoped (see worker/schedule_rollup.ts).
+      const schedByJob = await scheduleSummaries(c.env.DB, pageJobIds, pacificDateString(Date.now()));
 
       // Group crew + open tasks by job_id, capped ≤NESTED_CAP per job in JS.
       const crewByJob = new Map<string, CrewMember[]>();
@@ -183,6 +188,7 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
         client_name: j.client_name,
         crew: crewByJob.get(j.job_id) ?? [],
         open_tasks: tasksByJob.get(j.job_id) ?? [],
+        schedule: schedByJob.get(j.job_id) ?? null,
       }));
 
       const last = jobsRes.results[jobsRes.results.length - 1];
@@ -469,10 +475,27 @@ export function registerJobTrackerRoutes(app: FieldopsApp, gates: FieldopsGates)
           time_entries: timeEntries,
           equipment_on_site: (equipRes.results ?? []) as EquipmentOnSite[],
           inspections,
+          // A2: the live schedule signal (one job — same shared derivation as the list).
+          schedule: (await scheduleSummaries(c.env.DB, [header.job_id], pacificDateString(Date.now()))).get(header.job_id) ?? null,
         },
         cursors: { tasks: tasksCursor, time: timeNext, insp: inspNext },
         viewer_personnel: (viewerRes.results?.[0] as ViewerPersonnel | undefined) ?? null,
       };
+      return c.json(payload, 200);
+    },
+  );
+
+  // ── GET /api/fieldops/portfolio — the tracker list's cross-job strip (A6). ──────────────────
+  // Same read tier as the list (cap.jobtracker.read); one batch over ACTIVE jobs; the
+  // predicates live in schedule_rollup.ts beside the per-job aggregate so strip and cards
+  // can never disagree. No stored state, no new tables.
+  app.get(
+    "/api/fieldops/portfolio",
+    gates.requireSession,
+    gates.requireCapability("cap.jobtracker.read"),
+    async (c) => {
+      const { jobs, today, week_end } = await portfolioRollup(c.env.DB, pacificDateString(Date.now()));
+      const payload: PortfolioResponse = { jobs, today, week_end };
       return c.json(payload, 200);
     },
   );

@@ -51,6 +51,46 @@ export interface OpenTask {
  *  `lifecycle`. Lockstep with `JOB_LIFECYCLES` in worker/constants.ts. */
 export type JobLifecycle = "active" | "inactive" | "archived";
 
+/** A job's live schedule state, derived per-request from the ADR-0006 living task list
+ *  (worker/schedule_rollup.ts — one shared derivation for list/detail/portfolio). NULL on the
+ *  parent field = no schedule imported (the honest state — never a fabricated percentage; the
+ *  discipline that retired jobs.progress). NOTE: this aggregate is over the WHOLE schedule (no
+ *  600-row cap), so on a very large schedule it can differ from the Schedule page's capped,
+ *  truncation-flagged display. */
+/** GET /api/fieldops/portfolio (A6) — the tracker list's cross-job strip. Active jobs with ≥1
+ *  signal only; predicates shared with the per-job aggregate (worker/schedule_rollup.ts). */
+export interface PortfolioJob {
+  job_id: string;
+  project_name: string;
+  task_count: number;
+  percent: number;
+  late_count: number;
+  /** Undelivered delivery tasks due inside the week — INCLUDING already-overdue ones. */
+  deliveries_due: number;
+  /** Expected-material lines dated inside the week and not yet received. */
+  materials_due: number;
+  /** Unreached milestones due inside 14 days or already past. */
+  milestones_at_risk: number;
+  next_milestone: { name: string; date: string } | null;
+}
+
+export interface PortfolioResponse {
+  jobs: PortfolioJob[];
+  today: string;
+  week_end: string;
+}
+
+export interface JobScheduleSummary {
+  task_count: number;
+  /** Duration-weighted, floored — schedule_view.weightedPercent parity. */
+  percent: number;
+  /** finish_date < today AND percent_done < 100 — fieldops_report.behindSchedule parity. */
+  late_count: number;
+  next_milestone: { name: string; date: string } | null;
+  /** The Pacific date the late/next derivation used. */
+  today: string;
+}
+
 export interface JobRow {
   job_id: string;
   project_name: string;
@@ -60,6 +100,7 @@ export interface JobRow {
   client_name: string | null;
   crew: CrewMember[];
   open_tasks: OpenTask[];
+  schedule: JobScheduleSummary | null;
 }
 
 export interface JobListResponse {
@@ -220,6 +261,7 @@ export interface JobDetail {
   time_entries: JobTimeEntry[];
   equipment_on_site: EquipmentOnSite[];
   inspections: JobInspection[];
+  schedule: JobScheduleSummary | null;
 }
 
 /** (R7) The session user's own linked ACTIVE roster row — backs the log-time "Me (<name>)"
@@ -502,6 +544,27 @@ export interface ViewerTaskPlacement {
  *  `viewer_placement` collapses the Daily tab's placement waterfall: the tab used to derive its
  *  job from a full jobs-list page (fetchJobList → viewer_current_job); now the one endpoint it
  *  already reads carries the placement. */
+/** One job's assigned task on the Site Tasks page. WHO is personnel.name (display-name-only). */
+export interface JobTaskRow {
+  id: number;
+  description: string;
+  status: "open" | "in_progress" | "done";
+  due_date: string | null;
+  created_at: number;
+  personnel_id: number | null;
+  assignee_name: string | null;
+}
+
+/** GET /api/fieldops/tasks?job_id= — cap.jobtracker.read (the job-detail tasks leg's exposure).
+ *  viewer_personnel_id / viewer_privileged are DISPLAY hints for the own-only status buttons;
+ *  the write route re-enforces ownership in its own WHERE. */
+export interface JobTasksResponse {
+  tasks: JobTaskRow[];
+  project_name: string;
+  viewer_personnel_id: number | null;
+  viewer_privileged: boolean;
+}
+
 export interface MyTasksResponse {
   tasks: MyTask[];
   linked: boolean;
@@ -1095,6 +1158,8 @@ export interface ProductionReportResponse {
     /** The server's Pacific date the behind-schedule set was derived against. */
     today: string;
     task_count: number;
+    /** True when the read hit SCHEDULE_TASK_CAP — page 3 shows a PARTIAL table (A5). */
+    truncated: boolean;
   };
   office: WeeklyReportOffice;
   generated_at: number;
@@ -1131,6 +1196,21 @@ export type PaymentState =
   | "suspension_notice_due"
   | "suspension_notice_sent"
   | "paid";
+
+/** GET /api/fieldops/payments/summary — the job detail's payments card (A7). A REDUCTION of
+ *  the full payments read (same loadCycleViews derive), cap.payments.manage only; the jobs
+ *  list/detail responses carry zero payment fields (ADR-0006 decision 7). */
+export interface PaymentsSummaryResponse {
+  job_id: string;
+  has_terms: boolean;
+  cycle_count: number;
+  /** Cycles in any overdue-family state (overdue → suspension_notice_sent). */
+  overdue_count: number;
+  /** The worst state present, by escalation order; null when nothing is overdue. */
+  worst_state: PaymentState | null;
+  next_due: { label: string; due_date: string; balance_cents: number | null } | null;
+  today: string;
+}
 
 /** The job's terms row as served. WHO columns (created_by/updated_by) deliberately never
  *  serve — raw account usernames stay Worker-side (the W9 posture), and the Payments card

@@ -92,10 +92,13 @@ export function JobMaterialsPage({
   jobId,
   onHome,
   onOpenJob,
+  onOpenSchedule,
 }: {
   jobId: string;
   onHome: () => void;
   onOpenJob: (jobId: string) => void;
+  /** A5: the reverse of the schedule page's Materials drawer — deliveries context lives there. */
+  onOpenSchedule?: (jobId: string) => void;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -346,6 +349,11 @@ export function JobMaterialsPage({
         <button type="button" className="btn btn--secondary" onClick={() => onOpenJob(jobId)}>
           ← Back to job
         </button>
+      {onOpenSchedule && (
+        <button type="button" className="btn btn--secondary" onClick={() => onOpenSchedule(jobId)}>
+          Schedule deliveries →
+        </button>
+      )}
       </div>
       {/* The job NAME, not the JOB-###### key (operator request 2026-08-11) — the key is a
           system identifier the field never speaks; the id falls back only while loading. */}

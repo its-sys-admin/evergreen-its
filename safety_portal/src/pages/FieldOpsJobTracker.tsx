@@ -5,8 +5,11 @@ import { fetchPersonnelList, assignPersonnel, fetchMyCrew, type PersonnelRow, ty
 import { fetchEquipmentList, moveEquipment } from "../lib/fieldops_equipment";
 import { useAuth } from "../lib/auth";
 import { PageShell } from "../components/PageShell";
+import { SectionRail } from "../components/SectionRail";
+import { useScrollSpy } from "../lib/useScrollSpy";
 import { ChipX } from "../components/ChipX";
 import { ExpectedMaterialsSection } from "../components/ExpectedMaterialsSection";
+import { JobPaymentsCard } from "../components/JobPaymentsCard";
 import { InlineRowMsg, SectionError, TaskDue, errMsg, type RowFeedback } from "../components/myTasksShared";
 import { JobDailyRequirementsSection } from "../components/JobDailyRequirementsSection";
 import { statusLabel, lifecycleLabel } from "../lib/labels";
@@ -360,6 +363,17 @@ export function FieldOpsJobTracker({
   // R7 never-silent: list-area failures carry a working Retry (initial load / load-more / a failed
   // detail open all land here); reloadToken re-runs the list effect for the initial-load Retry.
   const [listError, setListError] = useState<RetryableError | null>(null);
+  // A6: the cross-job strip — loaded once per list mount; a failure hides the strip (it is
+  // a convenience layer over the cards, never the record).
+  const [portfolio, setPortfolio] = useState<api.PortfolioResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void api.fetchPortfolio().then(
+      (p) => { if (alive) setPortfolio(p); },
+      () => { if (alive) setPortfolio(null); },
+    );
+    return () => { alive = false; };
+  }, []);
   const [reloadToken, setReloadToken] = useState(0);
   // R7 — the viewer's own placement (worker viewer_current_job): the list badges "Your job".
   const [viewerCurrentJob, setViewerCurrentJob] = useState<string | null>(null);
@@ -1144,6 +1158,7 @@ export function FieldOpsJobTracker({
   // Computed at TOP level — hooks cannot live inside the detail branch below. Entries are
   // filtered by what this session can actually see, so a capability-hidden section never leaves
   // a dead link, and the spy observes exactly the filtered set. Order mirrors the page.
+  const canPayments = caps.includes("cap.payments.manage"); // A7: the payments card (admin-only cap)
   const canArchiveViewer = caps.includes("cap.job.archive");
   const canSeeMaterials = caps.includes("cap.materials.receive") || caps.includes("cap.materials.manage");
   const railSections = selectedJob
@@ -1156,6 +1171,7 @@ export function FieldOpsJobTracker({
         { id: "jd-equipment", label: "Equipment", on: true },
         { id: "jd-materials", label: "Materials", on: canSeeMaterials },
         { id: "jd-schedule", label: "Schedule", on: Boolean(onOpenSchedule) },
+        { id: "jd-payments", label: "Payments", on: canPayments },
         { id: "jd-weekly", label: "Weekly report", on: Boolean(onOpenWeeklyReport) },
         { id: "jd-inspections", label: "Inspections", on: true },
         { id: "jd-daily", label: "Daily requirements", on: canChecklist },
@@ -1164,38 +1180,14 @@ export function FieldOpsJobTracker({
         { id: "jd-danger", label: "Danger zone", on: canArchiveViewer && selectedJob.archive != null },
       ].filter((s) => s.on)
     : [];
-  const railIds = railSections.map((s) => s.id).join("|");
-  const [activeSection, setActiveSection] = useState<string | null>(null);
 
-  // Scroll-spy for the rail — the WeeklyReportPage device. Guarded: jsdom has no
-  // IntersectionObserver, and the rail is a convenience — without it the links still
-  // work, they just do not light up.
-  useEffect(() => {
-    if (view !== "detail" || !selectedJob) return;
-    if (typeof IntersectionObserver === "undefined") return;
-    const ids = railIds === "" ? [] : railIds.split("|");
-    const seen = new Map<string, number>();
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) seen.set(e.target.id, e.intersectionRatio);
-        let best: string | null = null;
-        let bestRatio = 0;
-        for (const id of ids) {
-          const r = seen.get(id) ?? 0;
-          if (r > bestRatio) { bestRatio = r; best = id; }
-        }
-        if (best) setActiveSection(best);
-      },
-      { rootMargin: "-72px 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] },
-    );
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) obs.observe(el);
-    }
-    return () => obs.disconnect();
-    // selectedJob keys re-observation after every reload (the sections remount);
-    // railIds keys it when the filtered set itself changes (e.g. a client appears).
-  }, [view, selectedJob, railIds]);
+  // Scroll-spy via the shared hook (behavior-frozen extraction — same observer options).
+  // observeKey: selectedJob keys re-observation after every reload (the sections remount);
+  // the ids key inside the hook re-observes when the filtered set itself changes.
+  const activeSection = useScrollSpy(railSections.map((s) => s.id), {
+    enabled: view === "detail" && selectedJob !== null,
+    observeKey: selectedJob,
+  });
 
   if (view === "detail" && selectedJob) {
     const job = selectedJob;
@@ -1244,14 +1236,29 @@ export function FieldOpsJobTracker({
         </div>
         <p className="dash-card__sub muted">{(job.client?.name ?? "No client")} · {job.job_id}</p>
 
-        {/* HERO — what this job IS, before nineteen sections of controls. Counts only:
-            a job has no single completion number, and inventing one would be a figure
-            nobody could reconcile. Open tasks reads DANGER when there are any, because
-            that is the one number here that asks somebody to do something.
-            Deliberately NOT .dash-progress — the detail view asserts that class is
-            absent, and a meter would be exactly the fabricated number this avoids. */}
+        {/* HERO — what this job IS, before nineteen sections of controls. Counts, plus the
+            MEASURED schedule state when one is committed: the old ban on a completion number
+            here was about the retired jobs.progress GUESS (a slider nobody could reconcile);
+            the schedule percent is the duration-weighted rollup of the committed schedule's
+            own tasks (ADR-0006), the same number page 3 of the weekly report prints. A job
+            with no schedule shows NO figure (the honest state) — and still deliberately NOT
+            .dash-progress (the detail view asserts that class is absent; sched-hero is the
+            schedule family). Open tasks and Late read DANGER because those are the numbers
+            that ask somebody to do something. */}
         <div className="job-hero">
           <ul className="job-hero__stats">
+            {job.schedule !== null && (
+              <li className="job-hero__stat sched-hero__stat">
+                <span className="job-hero__figure">{job.schedule.percent}%</span>
+                <span className="job-hero__label">Schedule done</span>
+              </li>
+            )}
+            {job.schedule !== null && job.schedule.late_count > 0 && (
+              <li className="job-hero__stat sched-hero__stat">
+                <span className="job-hero__figure job-hero__figure--alert">{job.schedule.late_count}</span>
+                <span className="job-hero__label">Late tasks</span>
+              </li>
+            )}
             <li className="job-hero__stat">
               <span className="job-hero__figure">{job.crew.length}</span>
               <span className="job-hero__label">On crew</span>
@@ -1273,6 +1280,11 @@ export function FieldOpsJobTracker({
               <span className="job-hero__label">Hours logged</span>
             </li>
           </ul>
+          {job.schedule?.next_milestone && (
+            <p className="dash-card__sub sched-hero__next">
+              Next milestone: {job.schedule.next_milestone.name} · {job.schedule.next_milestone.date}
+            </p>
+          )}
         </div>
 
         {setupBanner === job.job_id && (
@@ -1303,26 +1315,12 @@ export function FieldOpsJobTracker({
             capability-hidden section never leaves a dead link; the scroll-spy lights the
             item for the section in view. */}
         <div className="job-shell">
-          <nav className="job-rail" aria-label="Job sections">
-            {railSections.map((s) => (
-              <a
-                key={s.id}
-                className="job-rail__link"
-                href={`#${s.id}`}
-                aria-current={(activeSection ?? railSections[0]?.id) === s.id ? "true" : undefined}
-                onClick={(e) => {
-                  // A fragment navigation fires popstate, and App's popstate handler
-                  // REMOUNTS the routed page (losing scroll + state) — so the rail
-                  // scrolls directly and never touches history. Live-verified: the
-                  // bare-anchor version reloaded the whole detail on every chip tap.
-                  e.preventDefault();
-                  document.getElementById(s.id)?.scrollIntoView();
-                }}
-              >
-                {s.label}
-              </a>
-            ))}
-          </nav>
+          <SectionRail
+            sections={railSections}
+            activeId={activeSection ?? railSections[0]?.id ?? null}
+            ariaLabel="Job sections"
+            classPrefix="job-rail"
+          />
           <div className="job-shell__body">
 
         {canAssignTasks && (
@@ -1872,13 +1870,22 @@ export function FieldOpsJobTracker({
               <h2 className="job-sec__title">Schedule</h2>
             </header>
             <p className="dash-hint">
-              The job&apos;s living task list — what the project schedule says is happening,
-              with dates, milestones and deliveries.
+              {job.schedule === null
+                ? "No schedule imported — upload and commit one on the schedule page to start the living task list."
+                : `${job.schedule.task_count} task(s) · ${job.schedule.percent}% done` +
+                  (job.schedule.late_count > 0 ? ` · ${job.schedule.late_count} late` : "")}
             </p>
             <button className="btn btn--secondary" onClick={() => onOpenSchedule(job.job_id)}>
               Open schedule →
             </button>
           </section>
+        )}
+
+        {canPayments && (
+          <JobPaymentsCard
+            jobId={job.job_id}
+            onOpenSchedule={onOpenSchedule ? () => onOpenSchedule(job.job_id) : undefined}
+          />
         )}
 
         {/* 0067 — the office's weekly-report inputs (the sections D1 cannot derive). Deep-link
@@ -2084,6 +2091,34 @@ export function FieldOpsJobTracker({
         )
       ) : (
         <>
+          {portfolio !== null && portfolio.jobs.some((j) => j.late_count > 0 || j.deliveries_due > 0 || j.materials_due > 0 || j.milestones_at_risk > 0) && (
+            <section className="card dash-section sched-portfolio" aria-label="Across all jobs">
+              <header className="job-sec__head">
+                <h2 className="job-sec__title">Across all jobs</h2>
+                <span className="dash-card__sub">week of {portfolio.today} → {portfolio.week_end}</span>
+              </header>
+              <ul className="dash-tasklist">
+                {portfolio.jobs
+                  .filter((j) => j.late_count > 0 || j.deliveries_due > 0 || j.materials_due > 0 || j.milestones_at_risk > 0)
+                  .map((j) => (
+                    <li key={j.job_id}>
+                      <button type="button" className="btn btn--secondary sched-portfolio__job"
+                              onClick={() => { const job = jobs.find((x) => x.job_id === j.job_id); if (job) handleCardClick(job); }}>
+                        {j.project_name}
+                      </button>{" "}
+                      <span className="dash-card__sub">
+                        {[
+                          j.late_count > 0 ? `${j.late_count} late` : null,
+                          j.deliveries_due > 0 ? `${j.deliveries_due} deliveries due` : null,
+                          j.materials_due > 0 ? `${j.materials_due} materials expected` : null,
+                          j.milestones_at_risk > 0 ? `${j.milestones_at_risk} milestone(s) at risk` : null,
+                        ].filter(Boolean).join(" · ")}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
           <div className="dash-grid">
             {jobs.map((job) => (
               <div
@@ -2108,6 +2143,14 @@ export function FieldOpsJobTracker({
                       <span className="dash-chip" key={p.id}>{p.name}</span>
                     ))}
                   </div>
+                )}
+
+                {job.schedule !== null && (
+                  <p className="dash-card__sub sched-card__line">
+                    {job.schedule.percent}% of schedule
+                    {job.schedule.late_count > 0 ? ` · ${job.schedule.late_count} late` : ""}
+                    {job.schedule.next_milestone ? ` · Next: ${job.schedule.next_milestone.name} ${job.schedule.next_milestone.date}` : ""}
+                  </p>
                 )}
 
                 {job.open_tasks.length > 0 && (

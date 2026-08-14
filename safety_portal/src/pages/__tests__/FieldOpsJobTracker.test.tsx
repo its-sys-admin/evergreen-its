@@ -13,6 +13,7 @@ vi.mock("../../lib/fieldops_jobtracker", async (importOriginal) => {
   return {
     ...actual,
     fetchJobList: vi.fn(),
+    fetchPortfolio: vi.fn(),
     fetchJobDetail: vi.fn(),
     createJob: vi.fn(),
     getDeliveryContacts: vi.fn(),
@@ -70,6 +71,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   // Default: no write caps → read-only shell (existing read tests behave exactly as before).
   vi.mocked(useAuth).mockReturnValue(authWith([]));
+  // A6: the strip fetch fires on every list mount; quiet default keeps prior tests unchanged.
+  vi.mocked(api.fetchPortfolio).mockResolvedValue({ jobs: [], today: "2026-08-13", week_end: "2026-08-19" });
   // Safe empty defaults so the detail-view picker-load effect never rejects; assign tests override.
   vi.mocked(fetchPersonnelList).mockResolvedValue({ personnel: [], latest_entries: [], next_cursor: null });
   vi.mocked(fetchEquipmentList).mockResolvedValue({ equipment: [], next_cursor: null });
@@ -113,6 +116,7 @@ const JOBS: api.JobRow[] = [
     client_name: "Acme Co",
     crew: [{ id: 1, name: "Alice Chen", trade: "operator" }],
     open_tasks: [{ id: 1, description: "Dig footings", status: "open", personnel_name: "Alice Chen", due_date: null }],
+    schedule: null,
   },
   {
     job_id: "JOB-B",
@@ -122,6 +126,7 @@ const JOBS: api.JobRow[] = [
     client_name: null,
     crew: [],
     open_tasks: [],
+  schedule: null,
   },
 ];
 
@@ -151,6 +156,7 @@ const DETAIL: api.JobDetail = {
   ],
   equipment_on_site: [{ id: 5, name: "here-unit", kind: "skid-steer", identifier: "H1", label: "Site", read_at: 200 }],
   inspections: [{ uuid: "in-1", form_code: "skid-daily", version: 1, performed_at: 150, recorded_at: 150, equipment_name: "here-unit" }],
+  schedule: null,
 };
 
 // R7 — the viewer's own linked roster row (worker `viewer_personnel`): id 1 = Alice Chen, so the
@@ -1729,5 +1735,77 @@ describe("FieldOpsJobTracker — G2.3 time amend/void", () => {
     expect(container.textContent ?? "").toContain("Existing entries can still be corrected");
     fireEvent.click(getByLabelText("Edit time entry te-1"));
     await waitFor(() => expect(queryByLabelText("Correct time entry")).not.toBeNull());
+  });
+});
+
+describe("A2 — the schedule signal", () => {
+  const SCHED = { task_count: 66, percent: 62, late_count: 3, next_milestone: { name: "Energize", date: "2026-09-01" }, today: "2026-08-13" };
+
+  it("renders the list-card schedule line only for scheduled jobs", async () => {
+    const jobs = [
+      { ...JOBS[0], schedule: SCHED },
+      { ...JOBS[1], schedule: null },
+    ];
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs, next_cursor: null });
+    const { container } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    expect(container.textContent).toContain("62% of schedule · 3 late · Next: Energize 2026-09-01");
+    // The schedule-less card renders NO schedule line (never a nag, never a fabricated figure).
+    expect(container.querySelectorAll(".sched-card__line")).toHaveLength(1);
+  });
+
+  async function openScheduledDetail(schedule: typeof SCHED | null) {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.fetchJobDetail).mockResolvedValue({
+      job: { ...DETAIL, schedule }, cursors: NO_CURSORS, viewer_personnel: VIEWER,
+    });
+    const utils = render(<FieldOpsJobTracker onBack={() => {}} onOpenSchedule={() => {}} />);
+    await waitFor(() => expect(utils.container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    fireEvent.click(utils.container.querySelector(".dash-card--click")!);
+    await waitFor(() => expect(api.fetchJobDetail).toHaveBeenCalledWith("JOB-A"));
+    return utils;
+  }
+
+  it("renders the hero schedule stats + next milestone on the detail, and keeps .dash-progress banished", async () => {
+    const { container } = await openScheduledDetail(SCHED);
+    await waitFor(() => expect(container.textContent).toContain("Schedule done"));
+    const txt = container.textContent ?? "";
+    expect(txt).toContain("62%");
+    expect(txt).toContain("Late tasks");
+    expect(txt).toContain("Next milestone: Energize");
+    // The retired jobs.progress meter class must never come back.
+    expect(container.querySelector(".dash-progress")).toBeNull();
+  });
+
+  it("states the honest no-schedule case on the jd-schedule card", async () => {
+    const { container } = await openScheduledDetail(null);
+    await waitFor(() => expect(container.textContent).toContain("No schedule imported"));
+    expect(container.textContent).not.toContain("Schedule done");
+  });
+});
+
+
+describe("A6 — the cross-job strip", () => {
+  it("renders signal lines and hides itself when every job is quiet", async () => {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    vi.mocked(api.fetchPortfolio).mockResolvedValue({
+      jobs: [
+        { job_id: "JOB-A", project_name: "Alpha", task_count: 40, percent: 55, late_count: 2, deliveries_due: 1, materials_due: 0, milestones_at_risk: 1, next_milestone: null },
+        { job_id: "JOB-B", project_name: "Bravo", task_count: 10, percent: 90, late_count: 0, deliveries_due: 0, materials_due: 0, milestones_at_risk: 0, next_milestone: null },
+      ],
+      today: "2026-08-13", week_end: "2026-08-19",
+    });
+    const { container } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.textContent).toContain("Across all jobs"));
+    expect(container.textContent).toContain("2 late · 1 deliveries due · 1 milestone(s) at risk");
+    // Bravo is signal-less — no line for it.
+    expect(container.querySelectorAll(".sched-portfolio__job")).toHaveLength(1);
+  });
+
+  it("renders no strip at all when the portfolio is quiet or failed", async () => {
+    vi.mocked(api.fetchJobList).mockResolvedValue({ jobs: JOBS, next_cursor: null });
+    const { container } = render(<FieldOpsJobTracker onBack={() => {}} />);
+    await waitFor(() => expect(container.querySelectorAll(".dash-card--click")).toHaveLength(2));
+    expect(container.querySelector(".sched-portfolio")).toBeNull();
   });
 });

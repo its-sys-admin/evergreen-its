@@ -115,6 +115,7 @@ guarantee.
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import uuid
@@ -437,6 +438,13 @@ class ProcessResult:
     # request-driven PDF cache. Populated on processed (id in hand from the upload)
     # and already_filed (recovered from the stored link); None otherwise.
     box_file_id: str | None = None
+    # 0074 site-photos bridge: [{box_file_id, caption?, thumb_b64?}, …] for each inline
+    # site photo _file_portal_photos just filed to Box — portal_poll POSTs these to
+    # /api/internal/daily-photos/register (best-effort, AFTER mark-filed) so the WPR
+    # photo picker can offer them. Populated on processed only, and only when photos
+    # actually uploaded; None otherwise (incl. the already_filed re-serve, whose
+    # original cycle registered them).
+    site_photo_registrations: list[dict[str, Any]] | None = None
 
 
 # ---- Graph ingest --------------------------------------------------------
@@ -2021,21 +2029,38 @@ def _file_portal_photos(
     submission_uuid: str,
     photos: list[tuple[str, bytes]],
     correlation_id: str,
-) -> None:
+) -> list[dict[str, Any]]:
     """Best-effort: file the §34-screened photo ORIGINALS to
-    `<folder_id>/ITS Photos/<submission_uuid>/`.
+    `<folder_id>/ITS Photos/<submission_uuid>/` and return their pool registrations.
 
     The weekly packet embeds the photos in the PDF-of-record; these full-res Box copies
     are supplementary, so ANY failure is a WARN that never sinks the already-filed
     submission (mirrors `_attach_pdf_best_effort`). Deterministic names + version-on-
-    conflict make a re-pull-after-crash idempotent."""
+    conflict make a re-pull-after-crash idempotent — which also makes the RETURNED
+    registrations replay-stable: the same photo re-uploads as a new VERSION of the SAME
+    Box file id, so the Worker's (submission_uuid, box_file_id) idempotency key holds.
+
+    Returns [{box_file_id, caption, thumb_b64?}, …] for the 0074 register post (empty on
+    any failure — a missed registration is repairable by the operator backfill script,
+    never a reason to disturb the filing)."""
     if not photos:
-        return
+        return []
+    registrations: list[dict[str, Any]] = []
     try:
         photos_root = box_client.get_or_create_folder(folder_id, "ITS Photos")
         sub_folder = box_client.get_or_create_folder(photos_root, submission_uuid)
-        for i, (_caption, jpeg) in enumerate(photos, start=1):
-            box_client.upload_bytes_or_new_version(sub_folder, f"{i:02d}.jpg", jpeg)
+        for i, (caption, jpeg) in enumerate(photos, start=1):
+            uploaded = box_client.upload_bytes_or_new_version(sub_folder, f"{i:02d}.jpg", jpeg)
+            file_id = str(uploaded.get("id") or "")
+            if not file_id:
+                continue
+            reg: dict[str, Any] = {"box_file_id": file_id, "caption": caption[:300]}
+            # Thumb from the §34 clean re-encode (never raw bytes); optional — None
+            # degrades to the thumbless card on the WPR screen.
+            thumb = photo_screen.make_thumbnail(jpeg)
+            if thumb is not None:
+                reg["thumb_b64"] = base64.b64encode(thumb).decode("ascii")
+            registrations.append(reg)
     except Exception as exc:  # noqa: BLE001 — supplementary; the PDF-of-record embeds the photos
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
@@ -2043,6 +2068,8 @@ def _file_portal_photos(
             f"{type(exc).__name__}: {exc!r}",
             error_code="portal_photo_upload_failed", correlation_id=correlation_id,
         )
+        return []
+    return registrations
 
 
 # ---- DR-photo-pool Slice 2: additional-photo reference resolution ----------------
@@ -2552,8 +2579,11 @@ def _run_portal_pipeline(
     # POOL photos are deliberately NOT re-filed here — their permanent Box record
     # already exists (ITS Photos/daily/…, written by the screening pass at screen
     # time); re-uploading would duplicate the artifact.
+    site_photo_registrations: list[dict[str, Any]] = []
     if screened_photos:
-        _file_portal_photos(folder_id, submission_uuid, screened_photos, correlation_id)
+        site_photo_registrations = _file_portal_photos(
+            folder_id, submission_uuid, screened_photos, correlation_id
+        )
         notes = (notes + f" [photos:{len(screened_photos)}]").strip()
     if pool_photos or any(pool_counts.values()):
         notes = (
@@ -2622,6 +2652,7 @@ def _run_portal_pipeline(
         correlation_id=correlation_id,
         notes=f"project={project_name} form={form_code}", box_link=box_link,
         box_file_id=box_file_id,
+        site_photo_registrations=site_photo_registrations or None,
     )
 
 
