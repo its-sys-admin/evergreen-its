@@ -138,7 +138,7 @@ export function SiteTasksPage(props: {
   return (
     <PageShell onHome={onBack}>
       <h1 className="page__heading">Site tasks</h1>
-      <p className="page__sub">
+      <p className="dash-hint">
         Everything on this job&apos;s plate — the schedule&apos;s tasks with progress mark-off,
         plus assigned one-off tasks.
       </p>
@@ -202,7 +202,7 @@ export function SiteTasksPage(props: {
             {groups.map((group) => (
               <div key={group.name ?? "(no section)"} className="sched-group">
                 {group.name !== null && (
-                  <h3 className="sched-group__name">
+                  <h3 className="sched-group__head">
                     {group.name}
                     <span className="dash-card__sub"> {group.percent}%</span>
                   </h3>
@@ -246,7 +246,7 @@ export function SiteTasksPage(props: {
             {assigned !== null && assigned.tasks.length === 0 && (
               <p className="dash-hint">No one-off tasks are assigned on this job.</p>
             )}
-            <ul className="dash-list">
+            <ul className="dash-tasklist">
               {(assigned?.tasks ?? []).map((t) => (
                 <li key={t.id}>
                   <span className={statusPill(t.status)}>{statusLabel(t.status)}</span>{" "}
