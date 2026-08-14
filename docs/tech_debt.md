@@ -2688,3 +2688,91 @@ line, or for a delivery-mark control distinct from the existing receipt-confirm 
 
 Surfaced: 2026-08-12 portal design session (PR #109) — chat-only context, no diff to cite.
 
+
+## [OPEN 2026-08-14, low] `rfqs.closed` is a dead CHECK-constraint state with no writer — R4 close was never implemented
+
+The job-tracker/WPR program's A8 procurement recon (PR #142) surfaced, incidentally rather than as
+its own goal, that the `rfqs` table's CHECK constraint allows a `closed` status value that no code
+path ever writes. R4 (the RFQ close step) was scoped in ADR-0004 but never built — the state exists
+in the schema as a designed-for future, not a live bug (nothing today needs an RFQ to close, and the
+constraint permitting the value does no harm sitting unused).
+
+**Tag:** `po_materials`, `rfq`, `worker`, `schema`.
+
+**Revisit when:** the office asks for an explicit "close this RFQ" action, or the next `rfq_*`
+lane touch picks up ADR-0004's R4 slice.
+
+Surfaced: 2026-08-13/14 job-tracker unification + WPR program (PR #142); memory-archive §G90.
+
+## [OPEN 2026-08-14, low] Site-photos pool backfill for pre-bridge Deep Lake photos — scoped, not built
+
+The site-photos→pool bridge (PRs #133/#138/#139) registers newly-filed site photos into the existing
+§34-screened photo pool going forward. It does not retroactively register site photos filed before
+the bridge existed — specifically Deep Lake's 2026-08-11 photos, taken before this program built the
+bridge. Those photos remain on disk/Box but are invisible to the pool-driven surfaces (WPR photo
+detection, screened thumbnails) until a one-time backfill runs.
+
+**Fix shape:** a scoped one-shot script that walks the pre-bridge photo locations for the affected
+job(s) and registers each through the same pool-registration path `#138`'s Mac-side code already
+uses, rather than a live daemon pass.
+
+**Tag:** `field_ops`, `photos`, `migration`.
+
+**Revisit when:** the office specifically asks why Deep Lake's early-August photos don't appear on
+the WPR photo surface, or before any claim that photo coverage for that job is complete.
+
+Surfaced: 2026-08-13/14 job-tracker unification + WPR program; memory-archive §G90.
+
+## [OPEN 2026-08-14, low] `daily-report` v8 label fix for `crew_subcontractor` — closes the labor-bug root cause at the SOURCE form, not just the report
+
+PR #131 fixed the Deep Lake labor-bug SYMPTOM (the WPR labor table) by seeding the report from the
+JHA worker-acknowledgement roster instead of the free-text `crew_progress` field. It did not touch
+the root behavioral cause: the `daily-report` form's `crew_subcontractor` field label doesn't tell a
+foreman not to type individual crew members' names into it. A label fix — "Subcontractor / company
+(not individual names)" — was scoped during this program but not built; without it, foremen can keep
+entering names there, and while the report itself no longer trusts that field for labor counts, the
+field's own purpose stays unclear to the person filling it out.
+
+**Tag:** `safety-portal`, `forms`, `daily-report`, `ux`.
+
+**Revisit when:** the next `daily-report` form-definition touch (a version bump to v8 or later), or
+if the office reports foremen still entering names in that field despite the report no longer using
+them for labor counts.
+
+Surfaced: 2026-08-13/14 job-tracker unification + WPR program (root-caused during PR #131); memory-archive §G90.
+
+## [OPEN 2026-08-14, low] Two A6 cross-job portfolio-strip decisions need an explicit Seth confirm
+
+PR #143 (Track A6, the cross-job portfolio strip on the tracker list) shipped with two judgment
+calls made during the build that were not run past the operator before merge: (1) the milestone-risk
+horizon is set to 14 days — a job's upcoming milestone flags as "at risk" inside that window; (2)
+"deliveries due" wording/counting currently does not distinguish an overdue delivery from one still
+inside its window — both counts fold together. Neither is wrong, but both are choices a fresh eye
+should ratify rather than leave as an unstated default.
+
+**Tag:** `field_ops`, `frontend`, `job-tracker`, `operator-decision`.
+
+**Revisit when:** next job-tracker/portfolio-strip session — surface both to Seth for an explicit
+keep-as-is-or-change call.
+
+Surfaced: 2026-08-13/14 job-tracker unification + WPR program (PR #143); memory-archive §G90.
+
+## [OPEN 2026-08-14, low] Confirm leg-4 CI on exec PRs #133–#143 before treating the job-tracker/WPR program as fully four-part-verified
+
+Landing 13 PRs (#131–#143) in one program in one day meant most later PRs' main-branch CI runs on
+their own merge commit got cancelled mid-flight by the next PR's push, before they could report a
+terminal SUCCESS — a same-ref supersession artifact, not a real CI failure, but also not itself
+proof of a clean landing. A detached serial re-runner (`scratchpad/rerun-ci.sh`, log
+`scratchpad/rerun-ci.log`) was left running at session-close to walk #133–#143 and re-trigger/confirm
+each one's leg-4 in turn. This entry exists so the check doesn't get skipped if the re-runner didn't
+finish before the next session starts.
+
+**Fix / action:** run `pr-landed-verifier` (or `gh pr checks` / `gh run list --branch main`) against
+each of #133–#143 and confirm CI `SUCCESS` — not `CANCELLED` — on that PR's own merge commit.
+
+**Tag:** `ci`, `process`, `pr-verification`.
+
+**Revisit when:** immediately, at the next session's start — this is a verification debt, not a
+design deferral, and should close quickly.
+
+Surfaced: 2026-08-13/14 job-tracker unification + WPR program; memory-archive §G90.
