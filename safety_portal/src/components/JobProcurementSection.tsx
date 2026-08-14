@@ -38,8 +38,10 @@ export function JobProcurementSection(props: {
   jobId: string;
   onOpenPurchaseOrders?: () => void;
   onOpenSubcontracts?: () => void;
+  /** Track D: the per-job lifecycle screen — where documents are clicked into and marked. */
+  onOpenProcurement?: () => void;
 }) {
-  const { jobId, onOpenPurchaseOrders, onOpenSubcontracts } = props;
+  const { jobId, onOpenPurchaseOrders, onOpenSubcontracts, onOpenProcurement } = props;
   const [data, setData] = useState<JobProcurementResponse | null>(null);
   const [err, setErr] = useState(false);
 
@@ -65,6 +67,11 @@ export function JobProcurementSection(props: {
     <section className="card dash-section" id="jd-procurement">
       <header className="job-sec__head">
         <h2 className="job-sec__title">Procurement</h2>
+        {onOpenProcurement && (
+          <button type="button" className="btn btn--secondary" onClick={onOpenProcurement}>
+            Track lifecycle →
+          </button>
+        )}
       </header>
       <p className="dash-hint">
         This job&apos;s purchase orders, RFQ rounds and subcontracts, with where each sits in its

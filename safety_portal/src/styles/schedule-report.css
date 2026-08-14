@@ -2014,6 +2014,111 @@ button.sched-task__prog:hover {
   min-height: var(--tap);
 }
 
+/* ── Track D — the per-job procurement lifecycle screen ────────────────────── */
+/* Two-column shell from 1024px (lists | item panel), stacked on a phone — the job-shell
+   recipe without the rail. The item rows are full-width buttons (48px targets); the
+   timeline is the page's one signature: three plain stages that fill as facts are
+   recorded, never a percent. */
+.proc-shell {
+  display: grid;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .proc-shell {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  }
+}
+
+.proc-lists {
+  min-width: 0;
+}
+
+.proc-panel {
+  position: sticky;
+  top: var(--space-4);
+}
+
+.proc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+  font: inherit;
+  cursor: pointer;
+}
+
+.proc-item:hover {
+  border-color: var(--c-brg);
+}
+
+.proc-item:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+.proc-timeline {
+  list-style: none;
+  margin: var(--space-3) 0;
+  padding: 0;
+}
+
+.proc-timeline li {
+  position: relative;
+  padding: var(--space-2) 0 var(--space-2) 28px;
+  color: var(--c-muted);
+}
+
+.proc-timeline li::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--c-line);
+  border-radius: 50%;
+  background: var(--c-white);
+}
+
+.proc-timeline li.is-done {
+  color: var(--c-black);
+  font-weight: 600;
+}
+
+.proc-timeline li.is-done::before {
+  border-color: var(--c-brg);
+  background: var(--c-brg);
+}
+
+.proc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.proc-co-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.proc-co-form .wpr-field__input {
+  flex: 1 1 220px;
+}
+
+.proc-co-form .wpr-num {
+  flex: 0 1 130px;
+}
+
 /* ── The shell and its section rail (part three) ──────────────────────────
    Nineteen sections need an index. Part three adopts the weekly report's full
    two-column shell (operator-ratified, reversing part two's chips-at-every-width

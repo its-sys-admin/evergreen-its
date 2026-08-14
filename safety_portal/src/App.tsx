@@ -14,6 +14,7 @@ import { JobSchedulePage } from "./pages/JobSchedulePage";
 import { WeeklyReportPage } from "./pages/WeeklyReportPage";
 import { FieldOpsMyTasks } from "./pages/FieldOpsMyTasks";
 import { SiteTasksPage } from "./pages/SiteTasksPage";
+import { JobProcurementPage } from "./pages/JobProcurementPage";
 import { FieldOpsInspections } from "./pages/FieldOpsInspections";
 import { FieldOpsEquipment } from "./pages/FieldOpsEquipment";
 import { FieldOpsPersonnel } from "./pages/FieldOpsPersonnel";
@@ -328,6 +329,11 @@ export function App() {
     setEditing(false);
     navigate({ view: "fieldops-job-schedule", jobId });
   };
+  // Track D: the per-job procurement lifecycle screen, reached from the Job Tracker's card.
+  const openJobProcurement = (jobId: string) => {
+    setEditing(false);
+    navigate({ view: "fieldops-job-procurement", jobId });
+  };
 
   // The effective FormFillPage prefill: the route's shareable fields + the in-memory S5 draft.
   let fillPrefill: FormPrefill | undefined;
@@ -371,6 +377,7 @@ export function App() {
         onOpenWeeklyReport={has("cap.jobtracker.manage") ? openWeeklyReport : undefined}
         onOpenPurchaseOrders={has("cap.po.manage") ? () => navigate({ view: "po-builder" }) : undefined}
         onOpenSubcontracts={has("cap.subcontracts.manage") ? () => navigate({ view: "subcontract-builder" }) : undefined}
+        onOpenProcurement={has("cap.po.manage") || has("cap.subcontracts.manage") ? openJobProcurement : undefined}
       />
     );
   } else if (route.view === "fieldops-weekly-report" && allowed) {
@@ -414,6 +421,16 @@ export function App() {
         onOpenMaterials={has("cap.materials.receive") ? openJobMaterials : undefined}
         initialTab={route.tab}
         onTabChange={(t) => syncRouteUp({ view: "fieldops-tasks", tab: t }, true)}
+      />
+    );
+  } else if (route.view === "fieldops-job-procurement" && allowed) {
+    page = (
+      <JobProcurementPage
+        key={`${popEpoch}:procurement:${route.jobId}`}
+        jobId={route.jobId}
+        onOpenJob={openJobTracker}
+        onOpenPurchaseOrders={has("cap.po.manage") ? () => navigate({ view: "po-builder" }) : undefined}
+        onOpenSubcontracts={has("cap.subcontracts.manage") ? () => navigate({ view: "subcontract-builder" }) : undefined}
       />
     );
   } else if (route.view === "fieldops-site-tasks" && allowed) {

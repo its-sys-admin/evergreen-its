@@ -339,6 +339,7 @@ export function FieldOpsJobTracker({
   onOpenWeeklyReport,
   onOpenPurchaseOrders,
   onOpenSubcontracts,
+  onOpenProcurement,
 }: {
   onBack: () => void;
   /** R7 — deep-link straight into a job's detail (the My Tasks "Log time" quick action / job-group
@@ -360,6 +361,8 @@ export function FieldOpsJobTracker({
   /** A8: deep links into the procurement lanes (view-level caps re-gate in App). */
   onOpenPurchaseOrders?: () => void;
   onOpenSubcontracts?: () => void;
+  /** Track D: the per-job procurement lifecycle screen. */
+  onOpenProcurement?: (jobId: string) => void;
 }) {
   const [view, setView] = useState<"list" | "detail">("list");
   const [jobs, setJobs] = useState<api.JobRow[]>([]);
@@ -1878,6 +1881,7 @@ export function FieldOpsJobTracker({
             jobId={job.job_id}
             onOpenPurchaseOrders={onOpenPurchaseOrders ? () => onOpenPurchaseOrders() : undefined}
             onOpenSubcontracts={onOpenSubcontracts ? () => onOpenSubcontracts() : undefined}
+            onOpenProcurement={onOpenProcurement ? () => onOpenProcurement(job.job_id) : undefined}
           />
         )}
 
