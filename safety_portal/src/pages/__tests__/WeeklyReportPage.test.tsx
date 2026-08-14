@@ -217,6 +217,36 @@ describe("WeeklyReportPage — provenance and warnings", () => {
   });
 });
 
+describe("WeeklyReportPage — photo thumbnails + upload (0074)", () => {
+  it("renders a thumbnail image for has_thumb photos and an honest date tile for thumbless ones", async () => {
+    const p = payload();
+    p.photos.available = [
+      { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles", has_thumb: true },
+      { pool_id: 2, work_date: "2026-08-12", box_file_id: "b2", caption: "Trench", has_thumb: false },
+    ];
+    await renderPage(p);
+    const img = document.querySelector(".wpr-photo__thumb") as HTMLImageElement;
+    expect(img).toBeTruthy();
+    expect(img.getAttribute("src")).toBe("/api/fieldops/daily-photo/1/thumb");
+    expect(document.querySelectorAll(".wpr-photo__noimg")).toHaveLength(1);
+  });
+
+  it("mounts the office uploader inside the photos section", async () => {
+    await renderPage(payload());
+    const photos = document.getElementById("wpr-photos");
+    expect(photos!.querySelector(".wpr-upload")).toBeTruthy();
+    expect(screen.getByLabelText("Add photos to this week's pool")).toBeTruthy();
+  });
+
+  it("explains the empty pool and points at both fill paths", async () => {
+    const p = payload();
+    p.photos.available = [];
+    p.photos.selected = [];
+    await renderPage(p);
+    expect(screen.getByText(/appear here once screening finishes — or add your own/)).toBeTruthy();
+  });
+});
+
 describe("WeeklyReportPage — the three-state photo contract", () => {
   it("OMITS photos from the save when the office has not curated", async () => {
     await renderPage(payload());

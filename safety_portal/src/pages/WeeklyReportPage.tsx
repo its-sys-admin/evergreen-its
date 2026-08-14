@@ -56,6 +56,7 @@ import {
   type WeeklyReportPhoto,
 } from "../lib/fieldops_report";
 import { PageShell } from "../components/PageShell";
+import { WeeklyPhotoUpload } from "../components/WeeklyPhotoUpload";
 
 interface Props {
   jobId: string;
@@ -211,6 +212,18 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
   }, [jobId]);
 
   useEffect(() => { void load(weekStart); }, [load, weekStart]);
+
+  // Photo-pool refresh that MERGES: only `photos` is replaced, so an unsaved draft (labor rows,
+  // narrative, captions) is never clobbered by an upload finishing its screening in the
+  // background. `load()` would rebuild draft/baseline — exactly the wrong thing mid-edit.
+  const refreshPhotos = useCallback(async () => {
+    try {
+      const d2 = await fetchWeeklyReport(jobId, weekStart);
+      setData((prev) => (prev ? { ...prev, photos: d2.photos } : d2));
+    } catch {
+      // Purely cosmetic refresh — the next full load shows the pool anyway.
+    }
+  }, [jobId, weekStart]);
 
   const dirty = draft !== null && draftKey(draft) !== baseline;
 
@@ -685,10 +698,26 @@ export function WeeklyReportPage({ jobId, onBack, onHome }: Props) {
                 : `Your selection: ${(draft.photos ?? []).length} of ${data.photos.available.length}.`}
               {" "}Only screened photos appear here.
             </p>
-            {data.photos.available.length === 0 && <p>No screened photos for this week.</p>}
+            <WeeklyPhotoUpload jobId={jobId} weekStart={data.week.start} onPoolChanged={() => void refreshPhotos()} />
+            {data.photos.available.length === 0 && (
+              <p className="wpr-photos__empty">
+                No screened photos for this week yet. Photos from the crews&apos; daily reports
+                appear here once screening finishes — or add your own above.
+              </p>
+            )}
             <ul className="wpr-photos">
               {data.photos.available.map((p) => (
                 <li key={p.pool_id} className={`wpr-photo${selectedIds.has(p.pool_id) ? " is-on" : ""}`}>
+                  {p.has_thumb ? (
+                    // Session cookie rides same-origin; the route serves clean rows' thumbs only.
+                    <img className="wpr-photo__thumb" src={`/api/fieldops/daily-photo/${p.pool_id}/thumb`}
+                         loading="lazy" alt="" />
+                  ) : (
+                    <div className="wpr-photo__noimg" aria-hidden="true">
+                      <span>{p.work_date.slice(5)}</span>
+                      <span className="wpr-photo__noimg-note">No preview</span>
+                    </div>
+                  )}
                   <label className="wpr-photo__pick">
                     <input type="checkbox" checked={selectedIds.has(p.pool_id)}
                            aria-label={`Include the photo from ${p.work_date}`}
