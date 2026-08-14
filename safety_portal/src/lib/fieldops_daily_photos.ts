@@ -38,12 +38,18 @@ export async function uploadDailyPhoto(
   jobId: string,
   workDate: string,
   photo: PhotoValue,
+  // origin (0074): omitted for the field flow (server default 'field'); 'office_wpr' marks a
+  // weekly-report-screen upload for the 90d retention window (capability-checked server-side).
+  opts: { origin?: "office_wpr" } = {},
 ): Promise<DailyPhotoUploadResult> {
   const res = await fetch("/api/fieldops/daily-photo", {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ job_id: jobId, work_date: workDate, photo }),
+    body: JSON.stringify({
+      job_id: jobId, work_date: workDate, photo,
+      ...(opts.origin ? { origin: opts.origin } : {}),
+    }),
   });
   if (!res.ok) {
     let detail: string | null = null;

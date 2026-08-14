@@ -1543,6 +1543,130 @@ button.sched-task__prog:hover {
   outline-offset: -3px;
 }
 
+/* ── Photo thumbnails + office upload (0074) ─────────────────────────────── */
+/* The card grid gains a real image: 4:3 cover crop on top, pick strip + caption below.
+   Thumbless rows (screened before thumbnails existed) show an honest date tile instead —
+   never a broken-image glyph. */
+.wpr-photo__thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: var(--c-line);
+  border-bottom: 1px solid var(--c-line);
+}
+
+.wpr-photo__noimg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background:
+    repeating-linear-gradient(-45deg, transparent 0 10px, rgba(0, 0, 0, 0.025) 10px 20px),
+    var(--c-cream, #f7f5f0);
+  border-bottom: 1px solid var(--c-line);
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: var(--fs-lg, 1.2rem);
+}
+
+.wpr-photo__noimg-note {
+  font-size: 0.72rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.wpr-upload {
+  margin-bottom: var(--space-3);
+}
+
+.wpr-upload__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.wpr-upload__day {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.wpr-upload__day select {
+  min-height: var(--tap);
+  font: inherit;
+  padding: 0 var(--space-2);
+  border: 1.5px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-white);
+}
+
+/* The button is a <label> wrapping a visually-hidden file input, so the whole 48px chip is
+   the click target and keyboard focus lands on the input itself. */
+.wpr-upload__btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.wpr-upload__btn input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.wpr-upload__btn input[type="file"]:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+.wpr-upload__error {
+  margin: var(--space-2) 0 0;
+  color: var(--c-danger, #a13030);
+  font-size: var(--fs-sm);
+}
+
+.wpr-upload__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wpr-upload__chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--c-line);
+  color: var(--c-muted);
+  background: var(--c-white);
+}
+
+.wpr-upload__chip--clean {
+  color: var(--c-brg);
+  border-color: var(--c-brg);
+}
+
+.wpr-upload__chip--refused {
+  color: var(--c-danger, #a13030);
+  border-color: var(--c-danger, #a13030);
+}
+
+.wpr-photos__empty {
+  color: var(--c-muted);
+}
+
 /* ── Sticky save bar ──────────────────────────────────────────────────────
    The old page hid a lone Save button below eight sections of scroll. The bar follows
    the reader, states plainly whether anything is unsaved, and keeps the iPhone home
