@@ -9,6 +9,7 @@ import {
 } from "../lib/subcontracts";
 import { fetchJobs, type Job } from "../lib/api";
 import { errorText } from "../lib/errorCopy";
+import { CO_SCOPE_SUB_DELTA, CO_SCOPE_SUB_RESTATEMENT } from "../../worker/wire-types";
 import { useAuth } from "../lib/auth";
 import { PageShell } from "../components/PageShell";
 
@@ -1075,6 +1076,30 @@ export function SubcontractBuilderPage({
             onChange={(e) => setScopeSummary(e.target.value)}
           />
         </label>
+        {changeOrderOf !== null && (
+          // Operator-ratified Q3: every CO declares delta vs restatement semantics as the
+          // FIRST LINE of Exhibit A's work text (seeded delta at clone; swapped here). The
+          // sentence rides exhibit_a_work_text — signed by the sub:v1 canonical.
+          <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }} role="radiogroup" aria-label="Change-order scope declaration">
+            <span className="field__label">What this change order covers</span>
+            {[
+              { s: CO_SCOPE_SUB_DELTA, label: "The change only — the original subcontract otherwise stands" },
+              { s: CO_SCOPE_SUB_RESTATEMENT, label: "The complete subcontract, restated as revised" },
+            ].map((opt) => (
+              <label key={opt.label} style={{ display: "block" }}>
+                <input type="radio" name="co-scope" checked={exhibitAWorkText.startsWith(opt.s)}
+                       onChange={() => {
+                         let rest = exhibitAWorkText;
+                         for (const known of [CO_SCOPE_SUB_DELTA, CO_SCOPE_SUB_RESTATEMENT]) {
+                           if (rest.startsWith(known)) rest = rest.slice(known.length).replace(/^\n+/, "");
+                         }
+                         setExhibitAWorkText(`${opt.s}\n\n${rest}`);
+                       }} />
+                {" "}{opt.label}
+              </label>
+            ))}
+          </fieldset>
+        )}
         <label className="field">
           <span className="field__label">Exhibit A — the Work</span>
           <textarea

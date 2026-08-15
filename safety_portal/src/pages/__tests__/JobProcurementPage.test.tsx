@@ -156,6 +156,28 @@ describe("JobProcurementPage", () => {
     expect(screen.queryByRole("button", { name: "Create change order" })).toBeNull();
   });
 
+  it("offers the audited countersign undo on an executed subcontract (Q4)", async () => {
+    routeFetch({
+      list: {
+        ...RESPONSE,
+        subcontracts: [{
+          id: 7, sc_number: "2026.384.2.0.0", revision: 0, supersede_seq: 0, status: "executed",
+          trade: "civil", contract_price_cents: 500000, updated_at: 1, filed: true,
+          sub_name: "Trench Kings", accepted_at: "2026-08-15", accepted_by: "adm",
+          change_order_of: null, co_seq: null,
+        }],
+      },
+    });
+    render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.2.0.0"));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo accepted" }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) =>
+        String(c[0]).includes("/procurement/subcontract/7/lifecycle") &&
+        String((c[1] as RequestInit)?.body).includes("clear_accepted"))).toBe(true));
+    expect(window.confirm).toHaveBeenCalled();
+  });
+
   it("closes an RFQ round and explains where acceptance lives", async () => {
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
     fireEvent.click(await screen.findByLabelText("Open RFQ-2026.384-001"));

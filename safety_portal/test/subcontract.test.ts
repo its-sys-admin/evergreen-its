@@ -849,6 +849,8 @@ describe("change-order documents (Track D2)", () => {
     expect(b.sc_number).toBeNull();
     const bLines = await env.DB.prepare("SELECT * FROM sov_lines WHERE subcontract_id=?1 ORDER BY position").bind(idB).all();
     expect(bLines.results!.length).toBe(1); // cloned
+    // Q3: the scope declaration seeds as the FIRST LINE of the cloned Exhibit A work text.
+    expect(String(b.exhibit_a_work_text)).toMatch(/^This change order covers only the changes described herein/);
     const cloneAudit = await env.DB.prepare("SELECT * FROM audit_log WHERE action='sc_change_order_clone'").all();
     expect(cloneAudit.results!.length).toBe(1);
 
@@ -882,6 +884,15 @@ describe("change-order documents (Track D2)", () => {
     await driveTo(coId, "approved", "sent");
     expect((await p(admin, `/api/subcontracts/${coId}/change-order`)).status).toBe(409);
     expect((await p(admin, `/api/subcontracts/${coId}/supersede`)).status).toBe(409);
+  });
+
+  it("blocks superseding a parent with a non-canceled change order (Q1/A)", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+    await p(admin, `/api/subcontracts/${idA}/change-order`);
+    const sup = await p(admin, `/api/subcontracts/${idA}/supersede`);
+    expect(sup.status).toBe(409);
+    expect((await json<{ error: string }>(sup)).error).toBe("has_change_orders");
   });
 
   it("refuses generating a CO whose parent is no longer in force; update locks counterparty + job identity but preserves linkage on a clean edit", async () => {

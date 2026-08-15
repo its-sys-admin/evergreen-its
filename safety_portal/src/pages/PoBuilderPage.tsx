@@ -12,6 +12,7 @@ import {
 import { fetchJobs, type Job } from "../lib/api";
 import * as est from "../lib/estimates";
 import { errorText } from "../lib/errorCopy";
+import { CO_SCOPE_PO_DELTA, CO_SCOPE_PO_RESTATEMENT } from "../../worker/wire-types";
 import { useAuth } from "../lib/auth";
 
 // PO workstream S6 — the builder + status tracker (Aug-7 delivery program WS1). One page, two
@@ -1467,6 +1468,30 @@ export function PoBuilderPage({
       {/* 5 — Scope, delivery, payment */}
       <section className="card dash-section" aria-label="Step 5 — Scope and delivery">
         <h3 className="jha__section-title">5 · Scope of work, delivery, payment</h3>
+        {changeOrderOf !== null && (
+          // Operator-ratified Q3: every CO declares delta vs restatement semantics as the
+          // scope text's FIRST LINE (seeded delta at clone; swapped here). The sentence
+          // rides sow_text — signed by the po:v1 canonical, rendered on the document.
+          <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }} role="radiogroup" aria-label="Change-order scope declaration">
+            <span className="field__label">What this change order's pricing covers</span>
+            {[
+              { s: CO_SCOPE_PO_DELTA, label: "The change only — the original order otherwise stands" },
+              { s: CO_SCOPE_PO_RESTATEMENT, label: "The complete order, restated as revised" },
+            ].map((opt) => (
+              <label key={opt.label} style={{ display: "block" }}>
+                <input type="radio" name="co-scope" checked={sow.startsWith(opt.s)}
+                       onChange={() => {
+                         let rest = sow;
+                         for (const known of [CO_SCOPE_PO_DELTA, CO_SCOPE_PO_RESTATEMENT]) {
+                           if (rest.startsWith(known)) rest = rest.slice(known.length).replace(/^\n+/, "");
+                         }
+                         setSow(`${opt.s}\n\n${rest}`);
+                       }} />
+                {" "}{opt.label}
+              </label>
+            ))}
+          </fieldset>
+        )}
         <label className="field">
           <span className="field__label">Scope of work</span>
           <textarea className="field__textarea" aria-label="Scope of work" value={sow} maxLength={8000} rows={5} onChange={(e) => setSow(e.target.value)} />

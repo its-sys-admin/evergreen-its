@@ -830,6 +830,9 @@ describe("change-order documents (Track D2)", () => {
     expect(b.po_number).toBeNull();
     const bLines = await env.DB.prepare("SELECT * FROM po_line_items WHERE po_id=?1 ORDER BY position").bind(idB).all();
     expect(bLines.results!.length).toBe(2); // cloned
+    // Q3 (operator-ratified): the scope declaration seeds as the FIRST LINE of the cloned
+    // sow_text — delta semantics by default, signed via the canonical.
+    expect(String(b.sow_text)).toMatch(/^This change order covers only the changes described herein/);
     // Audit ordering (the supersede clone's W4 rule): the clone audit row exists for a multi-line PO.
     const cloneAudit = await env.DB.prepare("SELECT * FROM audit_log WHERE action='po_change_order_clone'").all();
     expect(cloneAudit.results!.length).toBe(1);
@@ -870,6 +873,18 @@ describe("change-order documents (Track D2)", () => {
     expect((await p(admin, `/api/po/${coId}/change-order`)).status).toBe(409);
     // … and not a supersede source either.
     expect((await p(admin, `/api/po/${coId}/supersede`)).status).toBe(409);
+  });
+
+  it("blocks superseding a parent with a non-canceled change order (Q1/A); canceling the CO unblocks it", async () => {
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    const sup = await p(admin, `/api/po/${idA}/supersede`);
+    expect(sup.status).toBe(409);
+    expect((await json<{ error: string }>(sup)).error).toBe("has_change_orders");
+    expect((await p(admin, `/api/po/${coId}/cancel`)).status).toBe(200);
+    expect((await p(admin, `/api/po/${idA}/supersede`)).status, "canceled CO no longer blocks").toBe(201);
   });
 
   it("gates the clone on cap.po.manage", async () => {

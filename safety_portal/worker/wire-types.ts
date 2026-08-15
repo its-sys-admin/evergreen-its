@@ -104,6 +104,21 @@ export interface JobProcurementSub {
   co_seq: number | null;
 }
 
+/** Track D2 scope declaration (operator-ratified 2026-08-15, Q3): every change-order draft
+ *  carries ONE of these as the first line of its scope text (sow_text / scope_summary) — the
+ *  clone routes seed the delta sentence server-side, the builders' radio swaps them. The
+ *  sentence lives in SIGNED text (sow_text/scope_summary are in the HMAC canonicals), so the
+ *  declaration the vendor reads is covered by the signature — no store-only column, no
+ *  canonical change. */
+export const CO_SCOPE_PO_DELTA =
+  "This change order covers only the changes described herein; all other terms of the original purchase order remain unchanged.";
+export const CO_SCOPE_PO_RESTATEMENT =
+  "This change order restates the complete purchase order as revised; the terms herein are the full order.";
+export const CO_SCOPE_SUB_DELTA =
+  "This change order covers only the changes described herein; all other terms of the original subcontract remain unchanged.";
+export const CO_SCOPE_SUB_RESTATEMENT =
+  "This change order restates the complete subcontract as revised; the terms herein are the full agreement.";
+
 export interface JobProcurementResponse {
   purchase_orders: JobProcurementPo[] | null;
   rfqs: JobProcurementRfq[] | null;

@@ -470,6 +470,13 @@ export function JobProcurementPage(props: {
                         Undo accepted
                       </button>
                     )}
+                    {selected.kind === "subcontract" && row.status === "executed" && (
+                      <button type="button" className="btn btn--secondary" disabled={busy}
+                              onClick={() => void lifecycle("subcontract", row.id, "clear_accepted",
+                                "Undo the countersign record? The subcontract returns to Submitted; if the ledger truly shows it countersigned, the sync will re-mark it.")}>
+                        Undo accepted
+                      </button>
+                    )}
                     {canChangeOrder && (
                       <button type="button" className="btn btn--secondary" disabled={busy}
                               onClick={() => void createChangeOrder(selected.kind as "po" | "subcontract", row.id)}>

@@ -331,20 +331,10 @@ def test_render_supersession_degrades_without_predecessor_number() -> None:
 # ---- change-order clause ----------------------------------------------------
 
 
-def test_change_order_parts_grammar() -> None:
-    """The `-CO<digits>` split: parent from the SIGNED number string, None on any
-    malformation (a malformed suffix renders NO clause rather than a wrong one)."""
-    parts = po_generate._change_order_parts
-    assert parts("2026.384.1.0.0-CO1") == ("2026.384.1.0.0", 1)
-    assert parts("2026.384.1.0.0-CO12") == ("2026.384.1.0.0", 12)
-    assert parts("  2026.384.1.0.0-CO2  ") == ("2026.384.1.0.0", 2)  # tolerant of padding
-    # The LAST -CO wins (a CO minted off a CO parent keeps the full parent number).
-    assert parts("2026.384.1.0.0-CO1-CO2") == ("2026.384.1.0.0-CO1", 2)
-    assert parts("2026.384.1.0.0") is None      # a normal PO never matches
-    assert parts("2026.384.1.0.0-COX") is None  # non-digit tail
-    assert parts("2026.384.1.0.0-CO") is None   # empty tail
-    assert parts("-CO1") is None                # empty head
-    assert parts("") is None
+# The `-CO<digits>` grammar test lives beside the helper it pins:
+# tests/test_po_numbering.py::test_change_order_parts_grammar (the private
+# po_generate._change_order_parts was promoted to numbering.change_order_parts
+# 2026-08-15 at the third consumer — render clause + po_naming CH token).
 
 
 def test_render_change_order_clause_when_co_numbered() -> None:

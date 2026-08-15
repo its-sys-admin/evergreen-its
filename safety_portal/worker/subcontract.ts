@@ -4,6 +4,7 @@ import type { FieldopsApp } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
 import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { hmacHex } from "./hmac";
+import { CO_SCOPE_SUB_DELTA } from "./wire-types";
 import { MAX_ADDRESS } from "./constants";
 // SC-S3c wiring — the SC-S2 terms manifest + versioned contractor/payment-terms config, imported at
 // BUILD time from subcontracts/ (the same files the Mac renderer reads at render time). A subcontract
@@ -1229,6 +1230,14 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     if ((src.status !== "sent" && src.status !== "executed") || src.change_order_of !== null) {
       return c.json({ error: "not_supersedable" }, 409);
     }
+    // Operator-ratified 2026-08-15 (design-completion Q1, option A): a parent with ANY
+    // non-canceled change order cannot be superseded — see the po.ts twin. The guard
+    // repeats atomically in the clone INSERT's WHERE below.
+    const liveCo = await c.env.DB
+      .prepare("SELECT id FROM subcontracts WHERE change_order_of = ?1 AND status != 'canceled' LIMIT 1")
+      .bind(id)
+      .first();
+    if (liveCo) return c.json({ error: "has_change_orders" }, 409);
     // Double-submit guard (idempotency): if a live successor draft already exists for this source,
     // don't mint a sibling at the same supersede_seq — surface the existing one. Canceled successors
     // don't block a fresh supersede.
@@ -1260,7 +1269,9 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
             "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
             "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
             "?1, 'draft', approver_name, approver_title, ?3 " +
-            "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed')",
+            "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed') " +
+            // Atomic twin of the has_change_orders pre-check above (operator-ratified Q1/A).
+            "AND NOT EXISTS (SELECT 1 FROM subcontracts co WHERE co.change_order_of = ?1 AND co.status != 'canceled')",
         )
         .bind(id, scUuid, actor),
       auditStmtIfChanged(c, actor, "sc_supersede_clone", String(id), { source_sc_id: id, sc_uuid: scUuid }),
@@ -1312,14 +1323,19 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
               "change_order_of, co_seq, status, approver_name, approver_title, created_by) " +
               "SELECT ?2, job_no, site_phase, supersede_seq, job_id, job_name, " +
               "project_name, owner_entity, prime_contractor, site_name, site_address, governing_law_state, " +
-              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, exhibit_a_work_text, " +
+              // Scope declaration seeds as the FIRST LINE of the cloned Exhibit A work text
+              // (operator-ratified Q3; the po.ts twin seeds sow_text) — Exhibit A is the
+              // subcontract's scope instrument, signed via the sub:v1 canonical. NOT
+              // scope_summary: that field is 512-capped (MAX_LINE_TEXT), and seeding it could
+              // push an otherwise-valid draft over the bound and make it unsaveable.
+              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, ?4 || exhibit_a_work_text, " +
               "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
               "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
               "?1, (SELECT COALESCE(MAX(co_seq), 0) + 1 FROM subcontracts WHERE change_order_of = ?1), " +
               "'draft', approver_name, approver_title, ?3 " +
               "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed') AND change_order_of IS NULL",
           )
-          .bind(id, scUuid, actor),
+          .bind(id, scUuid, actor, `${CO_SCOPE_SUB_DELTA}\n\n`),
         auditStmtIfChanged(c, actor, "sc_change_order_clone", String(id), { source_sc_id: id, sc_uuid: scUuid }),
         c.env.DB
           .prepare(

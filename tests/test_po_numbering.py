@@ -54,11 +54,27 @@ def test_parse_rejects_malformed(bad: str) -> None:
 
 def test_parse_rejects_change_order_suffix() -> None:
     """The Worker-minted CO grammar (`{parent}-CO{seq}`) is NOT a base D7 number —
-    parse_po_number handles BASE family numbers only. The change-order clause's
-    parent derives via a deliberate rsplit in the render module
-    (po_generate._change_order_parts), never through this parser."""
+    parse_po_number handles BASE family numbers only. Change-order derivation is a
+    deliberate rsplit (numbering.change_order_parts), never through this parser."""
     with pytest.raises(numbering.PoNumberError):
         numbering.parse_po_number("2026.384.1.0.0-CO1")
+
+
+def test_change_order_parts_grammar() -> None:
+    """The `-CO<digits>` split: parent from the SIGNED number string, None on any
+    malformation (a malformed suffix renders NO clause / NO CH file-name marker
+    rather than a wrong one)."""
+    parts = numbering.change_order_parts
+    assert parts("2026.384.1.0.0-CO1") == ("2026.384.1.0.0", 1)
+    assert parts("2026.384.1.0.0-CO12") == ("2026.384.1.0.0", 12)
+    assert parts("  2026.384.1.0.0-CO2  ") == ("2026.384.1.0.0", 2)  # tolerant of padding
+    # The LAST -CO wins (a CO minted off a CO parent keeps the full parent number).
+    assert parts("2026.384.1.0.0-CO1-CO2") == ("2026.384.1.0.0-CO1", 2)
+    assert parts("2026.384.1.0.0") is None      # a normal PO never matches
+    assert parts("2026.384.1.0.0-COX") is None  # non-digit tail
+    assert parts("2026.384.1.0.0-CO") is None   # empty tail
+    assert parts("-CO1") is None                # empty head
+    assert parts("") is None
 
 
 # ---- collision double-check -------------------------------------------------

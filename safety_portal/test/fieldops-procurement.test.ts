@@ -202,6 +202,19 @@ describe("procurement lifecycle (Track D)", () => {
   });
 });
 
+describe("subcontract countersign undo (Q4)", () => {
+  it("clear_accepted flips executed back to sent and clears the acceptance record; a second call 409s", async () => {
+    await seedSub("JOB-P", { status: "executed" });
+    const id = (await env.DB.prepare("SELECT id FROM subcontracts ORDER BY id DESC LIMIT 1").first<{ id: number }>())!.id;
+    await env.DB.prepare("UPDATE subcontracts SET accepted_at='2026-08-15', accepted_by='adm.p' WHERE id=?1").bind(id).run();
+    expect((await p(admin, `/api/fieldops/procurement/subcontract/${id}/lifecycle`, { action: "clear_accepted" })).status).toBe(200);
+    const row = await env.DB.prepare("SELECT status, accepted_at, accepted_by FROM subcontracts WHERE id=?1").bind(id)
+      .first<{ status: string; accepted_at: string | null; accepted_by: string | null }>();
+    expect(row).toMatchObject({ status: "sent", accepted_at: null, accepted_by: null });
+    expect((await p(admin, `/api/fieldops/procurement/subcontract/${id}/lifecycle`, { action: "clear_accepted" })).status).toBe(409);
+  });
+});
+
 describe("change-order documents (Track D2)", () => {
   it("serves change_order_of/co_seq on both lanes so the SPA nests CO documents", async () => {
     await seedVendor("VEN-000042");

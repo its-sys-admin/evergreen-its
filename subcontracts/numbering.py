@@ -29,10 +29,11 @@ mints its number as `{parent_sc_number}-CO{seq}` at generate time (e.g.
 force — a CO is not a supersession. That suffixed grammar is NOT part of the base
 D7 scheme: `parse_sc_number` handles BASE family numbers ONLY and REJECTS a
 CO-suffixed string (`ScNumberError`). Nothing on the Mac parses a CO number into
-D7 components — the render module derives the change-order clause's parent by a
-deliberate local rsplit on `-CO` (`subcontract_docx._change_order_parts`), because
-the sc_number is inside the signed HMAC string while the Worker's change-order D1
-columns are store-only/unsigned (outside the sub:v1 canonical).
+D7 components — `change_order_parts` (below) splits the suffix off by a deliberate
+rsplit on `-CO`, because the sc_number is inside the signed HMAC string while the
+Worker's change-order D1 columns are store-only/unsigned (outside the sub:v1
+canonical). Consumers: the render clause (`subcontract_docx`) and the CH
+file-name token (`subcontract_naming`).
 
 Deterministic string/lookup helpers only — no network beyond the Subcontract_Log
 read the caller passes through `subcontracts.subcontract_log`. Smartsheet failures
@@ -77,8 +78,8 @@ def parse_sc_number(value: str) -> ScNumber:
     Round-trip stable: `format_sc_number(*parse_sc_number(s)) == s` for every valid
     `s` (the segments carry no padding). NO production caller today (tests only) —
     kept as the grammar's executable definition; live code treats numbers as opaque
-    strings, and change-order clause derivation is a deliberate rsplit in the render
-    module, not a parse_* call.
+    strings, and change-order derivation is a deliberate rsplit
+    (`change_order_parts`), not a parse_* call.
     """
     m = _SC_NUMBER_RE.match((value or "").strip())
     if m is None:
@@ -91,6 +92,35 @@ def parse_sc_number(value: str) -> ScNumber:
         supersede_seq=int(m.group(3)),
         revision=int(m.group(4)),
     )
+
+
+def change_order_parts(number: str) -> tuple[str, int] | None:
+    """Split a change-order SC number `{parent}-CO{seq}` → (parent_number, seq), else None.
+
+    A change order is a NORMAL lane document cloned from a SENT parent; the Worker
+    mints its number as `{parent_sc_number}-CO{seq}` at generate time. The parent
+    stays in force — a CO is NOT a supersession (`supersedes_sc_id` is NULL on one).
+
+    §42 — why derive from the number STRING and not a D1 column: the sc_number is
+    inside the signed HMAC string the daemon has already verified (`verify_sub`),
+    so anything a consumer derives here (the contract clause's parent, the CH
+    file-name token) re-derives from SIGNED data. The Worker's change-order columns
+    are STORE-ONLY, outside the sub:v1 canonical — an unsigned column could drift
+    or be tampered without failing verification. The `-CO<digits>` suffix is
+    deliberately NOT part of the base D7 grammar (`parse_sc_number` rejects it), so
+    this is a rsplit, not a parse_* call. A malformed tail (non-digits, empty head)
+    returns None — consumers render NO clause / add NO marker rather than a wrong
+    one. Promoted from `subcontract_docx._change_order_parts` 2026-08-15 at the
+    third consumer (§14: render clause + `subcontract_naming` CH token);
+    `po_materials.numbering` keeps the lane twin — the lanes share no module.
+    """
+    value = (number or "").strip()
+    if "-CO" not in value:
+        return None
+    head, tail = value.rsplit("-CO", 1)
+    if not head or not tail.isascii() or not tail.isdigit():
+        return None
+    return head, int(tail)
 
 
 def check_collision(sc_number: str, d1_id: int) -> str | None:

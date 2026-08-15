@@ -248,6 +248,89 @@ def test_send_queue_source_fail_soft_per_sheet(monkeypatch: pytest.MonkeyPatch) 
     assert any(r.get("status") == "(unavailable)" for r in result.rows)
 
 
+def test_procurement_lanes_panel_is_registered() -> None:
+    # Registration tooth: the generic per-panel tests iterate PANELS_BY_ID, so
+    # they cannot notice a panel silently DROPPED from the registry — this can.
+    from operator_dashboard.sources.procurement_panel import ProcurementLanesSource
+
+    assert "procurement_lanes" in PANELS_BY_ID
+    assert isinstance(PANELS_BY_ID["procurement_lanes"], ProcurementLanesSource)
+
+
+def test_procurement_lanes_rolls_up_status_and_change_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The read-only ledger panel: per lane, Status counts + a change-order census
+    # (number contains "-CO" — a DISTINCT Track D2 document, not a duplicate) +
+    # the most recent rows (number, status, modified), newest first.
+    import shared.sheet_ids as sid
+    import shared.smartsheet_client as ss
+    from operator_dashboard.sources.procurement_panel import ProcurementLanesSource
+
+    rowsets = {
+        sid.SHEET_PO_LOG: [
+            {"PO Number": "2026.104", "Status": "sent", "Last Modified": "2026-08-10T09:00:00"},
+            {"PO Number": "2026.104-CO1", "Status": "pending_review", "Last Modified": "2026-08-14T12:00:00"},
+            {"PO Number": "2026.105", "Status": "sent", "Last Modified": "2026-08-11T08:00:00"},
+        ],
+        sid.SHEET_SUBCONTRACT_LOG: [
+            {"SC Number": "SC-2026-007", "Status": "executed", "Last Modified": "2026-08-01T10:00:00"},
+            {"SC Number": "SC-2026-007-CO2", "Status": "draft", "Last Modified": "2026-08-15T07:00:00"},
+        ],
+        sid.SHEET_RFQ_LOG: [
+            {"RFQ Number": "RFQ-2026-031", "Status": "responded", "Last Modified": "2026-08-12T11:00:00"},
+        ],
+    }
+    monkeypatch.setattr(ss, "get_rows", lambda sheet_id, **kw: list(rowsets.get(sheet_id, [])))
+    result = ProcurementLanesSource().fetch()
+
+    assert result.available
+    assert result.columns == ["lane", "kind", "item", "detail"]
+    # Census + the understatement caveat naming the authoritative lifecycle read.
+    assert "po 3" in result.summary and "subcontracts 2" in result.summary and "rfq 1" in result.summary
+    assert "2 change orders" in result.summary
+    assert "understate" in result.summary and "Procurement screen" in result.summary
+    # Status rollup rows per lane.
+    status_rows = {(r["lane"], r["item"]): r["detail"] for r in result.rows if r["kind"] == "status"}
+    assert status_rows[("po", "sent")] == "2"
+    assert status_rows[("po", "pending_review")] == "1"
+    assert status_rows[("subcontracts", "executed")] == "1"
+    assert status_rows[("rfq", "responded")] == "1"
+    # Change-order census rows for the lanes that have one.
+    co_rows = {r["lane"]: r["detail"] for r in result.rows if r["kind"] == "change orders"}
+    assert co_rows == {"po": "1", "subcontracts": "1"}
+    # Recent rows: newest first, detail = "status · modified".
+    po_recent = [r for r in result.rows if r["lane"] == "po" and r["kind"] == "recent"]
+    assert [r["item"] for r in po_recent] == ["2026.104-CO1", "2026.105", "2026.104"]
+    assert po_recent[0]["detail"].startswith("pending_review · 2026-08-14")
+    # A -CO recent row carries the not-a-duplicate tooltip (Tier-2 misread guard).
+    assert "distinct document" in po_recent[0].get("_title_item", "")
+    assert "_title_item" not in po_recent[1]
+
+
+def test_procurement_lanes_fail_soft_per_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One unreachable ledger degrades to an "(unavailable)" row; the other lanes
+    # still render and the panel never crashes the dashboard.
+    import shared.sheet_ids as sid
+    import shared.smartsheet_client as ss
+    from operator_dashboard.sources.procurement_panel import ProcurementLanesSource
+
+    def get_rows(sheet_id: int, **kw: object) -> list[dict[str, str]]:
+        if sheet_id == sid.SHEET_SUBCONTRACT_LOG:
+            raise RuntimeError("sheet down")
+        return [{"PO Number": "2026.104", "RFQ Number": "RFQ-1", "Status": "sent"}]
+
+    monkeypatch.setattr(ss, "get_rows", get_rows)
+    result = ProcurementLanesSource().fetch()
+
+    assert result.available  # never crashes
+    unavailable = [r["lane"] for r in result.rows if r["kind"] == "(unavailable)"]
+    assert unavailable == ["subcontracts"]
+    assert any(r["lane"] == "po" and r["kind"] == "status" for r in result.rows)
+    assert any(r["lane"] == "rfq" and r["kind"] == "status" for r in result.rows)
+    assert "subcontracts ?" in result.summary
+
+
 def _clear_panel_cache() -> None:
     import operator_dashboard.cache as cache
 

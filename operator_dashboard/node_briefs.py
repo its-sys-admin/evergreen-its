@@ -418,12 +418,13 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "The Mac-side half of the purchase-order pipeline: it re-adds every total in whole "
             "cents against the signed draft and refuses a mismatch outright. What passes becomes "
             "a PDF in the job's Box folder, a PO_Log row and a row on the approval desk, while a "
-            "separate pass screens the office's attached specs and drawings. It sends nothing."
+            "separate pass screens attached specs and drawings. A -CO-numbered change order rides "
+            "the same pipeline; its parent stays in force. It sends nothing."
             "\n\n"
             "Day-to-day this is watch-only. If POs stop appearing, check its gates in ITS_Config: "
             "gated off it writes no heartbeat, so stale means dark, not broken. Refusals land in "
-            "the Review Queue, fenced until you fix the cause and clear the fence per the runbook "
-            "— signature, totals and credential failures escalate to the developer."
+            "the Review Queue, fenced until you clear the fence per the runbook — signature, "
+            "totals and credential failures escalate to the developer."
         ),
         key_label="Key signals",
         key_line=(
@@ -530,11 +531,14 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
         what=(
             "The purchase-order ledger: one row per PO showing its number, vendor, total, and "
             "lifecycle stage. The po-poll daemon writes it automatically as a mirror of the "
-            "portal's authoritative database."
+            "portal's authoritative database. A row numbered {parent}-CO{n} is a change order — "
+            "a distinct document cloned from its sent parent, which stays in force — not a "
+            "duplicate row."
             "\n\n"
-            "Day-to-day it's read-only — a convenient office view of all POs without opening the "
-            "portal. Don't edit rows here (the portal is the master), and never do math on Total "
-            "(it's a display string)."
+            "Day-to-day it's read-only — a convenient office view without opening the portal. "
+            "Stages the office marks by hand on the job's portal Procurement screen (submitted, "
+            "accepted) can lag or be missing here, so read lifecycle there. Don't edit rows, and "
+            "never do math on Total (a display string)."
         ),
     ),
     "sheet_po_pending_review": NodeBrief(
@@ -544,7 +548,9 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "Scheduled Send or Send Now; only then does po-send email the vendor."
             "\n\n"
             "Note three columns are borrowed slots: \"Job ID\" holds the Vendor Key, \"Week Of\" "
-            "holds the PO date, and \"Compiled PDF\" is the PO PDF link."
+            "holds the PO date, and \"Compiled PDF\" is the PO PDF link. A row numbered "
+            "{parent}-CO{n} is a change order awaiting its own approval — a distinct document, "
+            "not a duplicate of the parent PO, which stays in force."
         ),
     ),
     "sheet_estimate_log": NodeBrief(
@@ -625,13 +631,13 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "re-adding the schedule-of-values against the contract price, and taking "
             "subcontractor identity from the Smartsheet roster rather than the portal's copy. "
             "What survives becomes three editable files in the job's Box folder and a PENDING "
-            "approval row; nothing reaches a subcontractor until a human approves."
+            "approval row; nothing reaches a subcontractor until a human approves. A -CO-numbered "
+            "change order rides the same path; its parent stays in force."
             "\n\n"
             "Day-to-day this is watch-only. A stale heartbeat can mean switched off, not broken — "
             "check its gates first. A refused draft lands in the Review Queue and is skipped "
-            "thereafter; where the runbook calls the cause operator-fixable, fix it and clear "
-            "that draft from the skip-list file it names. Tamper-seal or price mismatches, and "
-            "missing credentials, escalate."
+            "thereafter; fix operator-fixable causes and clear the skip-list entry the runbook "
+            "names. Tamper-seal or price mismatches, and missing credentials, escalate."
         ),
         key_label="Key signals",
         key_line=(
@@ -659,10 +665,13 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
         what=(
             "The subcontract ledger: one row per subcontract, tracking it from pending review "
             "through executed. The subcontract-poll daemon writes it automatically as a mirror of "
-            "the portal's database."
+            "the portal's database. A row numbered {parent}-CO{n} is a change order — a distinct "
+            "document cloned from its executed parent, which stays in force — not a duplicate."
             "\n\n"
-            "Day-to-day it's read-only — an office view of every subcontract's status. Don't edit "
-            "rows, and never do math on the Total display string."
+            "Day-to-day it's read-only — an office view of every subcontract's status. Stages the "
+            "office marks by hand on the job's portal Procurement screen (submitted, executed) "
+            "can lag or be missing here, so read lifecycle there. Don't edit rows, and never do "
+            "math on the Total display string."
         ),
     ),
     "sheet_subcontract_pending_review": NodeBrief(
@@ -672,7 +681,8 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
             "(contract + Exhibit A + schedule of values, one editable ZIP) to the subcontractor."
             "\n\n"
             "Borrowed slots: \"Job ID\" = Sub Key, \"Week Of\" = subcontract date, \"Compiled PDF\" = "
-            "the package link."
+            "the package link. A -CO-numbered row is a change order awaiting its own approval — "
+            "a distinct document, not a duplicate of the parent subcontract, which stays in force."
         ),
     ),
     "subcontract_send": NodeBrief(

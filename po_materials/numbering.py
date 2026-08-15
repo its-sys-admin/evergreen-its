@@ -28,10 +28,11 @@ mints its number as `{parent_po_number}-CO{seq}` at generate time (e.g.
 force — a CO is not a supersession. That suffixed grammar is NOT part of the base
 D7 scheme: `parse_po_number` handles BASE family numbers ONLY and REJECTS a
 CO-suffixed string (`PoNumberError`). Nothing on the Mac parses a CO number into
-D7 components — the render module derives the change-order clause's parent by a
-deliberate local rsplit on `-CO` (`po_generate._change_order_parts`), because the
-po_number is inside the signed HMAC string while the Worker's `change_order_of` /
-`co_seq` D1 columns are store-only/unsigned (outside the po:v1 canonical).
+D7 components — `change_order_parts` (below) splits the suffix off by a deliberate
+rsplit on `-CO`, because the po_number is inside the signed HMAC string while the
+Worker's `change_order_of` / `co_seq` D1 columns are store-only/unsigned (outside
+the po:v1 canonical). Consumers: the render clause (`po_generate`) and the CH
+file-name token (`po_naming`).
 
 Deterministic string/lookup helpers only — no network beyond the PO_Log read the
 caller passes through `po_materials.po_log`. Smartsheet failures propagate typed
@@ -76,8 +77,8 @@ def parse_po_number(value: str) -> PoNumber:
     Round-trip stable: `format_po_number(*parse_po_number(s)) == s` for every valid
     `s` (the segments carry no padding). NO production caller today (tests only) —
     kept as the grammar's executable definition; live code treats numbers as opaque
-    strings, and change-order clause derivation is a deliberate rsplit in the render
-    module, not a parse_* call.
+    strings, and change-order derivation is a deliberate rsplit
+    (`change_order_parts`), not a parse_* call.
     """
     m = _PO_NUMBER_RE.match((value or "").strip())
     if m is None:
@@ -90,6 +91,36 @@ def parse_po_number(value: str) -> PoNumber:
         supersede_seq=int(m.group(3)),
         revision=int(m.group(4)),
     )
+
+
+def change_order_parts(number: str) -> tuple[str, int] | None:
+    """Split a change-order PO number `{parent}-CO{seq}` → (parent_number, seq), else None.
+
+    A change order is a NORMAL lane document cloned from a SENT parent; the Worker
+    mints its number as `{parent_po_number}-CO{seq}` at generate time (e.g.
+    `2026.384.1.0.0` → `2026.384.1.0.0-CO1`). The parent stays in force — a CO is
+    NOT a supersession (`supersedes_po_id` is NULL on one).
+
+    §42 — why derive from the number STRING and not a D1 column: the po_number is
+    inside the signed HMAC canonical the daemon has already verified, so anything a
+    consumer derives here (the printed clause's parent, the CH file-name token)
+    re-derives from SIGNED data. The Worker's `change_order_of`/`co_seq` columns are
+    STORE-ONLY, outside the po:v1 canonical — an unsigned column could drift or be
+    tampered without failing verification. The `-CO<digits>` suffix is deliberately
+    NOT part of the base D7 grammar (`parse_po_number` rejects it), so this is a
+    rsplit, not a parse_* call. A malformed tail (non-digits, empty head) returns
+    None — consumers render NO clause / add NO marker rather than a wrong one.
+    Promoted from `po_generate._change_order_parts` 2026-08-15 at the third
+    consumer (§14: render clause + `po_naming` CH token); `subcontracts.numbering`
+    keeps the lane twin — the lanes share no module.
+    """
+    value = (number or "").strip()
+    if "-CO" not in value:
+        return None
+    head, tail = value.rsplit("-CO", 1)
+    if not head or not tail.isascii() or not tail.isdigit():
+        return None
+    return head, int(tail)
 
 
 def check_collision(po_number: str, d1_id: int) -> str | None:

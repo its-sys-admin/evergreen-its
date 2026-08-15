@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import type { FieldopsApp } from "./fieldops_gates";
 import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { hmacHex } from "./hmac";
+import { CO_SCOPE_PO_DELTA } from "./wire-types";
 import { MAX_ADDRESS } from "./constants";
 // S2b wiring — the S3 terms manifest + versioned purchaser/tax config, imported at
 // BUILD time from po_materials/ (the same files the Mac renderer reads at render time).
@@ -1238,6 +1239,16 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     // (change_order_of, co_seq), and re-issuing a CO is done as the NEXT CO against
     // the base — Track D2). Base documents only.
     if (src.status !== "sent" || src.change_order_of !== null) return c.json({ error: "not_supersedable" }, 409);
+    // Operator-ratified 2026-08-15 (design-completion Q1, option A): a parent with ANY
+    // non-canceled change order cannot be superseded — replacing it would strand paper that
+    // amends it (drafts could never generate; sent COs would modify a void contract).
+    // Further changes go out as the NEXT change order; the guard repeats atomically in the
+    // clone INSERT's WHERE below.
+    const liveCo = await c.env.DB
+      .prepare("SELECT id FROM purchase_orders WHERE change_order_of = ?1 AND status != 'canceled' LIMIT 1")
+      .bind(id)
+      .first();
+    if (liveCo) return c.json({ error: "has_change_orders" }, 409);
     // Double-submit guard (review finding, idempotency): if a live successor draft already
     // exists for this source, don't mint a sibling at the same supersede_seq — surface the
     // existing one. Canceled successors don't block a fresh supersede.
@@ -1272,7 +1283,9 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
             "sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
             "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
             "line_column_variant, ?1, 'draft', approver_name, approver_title, vendor_key, ?3 " +
-            "FROM purchase_orders WHERE id = ?1 AND status = 'sent'",
+            "FROM purchase_orders WHERE id = ?1 AND status = 'sent' " +
+            // Atomic twin of the has_change_orders pre-check above (operator-ratified Q1/A).
+            "AND NOT EXISTS (SELECT 1 FROM purchase_orders co WHERE co.change_order_of = ?1 AND co.status != 'canceled')",
         )
         .bind(id, poUuid, actor),
       auditStmtIfChanged(c, actor, "po_supersede_clone", String(id), { source_po_id: id, po_uuid: poUuid }),
@@ -1331,14 +1344,18 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
               "SELECT ?2, job_no, site_phase, supersede_seq, job_id, job_name, " +
               "ship_to_name, ship_to_address, ship_to_city, ship_to_state, ship_to_zip, " +
               "delivery_contact_name, delivery_contact_phone, delivery_contact_email, " +
-              "sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
+              // The scope declaration seeds as the FIRST LINE of the cloned sow_text
+              // (operator-ratified Q3): delta semantics by default — the builder's radio
+              // swaps it. sow_text is in the signed canonical, so the declaration the
+              // vendor reads is signature-covered.
+              "?4 || sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
               "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
               "line_column_variant, ?1, " +
               "(SELECT COALESCE(MAX(co_seq), 0) + 1 FROM purchase_orders WHERE change_order_of = ?1), " +
               "'draft', approver_name, approver_title, vendor_key, ?3 " +
               "FROM purchase_orders WHERE id = ?1 AND status = 'sent' AND change_order_of IS NULL",
           )
-          .bind(id, poUuid, actor),
+          .bind(id, poUuid, actor, `${CO_SCOPE_PO_DELTA}\n\n`),
         auditStmtIfChanged(c, actor, "po_change_order_clone", String(id), { source_po_id: id, po_uuid: poUuid }),
         c.env.DB
           .prepare(

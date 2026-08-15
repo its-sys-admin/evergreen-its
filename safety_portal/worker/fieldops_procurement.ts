@@ -308,6 +308,24 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           if ((res[0].meta.changes ?? 0) === 0) return refuseWrongState(c, "subcontracts", id);
           return c.json({ ok: true });
         }
+        if (action === "clear_accepted") {
+          // Operator-ratified 2026-08-15 (design-completion Q4): the audited correction for
+          // a mistaken countersign mark — executed → sent, acceptance record cleared. The
+          // ledger sync's own executed-write converges the other way: if Smartsheet truly
+          // records a countersign, the next sync re-flips this to executed (two-writer
+          // exact-prior-state discipline, whichever writes last with a true fact wins).
+          const res = await c.env.DB.batch([
+            c.env.DB
+              .prepare(
+                "UPDATE subcontracts SET status='sent', accepted_at=NULL, accepted_by=NULL, " +
+                  "updated_at=unixepoch() WHERE id=?1 AND status='executed'",
+              )
+              .bind(id),
+            auditStmtIfChanged(c, actor, "sc_accepted_cleared", String(id), { sc_id: id }),
+          ]);
+          if ((res[0].meta.changes ?? 0) === 0) return refuseWrongState(c, "subcontracts", id);
+          return c.json({ ok: true });
+        }
         return c.json({ error: "invalid_action" }, 400);
       }
 

@@ -18,6 +18,7 @@ the same leaf-module posture as `safety_naming.CFG_BOX_PORTAL_ROOT`.
 """
 from __future__ import annotations
 
+from po_materials import numbering
 from safety_reports import safety_naming
 
 # The PO lane's OWN Box mirror-tree ROOT (ITS_Config Setting + the Workstream cell its
@@ -32,12 +33,30 @@ CFG_BOX_PORTAL_ROOT = "po_materials.box.portal_root_folder_id"
 CFG_BOX_PORTAL_ROOT_WORKSTREAM = "po_materials"
 
 
+def _number_token(number: str) -> str:
+    """The number segment as it appears in FILE NAMES: ``CH_<number>`` when the number
+    is a change order (``{parent}-CO{seq}``, per ``numbering.change_order_parts``),
+    else the number unchanged.
+
+    §42 — operator directive 2026-08-15: change-order document FILE NAMES carry a
+    ``CH`` marker (e.g. ``<Job>_PO_CH_2026.384.1.0.0-CO1.pdf``) so a CO stands out in
+    a Box/Smartsheet listing. FILE NAMES ONLY — ``po_pdf_title`` (the PDF's internal
+    ``/Title``) is deliberately unmarked; the operator scoped the directive to file
+    names. Base-number names are BYTE-IDENTICAL to before this landed (the token only
+    ever differs for CO-formatted numbers), so no previously-filed document's §47
+    version-on-conflict key changes; zero CO documents were filed before this landed,
+    so no existing CO name shifts either."""
+    return f"CH_{number}" if numbering.change_order_parts(number) is not None else number
+
+
 def po_pdf_filename(po_number: str, job_name: str | None) -> str:
     """The PO PDF file name: ``<Job>_PO_<po_number>.pdf`` (job-prefixed, matching the
-    Safety ``<job>_<...>.pdf`` file style). Falls back to ``PO <po_number>.pdf`` when
-    the job name is empty (the pre-2026-07 name)."""
+    Safety ``<job>_<...>.pdf`` file style; a change-order number gains the ``CH_``
+    marker — ``<Job>_PO_CH_<number>.pdf``, see ``_number_token``). Falls back to
+    ``PO <po_number>.pdf`` when the job name is empty (the pre-2026-07 name)."""
     job = safety_naming.job_folder_name(job_name or "").strip()
-    return f"{job}_PO_{po_number}.pdf" if job else f"PO {po_number}.pdf"
+    number = _number_token(po_number)
+    return f"{job}_PO_{number}.pdf" if job else f"PO {number}.pdf"
 
 
 def po_attachment_filename(po_number: str, attachment_id: int, original_filename: str) -> str:
@@ -56,8 +75,10 @@ def po_attachment_filename(po_number: str, attachment_id: int, original_filename
     artifact re-filed (a crash-retry of THIS attachment keeps its id → same name →
     idempotent new version); two independent uploads are DISTINCT documents and get
     distinct names. The PO number still prefixes the name so attachments group beside
-    their PO PDF; the original name (charset-bounded by the Worker gate) stays visible."""
-    return f"PO_{po_number}_ATT{attachment_id}_{original_filename}"
+    their PO PDF (a change-order number gains the ``CH_`` marker —
+    ``PO_CH_<number>_ATT<id>_<original>``, see ``_number_token``); the original name
+    (charset-bounded by the Worker gate) stays visible."""
+    return f"PO_{_number_token(po_number)}_ATT{attachment_id}_{original_filename}"
 
 
 def po_pdf_title(po_number: str, job_name: str | None) -> str:
