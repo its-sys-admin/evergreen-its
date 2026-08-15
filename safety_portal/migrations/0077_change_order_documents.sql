@@ -22,6 +22,14 @@
 -- because the parent number is embedded in the signed po_number/sc_number; the Mac
 -- renders the change-order clause by deriving from that signed string.
 
+-- APPLY BEFORE DEPLOY — SAME MAINTENANCE WINDOW AS THE WORKER (bidirectional): run
+-- `npx wrangler d1 migrations apply its-safety-portal-db --remote` BEFORE this PR's Worker
+-- deploys (the 0010/0033/0074-0076 rule — the new Worker reads change_order_of/co_seq on the
+-- lane lists, both generates, both clone routes and the per-job GET; `git pull` first). BUT
+-- unlike the ordinary additive case, the DROP TABLE below also breaks the PRE-0077 Worker's
+-- change-order-record routes, so do not leave the old Worker live once this has applied:
+-- apply 0077, then deploy this Worker immediately in the same window.
+
 ALTER TABLE purchase_orders ADD COLUMN change_order_of INTEGER;
 ALTER TABLE purchase_orders ADD COLUMN co_seq INTEGER;
 ALTER TABLE subcontracts ADD COLUMN change_order_of INTEGER;
