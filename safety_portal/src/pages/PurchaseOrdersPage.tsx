@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { PageShell } from "../components/PageShell";
 import { PoBuilderPage } from "./PoBuilderPage";
 import { RfqBuilderPage } from "./RfqBuilderPage";
@@ -67,14 +67,23 @@ export function PurchaseOrdersPage({
 
   // Render-phase adoption of the external one-shot (idempotent under StrictMode double-render:
   // the second pass sees the nonce already recorded and skips). The render that carries the
-  // new prop is itself the render that must hand the request to PoBuilderPage below. Consumption
-  // is reported UP so the App-held request cannot outlive this mount and replay later.
+  // new prop is itself the render that must hand the request to PoBuilderPage below.
   const lastExternalNonceRef = useRef(0);
   if (externalOpenDraft && externalOpenDraft.nonce !== lastExternalNonceRef.current) {
     lastExternalNonceRef.current = externalOpenDraft.nonce;
     openDraftReqRef.current = { id: externalOpenDraft.id, nonce: ++nonceRef.current, origin: externalOpenDraft.origin };
-    onExternalOpenConsumed?.(externalOpenDraft.nonce);
   }
+  // Consumption is reported UP from an EFFECT, never the render body (review 2026-08-15):
+  // mutating an ancestor's ref during a child's render can fire in a discarded concurrent
+  // render pass and silently drop the one-shot. Effects run only after commit — the
+  // SubcontractBuilderPage pattern.
+  useEffect(() => {
+    if (externalOpenDraft && lastExternalNonceRef.current === externalOpenDraft.nonce) {
+      onExternalOpenConsumed?.(externalOpenDraft.nonce);
+    }
+    // Keyed on the request alone — the callback identity is stable-enough App scope.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalOpenDraft]);
 
   // Mount-on-first-visit set. Mutated during render (idempotent add — safe under StrictMode
   // double-render): the tab prop change that reveals a new panel is itself the re-render that

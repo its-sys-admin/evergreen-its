@@ -384,7 +384,7 @@ export async function cancelPo(id: number): Promise<void> {
   await postJson(`/api/po/${id}/cancel`, {});
 }
 
-/** HARD-delete an un-generated DRAFT PO (row + line items + attachments). Draft-only; a generated record is 409 not_deletable. */
+/** HARD-delete an un-generated DRAFT PO (row + line items + attachments). Draft-only; a generated record is 409 record_not_deletable. */
 export async function deletePoDraft(id: number): Promise<void> {
   await postJson(`/api/po/${id}/delete`, {});
 }

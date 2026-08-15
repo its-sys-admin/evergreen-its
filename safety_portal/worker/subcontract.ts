@@ -1176,9 +1176,13 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
             // matches 0 rows, and the client gets a clean 'draft_changed' 409 — never a 'queued' row
             // whose HMAC signed a stale snapshot. D1 serializes statements, not whole requests; this
             // is the request-level guard.
+            // Parent-in-force clause: makes the CO pre-check ATOMIC with the commit (the po.ts
+            // twin; review W5 2026-08-15) — nothing downstream re-checks the parent.
             "UPDATE subcontracts SET revision=?2, sc_number=?3, subtotal_cents=?4, hmac=?5, " +
               "status='queued', updated_at=unixepoch() " +
-              "WHERE id=?1 AND status='draft' AND draft_version=?6",
+              "WHERE id=?1 AND status='draft' AND draft_version=?6 " +
+              "AND (change_order_of IS NULL OR " +
+              "(SELECT s2.status FROM subcontracts s2 WHERE s2.id = subcontracts.change_order_of) IN ('sent','executed'))",
           )
           .bind(id, revision, scNumber, subtotal, hmac, sub.draft_version),
         auditStmtIfChanged(c, actor, "sc_generate", String(id), {
@@ -1192,14 +1196,18 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
       throw e;
     }
     if ((res[0].meta.changes ?? 0) === 0) {
-      // Distinguish the two 0-row causes: the draft was edited under us (retry-able) vs the row left
-      // 'draft' entirely.
+      // Distinguish the three 0-row causes: edited under us (retry-able), left 'draft'
+      // entirely, or (CO only) the parent left force inside the read→commit window.
       const now = await c.env.DB
         .prepare("SELECT status, draft_version FROM subcontracts WHERE id = ?1")
         .bind(id)
         .first<{ status: string; draft_version: number }>();
       if (now && now.status === "draft" && now.draft_version !== sub.draft_version) {
         return c.json({ error: "draft_changed" }, 409);
+      }
+      if (now && now.status === "draft" && sub.change_order_of !== null) {
+        // Still a draft at the same version — the only remaining predicate is the parent clause.
+        return c.json({ error: "parent_not_in_force" }, 409);
       }
       return c.json({ error: "not_draft" }, 409);
     }

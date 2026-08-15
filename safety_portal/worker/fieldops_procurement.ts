@@ -2,6 +2,7 @@ import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import type { Context } from "hono";
 import type { Env, Vars } from "./types";
 import { auditStmtIfChanged } from "./audit";
+import { pacificDateString } from "./fieldops_recurrence";
 import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobProcurementSub } from "./wire-types";
 
 // Per-job Procurement read for the Job Tracker (Track A8, operator ask 2026-08-13): the POs,
@@ -199,11 +200,10 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
       }
       const action = typeof body.action === "string" ? body.action : "";
       const actor = c.get("session").username;
-      // Pacific wall-clock date (en-CA formats YYYY-MM-DD) — the repo's date convention; a UTC
-      // slice stamps tomorrow's date for any evening mark (design-completion review, 2026-08-15).
-      const today = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
-      }).format(new Date());
+      // Pacific wall-clock date — the repo's convention; a UTC slice stamps tomorrow's date
+      // for any evening mark (design-completion review, 2026-08-15). §14: the shared helper,
+      // not a re-inlined Intl call.
+      const today = pacificDateString(Date.now());
 
       if (docType === "po") {
         if (!caps.has(LANE_CAP_PO)) return c.json({ error: "forbidden" }, 403);

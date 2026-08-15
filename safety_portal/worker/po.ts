@@ -1182,9 +1182,16 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
             // this UPDATE matches 0 rows, and the client gets a clean 'draft_changed' 409 —
             // never a 'queued' row whose HMAC signed a stale snapshot (review finding W5/W8).
             // D1 serializes statements, not whole requests; this is the request-level guard.
+            // The parent-in-force clause makes the CO pre-check ATOMIC with the commit (the
+            // status-sync flip's correlated-subquery pattern): a parent superseded between the
+            // read above and this statement can no longer let a signed "remains in force"
+            // clause through (review W5, 2026-08-15). Nothing downstream re-checks — the Mac
+            // renders the clause from the signed number unconditionally.
             "UPDATE purchase_orders SET revision=?2, po_number=?3, subtotal_cents=?4, tax_rate_bp=?5, " +
               "tax_cents=?6, total_cents=?7, hmac=?8, status='queued', updated_at=unixepoch() " +
-              "WHERE id=?1 AND status='draft' AND draft_version=?9",
+              "WHERE id=?1 AND status='draft' AND draft_version=?9 " +
+              "AND (change_order_of IS NULL OR " +
+              "(SELECT p2.status FROM purchase_orders p2 WHERE p2.id = purchase_orders.change_order_of) = 'sent')",
           )
           .bind(id, revision, poNumber, totals.subtotal_cents, totals.tax_rate_bp, totals.tax_cents, totals.total_cents, hmac, po.draft_version),
         auditStmtIfChanged(c, actor, "po_generate", String(id), {
@@ -1198,14 +1205,19 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
       throw e;
     }
     if ((res[0].meta.changes ?? 0) === 0) {
-      // Distinguish the two 0-row causes: the draft was edited under us (retry-able —
-      // refetch, re-verify totals, regenerate) vs the row left 'draft' entirely.
+      // Distinguish the three 0-row causes: the draft was edited under us (retry-able —
+      // refetch, re-verify totals, regenerate), the row left 'draft' entirely, or (CO only)
+      // the parent left force inside the read→commit window.
       const now = await c.env.DB
         .prepare("SELECT status, draft_version FROM purchase_orders WHERE id = ?1")
         .bind(id)
         .first<{ status: string; draft_version: number }>();
       if (now && now.status === "draft" && now.draft_version !== po.draft_version) {
         return c.json({ error: "draft_changed" }, 409);
+      }
+      if (now && now.status === "draft" && po.change_order_of !== null) {
+        // Still a draft at the same version — the only remaining predicate is the parent clause.
+        return c.json({ error: "parent_not_in_force" }, 409);
       }
       return c.json({ error: "not_draft" }, 409);
     }
