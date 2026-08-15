@@ -148,8 +148,8 @@ def test_render_subcontract_docx_no_clause_for_base_number(tmp_path, monkeypatch
 
 
 def test_render_subcontract_docx_non_digit_co_tail_no_clause(tmp_path, monkeypatch):
-    """`-COX` is not the CO grammar — _change_order_parts returns None and NO notice
-    renders (never a clause naming a parent the malformed suffix can't prove)."""
+    """`-COX` is not the CO grammar — numbering.change_order_parts returns None and NO
+    notice renders (never a clause naming a parent the malformed suffix can't prove)."""
     _cleared(tmp_path, monkeypatch)
     data = sd.render_subcontract_docx(_record(sc_number="2026.001.2.0.0-COX"), _SOV)
     joined = "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)

@@ -379,7 +379,7 @@ export async function cancelSubcontract(id: number): Promise<void> {
   await postJson(`/api/subcontracts/${id}/cancel`, {});
 }
 
-/** HARD-delete an un-generated DRAFT (row + SOV lines). Draft-only; a generated record is 409 not_deletable. */
+/** HARD-delete an un-generated DRAFT (row + SOV lines). Draft-only; a generated record is 409 record_not_deletable. */
 export async function deleteSubDraft(id: number): Promise<void> {
   await postJson(`/api/subcontracts/${id}/delete`, {});
 }

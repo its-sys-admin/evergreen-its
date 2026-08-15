@@ -2,6 +2,7 @@ import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import type { Context } from "hono";
 import type { Env, Vars } from "./types";
 import { auditStmtIfChanged } from "./audit";
+import { pacificDateString } from "./fieldops_recurrence";
 import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobProcurementSub } from "./wire-types";
 
 // Per-job Procurement read for the Job Tracker (Track A8, operator ask 2026-08-13): the POs,
@@ -14,8 +15,8 @@ import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobPr
 // `executed`, RFQs derive their parent status from per-vendor pending→filed→sent→responded.
 // Everything at `approved` or beyond is a CACHE of the Mac/Smartsheet-side authoritative state
 // with poll latency (the lanes' status-sync passes) — the SPA labels it "as of last sync".
-// `rfqs.closed` exists in the CHECK but has NO writer today — deliberately not rendered as a
-// reachable state here.
+// `rfqs.closed` was a dead CHECK state at birth; the Track D lifecycle route below is now its
+// ONE writer (the office retiring a finished round).
 //
 // CAPABILITY POSTURE (least-privilege; the fieldops_jobtracker routing-block precedent): the
 // lanes' own admin-only caps gate their own data — cap.po.manage for POs + RFQs (one
@@ -157,7 +158,13 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           co_seq: (r.co_seq as number | null) ?? null,
         }));
       }
-      const payload: JobProcurementResponse = { purchase_orders: pos, rfqs, subcontracts: subs };
+      // A lane returning exactly LANE_CAP_ROWS rows may have dropped older documents — say so
+      // (the no-silent-caps rule); the SPA renders a hint pointing at the lane pages.
+      const truncated_lanes: string[] = [];
+      if (pos && pos.length === LANE_CAP_ROWS) truncated_lanes.push("purchase_orders");
+      if (rfqs && rfqs.length === LANE_CAP_ROWS) truncated_lanes.push("rfqs");
+      if (subs && subs.length === LANE_CAP_ROWS) truncated_lanes.push("subcontracts");
+      const payload: JobProcurementResponse = { purchase_orders: pos, rfqs, subcontracts: subs, truncated_lanes };
       return c.json(payload, 200);
     },
   );
@@ -193,7 +200,10 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
       }
       const action = typeof body.action === "string" ? body.action : "";
       const actor = c.get("session").username;
-      const today = new Date().toISOString().slice(0, 10);
+      // Pacific wall-clock date — the repo's convention; a UTC slice stamps tomorrow's date
+      // for any evening mark (design-completion review, 2026-08-15). §14: the shared helper,
+      // not a re-inlined Intl call.
+      const today = pacificDateString(Date.now());
 
       if (docType === "po") {
         if (!caps.has(LANE_CAP_PO)) return c.json({ error: "forbidden" }, 403);
@@ -294,6 +304,24 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
               )
               .bind(id, today, actor),
             auditStmtIfChanged(c, actor, "sc_marked_accepted", String(id), { sc_id: id }),
+          ]);
+          if ((res[0].meta.changes ?? 0) === 0) return refuseWrongState(c, "subcontracts", id);
+          return c.json({ ok: true });
+        }
+        if (action === "clear_accepted") {
+          // Operator-ratified 2026-08-15 (design-completion Q4): the audited correction for
+          // a mistaken countersign mark — executed → sent, acceptance record cleared. The
+          // ledger sync's own executed-write converges the other way: if Smartsheet truly
+          // records a countersign, the next sync re-flips this to executed (two-writer
+          // exact-prior-state discipline, whichever writes last with a true fact wins).
+          const res = await c.env.DB.batch([
+            c.env.DB
+              .prepare(
+                "UPDATE subcontracts SET status='sent', accepted_at=NULL, accepted_by=NULL, " +
+                  "updated_at=unixepoch() WHERE id=?1 AND status='executed'",
+              )
+              .bind(id),
+            auditStmtIfChanged(c, actor, "sc_accepted_cleared", String(id), { sc_id: id }),
           ]);
           if ((res[0].meta.changes ?? 0) === 0) return refuseWrongState(c, "subcontracts", id);
           return c.json({ ok: true });

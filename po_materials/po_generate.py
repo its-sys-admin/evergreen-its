@@ -58,7 +58,7 @@ from reportlab.platypus import (  # type: ignore[import-untyped]
     TableStyle,
 )
 
-from po_materials import po_naming
+from po_materials import numbering, po_naming
 from po_materials import terms as terms_lib
 from po_materials import vendors as vendors_mod
 from po_materials.po_log import format_total_cents as _money
@@ -467,37 +467,6 @@ def _signature_block(title: str, name: str, title_line: str, st: dict) -> Table:
     return t
 
 
-def _change_order_parts(po_number: str) -> tuple[str, int] | None:
-    """Split a change-order PO number `{parent}-CO{seq}` → (parent_number, seq), else None.
-
-    A change order is a NORMAL lane document cloned from a SENT parent; the Worker
-    mints its number as `{parent_po_number}-CO{seq}` at generate time (e.g.
-    `2026.384.1.0.0` → `2026.384.1.0.0-CO1`). The parent stays in force — this is
-    NOT a supersession (`supersedes_po_id` is NULL on a CO), so the two in-body
-    clauses are mutually exclusive in practice, though the render tolerates both.
-
-    §42 — why derive from the number STRING and not a D1 column: the po_number is
-    inside the signed HMAC canonical the daemon has already verified, so the parent
-    identity printed in a legal clause re-derives from SIGNED data. The Worker's
-    `change_order_of`/`co_seq` columns are STORE-ONLY (the `estimate_id` precedent,
-    worker/po.ts) and outside the po:v1 canonical — an unsigned column could drift
-    or be tampered without failing verification, and a clause must never name a
-    parent the signature does not cover. The `-CO<digits>` suffix is deliberately
-    NOT part of the base D7 grammar (`numbering.parse_po_number` rejects it; see
-    po_materials/numbering.py), so this is a local rsplit, not a parse_* call.
-    A malformed tail (non-digits, empty head) returns None — NO clause renders
-    rather than a wrong one. Mirrors subcontracts/subcontract_docx.py's twin
-    (§14: two 10-line consumers in unlinked lanes — duplicated, cross-referenced).
-    """
-    value = (po_number or "").strip()
-    if "-CO" not in value:
-        return None
-    head, tail = value.rsplit("-CO", 1)
-    if not head or not tail.isascii() or not tail.isdigit():
-        return None
-    return head, int(tail)
-
-
 def render_po_pdf(
     po: Mapping[str, Any],
     lines: Sequence[Mapping[str, Any]],
@@ -647,11 +616,11 @@ def render_po_pdf(
 
     # In-body change-order clause — rendered when this PO's OWN number carries the
     # Worker-minted `-CO<seq>` suffix (parent derived from the SIGNED number string,
-    # never the store-only D1 columns — see _change_order_parts). The parent REMAINS
-    # in force: a CO is not a supersession, so this clause and the one above are
-    # mutually exclusive in practice (supersedes_po_id is NULL on a CO) but render
+    # never the store-only D1 columns — see numbering.change_order_parts). The parent
+    # REMAINS in force: a CO is not a supersession, so this clause and the one above
+    # are mutually exclusive in practice (supersedes_po_id is NULL on a CO) but render
     # independently and coexist harmlessly if a record ever carried both.
-    co_parts = _change_order_parts(str(po.get("po_number") or ""))
+    co_parts = numbering.change_order_parts(str(po.get("po_number") or ""))
     if co_parts is not None:
         parent_number, co_seq = co_parts
         co_clause = (

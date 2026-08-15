@@ -72,6 +72,8 @@ LIVE from `ITS_Vendors` at each dispatch — the display columns are never used.
    cycle re-dispatches (the poller skips HELD rows, so the hold must be cleared).
 4. Confirm the send: the row flips to `SENT` with a `Sent At` stamp.
 
+> **Change-order documents:** a review row whose number carries a `-CO<n>` suffix (e.g. `2026.384.1.0.0-CO1`) is a CHANGE ORDER to the named parent purchase order — a distinct document, not a duplicate send of the parent. It dispatches exactly like any other row; the parent stays in force.
+
 ## Symptom B — a PO row stuck HELD `held_missing_envelope` (numberless PO)
 
 ### Symptom

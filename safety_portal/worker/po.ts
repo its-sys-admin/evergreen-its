@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import type { FieldopsApp } from "./fieldops_gates";
 import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { hmacHex } from "./hmac";
+import { CO_SCOPE_PO_DELTA, CO_SCOPE_PO_RESTATEMENT } from "./wire-types";
 import { MAX_ADDRESS } from "./constants";
 // S2b wiring — the S3 terms manifest + versioned purchaser/tax config, imported at
 // BUILD time from po_materials/ (the same files the Mac renderer reads at render time).
@@ -104,7 +105,11 @@ const MAX_SHORT = 64;
 const MAX_PHONE = 40;
 const MAX_EMAIL = 320;
 const MAX_NOTES = 2000;
-const MAX_SOW = 8000;
+// 8192, not 8000: the CO clone seeds the ~120-char scope declaration ONTO the parent's
+// sow_text (Q3), and an at-cap original must stay round-trippable through the update
+// route — a bound the seed can breach makes the CO draft unsaveable. Headroom, never
+// silent truncation of contract text.
+const MAX_SOW = 8192;
 const MAX_INSTRUCTIONS = 4000;
 const MAX_TERMS_TEXT = 2000;
 const MAX_CATEGORIES = 20;
@@ -1012,6 +1017,23 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
       .first();
     if (!vendor) return c.json({ error: "unknown_vendor" }, 422);
 
+    // Track D2 identity lock: a change-order draft amends ONE parent contract — its
+    // counterparty and job identity are the parent's, and its number will be minted off the
+    // parent's. The full-replace body always carries these fields, so a repoint (new vendor,
+    // different job) would silently produce a CO numbered against a contract it no longer
+    // amends. Everything else (lines, totals, sow, terms, ship-to) stays freely editable —
+    // that IS the change order.
+    const cur = await c.env.DB
+      .prepare("SELECT change_order_of, vendor_key, job_no, site_phase, job_id FROM purchase_orders WHERE id = ?1")
+      .bind(id)
+      .first<{ change_order_of: number | null; vendor_key: string; job_no: string; site_phase: number; job_id: string }>();
+    if (
+      cur && cur.change_order_of !== null &&
+      (d.vendor_key !== cur.vendor_key || d.job_no !== cur.job_no || d.site_phase !== cur.site_phase || d.job_id !== cur.job_id)
+    ) {
+      return c.json({ error: "co_identity_locked" }, 409);
+    }
+
     const actor = c.get("session").username;
     const guard = "(SELECT status FROM purchase_orders WHERE id = ?1) = 'draft'";
     const res = await c.env.DB.batch([
@@ -1121,11 +1143,24 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     let revision: number | null;
     let poNumber: string;
     if (po.change_order_of !== null) {
+      // Corrupt-linkage guard: co_seq must exist or the mint below would sign "…-COnull".
+      if (po.co_seq === null) return c.json({ error: "co_linkage_invalid" }, 409);
       const parent = await c.env.DB
-        .prepare("SELECT po_number FROM purchase_orders WHERE id = ?1")
+        .prepare("SELECT po_number, status FROM purchase_orders WHERE id = ?1")
         .bind(po.change_order_of)
-        .first<{ po_number: string | null }>();
+        .first<{ po_number: string | null; status: string }>();
       if (!parent?.po_number) return c.json({ error: "parent_not_generated" }, 409);
+      // The rendered clause asserts the parent REMAINS IN FORCE — never sign that against a
+      // parent since superseded or canceled. A CO drafted before its parent was replaced is
+      // refused here and re-issued against the successor (design-completion review, 2026-08-15).
+      if (parent.status !== "sent") return c.json({ error: "parent_not_in_force" }, 409);
+      // Q3 enforcement: every CO document DECLARES delta-vs-restatement semantics as the
+      // first line of its signed sow_text. Missing (an unseeded at-cap clone, or the office
+      // deleted it) → a recoverable refusal: pick the radio in the builder (trimming the
+      // scope text first if it is at the bound).
+      if (!po.sow_text.startsWith(CO_SCOPE_PO_DELTA) && !po.sow_text.startsWith(CO_SCOPE_PO_RESTATEMENT)) {
+        return c.json({ error: "co_scope_missing" }, 409);
+      }
       revision = null;
       poNumber = `${parent.po_number}-CO${po.co_seq}`;
     } else {
@@ -1159,9 +1194,16 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
             // this UPDATE matches 0 rows, and the client gets a clean 'draft_changed' 409 —
             // never a 'queued' row whose HMAC signed a stale snapshot (review finding W5/W8).
             // D1 serializes statements, not whole requests; this is the request-level guard.
+            // The parent-in-force clause makes the CO pre-check ATOMIC with the commit (the
+            // status-sync flip's correlated-subquery pattern): a parent superseded between the
+            // read above and this statement can no longer let a signed "remains in force"
+            // clause through (review W5, 2026-08-15). Nothing downstream re-checks — the Mac
+            // renders the clause from the signed number unconditionally.
             "UPDATE purchase_orders SET revision=?2, po_number=?3, subtotal_cents=?4, tax_rate_bp=?5, " +
               "tax_cents=?6, total_cents=?7, hmac=?8, status='queued', updated_at=unixepoch() " +
-              "WHERE id=?1 AND status='draft' AND draft_version=?9",
+              "WHERE id=?1 AND status='draft' AND draft_version=?9 " +
+              "AND (change_order_of IS NULL OR " +
+              "(SELECT p2.status FROM purchase_orders p2 WHERE p2.id = purchase_orders.change_order_of) = 'sent')",
           )
           .bind(id, revision, poNumber, totals.subtotal_cents, totals.tax_rate_bp, totals.tax_cents, totals.total_cents, hmac, po.draft_version),
         auditStmtIfChanged(c, actor, "po_generate", String(id), {
@@ -1175,14 +1217,19 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
       throw e;
     }
     if ((res[0].meta.changes ?? 0) === 0) {
-      // Distinguish the two 0-row causes: the draft was edited under us (retry-able —
-      // refetch, re-verify totals, regenerate) vs the row left 'draft' entirely.
+      // Distinguish the three 0-row causes: the draft was edited under us (retry-able —
+      // refetch, re-verify totals, regenerate), the row left 'draft' entirely, or (CO only)
+      // the parent left force inside the read→commit window.
       const now = await c.env.DB
         .prepare("SELECT status, draft_version FROM purchase_orders WHERE id = ?1")
         .bind(id)
         .first<{ status: string; draft_version: number }>();
       if (now && now.status === "draft" && now.draft_version !== po.draft_version) {
         return c.json({ error: "draft_changed" }, 409);
+      }
+      if (now && now.status === "draft" && po.change_order_of !== null) {
+        // Still a draft at the same version — the only remaining predicate is the parent clause.
+        return c.json({ error: "parent_not_in_force" }, 409);
       }
       return c.json({ error: "not_draft" }, 409);
     }
@@ -1203,6 +1250,16 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     // (change_order_of, co_seq), and re-issuing a CO is done as the NEXT CO against
     // the base — Track D2). Base documents only.
     if (src.status !== "sent" || src.change_order_of !== null) return c.json({ error: "not_supersedable" }, 409);
+    // Operator-ratified 2026-08-15 (design-completion Q1, option A): a parent with ANY
+    // non-canceled change order cannot be superseded — replacing it would strand paper that
+    // amends it (drafts could never generate; sent COs would modify a void contract).
+    // Further changes go out as the NEXT change order; the guard repeats atomically in the
+    // clone INSERT's WHERE below.
+    const liveCo = await c.env.DB
+      .prepare("SELECT id FROM purchase_orders WHERE change_order_of = ?1 AND status != 'canceled' LIMIT 1")
+      .bind(id)
+      .first();
+    if (liveCo) return c.json({ error: "has_change_orders" }, 409);
     // Double-submit guard (review finding, idempotency): if a live successor draft already
     // exists for this source, don't mint a sibling at the same supersede_seq — surface the
     // existing one. Canceled successors don't block a fresh supersede.
@@ -1237,7 +1294,9 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
             "sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
             "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
             "line_column_variant, ?1, 'draft', approver_name, approver_title, vendor_key, ?3 " +
-            "FROM purchase_orders WHERE id = ?1 AND status = 'sent'",
+            "FROM purchase_orders WHERE id = ?1 AND status = 'sent' " +
+            // Atomic twin of the has_change_orders pre-check above (operator-ratified Q1/A).
+            "AND NOT EXISTS (SELECT 1 FROM purchase_orders co WHERE co.change_order_of = ?1 AND co.status != 'canceled')",
         )
         .bind(id, poUuid, actor),
       auditStmtIfChanged(c, actor, "po_supersede_clone", String(id), { source_po_id: id, po_uuid: poUuid }),
@@ -1296,14 +1355,23 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
               "SELECT ?2, job_no, site_phase, supersede_seq, job_id, job_name, " +
               "ship_to_name, ship_to_address, ship_to_city, ship_to_state, ship_to_zip, " +
               "delivery_contact_name, delivery_contact_phone, delivery_contact_email, " +
-              "sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
+              // The scope declaration seeds as the FIRST LINE of the cloned sow_text
+              // (operator-ratified Q3): delta semantics by default — the builder's radio
+              // swaps it. sow_text is in the signed canonical, so the declaration the
+              // vendor reads is signature-covered. FIT-AWARE (review W8): a parent whose
+              // sow_text sits within seed-length of MAX_SOW clones UNSEEDED rather than
+              // over-bound (a raw INSERT bypasses parseDraftBody) or truncated (contract
+              // text is never silently cut) — the generate-time declaration check below
+              // makes the missing sentence a visible, recoverable refusal, not a loss.
+              "CASE WHEN length(sow_text) + length(?4) <= 8192 THEN ?4 || sow_text ELSE sow_text END, " +
+              "delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
               "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
               "line_column_variant, ?1, " +
               "(SELECT COALESCE(MAX(co_seq), 0) + 1 FROM purchase_orders WHERE change_order_of = ?1), " +
               "'draft', approver_name, approver_title, vendor_key, ?3 " +
               "FROM purchase_orders WHERE id = ?1 AND status = 'sent' AND change_order_of IS NULL",
           )
-          .bind(id, poUuid, actor),
+          .bind(id, poUuid, actor, `${CO_SCOPE_PO_DELTA}\n\n`),
         auditStmtIfChanged(c, actor, "po_change_order_clone", String(id), { source_po_id: id, po_uuid: poUuid }),
         c.env.DB
           .prepare(
@@ -1386,7 +1454,9 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     ]);
     if ((res[3].meta.changes ?? 0) === 0) {
       const row = await c.env.DB.prepare("SELECT status FROM purchase_orders WHERE id = ?1").bind(id).first();
-      return row ? c.json({ error: "not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
+      // record_not_deletable, not not_deletable: the photo pool owns that code with
+      // screening-specific copy — one errorCopy key was serving two meanings.
+      return row ? c.json({ error: "record_not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
     }
     return c.json({ ok: true, id });
   });

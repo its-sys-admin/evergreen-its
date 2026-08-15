@@ -56,6 +56,7 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
       ],
       selected: [{ pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles" }],
       auto_selected: true,
+    truncated: false,
     },
     schedule: null,
     office: {

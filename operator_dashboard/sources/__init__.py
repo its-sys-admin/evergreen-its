@@ -10,6 +10,7 @@ from operator_dashboard.sources.base import DataSource
 from operator_dashboard.sources.box_roots import BoxRootsSource
 from operator_dashboard.sources.daemons import DaemonStatusSource
 from operator_dashboard.sources.logs import LogTailSource
+from operator_dashboard.sources.procurement_panel import ProcurementLanesSource
 from operator_dashboard.sources.runtime_state import (
     CircuitBreakerSource,
     HeartbeatsSource,
@@ -39,6 +40,7 @@ PANELS: list[DataSource] = [
     ErrorsRecentSource(),
     ReviewQueueDepthSource(),
     SendQueueSource(),
+    ProcurementLanesSource(),
     BoxRootsSource(),
     AuditTrailSource(),
 ]

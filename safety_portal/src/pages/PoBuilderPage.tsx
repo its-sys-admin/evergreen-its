@@ -12,6 +12,7 @@ import {
 import { fetchJobs, type Job } from "../lib/api";
 import * as est from "../lib/estimates";
 import { errorText } from "../lib/errorCopy";
+import { CO_SCOPE_PO_DELTA, CO_SCOPE_PO_RESTATEMENT } from "../../worker/wire-types";
 import { useAuth } from "../lib/auth";
 
 // PO workstream S6 — the builder + status tracker (Aug-7 delivery program WS1). One page, two
@@ -215,8 +216,9 @@ export function PoBuilderPage({
   onReviewEstimate: (estimateId: number) => void;
   /** Jump to the Vendor Estimates tab (the "none ready — upload one" affordance). */
   onOpenEstimatesTab: () => void;
-  /** Nonce-keyed one-shot from the hub: open this just-imported draft in the builder. */
-  openDraftRequest?: { id: number; nonce: number } | null;
+  /** Nonce-keyed one-shot from the hub: open this draft in the builder. `origin` picks the
+   *  copy — the channel serves BOTH estimate imports and job-screen change-order handoffs. */
+  openDraftRequest?: { id: number; nonce: number; origin?: "estimate" | "change_order" } | null;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -722,18 +724,25 @@ export function PoBuilderPage({
   useEffect(() => {
     if (!openDraftRequest) return;
     const { id } = openDraftRequest;
+    // The channel serves two producers with different copy: an estimate disposition minted
+    // this draft, or the job Procurement screen created a change order from a sent PO.
+    const co = openDraftRequest.origin === "change_order";
+    const noun = co ? "change-order draft" : "imported draft";
     setFromEstOpen(false);
     setFromEstRows(null);
     void (async () => {
       if (
         view === "builder" &&
+        draftId !== id && // re-opening the SAME draft loses nothing — don't threaten it
         !window.confirm(
-          `Open imported draft #${id} now? The purchase order you were editing will be replaced (unsaved changes are lost).`,
+          `Open ${noun} #${id} now? The purchase order you were editing will be replaced (unsaved changes are lost).`,
         )
       ) {
         setMsg({
           ok: true,
-          text: `Estimate imported into draft #${id} — open it from the list when you're ready.`,
+          text: co
+            ? `Change-order draft #${id} is in the list — open it when you're ready.`
+            : `Estimate imported into draft #${id} — open it from the list when you're ready.`,
         });
         reloadPos(statusFilter === "all" ? undefined : statusFilter);
         return;
@@ -742,7 +751,9 @@ export function PoBuilderPage({
       if (ok) {
         setMsg({
           ok: true,
-          text: `Estimate imported into draft #${id} — adjust lines, attachments, and terms below, then Generate.`,
+          text: co
+            ? `Change-order draft #${id} opened — edit what changed, then Generate.`
+            : `Estimate imported into draft #${id} — adjust lines, attachments, and terms below, then Generate.`,
         });
       }
       reloadPos(statusFilter === "all" ? undefined : statusFilter);
@@ -1036,7 +1047,9 @@ export function PoBuilderPage({
   }
 
   // ── Render: the tracker ────────────────────────────────────────────────────────────────────────
-  const sentPos = useMemo(() => pos.filter((p) => p.status === "sent"), [pos]);
+  // Supersede sources: in-force BASE documents only — a change order categorically can't be
+  // superseded (the worker refuses; offering one here was a doomed pick).
+  const sentPos = useMemo(() => pos.filter((p) => p.status === "sent" && p.change_order_of === null), [pos]);
 
   function trackerRow(p: api.PoListRow) {
     const vendor = vendorByKey.get(p.vendor_key);
@@ -1054,6 +1067,7 @@ export function PoBuilderPage({
             <span className="dash-chip">{formatCents(p.total_cents)}</span>
             <span className="dash-chip">Updated {fmtDate(p.updated_at)}</span>
             {p.supersedes_po_id !== null ? <span className="dash-chip">Supersedes #{p.supersedes_po_id}</span> : null}
+            {p.change_order_of !== null ? <span className="dash-chip">Change order of #{p.change_order_of}</span> : null}
           </div>
         </div>
         {canManage ? (
@@ -1454,9 +1468,39 @@ export function PoBuilderPage({
       {/* 5 — Scope, delivery, payment */}
       <section className="card dash-section" aria-label="Step 5 — Scope and delivery">
         <h3 className="jha__section-title">5 · Scope of work, delivery, payment</h3>
+        {changeOrderOf !== null && (
+          // Operator-ratified Q3: every CO declares delta vs restatement semantics as the
+          // scope text's FIRST LINE (seeded delta at clone; swapped here). The sentence
+          // rides sow_text — signed by the po:v1 canonical, rendered on the document.
+          <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }} role="radiogroup" aria-label="Change-order scope declaration">
+            <span className="field__label">What this change order's pricing covers</span>
+            {[
+              { s: CO_SCOPE_PO_DELTA, label: "The change only — the original order otherwise stands" },
+              { s: CO_SCOPE_PO_RESTATEMENT, label: "The complete order, restated as revised" },
+            ].map((opt) => (
+              <label key={opt.label} style={{ display: "block" }}>
+                <input type="radio" name="co-scope" checked={sow.startsWith(opt.s)}
+                       onChange={() => {
+                         let rest = sow;
+                         for (const known of [CO_SCOPE_PO_DELTA, CO_SCOPE_PO_RESTATEMENT]) {
+                           if (rest.startsWith(known)) rest = rest.slice(known.length).replace(/^\n+/, "");
+                         }
+                         setSow(`${opt.s}\n\n${rest}`);
+                       }} />
+                {" "}{opt.label}
+              </label>
+            ))}
+            {!sow.startsWith(CO_SCOPE_PO_DELTA) && !sow.startsWith(CO_SCOPE_PO_RESTATEMENT) && (
+              <p className="muted">
+                Choose one — it becomes the first line of the scope text, and Generate requires
+                it. (If the scope text is at its length limit, trim it first.)
+              </p>
+            )}
+          </fieldset>
+        )}
         <label className="field">
           <span className="field__label">Scope of work</span>
-          <textarea className="field__textarea" aria-label="Scope of work" value={sow} maxLength={8000} rows={5} onChange={(e) => setSow(e.target.value)} />
+          <textarea className="field__textarea" aria-label="Scope of work" value={sow} maxLength={8192} rows={5} onChange={(e) => setSow(e.target.value)} />
         </label>
         <label className="field">
           <span className="field__label">Delivery instructions</span>

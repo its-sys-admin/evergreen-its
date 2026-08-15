@@ -139,7 +139,7 @@ docs:
     title: "ITS Data Model Reference"
     version: v1
     source: docs/references/data_model_reference.md
-    sha256: 0ce521e5a2d03d7c970f4a3ec570eaf88ba3988abd0b0efcf683f0b9ba3f9b64
+    sha256: 82ee48614334a1c525abd853594930114c5bd6b6f64714e53a5c15613c5fd27d
     audience: operator
 
   - key: integration_reference

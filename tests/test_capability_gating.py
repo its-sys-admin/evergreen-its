@@ -704,16 +704,18 @@ NETWORK_LIB_ALLOWLIST: frozenset[str] = frozenset({
     "po_materials/po_attach_screen.py",
     # WS2 operator dashboard (D1-1, read-only observability app) — the root is
     # walked (below) so a future dashboard module that quietly acquires network
-    # capability is caught. These four legitimately import a tracked needle, all
+    # capability is caught. These five legitimately import a tracked needle, all
     # benign + non-egress:
     #   daemons.py      — `subprocess` runs read-only `launchctl list` (fixed
     #                     argv, no shell, bounded timeout) to list daemon status.
-    #   runtime_state.py / smartsheet_panels.py / watchdog_checks.py — `importlib`
+    #   runtime_state.py / smartsheet_panels.py / procurement_panel.py /
+    #   watchdog_checks.py — `importlib`
     #                     lazily resolves INTERNAL modules only (shared.* /
     #                     watchdog) so a broken import degrades one panel; never a
     #                     dynamic import of a network lib. The app is read-only
     #                     (no customer send, no LLM) — not in GATED/SEND lists.
     "operator_dashboard/sources/daemons.py",
+    "operator_dashboard/sources/procurement_panel.py",
     "operator_dashboard/sources/runtime_state.py",
     "operator_dashboard/sources/smartsheet_panels.py",
     "operator_dashboard/sources/watchdog_checks.py",

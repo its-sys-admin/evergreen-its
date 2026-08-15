@@ -189,6 +189,10 @@ export const ERROR_COPY: Record<string, string> = {
   not_change_orderable: "Change orders come off an in-force document — this one isn't sent yet, or is itself a change order.",
   change_order_conflict: "Someone created a change order at the same moment — try again.",
   parent_not_generated: "The original document has no number yet — generate it before its change order.",
+  parent_not_in_force: "The original document is no longer in force — issue the change order against its replacement instead.",
+  co_identity_locked: "A change order keeps its original's vendor/subcontractor and job — change the lines, scope, or terms instead.",
+  co_linkage_invalid: "This change order's link to its original is broken — contact the developer before generating it.",
+  record_not_deletable: "Only an un-generated draft can be deleted — cancel the record instead.",
   photo_claimed: "That photo already belongs to a filed report — it can't be removed from the pool.",
   not_deletable: "That photo was refused by screening — remove it from the list instead.",
   invalid_additional_photos: "The additional-photos list didn't come through correctly — remove and re-add the photos.",
@@ -303,7 +307,9 @@ export const ERROR_COPY: Record<string, string> = {
   // Reworded workstream-neutral (S5 FLAG-2): these three wire codes are shared by the PO and the
   // subcontract supersede/cancel routes (worker reuses the codes), but the code→copy map is global —
   // so the copy must read correctly for both. A subcontract supersedes from sent OR executed.
-  not_supersedable: "That record can't be superseded from its current status.",
+  not_supersedable: "That record can't be superseded — it isn't in force, or it's a change order (issue the next change order against the original instead).",
+  has_change_orders: "This document has change orders — make further changes as the next change order instead of replacing it.",
+  co_scope_missing: "Pick what this change order covers (the choice above the scope text) before generating — trim the scope text first if it's at the length limit.",
   supersede_in_progress: "A replacement for that record is already in progress — it was opened instead.",
   not_cancelable: "That record can't be canceled from its current status.",
   invalid_approver: "The approver name/title is too long.",

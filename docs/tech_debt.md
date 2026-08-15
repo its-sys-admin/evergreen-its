@@ -2795,3 +2795,48 @@ here rather than fixed.
 `.ts`-file count too (likely stale after this program's Worker-side additions).
 
 Surfaced: 2026-08-13/14 session-close pass, job-tracker unification + WPR program; memory-archive §G90.
+
+## [OPEN 2026-08-15, medium] Portal-marked lifecycle facts never reach the Smartsheet ledgers (one-way divergence)
+
+Track D's manual marks (`mark_submitted` → status `sent`, PO `accepted_at/by`, subcontract
+`executed`) and Track D2's CO documents update D1 — the lanes' authoritative store — but nothing
+mirrors these facts into PO_Log / Subcontract_Log or the pending-review sheets, whose Status
+columns an operator reads as current. The Mac status-sync only pushes machine transitions it
+drives itself. Until a mirror pass (or a documented "D1 is the read surface for lifecycle"
+posture) exists, the ledgers silently understate documents the office marked by hand.
+
+**Tag:** `po-materials`, `subcontracts`, `smartsheet`, `design-completion`.
+
+**Revisit when:** the operator answers the Track D2 review's ledger question, or the next
+procurement-lane Mac PR.
+
+Surfaced: 2026-08-15 design-completion review (13-agent workflow), lifecycle-semantics +
+registry-fanout lenses.
+
+## [OPEN 2026-08-15, low] Design-completion review — deferred items (WPR upload trace, estimate→CO composition, archived-job writes, CO poll test, po_send filename)
+
+Confirmed by the 2026-08-15 review but deliberately not fixed in the same pass:
+
+- **WPR office photo uploads leave no office-visible trace when refused/abandoned** — a
+  screening-refused or tab-closed-mid-screening upload just vanishes from the uploader's view
+  (`WeeklyPhotoUpload.tsx` polls only while mounted; refused rows are never listed).
+- **A vendor's quoted change cannot feed a CO draft** — the estimate importer only mints BASE
+  drafts (`POST /api/po/drafts` + `estimate_id`); no compose path exists into
+  `POST /api/po/:id/change-order`.
+- **Procurement activity on an archived job re-grows live folders** — any filing (CO or base)
+  on a job whose containers moved to the archive recreates the live per-job folder and later
+  makes the restore's name-collision refusal fire. Pre-existing class, wider than Track D2.
+- **No Mac poll-level test files a CO-numbered document end-to-end** (`tests/test_po_poll.py`
+  fixtures are base-numbered only; the clause render is tested, the filing path relies on the
+  number-opacity audit).
+- **`po_send` emailed attachment filename can diverge from the Box/Smartsheet canonical name**
+  (send builds it from ITS_Active_Jobs `project_name`; the filed copy used the D1 row's
+  `job_name`) — cosmetic divergence, contradicts po_send's own docstring.
+
+**Tag:** `design-completion`, `wpr`, `po-materials`, `field-ops-archive`, `tests`.
+
+**Revisit when:** per-item — the WPR trace at the next portal-photos PR; the estimate→CO compose
+and the archived-job guard on operator direction; the poll test + filename at the next
+po_materials Mac PR.
+
+Surfaced: 2026-08-15 design-completion review (13-agent workflow).

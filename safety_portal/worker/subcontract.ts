@@ -4,6 +4,7 @@ import type { FieldopsApp } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
 import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { hmacHex } from "./hmac";
+import { CO_SCOPE_SUB_DELTA, CO_SCOPE_SUB_RESTATEMENT } from "./wire-types";
 import { MAX_ADDRESS } from "./constants";
 // SC-S3c wiring — the SC-S2 terms manifest + versioned contractor/payment-terms config, imported at
 // BUILD time from subcontracts/ (the same files the Mac renderer reads at render time). A subcontract
@@ -1011,6 +1012,20 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
       .first();
     if (!subcontractor) return c.json({ error: "unknown_subcontractor" }, 422);
 
+    // Track D2 identity lock (the po.ts twin): a change-order draft amends ONE parent
+    // contract — counterparty + job identity are the parent's. Scope, SOV, price, dates and
+    // terms stay freely editable; that IS the change order.
+    const cur = await c.env.DB
+      .prepare("SELECT change_order_of, sub_key, job_no, site_phase, job_id FROM subcontracts WHERE id = ?1")
+      .bind(id)
+      .first<{ change_order_of: number | null; sub_key: string; job_no: string; site_phase: number; job_id: string }>();
+    if (
+      cur && cur.change_order_of !== null &&
+      (d.sub_key !== cur.sub_key || d.job_no !== cur.job_no || d.site_phase !== cur.site_phase || d.job_id !== cur.job_id)
+    ) {
+      return c.json({ error: "co_identity_locked" }, 409);
+    }
+
     const actor = c.get("session").username;
     const guard = "(SELECT status FROM subcontracts WHERE id = ?1) = 'draft'";
     const res = await c.env.DB.batch([
@@ -1118,11 +1133,26 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     let revision: number | null;
     let scNumber: string;
     if (sub.change_order_of !== null) {
+      // Corrupt-linkage guard: co_seq must exist or the mint below would sign "…-COnull".
+      if (sub.co_seq === null) return c.json({ error: "co_linkage_invalid" }, 409);
       const parent = await c.env.DB
-        .prepare("SELECT sc_number FROM subcontracts WHERE id = ?1")
+        .prepare("SELECT sc_number, status FROM subcontracts WHERE id = ?1")
         .bind(sub.change_order_of)
-        .first<{ sc_number: string | null }>();
+        .first<{ sc_number: string | null; status: string }>();
       if (!parent?.sc_number) return c.json({ error: "parent_not_generated" }, 409);
+      // The rendered notice asserts the parent REMAINS IN FORCE — never sign that against a
+      // parent since superseded or canceled ('sent' and 'executed' are the in-force states).
+      if (parent.status !== "sent" && parent.status !== "executed") {
+        return c.json({ error: "parent_not_in_force" }, 409);
+      }
+      // Q3 enforcement (the po.ts twin): every CO declares its scope semantics as the first
+      // line of the signed Exhibit A work text.
+      if (
+        !sub.exhibit_a_work_text.startsWith(CO_SCOPE_SUB_DELTA) &&
+        !sub.exhibit_a_work_text.startsWith(CO_SCOPE_SUB_RESTATEMENT)
+      ) {
+        return c.json({ error: "co_scope_missing" }, 409);
+      }
       revision = null;
       scNumber = `${parent.sc_number}-CO${sub.co_seq}`;
     } else {
@@ -1155,9 +1185,13 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
             // matches 0 rows, and the client gets a clean 'draft_changed' 409 — never a 'queued' row
             // whose HMAC signed a stale snapshot. D1 serializes statements, not whole requests; this
             // is the request-level guard.
+            // Parent-in-force clause: makes the CO pre-check ATOMIC with the commit (the po.ts
+            // twin; review W5 2026-08-15) — nothing downstream re-checks the parent.
             "UPDATE subcontracts SET revision=?2, sc_number=?3, subtotal_cents=?4, hmac=?5, " +
               "status='queued', updated_at=unixepoch() " +
-              "WHERE id=?1 AND status='draft' AND draft_version=?6",
+              "WHERE id=?1 AND status='draft' AND draft_version=?6 " +
+              "AND (change_order_of IS NULL OR " +
+              "(SELECT s2.status FROM subcontracts s2 WHERE s2.id = subcontracts.change_order_of) IN ('sent','executed'))",
           )
           .bind(id, revision, scNumber, subtotal, hmac, sub.draft_version),
         auditStmtIfChanged(c, actor, "sc_generate", String(id), {
@@ -1171,14 +1205,18 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
       throw e;
     }
     if ((res[0].meta.changes ?? 0) === 0) {
-      // Distinguish the two 0-row causes: the draft was edited under us (retry-able) vs the row left
-      // 'draft' entirely.
+      // Distinguish the three 0-row causes: edited under us (retry-able), left 'draft'
+      // entirely, or (CO only) the parent left force inside the read→commit window.
       const now = await c.env.DB
         .prepare("SELECT status, draft_version FROM subcontracts WHERE id = ?1")
         .bind(id)
         .first<{ status: string; draft_version: number }>();
       if (now && now.status === "draft" && now.draft_version !== sub.draft_version) {
         return c.json({ error: "draft_changed" }, 409);
+      }
+      if (now && now.status === "draft" && sub.change_order_of !== null) {
+        // Still a draft at the same version — the only remaining predicate is the parent clause.
+        return c.json({ error: "parent_not_in_force" }, 409);
       }
       return c.json({ error: "not_draft" }, 409);
     }
@@ -1200,6 +1238,14 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     if ((src.status !== "sent" && src.status !== "executed") || src.change_order_of !== null) {
       return c.json({ error: "not_supersedable" }, 409);
     }
+    // Operator-ratified 2026-08-15 (design-completion Q1, option A): a parent with ANY
+    // non-canceled change order cannot be superseded — see the po.ts twin. The guard
+    // repeats atomically in the clone INSERT's WHERE below.
+    const liveCo = await c.env.DB
+      .prepare("SELECT id FROM subcontracts WHERE change_order_of = ?1 AND status != 'canceled' LIMIT 1")
+      .bind(id)
+      .first();
+    if (liveCo) return c.json({ error: "has_change_orders" }, 409);
     // Double-submit guard (idempotency): if a live successor draft already exists for this source,
     // don't mint a sibling at the same supersede_seq — surface the existing one. Canceled successors
     // don't block a fresh supersede.
@@ -1231,7 +1277,9 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
             "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
             "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
             "?1, 'draft', approver_name, approver_title, ?3 " +
-            "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed')",
+            "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed') " +
+            // Atomic twin of the has_change_orders pre-check above (operator-ratified Q1/A).
+            "AND NOT EXISTS (SELECT 1 FROM subcontracts co WHERE co.change_order_of = ?1 AND co.status != 'canceled')",
         )
         .bind(id, scUuid, actor),
       auditStmtIfChanged(c, actor, "sc_supersede_clone", String(id), { source_sc_id: id, sc_uuid: scUuid }),
@@ -1283,14 +1331,20 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
               "change_order_of, co_seq, status, approver_name, approver_title, created_by) " +
               "SELECT ?2, job_no, site_phase, supersede_seq, job_id, job_name, " +
               "project_name, owner_entity, prime_contractor, site_name, site_address, governing_law_state, " +
-              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, exhibit_a_work_text, " +
+              // Scope declaration seeds as the FIRST LINE of the cloned Exhibit A work text
+              // (operator-ratified Q3; the po.ts twin seeds sow_text) — Exhibit A is the
+              // subcontract's scope instrument, signed via the sub:v1 canonical. NOT
+              // scope_summary: that field is 512-capped (MAX_LINE_TEXT), and seeding it could
+              // push an otherwise-valid draft over the bound and make it unsaveable.
+              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, " +
+              "CASE WHEN length(exhibit_a_work_text) + length(?4) <= 100000 THEN ?4 || exhibit_a_work_text ELSE exhibit_a_work_text END, " +
               "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
               "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
               "?1, (SELECT COALESCE(MAX(co_seq), 0) + 1 FROM subcontracts WHERE change_order_of = ?1), " +
               "'draft', approver_name, approver_title, ?3 " +
               "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed') AND change_order_of IS NULL",
           )
-          .bind(id, scUuid, actor),
+          .bind(id, scUuid, actor, `${CO_SCOPE_SUB_DELTA}\n\n`),
         auditStmtIfChanged(c, actor, "sc_change_order_clone", String(id), { source_sc_id: id, sc_uuid: scUuid }),
         c.env.DB
           .prepare(
@@ -1359,7 +1413,8 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     ]);
     if ((res[1].meta.changes ?? 0) === 0) {
       const row = await c.env.DB.prepare("SELECT status FROM subcontracts WHERE id = ?1").bind(id).first();
-      return row ? c.json({ error: "not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
+      // record_not_deletable, not not_deletable — the photo pool owns that code (see po.ts).
+      return row ? c.json({ error: "record_not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
     }
     return c.json({ ok: true, id });
   });

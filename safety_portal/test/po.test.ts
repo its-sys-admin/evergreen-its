@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { CO_SCOPE_PO_DELTA } from "../worker/wire-types";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, p, g, json } from "./helpers";
 import { hmacHex } from "../worker/hmac";
@@ -830,6 +831,9 @@ describe("change-order documents (Track D2)", () => {
     expect(b.po_number).toBeNull();
     const bLines = await env.DB.prepare("SELECT * FROM po_line_items WHERE po_id=?1 ORDER BY position").bind(idB).all();
     expect(bLines.results!.length).toBe(2); // cloned
+    // Q3 (operator-ratified): the scope declaration seeds as the FIRST LINE of the cloned
+    // sow_text — delta semantics by default, signed via the canonical.
+    expect(String(b.sow_text)).toMatch(/^This change order covers only the changes described herein/);
     // Audit ordering (the supersede clone's W4 rule): the clone audit row exists for a multi-line PO.
     const cloneAudit = await env.DB.prepare("SELECT * FROM audit_log WHERE action='po_change_order_clone'").all();
     expect(cloneAudit.results!.length).toBe(1);
@@ -872,10 +876,72 @@ describe("change-order documents (Track D2)", () => {
     expect((await p(admin, `/api/po/${coId}/supersede`)).status).toBe(409);
   });
 
+  it("seeds the scope declaration fit-aware and ENFORCES it at generate (Q3/W8): an at-cap parent clones unseeded, generate refuses, a declared trim generates", async () => {
+    // Parent whose sow_text is within seed-length of MAX_SOW (8192): the clone must NOT
+    // write an over-bound sow (raw INSERT bypasses parseDraftBody) and must NOT truncate.
+    const idA = await makeQueued(admin, { sow_text: "x".repeat(8150) });
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    expect(co.status, await co.clone().text()).toBe(201);
+    const { id: coId } = await json<{ id: number }>(co);
+    const row = await poRow(coId);
+    expect(String(row.sow_text)).toBe("x".repeat(8150)); // unseeded, untruncated
+    // Generate refuses until the declaration exists — recoverable, never silent.
+    const gen1 = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen1.status).toBe(409);
+    expect((await json<{ error: string }>(gen1)).error).toBe("co_scope_missing");
+    // The office trims + declares (the builder radio path) — generate proceeds.
+    const upd = await p(admin, `/api/po/drafts/${coId}/update`, draftBody({ sow_text: `${CO_SCOPE_PO_DELTA}\n\ntrimmed scope` }));
+    expect(upd.status, await upd.clone().text()).toBe(200);
+    const gen2 = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen2.status, await gen2.clone().text()).toBe(200);
+  });
+
+  it("blocks superseding a parent with a non-canceled change order (Q1/A); canceling the CO unblocks it", async () => {
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    const sup = await p(admin, `/api/po/${idA}/supersede`);
+    expect(sup.status).toBe(409);
+    expect((await json<{ error: string }>(sup)).error).toBe("has_change_orders");
+    expect((await p(admin, `/api/po/${coId}/cancel`)).status).toBe(200);
+    expect((await p(admin, `/api/po/${idA}/supersede`)).status, "canceled CO no longer blocks").toBe(201);
+  });
+
   it("gates the clone on cap.po.manage", async () => {
     const idA = await makeQueued(admin);
     await driveToSent(idA);
     expect((await p(submitter, `/api/po/${idA}/change-order`)).status).toBe(403);
+  });
+
+  it("refuses generating a CO whose parent is no longer in force — the clause must never assert a void parent", async () => {
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    await env.DB.prepare("UPDATE purchase_orders SET status='superseded' WHERE id=?1").bind(idA).run();
+    const gen = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen.status).toBe(409);
+    expect((await json<{ error: string }>(gen)).error).toBe("parent_not_in_force");
+  });
+
+  it("locks a CO draft's counterparty + job identity (update 409s a repoint; a same-identity edit preserves the linkage)", async () => {
+    await seedVendor("VEN-000002");
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+
+    const repoint = await p(admin, `/api/po/drafts/${coId}/update`, draftBody({ vendor_key: "VEN-000002" }));
+    expect(repoint.status).toBe(409);
+    expect((await json<{ error: string }>(repoint)).error).toBe("co_identity_locked");
+
+    const edit = await p(admin, `/api/po/drafts/${coId}/update`, draftBody());
+    expect(edit.status, await edit.clone().text()).toBe(200);
+    const row = await poRow(coId);
+    expect(row.change_order_of).toBe(idA); // linkage survives a full-replace edit
+    expect(row.co_seq).toBe(1);
   });
 });
 
@@ -911,7 +977,7 @@ describe("cancel", () => {
     const queuedId = await makeQueued(admin);
     const del = await p(admin, `/api/po/${queuedId}/delete`);
     expect(del.status).toBe(409);
-    expect((await json<{ error: string }>(del)).error).toBe("not_deletable");
+    expect((await json<{ error: string }>(del)).error).toBe("record_not_deletable");
     expect((await poRow(queuedId)).status).toBe("queued");
     expect(await nLines(queuedId)).toBeGreaterThan(0);
 

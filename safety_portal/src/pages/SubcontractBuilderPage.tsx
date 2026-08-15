@@ -9,6 +9,7 @@ import {
 } from "../lib/subcontracts";
 import { fetchJobs, type Job } from "../lib/api";
 import { errorText } from "../lib/errorCopy";
+import { CO_SCOPE_SUB_DELTA, CO_SCOPE_SUB_RESTATEMENT } from "../../worker/wire-types";
 import { useAuth } from "../lib/auth";
 import { PageShell } from "../components/PageShell";
 
@@ -148,11 +149,15 @@ function FieldInput({
 export function SubcontractBuilderPage({
   onBack,
   openDraftRequest,
+  onOpenDraftConsumed,
 }: {
   onBack: () => void;
   /** Nonce-keyed one-shot from App (Track D2 — the job screen's just-created change-order
    *  draft): open this draft in the builder. The PoBuilderPage openDraftRequest twin. */
   openDraftRequest?: { id: number; nonce: number } | null;
+  /** Report the consumed nonce so App clears its ref — WITHOUT this the request replays on
+   *  every later mount of this page (the consuming effect always runs once on mount). */
+  onOpenDraftConsumed?: (nonce: number) => void;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -618,6 +623,9 @@ export function SubcontractBuilderPage({
   useEffect(() => {
     if (!openDraftRequest) return;
     const { id } = openDraftRequest;
+    // One-shot: report consumption UP immediately so the App-held request cannot outlive this
+    // mount and replay on a later visit.
+    onOpenDraftConsumed?.(openDraftRequest.nonce);
     void (async () => {
       if (
         view === "builder" &&
@@ -709,8 +717,10 @@ export function SubcontractBuilderPage({
   }
 
   // ── Render: the tracker ────────────────────────────────────────────────────────────────────────────
+  // Supersede sources: in-force BASE documents only — a change order categorically can't be
+  // superseded (the worker refuses; offering one here was a doomed pick).
   const supersedableSubs = useMemo(
-    () => subcontracts.filter((s) => s.status === "sent" || s.status === "executed"),
+    () => subcontracts.filter((s) => (s.status === "sent" || s.status === "executed") && s.change_order_of === null),
     [subcontracts],
   );
 
@@ -730,6 +740,7 @@ export function SubcontractBuilderPage({
             <span className="dash-chip">{formatCents(p.contract_price_cents)}</span>
             <span className="dash-chip">Updated {fmtDate(p.updated_at)}</span>
             {p.supersedes_sc_id !== null ? <span className="dash-chip">Supersedes #{p.supersedes_sc_id}</span> : null}
+            {p.change_order_of !== null ? <span className="dash-chip">Change order of #{p.change_order_of}</span> : null}
           </div>
         </div>
         {canManage ? (
@@ -1065,6 +1076,35 @@ export function SubcontractBuilderPage({
             onChange={(e) => setScopeSummary(e.target.value)}
           />
         </label>
+        {changeOrderOf !== null && (
+          // Operator-ratified Q3: every CO declares delta vs restatement semantics as the
+          // FIRST LINE of Exhibit A's work text (seeded delta at clone; swapped here). The
+          // sentence rides exhibit_a_work_text — signed by the sub:v1 canonical.
+          <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }} role="radiogroup" aria-label="Change-order scope declaration">
+            <span className="field__label">What this change order covers</span>
+            {[
+              { s: CO_SCOPE_SUB_DELTA, label: "The change only — the original subcontract otherwise stands" },
+              { s: CO_SCOPE_SUB_RESTATEMENT, label: "The complete subcontract, restated as revised" },
+            ].map((opt) => (
+              <label key={opt.label} style={{ display: "block" }}>
+                <input type="radio" name="co-scope" checked={exhibitAWorkText.startsWith(opt.s)}
+                       onChange={() => {
+                         let rest = exhibitAWorkText;
+                         for (const known of [CO_SCOPE_SUB_DELTA, CO_SCOPE_SUB_RESTATEMENT]) {
+                           if (rest.startsWith(known)) rest = rest.slice(known.length).replace(/^\n+/, "");
+                         }
+                         setExhibitAWorkText(`${opt.s}\n\n${rest}`);
+                       }} />
+                {" "}{opt.label}
+              </label>
+            ))}
+            {!exhibitAWorkText.startsWith(CO_SCOPE_SUB_DELTA) && !exhibitAWorkText.startsWith(CO_SCOPE_SUB_RESTATEMENT) && (
+              <p className="muted">
+                Choose one — it becomes the first line of Exhibit A, and Generate requires it.
+              </p>
+            )}
+          </fieldset>
+        )}
         <label className="field">
           <span className="field__label">Exhibit A — the Work</span>
           <textarea

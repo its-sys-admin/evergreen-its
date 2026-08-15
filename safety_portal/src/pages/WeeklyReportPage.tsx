@@ -542,11 +542,15 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
             </header>
             <p className="wpr-sec__hint">
               {/* The seed sentence shows exactly when the SEED is what the table displays — the
-                  same office-rows-empty predicate toDraft uses to choose it. */}
-              {data.office.labor.rows.length === 0 &&
+                  same office-rows-empty predicate toDraft uses to choose it, AND only when the
+                  seed actually produced rows (a zero-JHA, zero-crew week gets an honest empty
+                  line, not a claim about sign-ins that don't exist). */}
+              {data.office.labor.rows.length === 0 && draft.labor.length > 0 &&
                 (data.labor.seed_source === "jha"
                   ? "Companies are seeded from this week's JHA sign-ins — workers is each company's peak daily signer count. "
                   : "Crews are seeded from the daily reports. ")}
+              {data.office.labor.rows.length === 0 && draft.labor.length === 0 &&
+                "No JHA sign-ins or crew rows this week yet — add companies below. "}
               Man-hours cannot be attributed to a company automatically — the roster has no employer
               field — so enter them here.
               {" "}The job logged <strong>{data.labor.total_hours}</strong> hours in total this week.
@@ -678,6 +682,8 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
                 ? `Auto-selected a spread across the week. ${data.photos.available.length} screened photo(s) available.`
                 : `Your selection: ${(draft.photos ?? []).length} of ${data.photos.available.length}.`}
               {" "}Only screened photos appear here.
+              {data.photos.truncated &&
+                ` Showing the first ${data.photos.available.length} — the week holds more screened photos than can be offered.`}
             </p>
             <WeeklyPhotoUpload jobId={jobId} weekStart={data.week.start} onPoolChanged={() => void refreshPhotos()} />
             {data.photos.available.length === 0 && (
@@ -711,7 +717,11 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
                          value={
                            (draft.photos ?? data.photos.selected).find((x) => x.pool_id === p.pool_id)?.caption ?? p.caption
                          }
-                         placeholder="Caption"
+                         // The caption rides the SELECTED list — typing on an unselected photo
+                         // used to map over rows that don't include it and silently discard
+                         // every keystroke. Disabled until selected, with the reason visible.
+                         disabled={!selectedIds.has(p.pool_id)}
+                         placeholder={selectedIds.has(p.pool_id) ? "Caption" : "Select to caption"}
                          onChange={(e) => {
                            const base = draft.photos ?? data.photos.selected;
                            set("photos", base.map((x) => x.pool_id === p.pool_id ? { ...x, caption: e.target.value } : x));

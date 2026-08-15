@@ -35,7 +35,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from subcontracts import exhibit, governing_law, money, subcontract_generate, terms
+from subcontracts import exhibit, governing_law, money, numbering, subcontract_generate, terms
 
 # A top-level article heading is `<n>.<TAB>TITLE:` — a SINGLE number, a dot, then a tab (the corpus
 # body's structure). Sub-clauses are `<n>.<m>` (a second number right after the dot), so this pattern
@@ -66,34 +66,6 @@ def _agreement_datetime(subcontract: dict[str, Any]) -> datetime:
         return datetime(int(ymd[0]), int(ymd[1]), int(ymd[2]))
     except (ValueError, TypeError) as exc:
         raise SubcontractDocxError(f"invalid agreement_ymd {ymd!r}: {exc}") from exc
-
-
-def _change_order_parts(sc_number: str) -> tuple[str, int] | None:
-    """Split a change-order SC number `{parent}-CO{seq}` → (parent_number, seq), else None.
-
-    A change order is a NORMAL lane document cloned from a SENT parent; the Worker
-    mints its number as `{parent_sc_number}-CO{seq}` at generate time. The parent
-    stays in force — a CO is NOT a supersession (`supersedes_sc_id` is NULL on one).
-
-    §42 — why derive from the number STRING and not a D1 column: the sc_number is
-    inside the signed HMAC string the daemon has already verified (`verify_sub`), so
-    the parent identity printed in a contract clause re-derives from SIGNED data.
-    The Worker's change-order columns are STORE-ONLY (the `estimate_id` precedent,
-    worker/po.ts) and outside the sub:v1 canonical — an unsigned column could drift
-    or be tampered without failing verification. The `-CO<digits>` suffix is
-    deliberately NOT part of the base D7 grammar (`numbering.parse_sc_number`
-    rejects it; see subcontracts/numbering.py), so this is a local rsplit, not a
-    parse_* call. A malformed tail (non-digits, empty head) returns None — NO
-    clause renders rather than a wrong one. Mirrors po_materials/po_generate.py's
-    twin (§14: two 10-line consumers in unlinked lanes — duplicated, cross-referenced).
-    """
-    value = (sc_number or "").strip()
-    if "-CO" not in value:
-        return None
-    head, tail = value.rsplit("-CO", 1)
-    if not head or not tail.isascii() or not tail.isdigit():
-        return None
-    return head, int(tail)
 
 
 def _add_change_order_notice(doc: Any, text: str) -> None:
@@ -173,12 +145,12 @@ def render_subcontract_docx(
     normal.font.name = "Times New Roman"
     normal.font.size = Pt(11)
 
-    # Change-order notice (see _change_order_parts): a CO-numbered subcontract carries
-    # a prominent clause DIRECTLY UNDER the title (or as the very first paragraph if a
-    # body ever lacks the title line) naming the parent that REMAINS IN FORCE. Derived
-    # from the SIGNED sc_number, never a store-only D1 column; a base-numbered
+    # Change-order notice (see numbering.change_order_parts): a CO-numbered subcontract
+    # carries a prominent clause DIRECTLY UNDER the title (or as the very first paragraph
+    # if a body ever lacks the title line) naming the parent that REMAINS IN FORCE.
+    # Derived from the SIGNED sc_number, never a store-only D1 column; a base-numbered
     # subcontract renders no notice. Deterministic — pure function of the record.
-    co_parts = _change_order_parts(str(subcontract.get("sc_number") or ""))
+    co_parts = numbering.change_order_parts(str(subcontract.get("sc_number") or ""))
     co_notice: str | None = None
     if co_parts is not None:
         parent_number, co_seq = co_parts

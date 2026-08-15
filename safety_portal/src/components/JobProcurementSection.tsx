@@ -22,11 +22,12 @@ const STAGE_LABEL: Record<string, string> = {
   canceled: "Canceled",
   generated: "Generated",
   partially_sent: "Partially sent",
+  closed: "Closed",
 };
 
 function stagePill(status: string): string {
   if (status === "sent" || status === "executed" || status === "approved") return "dash-pill dash-pill--ok";
-  if (status === "superseded" || status === "canceled") return "dash-pill";
+  if (status === "superseded" || status === "canceled" || status === "closed") return "dash-pill";
   return "dash-pill dash-pill--warn";
 }
 

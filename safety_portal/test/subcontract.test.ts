@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { env } from "cloudflare:test";
+import { CO_SCOPE_SUB_DELTA } from "../worker/wire-types";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, p, g, json } from "./helpers";
 import { hmacHex } from "../worker/hmac";
@@ -849,6 +850,8 @@ describe("change-order documents (Track D2)", () => {
     expect(b.sc_number).toBeNull();
     const bLines = await env.DB.prepare("SELECT * FROM sov_lines WHERE subcontract_id=?1 ORDER BY position").bind(idB).all();
     expect(bLines.results!.length).toBe(1); // cloned
+    // Q3: the scope declaration seeds as the FIRST LINE of the cloned Exhibit A work text.
+    expect(String(b.exhibit_a_work_text)).toMatch(/^This change order covers only the changes described herein/);
     const cloneAudit = await env.DB.prepare("SELECT * FROM audit_log WHERE action='sc_change_order_clone'").all();
     expect(cloneAudit.results!.length).toBe(1);
 
@@ -882,6 +885,57 @@ describe("change-order documents (Track D2)", () => {
     await driveTo(coId, "approved", "sent");
     expect((await p(admin, `/api/subcontracts/${coId}/change-order`)).status).toBe(409);
     expect((await p(admin, `/api/subcontracts/${coId}/supersede`)).status).toBe(409);
+  });
+
+  it("enforces the CO scope declaration at generate (Q3): a declaration-stripped draft refuses; restoring it generates", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+    const co = await p(admin, `/api/subcontracts/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    // The office strips the seeded sentence via a full-replace edit → generate refuses.
+    const strip = await p(admin, `/api/subcontracts/drafts/${coId}/update`, draftBody());
+    expect(strip.status, await strip.clone().text()).toBe(200);
+    const gen1 = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen1.status).toBe(409);
+    expect((await json<{ error: string }>(gen1)).error).toBe("co_scope_missing");
+    const restore = await p(admin, `/api/subcontracts/drafts/${coId}/update`,
+      draftBody({ exhibit_a_work_text: `${CO_SCOPE_SUB_DELTA}\n\nthe work` }));
+    expect(restore.status, await restore.clone().text()).toBe(200);
+    const gen2 = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen2.status, await gen2.clone().text()).toBe(200);
+  });
+
+  it("blocks superseding a parent with a non-canceled change order (Q1/A)", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+    await p(admin, `/api/subcontracts/${idA}/change-order`);
+    const sup = await p(admin, `/api/subcontracts/${idA}/supersede`);
+    expect(sup.status).toBe(409);
+    expect((await json<{ error: string }>(sup)).error).toBe("has_change_orders");
+  });
+
+  it("refuses generating a CO whose parent is no longer in force; update locks counterparty + job identity but preserves linkage on a clean edit", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+    const co = await p(admin, `/api/subcontracts/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+
+    // Identity repoint refused; clean edit preserves the linkage.
+    await seedSubcontractor("SUB-000099");
+    const repoint = await p(admin, `/api/subcontracts/drafts/${coId}/update`, draftBody({ sub_key: "SUB-000099" }));
+    expect(repoint.status).toBe(409);
+    expect((await json<{ error: string }>(repoint)).error).toBe("co_identity_locked");
+    const edit = await p(admin, `/api/subcontracts/drafts/${coId}/update`, draftBody());
+    expect(edit.status, await edit.clone().text()).toBe(200);
+    const row = await subRow(coId);
+    expect(row.change_order_of).toBe(idA);
+    expect(row.co_seq).toBe(1);
+
+    // Parent leaves force → generate refused.
+    await env.DB.prepare("UPDATE subcontracts SET status='superseded' WHERE id=?1").bind(idA).run();
+    const gen = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen.status).toBe(409);
+    expect((await json<{ error: string }>(gen)).error).toBe("parent_not_in_force");
   });
 });
 
@@ -928,7 +982,7 @@ describe("cancel", () => {
     const queuedId = await makeQueued(admin);
     const del = await p(admin, `/api/subcontracts/${queuedId}/delete`);
     expect(del.status).toBe(409);
-    expect((await json<{ error: string }>(del)).error).toBe("not_deletable");
+    expect((await json<{ error: string }>(del)).error).toBe("record_not_deletable");
     expect((await subRow(queuedId)).status).toBe("queued");
     expect(await nLines(queuedId)).toBeGreaterThan(0);
 
