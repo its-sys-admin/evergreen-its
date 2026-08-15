@@ -2840,3 +2840,25 @@ and the archived-job guard on operator direction; the poll test + filename at th
 po_materials Mac PR.
 
 Surfaced: 2026-08-15 design-completion review (13-agent workflow).
+
+## [OPEN 2026-08-15, medium] GitHub Actions cost controls — the free-tier meter runs whenever the repo is private
+
+The 2026-08-15 billing outage (every CI job refused to start mid-session) was the project's own
+run volume hitting the free tier: ~72 runs / ≈1,100-1,400 job-minutes in 3 days once the repo
+went private, double-triggered (push + pull_request per PR push), with ~10 additional full runs
+existing only to re-green cascade-cancelled merge-commit runs for the four-part leg-4 record.
+The operator restored free minutes by making the repo PUBLIC again (2026-08-15) — which also
+re-opens the history-exposure surface (the PII purge was never run; see the standing exposure
+item). If the repo ever goes private again, land cost controls FIRST:
+
+- dedupe the workflow triggers (pull_request for PR branches, push for main only) + add
+  cancel-in-progress on PR branches (~halves the burn);
+- consider a self-hosted runner on the Mac (private-repo self-hosted minutes are free);
+- retire full-run leg-4 re-runs (accept tip-green + per-PR green, or re-run the test job only);
+- or simply set a small spending limit (~$0.008/min Linux — the whole 3-day program ≈ $9).
+
+**Tag:** `ci`, `process`, `cost`.
+
+**Revisit when:** the repo's visibility changes again, or the next CI-workflow-touching PR.
+
+Surfaced: 2026-08-15 design-completion session (billing outage + operator public-flip).
