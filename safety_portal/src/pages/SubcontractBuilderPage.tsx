@@ -145,7 +145,15 @@ function FieldInput({
   );
 }
 
-export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
+export function SubcontractBuilderPage({
+  onBack,
+  openDraftRequest,
+}: {
+  onBack: () => void;
+  /** Nonce-keyed one-shot from App (Track D2 — the job screen's just-created change-order
+   *  draft): open this draft in the builder. The PoBuilderPage openDraftRequest twin. */
+  openDraftRequest?: { id: number; nonce: number } | null;
+}) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
   const canManage = caps.includes("cap.subcontracts.manage"); // UI affordance only — the Worker re-gates
@@ -193,6 +201,8 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
   // ── Builder form state ─────────────────────────────────────────────────────────────────────────
   const [draftId, setDraftId] = useState<number | null>(null);
   const [supersedesScId, setSupersedesScId] = useState<number | null>(null);
+  // Track D2: set when the open draft IS a change order — parent id + this CO's sequence.
+  const [changeOrderOf, setChangeOrderOf] = useState<{ id: number; seq: number | null } | null>(null);
   const [jobId, setJobId] = useState("");
   const [jobName, setJobName] = useState("");
   const [jobNo, setJobNo] = useState("");
@@ -230,6 +240,7 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
   function resetForm() {
     setDraftId(null);
     setSupersedesScId(null);
+    setChangeOrderOf(null);
     setJobId("");
     setJobName("");
     setJobNo("");
@@ -512,6 +523,7 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
       const { subcontract: sc, sov_lines } = await api.fetchSubDraft(id);
       setDraftId(sc.id);
       setSupersedesScId(sc.supersedes_sc_id);
+      setChangeOrderOf(sc.change_order_of !== null ? { id: sc.change_order_of, seq: sc.co_seq } : null);
       setJobId(sc.job_id);
       setJobName(sc.job_name);
       setJobNo(sc.job_no);
@@ -576,6 +588,56 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
     }
     setBusy(false);
   }
+
+  /** Create a CHANGE-ORDER draft from a sent/executed subcontract (Track D2): the Worker
+   *  clones the parent's full configuration + SOV; the office edits what changed and
+   *  generates — the parent stays in force, and the CO's number ({parent}-CO{n}) is minted
+   *  at generate. */
+  async function onChangeOrder(id: number) {
+    if (busy) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.createSubChangeOrder(id);
+      setMsg({
+        ok: true,
+        text: `Change order CO${r.co_seq ?? "?"} drafted from the subcontract — edit what changed, then Generate.`,
+      });
+      await openDraft(r.id);
+      reloadSubs(statusFilter === "all" ? undefined : statusFilter);
+    } catch (err) {
+      // ApiError.message is already human copy (errorText in its constructor).
+      setMsg({ ok: false, text: err instanceof Error ? err.message : "Change order failed." });
+    }
+    setBusy(false);
+  }
+
+  // The App-level one-shot (Track D2): the job Procurement screen created a change-order
+  // draft and navigated here — open it. Discard-guard: if the builder is mid-edit on a
+  // DIFFERENT draft, confirm before replacing (the PoBuilderPage openDraftRequest twin).
+  useEffect(() => {
+    if (!openDraftRequest) return;
+    const { id } = openDraftRequest;
+    void (async () => {
+      if (
+        view === "builder" &&
+        draftId !== id &&
+        !window.confirm(
+          `Open change-order draft #${id} now? The subcontract you were editing will be replaced (unsaved changes are lost).`,
+        )
+      ) {
+        setMsg({ ok: true, text: `Change-order draft #${id} is in the list — open it when you're ready.` });
+        reloadSubs(statusFilter === "all" ? undefined : statusFilter);
+        return;
+      }
+      await openDraft(id);
+      reloadSubs(statusFilter === "all" ? undefined : statusFilter);
+    })();
+    // Deliberately keyed on the request nonce alone (the PoBuilderPage precedent): openDraft/
+    // reloadSubs are stable-enough in-component closures; re-running on their identity would
+    // replay the open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDraftRequest]);
 
   async function onCancel(id: number) {
     if (busy) return;
@@ -701,10 +763,15 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
                 </button>
               )
             ) : null}
-            {p.status === "sent" || p.status === "executed" ? (
-              <button className="btn btn--primary" disabled={busy} onClick={() => void onSupersede(p.id)}>
-                Supersede
-              </button>
+            {(p.status === "sent" || p.status === "executed") && p.change_order_of === null ? (
+              <>
+                <button className="btn btn--primary" disabled={busy} onClick={() => void onSupersede(p.id)}>
+                  Supersede
+                </button>{" "}
+                <button className="btn btn--secondary" disabled={busy} onClick={() => void onChangeOrder(p.id)}>
+                  Change order
+                </button>
+              </>
             ) : null}
           </div>
         ) : null}
@@ -774,6 +841,7 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
         </button>
         {draftId !== null ? <span className="dash-pill">Editing draft #{draftId}</span> : null}
         {supersedesScId !== null ? <span className="dash-pill dash-pill--warn">Supersedes SC #{supersedesScId}</span> : null}
+        {changeOrderOf !== null ? <span className="dash-pill dash-pill--warn">Change order CO{changeOrderOf.seq ?? "?"} of SC #{changeOrderOf.id}</span> : null}
       </div>
 
       {/* 1 — Job & project */}
@@ -1056,7 +1124,13 @@ export function SubcontractBuilderPage({ onBack }: { onBack: () => void }) {
       {/* 7 — Supersedes (optional) */}
       <section className="card dash-section" aria-label="Step 7 — Supersedes">
         <h3 className="jha__section-title">7 · Supersedes (optional)</h3>
-        {supersedesScId !== null ? (
+        {changeOrderOf !== null ? (
+          <p className="muted">
+            This draft is change order CO{changeOrderOf.seq ?? "?"} of SC #{changeOrderOf.id} — the
+            original subcontract stays in force; this document carries the change. Its number is
+            minted at generate as the original&apos;s number + -CO{changeOrderOf.seq ?? "n"}.
+          </p>
+        ) : supersedesScId !== null ? (
           <p className="muted">
             This draft supersedes SC #{supersedesScId} — the old subcontract stays in force until this one is sent.
           </p>

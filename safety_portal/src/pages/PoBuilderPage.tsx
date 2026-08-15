@@ -286,6 +286,8 @@ export function PoBuilderPage({
   // ── Builder form state ─────────────────────────────────────────────────────────────────────────
   const [draftId, setDraftId] = useState<number | null>(null);
   const [supersedesPoId, setSupersedesPoId] = useState<number | null>(null);
+  // Track D2: set when the open draft IS a change order — parent id + this CO's sequence.
+  const [changeOrderOf, setChangeOrderOf] = useState<{ id: number; seq: number | null } | null>(null);
   const [jobId, setJobId] = useState("");
   const [jobName, setJobName] = useState("");
   const [jobNo, setJobNo] = useState("");
@@ -324,6 +326,7 @@ export function PoBuilderPage({
   function resetForm() {
     setDraftId(null);
     setSupersedesPoId(null);
+    setChangeOrderOf(null);
     setJobId("");
     setJobName("");
     setJobNo("");
@@ -651,6 +654,7 @@ export function PoBuilderPage({
       const { po, line_items } = await api.fetchPo(id);
       setDraftId(po.id);
       setSupersedesPoId(po.supersedes_po_id);
+      setChangeOrderOf(po.change_order_of !== null ? { id: po.change_order_of, seq: po.co_seq } : null);
       setJobId(po.job_id);
       setJobName(po.job_name);
       setJobNo(po.job_no);
@@ -766,6 +770,28 @@ export function PoBuilderPage({
       reloadPos(statusFilter === "all" ? undefined : statusFilter);
     } catch (err) {
       setMsg({ ok: false, text: err instanceof Error ? err.message : "Supersede failed." });
+    }
+    setBusy(false);
+  }
+
+  /** Create a CHANGE-ORDER draft from a sent PO (Track D2): the Worker clones the parent's
+   *  full configuration + lines; the office edits what changed and generates — the parent
+   *  stays in force, and the CO's number ({parent}-CO{n}) is minted at generate. */
+  async function onChangeOrder(id: number) {
+    if (busy) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.createPoChangeOrder(id);
+      setMsg({
+        ok: true,
+        text: `Change order CO${r.co_seq ?? "?"} drafted from the sent PO — edit what changed, then Generate.`,
+      });
+      await openDraft(r.id);
+      reloadPos(statusFilter === "all" ? undefined : statusFilter);
+    } catch (err) {
+      // ApiError.message is already human copy (errorText in its constructor).
+      setMsg({ ok: false, text: err instanceof Error ? err.message : "Change order failed." });
     }
     setBusy(false);
   }
@@ -1061,10 +1087,15 @@ export function PoBuilderPage({
                 </button>
               )
             ) : null}
-            {p.status === "sent" ? (
-              <button className="btn btn--primary" disabled={busy} onClick={() => void onSupersede(p.id)}>
-                Supersede
-              </button>
+            {p.status === "sent" && p.change_order_of === null ? (
+              <>
+                <button className="btn btn--primary" disabled={busy} onClick={() => void onSupersede(p.id)}>
+                  Supersede
+                </button>{" "}
+                <button className="btn btn--secondary" disabled={busy} onClick={() => void onChangeOrder(p.id)}>
+                  Change order
+                </button>
+              </>
             ) : null}
           </div>
         ) : null}
@@ -1185,6 +1216,7 @@ export function PoBuilderPage({
         </button>
         {draftId !== null ? <span className="dash-pill">Editing draft #{draftId}</span> : null}
         {supersedesPoId !== null ? <span className="dash-pill dash-pill--warn">Supersedes PO #{supersedesPoId}</span> : null}
+        {changeOrderOf !== null ? <span className="dash-pill dash-pill--warn">Change order CO{changeOrderOf.seq ?? "?"} of PO #{changeOrderOf.id}</span> : null}
       </div>
 
       {/* 1 — Job */}
@@ -1492,7 +1524,13 @@ export function PoBuilderPage({
       {/* 7 — Supersedes (optional) */}
       <section className="card dash-section" aria-label="Step 7 — Supersedes">
         <h3 className="jha__section-title">7 · Supersedes (optional)</h3>
-        {supersedesPoId !== null ? (
+        {changeOrderOf !== null ? (
+          <p className="muted">
+            This draft is change order CO{changeOrderOf.seq ?? "?"} of PO #{changeOrderOf.id} — the
+            original PO stays in force; this document carries the change. Its number is minted at
+            generate as the original&apos;s number + -CO{changeOrderOf.seq ?? "n"}.
+          </p>
+        ) : supersedesPoId !== null ? (
           <p className="muted">This draft supersedes PO #{supersedesPoId} — the old PO stays in force until this one is sent.</p>
         ) : sentPos.length === 0 ? (
           <p className="muted">No sent POs to supersede.</p>

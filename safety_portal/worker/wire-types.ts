@@ -67,7 +67,11 @@ export interface JobProcurementPo {
   /** Portal-marked vendor acceptance (Track D) — rides its own columns; `status` stays 'sent'. */
   accepted_at: string | null;
   accepted_by: string | null;
-  change_order_count: number;
+  /** Track D2: set when this document IS a change order — the parent document's id + this CO's
+   *  1-based sequence. The SPA nests CO documents under their parent; a CO's number is
+   *  `{parent number}-CO{co_seq}`, minted at generate. */
+  change_order_of: number | null;
+  co_seq: number | null;
 }
 
 export interface JobProcurementRfq {
@@ -95,25 +99,9 @@ export interface JobProcurementSub {
   /** WHO recorded the countersign (status='executed' is the machine's accepted state). */
   accepted_at: string | null;
   accepted_by: string | null;
-  change_order_count: number;
-}
-
-/** One change order recorded against a PO or subcontract (Track D). amount_cents is SIGNED —
- *  a deductive change order is negative. */
-export interface ProcurementChangeOrder {
-  id: number;
-  seq: number;
-  description: string;
-  amount_cents: number;
-  status: "pending" | "approved" | "rejected";
-  created_by: string;
-  created_at: number;
-  decided_by: string | null;
-  decided_at: number | null;
-}
-
-export interface ChangeOrdersResponse {
-  change_orders: ProcurementChangeOrder[];
+  /** Track D2 — see JobProcurementPo. */
+  change_order_of: number | null;
+  co_seq: number | null;
 }
 
 export interface JobProcurementResponse {

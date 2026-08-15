@@ -202,67 +202,48 @@ describe("procurement lifecycle (Track D)", () => {
   });
 });
 
-describe("change orders (Track D)", () => {
-  async function seedSentPo(): Promise<number> {
+describe("change-order documents (Track D2)", () => {
+  it("serves change_order_of/co_seq on both lanes so the SPA nests CO documents", async () => {
     await seedVendor("VEN-000042");
     await seedPo("JOB-P", { status: "sent", vendorKey: "VEN-000042" });
-    return (await env.DB.prepare("SELECT id FROM purchase_orders ORDER BY id DESC LIMIT 1").first<{ id: number }>())!.id;
-  }
+    const poId = (await env.DB.prepare("SELECT id FROM purchase_orders ORDER BY id DESC LIMIT 1").first<{ id: number }>())!.id;
+    // The CO document, as the lane clone route would mint it (linkage columns set, no supersession).
+    await env.DB.prepare(
+      "INSERT INTO purchase_orders (po_uuid, job_no, site_phase, job_id, job_name, vendor_key, status, subtotal_cents, tax_cents, shipping_cents, total_cents, created_by, change_order_of, co_seq) " +
+        "VALUES (?1, '2026.384', 1, 'JOB-P', 'Deep Lake', 'VEN-000042', 'draft', 100, 0, 0, 100, 'adm.p', ?2, 1)",
+    ).bind(crypto.randomUUID(), poId).run();
+    await seedSub("JOB-P", { status: "executed" });
 
-  it("creates with a server-assigned per-document seq and a SERVER-derived job_id; lists in order", async () => {
-    const poId = await seedSentPo();
-    const one = await p(admin, "/api/fieldops/procurement/change-orders", {
-      doc_type: "po", doc_id: poId, description: "Add 40 more piles", amount_cents: 250_000,
-      job_id: "JOB-EVIL", // hostile extra — must be ignored (derived from the parent row)
-    });
-    expect(one.status, await one.clone().text()).toBe(201);
-    expect(await one.json()).toMatchObject({ seq: 1 });
-    const two = await p(admin, "/api/fieldops/procurement/change-orders", {
-      doc_type: "po", doc_id: poId, description: "Deduct unused conduit", amount_cents: -50_000,
-    });
-    expect(await two.json()).toMatchObject({ seq: 2 });
-    const stored = await env.DB.prepare("SELECT job_id, seq, amount_cents FROM procurement_change_orders ORDER BY seq").all<{ job_id: string; seq: number; amount_cents: number }>();
-    expect(stored.results.map((r) => r.job_id)).toEqual(["JOB-P", "JOB-P"]);
-    expect(stored.results[1].amount_cents).toBe(-50_000);
-
-    const list = await g(admin, `/api/fieldops/procurement/po/${poId}/change-orders`);
-    const body = (await list.json()) as { change_orders: { seq: number; status: string }[] };
-    expect(body.change_orders.map((c) => c.seq)).toEqual([1, 2]);
-    // The lane list surfaces the count.
-    const proc = await g(admin, "/api/fieldops/jobs/JOB-P/procurement");
-    const lanes = (await proc.json()) as { purchase_orders: { change_order_count: number }[] | null };
-    expect(lanes.purchase_orders![0].change_order_count).toBe(2);
+    const res = await g(admin, "/api/fieldops/jobs/JOB-P/procurement");
+    expect(res.status, await res.clone().text()).toBe(200);
+    const body = (await res.json()) as {
+      purchase_orders: { id: number; change_order_of: number | null; co_seq: number | null }[] | null;
+      subcontracts: { change_order_of: number | null; co_seq: number | null }[] | null;
+    };
+    const co = body.purchase_orders!.find((r) => r.change_order_of !== null);
+    expect(co).toBeDefined();
+    expect(co!.change_order_of).toBe(poId);
+    expect(co!.co_seq).toBe(1);
+    const base = body.purchase_orders!.find((r) => r.id === poId)!;
+    expect(base.change_order_of).toBeNull();
+    expect(body.subcontracts![0].change_order_of).toBeNull();
   });
 
-  it("decides once (pending → approved; a second decide is 409) and deactivates", async () => {
-    const poId = await seedSentPo();
-    const created = await p(admin, "/api/fieldops/procurement/change-orders", {
-      doc_type: "po", doc_id: poId, description: "CO", amount_cents: 100,
-    });
-    const coId = ((await created.json()) as { id: number }).id;
-    expect((await p(admin, `/api/fieldops/procurement/change-orders/${coId}/decide`, { status: "approved" })).status).toBe(200);
-    const row = await env.DB.prepare("SELECT status, decided_by FROM procurement_change_orders WHERE id=?1").bind(coId)
-      .first<{ status: string; decided_by: string | null }>();
-    expect(row).toMatchObject({ status: "approved", decided_by: "adm.p" });
-    expect((await p(admin, `/api/fieldops/procurement/change-orders/${coId}/decide`, { status: "rejected" })).status).toBe(409);
-    expect((await p(admin, `/api/fieldops/procurement/change-orders/${coId}/deactivate`, {})).status).toBe(200);
-    const list = await g(admin, `/api/fieldops/procurement/po/${poId}/change-orders`);
-    expect(((await list.json()) as { change_orders: unknown[] }).change_orders).toEqual([]);
-  });
+  it("lifecycle marking works on a CO document and never touches its parent", async () => {
+    await seedVendor("VEN-000042");
+    await seedPo("JOB-P", { status: "sent", vendorKey: "VEN-000042" });
+    const poId = (await env.DB.prepare("SELECT id FROM purchase_orders ORDER BY id DESC LIMIT 1").first<{ id: number }>())!.id;
+    await env.DB.prepare(
+      "INSERT INTO purchase_orders (po_uuid, po_number, job_no, site_phase, job_id, job_name, vendor_key, status, subtotal_cents, tax_cents, shipping_cents, total_cents, created_by, change_order_of, co_seq) " +
+        "VALUES (?1, '2026.384.1.0.0-CO1', '2026.384', 1, 'JOB-P', 'Deep Lake', 'VEN-000042', 'approved', 100, 0, 0, 100, 'adm.p', ?2, 1)",
+    ).bind(crypto.randomUUID(), poId).run();
+    const coId = (await env.DB.prepare("SELECT id FROM purchase_orders WHERE change_order_of=?1").bind(poId).first<{ id: number }>())!.id;
 
-  it("403s decide/deactivate for a session below the lane tier — no row-existence oracle (review W6)", async () => {
-    // An UNKNOWN id must also 403 (not 404) for the uncapable session — the floor runs first.
-    expect((await p(manager, "/api/fieldops/procurement/change-orders/999999/decide", { status: "approved" })).status).toBe(403);
-    expect((await p(manager, "/api/fieldops/procurement/change-orders/999999/deactivate", {})).status).toBe(403);
-  });
-
-  it("404s an unknown parent document and 403s the wrong lane cap", async () => {
-    expect((await p(admin, "/api/fieldops/procurement/change-orders", {
-      doc_type: "po", doc_id: 999_999, description: "x", amount_cents: 1,
-    })).status).toBe(404);
-    const poId = await seedSentPo();
-    expect((await p(manager, "/api/fieldops/procurement/change-orders", {
-      doc_type: "po", doc_id: poId, description: "x", amount_cents: 1,
-    })).status).toBe(403);
+    // mark_submitted on the CO: it flips to sent; the parent (also sent) is NOT superseded —
+    // the flip keys on supersedes_po_id, which a CO never sets.
+    expect((await p(admin, `/api/fieldops/procurement/po/${coId}/lifecycle`, { action: "mark_submitted" })).status).toBe(200);
+    const parent = await env.DB.prepare("SELECT status FROM purchase_orders WHERE id=?1").bind(poId).first<{ status: string }>();
+    expect(parent!.status).toBe("sent");
+    expect((await p(admin, `/api/fieldops/procurement/po/${coId}/lifecycle`, { action: "mark_accepted" })).status).toBe(200);
   });
 });

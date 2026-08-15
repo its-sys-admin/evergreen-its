@@ -109,6 +109,10 @@ export interface SubcontractListRow {
   status: SubcontractStatus;
   contract_price_cents: number;
   supersedes_sc_id: number | null;
+  /** Track D2: set when this subcontract IS a change order against `change_order_of`; its
+   *  number is `{parent number}-CO{co_seq}`, minted at generate. The parent stays in force. */
+  change_order_of: number | null;
+  co_seq: number | null;
   box_file_id: string | null;
   created_by: string;
   created_at: number;
@@ -349,6 +353,25 @@ export async function supersedeSubcontract(id: number): Promise<SupersedeResult>
   if (body.error === "supersede_in_progress" && typeof body.existing_id === "number") {
     return { ok: false, error: "supersede_in_progress", existing_id: body.existing_id };
   }
+  throw new ApiError(body.error ?? null, res.status);
+}
+
+/** Create a CHANGE-ORDER draft against a SENT or EXECUTED subcontract (Track D2): the Worker
+ *  clones the parent's full configuration + SOV into a fresh draft linked change_order_of/co_seq.
+ *  The parent stays in force; the CO's number (`{parent}-CO{n}`) is minted at its own generate.
+ *  Failures (wrong state, CO-of-CO, a lost co_seq race) throw ApiError for errorCopy translation. */
+export async function createSubChangeOrder(id: number): Promise<{ id: number; co_seq: number | null }> {
+  const res = await fetch(`/api/subcontracts/${id}/change-order`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (res.ok) {
+    const data = (await res.json()) as { id: number; co_seq: number | null };
+    return { id: data.id, co_seq: data.co_seq ?? null };
+  }
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
   throw new ApiError(body.error ?? null, res.status);
 }
 

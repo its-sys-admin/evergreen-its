@@ -2104,19 +2104,15 @@ button.sched-task__prog:hover {
   margin-bottom: var(--space-3);
 }
 
-.proc-co-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
+/* Track D2 — change-order DOCUMENTS nest under their parent in the lane lists. */
+.proc-colist {
+  margin: 0 0 var(--space-2) var(--space-4);
+  border-left: 2px solid var(--c-line);
+  padding-left: var(--space-2);
 }
 
-.proc-co-form .wpr-field__input {
-  flex: 1 1 220px;
-}
-
-.proc-co-form .wpr-num {
-  flex: 0 1 130px;
+.proc-item--co {
+  font-size: 0.92em;
 }
 
 /* ── The shell and its section rail (part three) ──────────────────────────

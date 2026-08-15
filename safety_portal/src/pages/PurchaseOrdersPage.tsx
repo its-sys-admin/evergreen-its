@@ -43,10 +43,15 @@ export function PurchaseOrdersPage({
   tab,
   onTabChange,
   onBack,
+  externalOpenDraft,
 }: {
   tab: PoTab;
   onTabChange: (t: PoTab) => void;
   onBack: () => void;
+  /** App-level one-shot (Track D2): open this draft in the builder — the job Procurement
+   *  screen's just-created change order. Own nonce counter; adopted into the internal
+   *  request stream below. */
+  externalOpenDraft?: { id: number; nonce: number } | null;
 }) {
   // Monotonic nonce for the cross-tab one-shot requests below: a fresh nonce re-fires the
   // consumer's effect even when the same id is requested twice (e.g. review, back out, review
@@ -54,6 +59,15 @@ export function PurchaseOrdersPage({
   const nonceRef = useRef(0);
   const openDraftReqRef = useRef<{ id: number; nonce: number } | null>(null);
   const reviewReqRef = useRef<{ id: number; nonce: number } | null>(null);
+
+  // Render-phase adoption of the external one-shot (idempotent under StrictMode double-render:
+  // the second pass sees the nonce already recorded and skips). The render that carries the
+  // new prop is itself the render that must hand the request to PoBuilderPage below.
+  const lastExternalNonceRef = useRef(0);
+  if (externalOpenDraft && externalOpenDraft.nonce !== lastExternalNonceRef.current) {
+    lastExternalNonceRef.current = externalOpenDraft.nonce;
+    openDraftReqRef.current = { id: externalOpenDraft.id, nonce: ++nonceRef.current };
+  }
 
   // Mount-on-first-visit set. Mutated during render (idempotent add — safe under StrictMode
   // double-render): the tab prop change that reveals a new panel is itself the re-render that

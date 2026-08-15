@@ -196,6 +196,14 @@ export function App() {
   const routeRef = useRef<AppRoute>(route);
   // R3: FormFillPage's unsaved-input flag, consulted by the popstate guard before discarding.
   const formDirtyRef = useRef(false);
+  // Track D2: the job Procurement screen created a change-order DRAFT in a lane — carry the
+  // draft id into that lane's builder as a nonce-keyed one-shot (refs, not state: navigate()
+  // triggers the re-render that delivers the request; bumping must not re-render by itself).
+  // Declared HERE, above the loading/signed-out early returns — hooks after those returns
+  // change the hook count across auth transitions and crash the renderer.
+  const builderOpenNonceRef = useRef(0);
+  const poExternalOpenRef = useRef<{ id: number; nonce: number } | null>(null);
+  const subExternalOpenRef = useRef<{ id: number; nonce: number } | null>(null);
 
   // G2.5 history integration: canonicalize the entry URL, then restore routes on popstate.
   // Registered once; reads state through refs so the listener never goes stale.
@@ -334,6 +342,17 @@ export function App() {
     setEditing(false);
     navigate({ view: "fieldops-job-procurement", jobId });
   };
+  // Track D2 handoff callbacks (the refs live above the auth early-returns).
+  const openPoDraftInBuilder = (id: number) => {
+    poExternalOpenRef.current = { id, nonce: ++builderOpenNonceRef.current };
+    setEditing(false);
+    navigate({ view: "po-builder" });
+  };
+  const openSubDraftInBuilder = (id: number) => {
+    subExternalOpenRef.current = { id, nonce: ++builderOpenNonceRef.current };
+    setEditing(false);
+    navigate({ view: "subcontract-builder" });
+  };
 
   // The effective FormFillPage prefill: the route's shareable fields + the in-memory S5 draft.
   let fillPrefill: FormPrefill | undefined;
@@ -431,6 +450,8 @@ export function App() {
         onOpenJob={openJobTracker}
         onOpenPurchaseOrders={has("cap.po.manage") ? () => navigate({ view: "po-builder" }) : undefined}
         onOpenSubcontracts={has("cap.subcontracts.manage") ? () => navigate({ view: "subcontract-builder" }) : undefined}
+        onOpenPoDraft={has("cap.po.manage") ? openPoDraftInBuilder : undefined}
+        onOpenSubDraft={has("cap.subcontracts.manage") ? openSubDraftInBuilder : undefined}
       />
     );
   } else if (route.view === "fieldops-site-tasks" && allowed) {
@@ -463,6 +484,7 @@ export function App() {
         tab={PO_TAB_BY_VIEW[route.view]}
         onTabChange={(t) => navigate({ view: PO_VIEW_BY_TAB[t] }, true)}
         onBack={home}
+        externalOpenDraft={poExternalOpenRef.current}
       />
     );
   } else if (route.view === "po-vendors" && allowed) {
@@ -472,7 +494,7 @@ export function App() {
   } else if (route.view === "subcontractors" && allowed) {
     page = <SubcontractorsPage onBack={home} />;
   } else if (route.view === "subcontract-builder" && allowed) {
-    page = <SubcontractBuilderPage onBack={home} />;
+    page = <SubcontractBuilderPage onBack={home} openDraftRequest={subExternalOpenRef.current} />;
   } else {
     page = (
       <HomePage

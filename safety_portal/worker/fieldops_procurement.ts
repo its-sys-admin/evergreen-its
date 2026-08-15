@@ -1,7 +1,7 @@
 import type { FieldopsApp, FieldopsGates } from "./fieldops_gates";
 import type { Context } from "hono";
 import type { Env, Vars } from "./types";
-import { auditStmtIfChanged, isUniqueViolation } from "./audit";
+import { auditStmtIfChanged } from "./audit";
 import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobProcurementSub } from "./wire-types";
 
 // Per-job Procurement read for the Job Tracker (Track A8, operator ask 2026-08-13): the POs,
@@ -65,11 +65,12 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
             .prepare(
               // Vendor NAME server-side (never bare VEN-keys on a display surface); LEFT JOIN —
               // a vendor removed from the SoR must not drop the PO row.
+              // change_order_of/co_seq ride out so the SPA nests CO documents under their
+              // parent (Track D2 — a CO is a real lane document, not a side record).
               `SELECT p.id, p.po_number, p.revision, p.supersede_seq, p.status, p.total_cents,
                       p.updated_at, (p.box_file_id IS NOT NULL) AS filed,
                       p.vendor_key, v.vendor_name, p.accepted_at, p.accepted_by,
-                      (SELECT COUNT(*) FROM procurement_change_orders co
-                        WHERE co.doc_type='po' AND co.doc_id=p.id AND co.active=1) AS change_order_count
+                      p.change_order_of, p.co_seq
                FROM purchase_orders p LEFT JOIN po_vendors v ON v.vendor_key = p.vendor_key
                WHERE p.job_id = ?1
                ORDER BY p.updated_at DESC, p.id DESC LIMIT ${LANE_CAP_ROWS}`,
@@ -97,8 +98,7 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
               `SELECT s.id, s.sc_number, s.revision, s.supersede_seq, s.status, s.trade,
                       s.contract_price_cents, s.updated_at, (s.box_file_id IS NOT NULL) AS filed,
                       s.sub_key, sub.sub_name, s.accepted_at, s.accepted_by,
-                      (SELECT COUNT(*) FROM procurement_change_orders co
-                        WHERE co.doc_type='subcontract' AND co.doc_id=s.id AND co.active=1) AS change_order_count
+                      s.change_order_of, s.co_seq
                FROM subcontracts s LEFT JOIN subcontractors sub ON sub.sub_key = s.sub_key
                WHERE s.job_id = ?1
                ORDER BY s.updated_at DESC, s.id DESC LIMIT ${LANE_CAP_ROWS}`,
@@ -125,7 +125,8 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           vendor_name: (r.vendor_name as string | null) ?? null,
           accepted_at: (r.accepted_at as string | null) ?? null,
           accepted_by: (r.accepted_by as string | null) ?? null,
-          change_order_count: Number(r.change_order_count ?? 0),
+          change_order_of: (r.change_order_of as number | null) ?? null,
+          co_seq: (r.co_seq as number | null) ?? null,
         }));
         rfqs = ((res[i++].results ?? []) as Record<string, unknown>[]).map((r) => ({
           id: Number(r.id),
@@ -152,7 +153,8 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           sub_name: (r.sub_name as string | null) ?? null,
           accepted_at: (r.accepted_at as string | null) ?? null,
           accepted_by: (r.accepted_by as string | null) ?? null,
-          change_order_count: Number(r.change_order_count ?? 0),
+          change_order_of: (r.change_order_of as number | null) ?? null,
+          co_seq: (r.co_seq as number | null) ?? null,
         }));
       }
       const payload: JobProcurementResponse = { purchase_orders: pos, rfqs, subcontracts: subs };
@@ -323,127 +325,13 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
     },
   );
 
-  // ── Change orders (Track D). ────────────────────────────────────────────────────────────────
-  // Recorded against a PO or subcontract; job_id denormalized SERVER-SIDE from the parent row
-  // (never client-supplied — a hostile job_id could not misfile a CO). seq is per-document,
-  // assigned inside the INSERT (MAX+1) so two concurrent creates cannot collide silently — the
-  // UNIQUE(doc_type, doc_id, seq) makes the loser retry visible.
-  app.post("/api/fieldops/procurement/change-orders", gates.requireSession, async (c) => {
-    const caps = c.get("capabilities");
-    let body: Record<string, unknown>;
-    try {
-      body = (await c.req.json()) as Record<string, unknown>;
-    } catch {
-      return c.json({ error: "bad_request" }, 400);
-    }
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return c.json({ error: "bad_request" }, 400);
-    }
-    const docType = body.doc_type === "po" || body.doc_type === "subcontract" ? body.doc_type : null;
-    const docId = typeof body.doc_id === "number" && Number.isSafeInteger(body.doc_id) && body.doc_id > 0 ? body.doc_id : null;
-    const description = typeof body.description === "string" ? body.description.trim().slice(0, 2000) : "";
-    const amount = typeof body.amount_cents === "number" && Number.isSafeInteger(body.amount_cents) &&
-      Math.abs(body.amount_cents) <= 1_000_000_000_00 ? body.amount_cents : null;
-    if (docType === null || docId === null || description === "" || amount === null) {
-      return c.json({ error: "invalid_change_order" }, 400);
-    }
-    if (!caps.has(docType === "po" ? LANE_CAP_PO : LANE_CAP_SUB)) return c.json({ error: "forbidden" }, 403);
-    const parentTable = docType === "po" ? "purchase_orders" : "subcontracts";
-    const parent = await c.env.DB
-      .prepare(`SELECT job_id FROM ${parentTable} WHERE id = ?1`)
-      .bind(docId)
-      .first<{ job_id: string }>();
-    if (!parent) return c.json({ error: "unknown_document" }, 404);
-    const actor = c.get("session").username;
-    let res;
-    try {
-      res = await c.env.DB.batch([
-        c.env.DB
-          .prepare(
-            "INSERT INTO procurement_change_orders (job_id, doc_type, doc_id, seq, description, amount_cents, created_by) " +
-              "SELECT ?1, ?2, ?3, COALESCE((SELECT MAX(seq) FROM procurement_change_orders WHERE doc_type=?2 AND doc_id=?3), 0) + 1, ?4, ?5, ?6 " +
-              "RETURNING id, seq",
-          )
-          .bind(parent.job_id, docType, docId, description, amount, actor),
-        auditStmtIfChanged(c, actor, "change_order_create", `${docType}:${docId}`, {
-          doc_type: docType, doc_id: docId, amount_cents: amount,
-        }),
-      ]);
-    } catch (e) {
-      // The MAX+1 race-loser under UNIQUE(doc_type, doc_id, seq): a clean retriable 409, never
-      // a generic 500 (review W5 — the po_number_conflict pattern).
-      if (isUniqueViolation(e)) return c.json({ error: "change_order_seq_conflict" }, 409);
-      throw e;
-    }
-    const row = (res[0].results?.[0] ?? null) as { id: number; seq: number } | null;
-    if (!row) return c.json({ error: "internal_error" }, 500);
-    return c.json({ ok: true, id: row.id, seq: row.seq }, 201);
-  });
-
-  app.post("/api/fieldops/procurement/change-orders/:id/decide", gates.requireSession, gates.requireAnyCapability([LANE_CAP_PO, LANE_CAP_SUB]), async (c) => {
-    const id = parseInt(c.req.param("id"), 10);
-    if (isNaN(id) || id < 1) return c.json({ error: "invalid_id" }, 400);
-    let body: Record<string, unknown>;
-    try {
-      body = (await c.req.json()) as Record<string, unknown>;
-    } catch {
-      return c.json({ error: "bad_request" }, 400);
-    }
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return c.json({ error: "bad_request" }, 400);
-    }
-    const status = body.status === "approved" || body.status === "rejected" ? (body.status as string) : null;
-    if (status === null) return c.json({ error: "invalid_status" }, 400);
-    const gateErr = await requireCoLaneCap(c, id);
-    if (gateErr) return gateErr;
-    const actor = c.get("session").username;
-    const res = await c.env.DB.batch([
-      c.env.DB
-        .prepare(
-          "UPDATE procurement_change_orders SET status=?2, decided_by=?3, decided_at=unixepoch() " +
-            "WHERE id=?1 AND active=1 AND status='pending'",
-        )
-        .bind(id, status, actor),
-      auditStmtIfChanged(c, actor, "change_order_decide", String(id), { change_order_id: id, status }),
-    ]);
-    if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_pending" }, 409);
-    return c.json({ ok: true });
-  });
-
-  app.post("/api/fieldops/procurement/change-orders/:id/deactivate", gates.requireSession, gates.requireAnyCapability([LANE_CAP_PO, LANE_CAP_SUB]), async (c) => {
-    const id = parseInt(c.req.param("id"), 10);
-    if (isNaN(id) || id < 1) return c.json({ error: "invalid_id" }, 400);
-    const gateErr = await requireCoLaneCap(c, id);
-    if (gateErr) return gateErr;
-    const actor = c.get("session").username;
-    const res = await c.env.DB.batch([
-      c.env.DB
-        .prepare("UPDATE procurement_change_orders SET active=0 WHERE id=?1 AND active=1")
-        .bind(id),
-      auditStmtIfChanged(c, actor, "change_order_deactivate", String(id), { change_order_id: id }),
-    ]);
-    if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_found" }, 404);
-    return c.json({ ok: true });
-  });
-
-  // Per-document change-order list (the item screen's read).
-  app.get("/api/fieldops/procurement/:doc_type/:id/change-orders", gates.requireSession, async (c) => {
-    const docType = c.req.param("doc_type") ?? "";
-    const id = parseInt(c.req.param("id"), 10);
-    if ((docType !== "po" && docType !== "subcontract") || isNaN(id) || id < 1) {
-      return c.json({ error: "invalid_id" }, 400);
-    }
-    const caps = c.get("capabilities");
-    if (!caps.has(docType === "po" ? LANE_CAP_PO : LANE_CAP_SUB)) return c.json({ error: "forbidden" }, 403);
-    const rows = await c.env.DB
-      .prepare(
-        "SELECT id, seq, description, amount_cents, status, created_by, created_at, decided_by, decided_at " +
-          "FROM procurement_change_orders WHERE doc_type=?1 AND doc_id=?2 AND active=1 ORDER BY seq ASC",
-      )
-      .bind(docType, id)
-      .all();
-    return c.json({ change_orders: rows.results ?? [] }, 200);
-  });
+  // ── Change orders (Track D2). ───────────────────────────────────────────────────────────────
+  // A change order is a DOCUMENT, not a record (operator directive 2026-08-14): it is created by
+  // the lanes' own clone routes (POST /api/po/:id/change-order, /api/subcontracts/:id/change-order)
+  // as a full draft fed from the parent's configuration, and generated/reviewed/sent through the
+  // lane's existing pipeline. This module only READS the linkage (change_order_of/co_seq in the
+  // per-job GET above) so the job screen can nest CO documents under their parent; the 0076
+  // description-record model (procurement_change_orders) was dropped in 0077.
 }
 
 /** 409 naming the document's CURRENT state — a wrong-state lifecycle action must never read as
@@ -456,22 +344,5 @@ async function refuseWrongState(
   const row = await c.env.DB.prepare(`SELECT status FROM ${table} WHERE id = ?1`).bind(id).first<{ status: string }>();
   if (!row) return c.json({ error: "unknown_document" }, 404);
   return c.json({ error: "wrong_state", current_status: row.status }, 409);
-}
-
-/** The CO write gate: resolve the CO's lane, require that lane's own capability. Runs BEHIND
- *  the requireAnyCapability([PO, SUB]) middleware floor (review W6) — an uncapable session is
- *  403d before this SELECT, so row existence never leaks below the lane tier. */
-async function requireCoLaneCap(
-  c: Context<{ Bindings: Env; Variables: Vars }>,
-  coId: number,
-) {
-  const row = await c.env.DB
-    .prepare("SELECT doc_type FROM procurement_change_orders WHERE id = ?1")
-    .bind(coId)
-    .first<{ doc_type: string }>();
-  if (!row) return c.json({ error: "not_found" }, 404);
-  const caps = c.get("capabilities");
-  if (!caps.has(row.doc_type === "po" ? LANE_CAP_PO : LANE_CAP_SUB)) return c.json({ error: "forbidden" }, 403);
-  return null;
 }
 

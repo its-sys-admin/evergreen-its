@@ -905,7 +905,7 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     const { results } = await c.env.DB
       .prepare(
         "SELECT id, sc_number, job_no, site_phase, supersede_seq, revision, sub_key, job_id, job_name, " +
-          "project_name, owner_entity, status, contract_price_cents, supersedes_sc_id, box_file_id, " +
+          "project_name, owner_entity, status, contract_price_cents, supersedes_sc_id, change_order_of, co_seq, box_file_id, " +
           "created_by, created_at, updated_at " +
           "FROM subcontracts WHERE (?1 = 'all' OR status = ?1) ORDER BY updated_at DESC, id DESC LIMIT ?2",
       )
@@ -1082,7 +1082,7 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     const sub = await c.env.DB
       .prepare("SELECT * FROM subcontracts WHERE id = ?1 AND status = 'draft'")
       .bind(id)
-      .first<SubcontractRow & { status: string; draft_version: number }>();
+      .first<SubcontractRow & { status: string; draft_version: number; change_order_of: number | null; co_seq: number | null }>();
     if (!sub) return c.json({ error: "not_found" }, 404);
     const lines = await loadSovLines(c.env.DB, id);
     if (lines.length === 0) return c.json({ error: "no_sov_lines" }, 422);
@@ -1109,16 +1109,34 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     if (!sub.project_name?.trim()) return c.json({ error: "missing_project_name" }, 422);
     if (!sub.trade?.trim()) return c.json({ error: "missing_trade" }, 422);
 
-    // MAX(revision)+1 within the family (allocated tuples only — drafts carry NULL).
-    const rev = await c.env.DB
-      .prepare(
-        "SELECT COALESCE(MAX(revision), -1) + 1 AS rev FROM subcontracts " +
-          "WHERE job_no = ?1 AND site_phase = ?2 AND supersede_seq = ?3 AND revision IS NOT NULL",
-      )
-      .bind(sub.job_no, sub.site_phase, sub.supersede_seq)
-      .first<{ rev: number }>();
-    const revision = rev?.rev ?? 0;
-    const scNumber = `${sub.job_no}.${sub.site_phase}.${sub.supersede_seq}.${revision}`;
+    // Number allocation forks on document kind (Track D2, the po.ts twin):
+    //  - BASE document: revision = family MAX+1, five-segment D7 number.
+    //  - CHANGE ORDER (change_order_of set): revision stays NULL (never consumes a family
+    //    slot) and the number is `{parent sc_number}-CO{co_seq}` — the parent number rides
+    //    INSIDE the signed sc_number, which is how the Mac renders the change-order clause
+    //    from signed data (change_order_of/co_seq are store-only, out of sub:v1).
+    let revision: number | null;
+    let scNumber: string;
+    if (sub.change_order_of !== null) {
+      const parent = await c.env.DB
+        .prepare("SELECT sc_number FROM subcontracts WHERE id = ?1")
+        .bind(sub.change_order_of)
+        .first<{ sc_number: string | null }>();
+      if (!parent?.sc_number) return c.json({ error: "parent_not_generated" }, 409);
+      revision = null;
+      scNumber = `${parent.sc_number}-CO${sub.co_seq}`;
+    } else {
+      // MAX(revision)+1 within the family (allocated tuples only — drafts carry NULL).
+      const rev = await c.env.DB
+        .prepare(
+          "SELECT COALESCE(MAX(revision), -1) + 1 AS rev FROM subcontracts " +
+            "WHERE job_no = ?1 AND site_phase = ?2 AND supersede_seq = ?3 AND revision IS NOT NULL",
+        )
+        .bind(sub.job_no, sub.site_phase, sub.supersede_seq)
+        .first<{ rev: number }>();
+      revision = rev?.rev ?? 0;
+      scNumber = `${sub.job_no}.${sub.site_phase}.${sub.supersede_seq}.${revision}`;
+    }
 
     // Fail closed on a missing HMAC secret — signing with undefined would mint signatures the Mac
     // side can never verify (silent loss).
@@ -1177,7 +1195,11 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     if (id === null) return c.json({ error: "invalid_id" }, 400);
     const src = await c.env.DB.prepare("SELECT * FROM subcontracts WHERE id = ?1").bind(id).first<Record<string, unknown>>();
     if (!src) return c.json({ error: "not_found" }, 404);
-    if (src.status !== "sent" && src.status !== "executed") return c.json({ error: "not_supersedable" }, 409);
+    // A change-order document can't be superseded — re-issuing a CO is done as the NEXT
+    // CO against the base (Track D2, the po.ts twin). Base documents only.
+    if ((src.status !== "sent" && src.status !== "executed") || src.change_order_of !== null) {
+      return c.json({ error: "not_supersedable" }, 409);
+    }
     // Double-submit guard (idempotency): if a live successor draft already exists for this source,
     // don't mint a sibling at the same supersede_seq — surface the existing one. Canceled successors
     // don't block a fresh supersede.
@@ -1225,6 +1247,71 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_supersedable" }, 409); // lost race
     const clone = await c.env.DB.prepare("SELECT id FROM subcontracts WHERE sc_uuid = ?1").bind(scUuid).first<{ id: number }>();
     return c.json({ ok: true, id: clone?.id ?? null, supersedes_sc_id: id }, 201);
+  });
+
+  // POST /api/subcontracts/:id/change-order — clone a SENT or EXECUTED subcontract into a
+  // CHANGE-ORDER draft (Track D2, the po.ts twin with the wider in-force source set). The
+  // parent stays in force: change_order_of → the source, supersedes_sc_id stays NULL (the
+  // supersession flip is structurally inert for a CO), supersede_seq copied VERBATIM,
+  // co_seq = MAX+1 over ALL of the parent's COs. At generate the CO mints
+  // `{parent sc_number}-CO{co_seq}` instead of allocating a family revision. No CO-of-CO;
+  // multiple concurrent CO drafts allowed — the partial unique index is the race backstop.
+  app.post("/api/subcontracts/:id/change-order", gates.requireSession, gates.requireCapability(CAP_SUB), async (c) => {
+    const id = parseIdParam(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid_id" }, 400);
+    const src = await c.env.DB.prepare("SELECT * FROM subcontracts WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+    if (!src) return c.json({ error: "not_found" }, 404);
+    if ((src.status !== "sent" && src.status !== "executed") || src.change_order_of !== null) {
+      return c.json({ error: "not_change_orderable" }, 409);
+    }
+
+    const actor = c.get("session").username;
+    const scUuid = crypto.randomUUID();
+    // Same batch shape + audit ordering as the supersede clone above (the audit stmt reads
+    // changes() of the IMMEDIATELY PRECEDING statement — keep it directly after the parent
+    // INSERT).
+    let res;
+    try {
+      res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            "INSERT INTO subcontracts (sc_uuid, job_no, site_phase, supersede_seq, job_id, job_name, " +
+              "project_name, owner_entity, prime_contractor, site_name, site_address, governing_law_state, " +
+              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, exhibit_a_work_text, " +
+              "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
+              "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
+              "change_order_of, co_seq, status, approver_name, approver_title, created_by) " +
+              "SELECT ?2, job_no, site_phase, supersede_seq, job_id, job_name, " +
+              "project_name, owner_entity, prime_contractor, site_name, site_address, governing_law_state, " +
+              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, exhibit_a_work_text, " +
+              "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
+              "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
+              "?1, (SELECT COALESCE(MAX(co_seq), 0) + 1 FROM subcontracts WHERE change_order_of = ?1), " +
+              "'draft', approver_name, approver_title, ?3 " +
+              "FROM subcontracts WHERE id = ?1 AND status IN ('sent','executed') AND change_order_of IS NULL",
+          )
+          .bind(id, scUuid, actor),
+        auditStmtIfChanged(c, actor, "sc_change_order_clone", String(id), { source_sc_id: id, sc_uuid: scUuid }),
+        c.env.DB
+          .prepare(
+            `INSERT INTO sov_lines (subcontract_id, ${SOV_COLS}) ` +
+              `SELECT (SELECT id FROM subcontracts WHERE sc_uuid = ?2), ${SOV_COLS} ` +
+              "FROM sov_lines WHERE subcontract_id = ?1 " +
+              "AND EXISTS (SELECT 1 FROM subcontracts WHERE sc_uuid = ?2)",
+          )
+          .bind(id, scUuid),
+      ]);
+    } catch (e) {
+      // Lost the co_seq allocation race (partial unique index) — nothing was written; retry.
+      if (isUniqueViolation(e)) return c.json({ error: "change_order_conflict" }, 409);
+      throw e;
+    }
+    if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_change_orderable" }, 409); // lost race
+    const clone = await c.env.DB
+      .prepare("SELECT id, co_seq FROM subcontracts WHERE sc_uuid = ?1")
+      .bind(scUuid)
+      .first<{ id: number; co_seq: number }>();
+    return c.json({ ok: true, id: clone?.id ?? null, change_order_of: id, co_seq: clone?.co_seq ?? null }, 201);
   });
 
   // POST /api/subcontracts/:id/cancel — off-path terminal, ONLY from draft/queued/pending_review (an

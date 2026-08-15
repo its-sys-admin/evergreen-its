@@ -106,6 +106,8 @@ function scRow(overrides: Partial<api.SubcontractListRow>): api.SubcontractListR
     supersede_seq: 0,
     revision: null,
     sub_key: "SUB-000001",
+    change_order_of: null,
+    co_seq: null,
     job_id: "JOB-000001",
     job_name: "2023.126 Kendall Solar",
     project_name: "2023.126 Kendall Solar",
