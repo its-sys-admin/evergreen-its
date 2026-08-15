@@ -52,6 +52,15 @@ def test_parse_rejects_malformed(bad: str) -> None:
         numbering.parse_po_number(bad)
 
 
+def test_parse_rejects_change_order_suffix() -> None:
+    """The Worker-minted CO grammar (`{parent}-CO{seq}`) is NOT a base D7 number —
+    parse_po_number handles BASE family numbers only. The change-order clause's
+    parent derives via a deliberate rsplit in the render module
+    (po_generate._change_order_parts), never through this parser."""
+    with pytest.raises(numbering.PoNumberError):
+        numbering.parse_po_number("2026.384.1.0.0-CO1")
+
+
 # ---- collision double-check -------------------------------------------------
 
 

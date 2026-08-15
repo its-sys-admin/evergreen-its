@@ -121,6 +121,41 @@ def test_render_subcontract_docx_bolds_article_headings(tmp_path, monkeypatch):
     assert not any(t.startswith("1.1") for t in bold_texts)
 
 
+def test_render_subcontract_docx_change_order_clause(tmp_path, monkeypatch):
+    """A CO-numbered subcontract (`{parent}-CO{seq}`, Worker-minted, signed) renders the
+    change-order notice DIRECTLY UNDER the title — bold + centered — naming the parent
+    that remains in force. Parent derives from the sc_number string (signed data), never
+    a store-only D1 column."""
+    _cleared(tmp_path, monkeypatch)
+    data = sd.render_subcontract_docx(_record(sc_number="2026.001.2.0.0-CO1"), _SOV)
+    doc = Document(io.BytesIO(data))
+    texts = [p.text for p in doc.paragraphs]
+    assert texts[0] == "SUBCONTRACT AGREEMENT"
+    assert texts[1] == (
+        "THIS DOCUMENT IS CHANGE ORDER NO. 1 TO SUBCONTRACT 2026.001.2.0.0. "
+        "SUBCONTRACT 2026.001.2.0.0 REMAINS IN FORCE AS MODIFIED HEREBY."
+    )
+    notice = doc.paragraphs[1]
+    assert notice.runs and notice.runs[0].bold  # prominent, the title styling's twin
+
+
+def test_render_subcontract_docx_no_clause_for_base_number(tmp_path, monkeypatch):
+    """A base-numbered subcontract renders NO change-order notice."""
+    _cleared(tmp_path, monkeypatch)
+    data = sd.render_subcontract_docx(_record(sc_number="2026.001.2.0.0"), _SOV)
+    joined = "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)
+    assert "CHANGE ORDER NO." not in joined
+
+
+def test_render_subcontract_docx_non_digit_co_tail_no_clause(tmp_path, monkeypatch):
+    """`-COX` is not the CO grammar — _change_order_parts returns None and NO notice
+    renders (never a clause naming a parent the malformed suffix can't prove)."""
+    _cleared(tmp_path, monkeypatch)
+    data = sd.render_subcontract_docx(_record(sc_number="2026.001.2.0.0-COX"), _SOV)
+    joined = "\n".join(p.text for p in Document(io.BytesIO(data)).paragraphs)
+    assert "CHANGE ORDER NO." not in joined
+
+
 def test_render_subcontract_docx_fences_pending_body(tmp_path, monkeypatch):
     _cleared(tmp_path, monkeypatch, legal_review="pending")
     with pytest.raises(SubcontractDocxError, match="gate failed"):
