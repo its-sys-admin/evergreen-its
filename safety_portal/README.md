@@ -61,7 +61,8 @@ its migration fail-closes `resolveCapabilities` → the universal-lockout class 
 | `0073_job_payments` | ADR-0006 PR-7 payments: `cap.payments.manage` → admin ONLY + `job_payment_terms`/`job_payment_cycles`/`job_payment_receipts` (states DERIVED at read, never stored). Apply BEFORE the Worker carrying `/api/fieldops/payments` deploys — fail-closed `resolveCapabilities` 403s every admin until the capability row lands | (ADR-0006 PR-7) | ☐ pending |
 | `0074_daily_photo_wpr` | WPR photo pipeline (Track B) | #133 | ✅ |
 | `0075_rfq_job_id` | Job-tracker Procurement section (Track A8) | #142 | ✅ |
-| `0076_procurement_lifecycle` | Procurement lifecycle + change orders (Track D) | pending | ⬜ |
+| `0076_procurement_lifecycle` | Procurement lifecycle + change orders (Track D) | #147 | ✅ 2026-08-14 |
+| `0077_change_order_documents` | Change orders as DOCUMENTS (Track D2): `change_order_of`/`co_seq` on both lanes + partial unique seq indexes + DROP `procurement_change_orders` (0-row record model). **Bidirectional**: apply BEFORE this Worker deploys, and deploy immediately after applying — the DROP breaks the pre-0077 Worker's CO-record routes | (Track D2) | ☐ pending |
 
 > ⚠️ **This table is behind the migrations directory: `0053`–`0058`, `0060`, and `0063`–`0072`
 > shipped but were never listed here.** Pre-existing drift, not introduced by `0059`/`0061`/`0073`.

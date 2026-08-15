@@ -830,6 +830,61 @@ describe("status-sync + supersession", () => {
   });
 });
 
+// ── change-order documents (Track D2) ─────────────────────────────────────────
+describe("change-order documents (Track D2)", () => {
+  it("clones a SENT subcontract into a CO draft (SOV + config, seq allocated, NO supersession linkage); generate mints {parent}-CO{seq} with revision NULL; the CO shipping never retires the parent", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+
+    const co = await p(admin, `/api/subcontracts/${idA}/change-order`);
+    expect(co.status, await co.clone().text()).toBe(201);
+    const { id: idB, co_seq } = await json<{ id: number; co_seq: number }>(co);
+    expect(co_seq).toBe(1);
+    const b = await subRow(idB);
+    expect(b.status).toBe("draft");
+    expect(b.change_order_of).toBe(idA);
+    expect(b.co_seq).toBe(1);
+    expect(b.supersedes_sc_id).toBeNull(); // the flip sites key on this — structurally inert
+    expect(b.supersede_seq).toBe((await subRow(idA)).supersede_seq); // verbatim, never +1
+    expect(b.sc_number).toBeNull();
+    const bLines = await env.DB.prepare("SELECT * FROM sov_lines WHERE subcontract_id=?1 ORDER BY position").bind(idB).all();
+    expect(bLines.results!.length).toBe(1); // cloned
+    const cloneAudit = await env.DB.prepare("SELECT * FROM audit_log WHERE action='sc_change_order_clone'").all();
+    expect(cloneAudit.results!.length).toBe(1);
+
+    // Generate: suffixed number off the parent's SIGNED number; revision stays NULL.
+    const gen = await p(admin, `/api/subcontracts/drafts/${idB}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen.status, await gen.clone().text()).toBe(200);
+    const parentNumber = (await subRow(idA)).sc_number as string;
+    expect((await json<{ sc_number: string }>(gen)).sc_number).toBe(`${parentNumber}-CO1`);
+    expect((await subRow(idB)).revision).toBeNull();
+
+    // The CO reaching 'sent' must NOT flip the parent — both stay in force.
+    await driveTo(idB, "approved", "sent");
+    expect((await subRow(idB)).status).toBe("sent");
+    expect((await subRow(idA)).status).toBe("sent");
+    expect((await env.DB.prepare("SELECT * FROM audit_log WHERE action='sc_superseded_flip'").all()).results!.length).toBe(0);
+  });
+
+  it("allows a CO from EXECUTED; refuses a CO on a draft, a CO-of-CO, and superseding a CO; gates on the lane cap", async () => {
+    const created = await p(admin, "/api/subcontracts/drafts", draftBody());
+    const { id: draftId } = await json<{ id: number }>(created);
+    expect((await p(admin, `/api/subcontracts/${draftId}/change-order`)).status).toBe(409);
+
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent", "executed");
+    expect((await p(submitter, `/api/subcontracts/${idA}/change-order`)).status).toBe(403);
+    const co = await p(admin, `/api/subcontracts/${idA}/change-order`);
+    expect(co.status, await co.clone().text()).toBe(201);
+    const { id: coId } = await json<{ id: number }>(co);
+    const gen = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen.status, await gen.clone().text()).toBe(200);
+    await driveTo(coId, "approved", "sent");
+    expect((await p(admin, `/api/subcontracts/${coId}/change-order`)).status).toBe(409);
+    expect((await p(admin, `/api/subcontracts/${coId}/supersede`)).status).toBe(409);
+  });
+});
+
 // ── cancel guards (refusing approved/sent/executed) ───────────────────────────
 describe("cancel", () => {
   it("cancels draft / queued; refuses sent / executed; 404s unknown", async () => {

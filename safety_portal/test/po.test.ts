@@ -811,6 +811,74 @@ describe("status-sync + supersession", () => {
   });
 });
 
+// ── change-order documents (Track D2) ─────────────────────────────────────────
+describe("change-order documents (Track D2)", () => {
+  it("clones a SENT PO into a CO draft (lines + config, seq allocated, NO supersession linkage); generate mints {parent}-CO{seq} with revision NULL; the CO shipping never retires the parent", async () => {
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    expect(co.status, await co.clone().text()).toBe(201);
+    const { id: idB, co_seq } = await json<{ id: number; co_seq: number }>(co);
+    expect(co_seq).toBe(1);
+    const b = await poRow(idB);
+    expect(b.status).toBe("draft");
+    expect(b.change_order_of).toBe(idA);
+    expect(b.co_seq).toBe(1);
+    expect(b.supersedes_po_id).toBeNull(); // the flip sites key on this — structurally inert
+    expect(b.supersede_seq).toBe((await poRow(idA)).supersede_seq); // verbatim, never +1
+    expect(b.po_number).toBeNull();
+    const bLines = await env.DB.prepare("SELECT * FROM po_line_items WHERE po_id=?1 ORDER BY position").bind(idB).all();
+    expect(bLines.results!.length).toBe(2); // cloned
+    // Audit ordering (the supersede clone's W4 rule): the clone audit row exists for a multi-line PO.
+    const cloneAudit = await env.DB.prepare("SELECT * FROM audit_log WHERE action='po_change_order_clone'").all();
+    expect(cloneAudit.results!.length).toBe(1);
+
+    // Generate: suffixed number off the parent's SIGNED number; revision stays NULL so the CO
+    // never consumes a slot in the family MAX.
+    const gen = await p(admin, `/api/po/drafts/${idB}/generate`, EXPECTED);
+    expect(gen.status, await gen.clone().text()).toBe(200);
+    const parentNumber = (await poRow(idA)).po_number as string;
+    expect((await json<{ po_number: string }>(gen)).po_number).toBe(`${parentNumber}-CO1`);
+    expect((await poRow(idB)).revision).toBeNull();
+
+    // The CO reaching 'sent' must NOT flip the parent — both stay in force.
+    await driveToSent(idB);
+    expect((await poRow(idB)).status).toBe("sent");
+    expect((await poRow(idA)).status).toBe("sent");
+    expect((await env.DB.prepare("SELECT * FROM audit_log WHERE action='po_superseded_flip'").all()).results!.length).toBe(0);
+
+    // Second CO on the same parent → seq 2 (MAX over ALL of the parent's COs).
+    const co2 = await p(admin, `/api/po/${idA}/change-order`);
+    expect(co2.status).toBe(201);
+    expect((await json<{ co_seq: number }>(co2)).co_seq).toBe(2);
+  });
+
+  it("refuses a CO on a non-sent parent, a CO-of-CO, and superseding a CO", async () => {
+    const created = await p(admin, "/api/po/drafts", draftBody());
+    const { id: draftId } = await json<{ id: number }>(created);
+    expect((await p(admin, `/api/po/${draftId}/change-order`)).status).toBe(409);
+
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    const gen = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen.status, await gen.clone().text()).toBe(200);
+    await driveToSent(coId);
+    // A sent CO is still not a CO source (corrections are the NEXT CO on the base) …
+    expect((await p(admin, `/api/po/${coId}/change-order`)).status).toBe(409);
+    // … and not a supersede source either.
+    expect((await p(admin, `/api/po/${coId}/supersede`)).status).toBe(409);
+  });
+
+  it("gates the clone on cap.po.manage", async () => {
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    expect((await p(submitter, `/api/po/${idA}/change-order`)).status).toBe(403);
+  });
+});
+
 // ── cancel guards ─────────────────────────────────────────────────────────────
 describe("cancel", () => {
   it("cancels draft / queued / pending_review; refuses approved / sent; 404s unknown", async () => {

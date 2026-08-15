@@ -888,7 +888,7 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     const { results } = await c.env.DB
       .prepare(
         "SELECT id, po_number, job_no, site_phase, supersede_seq, revision, vendor_key, job_id, job_name, " +
-          "status, total_cents, supersedes_po_id, box_file_id, created_by, created_at, updated_at " +
+          "status, total_cents, supersedes_po_id, change_order_of, co_seq, box_file_id, created_by, created_at, updated_at " +
           "FROM purchase_orders WHERE (?1 = 'all' OR status = ?1) ORDER BY updated_at DESC, id DESC LIMIT ?2",
       )
       .bind(status, limit)
@@ -1085,7 +1085,7 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     const po = await c.env.DB
       .prepare("SELECT * FROM purchase_orders WHERE id = ?1 AND status = 'draft'")
       .bind(id)
-      .first<PoRow & { tax_mode: string; shipping_cents: number; status: string; draft_version: number }>();
+      .first<PoRow & { tax_mode: string; shipping_cents: number; status: string; draft_version: number; change_order_of: number | null; co_seq: number | null }>();
     if (!po) return c.json({ error: "not_found" }, 404);
     const lines = await loadLines(c.env.DB, id);
     if (lines.length === 0) return c.json({ error: "no_line_items" }, 422);
@@ -1108,16 +1108,38 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     // incomplete); GENERATE requires it — refuse a blank here (defense-in-depth behind the SPA flag).
     if (!po.terms_profile_id.trim()) return c.json({ error: "missing_terms_profile" }, 422);
 
-    // MAX(revision)+1 within the family (allocated tuples only — drafts carry NULL).
-    const rev = await c.env.DB
-      .prepare(
-        "SELECT COALESCE(MAX(revision), -1) + 1 AS rev FROM purchase_orders " +
-          "WHERE job_no = ?1 AND site_phase = ?2 AND supersede_seq = ?3 AND revision IS NOT NULL",
-      )
-      .bind(po.job_no, po.site_phase, po.supersede_seq)
-      .first<{ rev: number }>();
-    const revision = rev?.rev ?? 0;
-    const poNumber = `${po.job_no}.${po.site_phase}.${po.supersede_seq}.${revision}`;
+    // Number allocation forks on document kind (Track D2):
+    //  - BASE document: revision = family MAX+1, five-segment D7 number.
+    //  - CHANGE ORDER (change_order_of set): revision stays NULL — a CO never consumes
+    //    a family slot (the MAX subquery's `revision IS NOT NULL` excludes it) — and the
+    //    number is `{parent po_number}-CO{co_seq}`. The parent number is read live at
+    //    generate: the parent was 'sent' at clone time, so it MUST have one; a NULL here
+    //    means the linkage is corrupt and we refuse rather than mint an orphan number.
+    //    The parent number rides INSIDE the signed po_number, which is how the Mac
+    //    renders the change-order clause from signed data (store-only columns stay out
+    //    of the canonical — see parseDraftBody's estimate_id note).
+    let revision: number | null;
+    let poNumber: string;
+    if (po.change_order_of !== null) {
+      const parent = await c.env.DB
+        .prepare("SELECT po_number FROM purchase_orders WHERE id = ?1")
+        .bind(po.change_order_of)
+        .first<{ po_number: string | null }>();
+      if (!parent?.po_number) return c.json({ error: "parent_not_generated" }, 409);
+      revision = null;
+      poNumber = `${parent.po_number}-CO${po.co_seq}`;
+    } else {
+      // MAX(revision)+1 within the family (allocated tuples only — drafts carry NULL).
+      const rev = await c.env.DB
+        .prepare(
+          "SELECT COALESCE(MAX(revision), -1) + 1 AS rev FROM purchase_orders " +
+            "WHERE job_no = ?1 AND site_phase = ?2 AND supersede_seq = ?3 AND revision IS NOT NULL",
+        )
+        .bind(po.job_no, po.site_phase, po.supersede_seq)
+        .first<{ rev: number }>();
+      revision = rev?.rev ?? 0;
+      poNumber = `${po.job_no}.${po.site_phase}.${po.supersede_seq}.${revision}`;
+    }
 
     // Fail closed on a missing HMAC secret — signing with undefined would mint signatures
     // the Mac side can never verify (silent loss), the exact failure buildSubmissionInsert
@@ -1177,7 +1199,10 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     if (id === null) return c.json({ error: "invalid_id" }, 400);
     const src = await c.env.DB.prepare("SELECT * FROM purchase_orders WHERE id = ?1").bind(id).first<Record<string, unknown>>();
     if (!src) return c.json({ error: "not_found" }, 404);
-    if (src.status !== "sent") return c.json({ error: "not_supersedable" }, 409);
+    // A change-order document can't be superseded (its clone would collide on
+    // (change_order_of, co_seq), and re-issuing a CO is done as the NEXT CO against
+    // the base — Track D2). Base documents only.
+    if (src.status !== "sent" || src.change_order_of !== null) return c.json({ error: "not_supersedable" }, 409);
     // Double-submit guard (review finding, idempotency): if a live successor draft already
     // exists for this source, don't mint a sibling at the same supersede_seq — surface the
     // existing one. Canceled successors don't block a fresh supersede.
@@ -1228,6 +1253,79 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_supersedable" }, 409); // lost race
     const clone = await c.env.DB.prepare("SELECT id FROM purchase_orders WHERE po_uuid = ?1").bind(poUuid).first<{ id: number }>();
     return c.json({ ok: true, id: clone?.id ?? null, supersedes_po_id: id }, 201);
+  });
+
+  // POST /api/po/:id/change-order — clone a SENT PO into a CHANGE-ORDER draft (Track D2).
+  // The supersede clone's sibling with inverted semantics: the parent stays in force.
+  // change_order_of → the source, supersedes_po_id stays NULL (the supersession flip
+  // sites key on it, so a CO can never retire its parent), supersede_seq copied VERBATIM
+  // (the CO lives beside the parent, not in a successor family), co_seq = MAX+1 over ALL
+  // of the parent's COs (any status — a canceled generated CO's seq is never reused).
+  // At generate the CO mints `{parent po_number}-CO{co_seq}` instead of allocating a
+  // family revision. Gates: parent must be 'sent' AND itself a base document — a change
+  // order to a change order is refused; corrections are the NEXT CO against the base.
+  // Multiple concurrent CO drafts on one parent are allowed (unlike supersede's
+  // one-in-progress guard): two independent changes are legitimate, and the partial
+  // unique index (change_order_of, co_seq) is the allocation-race backstop.
+  app.post("/api/po/:id/change-order", gates.requireSession, gates.requireCapability(CAP_PO), async (c) => {
+    const id = parseIdParam(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid_id" }, 400);
+    const src = await c.env.DB.prepare("SELECT * FROM purchase_orders WHERE id = ?1").bind(id).first<Record<string, unknown>>();
+    if (!src) return c.json({ error: "not_found" }, 404);
+    if (src.status !== "sent" || src.change_order_of !== null) {
+      return c.json({ error: "not_change_orderable" }, 409);
+    }
+
+    const actor = c.get("session").username;
+    const poUuid = crypto.randomUUID();
+    // Same batch shape + audit ordering as the supersede clone above (audit stmt reads
+    // changes() of the IMMEDIATELY PRECEDING statement — keep it directly after the
+    // parent INSERT). estimate_id is deliberately not copied, matching supersede: the
+    // import provenance belongs to the original document only.
+    let res;
+    try {
+      res = await c.env.DB.batch([
+        c.env.DB
+          .prepare(
+            "INSERT INTO purchase_orders (po_uuid, job_no, site_phase, supersede_seq, job_id, job_name, " +
+              "ship_to_name, ship_to_address, ship_to_city, ship_to_state, ship_to_zip, " +
+              "delivery_contact_name, delivery_contact_phone, delivery_contact_email, " +
+              "sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
+              "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
+              "line_column_variant, change_order_of, co_seq, status, approver_name, approver_title, vendor_key, created_by) " +
+              "SELECT ?2, job_no, site_phase, supersede_seq, job_id, job_name, " +
+              "ship_to_name, ship_to_address, ship_to_city, ship_to_state, ship_to_zip, " +
+              "delivery_contact_name, delivery_contact_phone, delivery_contact_email, " +
+              "sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
+              "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
+              "line_column_variant, ?1, " +
+              "(SELECT COALESCE(MAX(co_seq), 0) + 1 FROM purchase_orders WHERE change_order_of = ?1), " +
+              "'draft', approver_name, approver_title, vendor_key, ?3 " +
+              "FROM purchase_orders WHERE id = ?1 AND status = 'sent' AND change_order_of IS NULL",
+          )
+          .bind(id, poUuid, actor),
+        auditStmtIfChanged(c, actor, "po_change_order_clone", String(id), { source_po_id: id, po_uuid: poUuid }),
+        c.env.DB
+          .prepare(
+            `INSERT INTO po_line_items (po_id, ${LINE_COLS}) ` +
+              `SELECT (SELECT id FROM purchase_orders WHERE po_uuid = ?2), ${LINE_COLS} ` +
+              "FROM po_line_items WHERE po_id = ?1 " +
+              "AND EXISTS (SELECT 1 FROM purchase_orders WHERE po_uuid = ?2)",
+          )
+          .bind(id, poUuid),
+      ]);
+    } catch (e) {
+      // Lost the co_seq allocation race (partial unique index) — nothing was written;
+      // the client simply retries and reads a fresh MAX.
+      if (isUniqueViolation(e)) return c.json({ error: "change_order_conflict" }, 409);
+      throw e;
+    }
+    if ((res[0].meta.changes ?? 0) === 0) return c.json({ error: "not_change_orderable" }, 409); // lost race
+    const clone = await c.env.DB
+      .prepare("SELECT id, co_seq FROM purchase_orders WHERE po_uuid = ?1")
+      .bind(poUuid)
+      .first<{ id: number; co_seq: number }>();
+    return c.json({ ok: true, id: clone?.id ?? null, change_order_of: id, co_seq: clone?.co_seq ?? null }, 201);
   });
 
   // POST /api/po/:id/cancel — off-path terminal, ONLY from draft/queued/pending_review

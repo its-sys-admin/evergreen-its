@@ -1,19 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
-  ChangeOrdersResponse,
   JobProcurementPo,
   JobProcurementResponse,
   JobProcurementRfq,
   JobProcurementSub,
-  ProcurementChangeOrder,
 } from "../../worker/wire-types";
 import { PageShell } from "../components/PageShell";
+import { createPoChangeOrder } from "../lib/po";
+import { createSubChangeOrder } from "../lib/subcontracts";
 
-// Per-job Procurement screen (Track D, operator directive 2026-08-14) — each job's own page:
-// the lanes' documents as clickable rows, an item panel tracking the lifecycle
-// (Generated → Submitted → Accepted) with the office's manual marks, and change orders
-// recorded against the document. STILL SEND-FREE: every action here RECORDS a fact about
-// paper; approvals and actual sends live in their own lanes (Invariant 1 / F22).
+// Per-job Procurement screen (Track D + D2) — each job's own page: the lanes' documents as
+// clickable rows, an item panel tracking the lifecycle (Generated → Submitted → Accepted)
+// with the office's manual marks, and CHANGE ORDERS AS DOCUMENTS (operator directive
+// 2026-08-14): a change order is a full lane document cloned from its parent's configuration,
+// edited in the lane builder, and generated/reviewed/sent through the lane's own pipeline.
+// This screen nests CO documents under their parent and offers "Create change order" on
+// in-force documents — the actual drafting happens in the lane builder it opens into.
+// STILL SEND-FREE: every action here RECORDS a fact or drafts paper; approvals and actual
+// sends live in their own lanes (Invariant 1 / F22).
 //
 // Stage semantics on the panel:
 //   Generated  — the document exists (draft → pending_review → approved on the machine).
@@ -24,6 +28,10 @@ import { PageShell } from "../components/PageShell";
 //                subcontracts: the machine's countersign state ('executed').
 //   RFQs close instead of accepting — a finished round is retired; an accepted quote becomes
 //   a PO through the estimate-import flow, not here.
+//
+// Totals on a CO chain are shown per document, never summed: whether the office drafts a CO
+// as a delta or a restated contract is their drafting choice, so a computed "current value"
+// would assert math the system can't know.
 
 const STAGE_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -59,6 +67,35 @@ async function postJson(path: string, body: unknown): Promise<Response> {
   });
 }
 
+/** Group a lane's rows for display: base documents in server (newest-first) order, each
+ *  carrying its CO documents sorted by co_seq. A CO whose parent fell off the lane cap
+ *  degrades to a top-level row (never hidden). */
+function groupWithCos<T extends { id: number; change_order_of: number | null; co_seq: number | null }>(
+  rows: T[],
+): { base: T; cos: T[] }[] {
+  const byParent = new Map<number, T[]>();
+  for (const r of rows) {
+    if (r.change_order_of !== null) {
+      const list = byParent.get(r.change_order_of) ?? [];
+      list.push(r);
+      byParent.set(r.change_order_of, list);
+    }
+  }
+  const out: { base: T; cos: T[] }[] = [];
+  const seen = new Set<number>();
+  for (const r of rows) {
+    if (r.change_order_of === null) {
+      const cos = (byParent.get(r.id) ?? []).sort((a, b) => (a.co_seq ?? 0) - (b.co_seq ?? 0));
+      cos.forEach((c) => seen.add(c.id));
+      out.push({ base: r, cos });
+    }
+  }
+  for (const r of rows) {
+    if (r.change_order_of !== null && !seen.has(r.id)) out.push({ base: r, cos: [] });
+  }
+  return out;
+}
+
 type Selected =
   | { kind: "po"; row: JobProcurementPo }
   | { kind: "subcontract"; row: JobProcurementSub }
@@ -69,15 +106,15 @@ export function JobProcurementPage(props: {
   onOpenJob: (jobId: string) => void;
   onOpenPurchaseOrders?: () => void;
   onOpenSubcontracts?: () => void;
+  /** Track D2: open the lane builder ON a specific draft (the just-created change order). */
+  onOpenPoDraft?: (id: number) => void;
+  onOpenSubDraft?: (id: number) => void;
 }) {
-  const { jobId, onOpenJob, onOpenPurchaseOrders, onOpenSubcontracts } = props;
+  const { jobId, onOpenJob, onOpenPurchaseOrders, onOpenSubcontracts, onOpenPoDraft, onOpenSubDraft } = props;
   const [data, setData] = useState<JobProcurementResponse | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
-  const [cos, setCos] = useState<ProcurementChangeOrder[] | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [coDesc, setCoDesc] = useState("");
-  const [coAmount, setCoAmount] = useState("");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/fieldops/jobs/${encodeURIComponent(jobId)}/procurement`, {
@@ -95,26 +132,6 @@ export function JobProcurementPage(props: {
     setMsg(null);
     void load();
   }, [load]);
-
-  // The item panel's change orders (POs + subcontracts only).
-  useEffect(() => {
-    setCos(null);
-    setCoDesc("");
-    setCoAmount("");
-    if (!selected || selected.kind === "rfq") return;
-    let alive = true;
-    void fetch(
-      `/api/fieldops/procurement/${selected.kind}/${selected.row.id}/change-orders`,
-      { credentials: "same-origin" },
-    ).then(async (r) => {
-      if (!alive || !r.ok) return;
-      const body = (await r.json()) as ChangeOrdersResponse;
-      if (alive) setCos(body.change_orders);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [selected]);
 
   // Re-select the refreshed row after a reload so the panel shows the new state.
   const refreshKeeping = useCallback(async (kind: Selected["kind"], id: number) => {
@@ -151,38 +168,32 @@ export function JobProcurementPage(props: {
     }
   }
 
-  async function addChangeOrder() {
-    if (!selected || selected.kind === "rfq" || busy) return;
-    const amount = Math.round(Number(coAmount) * 100);
-    if (!coDesc.trim() || !Number.isFinite(amount)) {
-      setMsg({ ok: false, text: "A change order needs a description and a dollar amount (negative for deductive)." });
-      return;
-    }
+  // Create a CO draft from the selected in-force document, then hand off to the lane
+  // builder so the office edits WHAT CHANGED and generates the new contract document.
+  async function createChangeOrder(kind: "po" | "subcontract", id: number) {
+    if (busy) return;
     setBusy(true);
+    setMsg(null);
     try {
-      const res = await postJson("/api/fieldops/procurement/change-orders", {
-        doc_type: selected.kind, doc_id: selected.row.id,
-        description: coDesc.trim(), amount_cents: amount,
-      });
-      if (res.ok) {
-        setCoDesc("");
-        setCoAmount("");
-        await refreshKeeping(selected.kind, selected.row.id);
+      if (kind === "po") {
+        const r = await createPoChangeOrder(id);
+        if (onOpenPoDraft) {
+          onOpenPoDraft(r.id);
+        } else {
+          setMsg({ ok: true, text: `Change order draft created — open it in the Purchase Orders lane.` });
+          await refreshKeeping(kind, id);
+        }
       } else {
-        setMsg({ ok: false, text: "Could not record the change order." });
+        const r = await createSubChangeOrder(id);
+        if (onOpenSubDraft) {
+          onOpenSubDraft(r.id);
+        } else {
+          setMsg({ ok: true, text: `Change order draft created — open it in the Subcontracts lane.` });
+          await refreshKeeping(kind, id);
+        }
       }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function decideCo(id: number, status: "approved" | "rejected") {
-    if (!selected || selected.kind === "rfq" || busy) return;
-    setBusy(true);
-    try {
-      const res = await postJson(`/api/fieldops/procurement/change-orders/${id}/decide`, { status });
-      if (!res.ok) setMsg({ ok: false, text: "Could not record that decision." });
-      await refreshKeeping(selected.kind, selected.row.id);
+    } catch {
+      setMsg({ ok: false, text: "Could not create the change order draft. Reload and try again." });
     } finally {
       setBusy(false);
     }
@@ -191,6 +202,40 @@ export function JobProcurementPage(props: {
   const poRows = data?.purchase_orders ?? null;
   const rfqRows = data?.rfqs ?? null;
   const subRows = data?.subcontracts ?? null;
+
+  function renderDocButton(
+    kind: "po" | "subcontract",
+    row: JobProcurementPo | JobProcurementSub,
+    isCo: boolean,
+  ) {
+    const num = kind === "po"
+      ? (row as JobProcurementPo).po_number
+      : (row as JobProcurementSub).sc_number;
+    const fallback = isCo
+      ? `Change order draft CO${row.co_seq ?? "?"}`
+      : kind === "po" ? "PO (unnumbered draft)" : "Subcontract (unnumbered draft)";
+    const accepted = kind === "po"
+      ? (row as JobProcurementPo).accepted_at !== null
+      : row.status === "executed";
+    const total = kind === "po"
+      ? (row as JobProcurementPo).total_cents
+      : (row as JobProcurementSub).contract_price_cents;
+    const party = kind === "po"
+      ? (row as JobProcurementPo).vendor_name ?? "Vendor unset"
+      : (row as JobProcurementSub).sub_name ?? "Subcontractor unset";
+    return (
+      <button type="button" className={isCo ? "proc-item proc-item--co" : "proc-item"}
+              aria-label={`Open ${num ?? fallback}`}
+              onClick={() => setSelected({ kind, row } as Selected)}>
+        <span className={stagePill(row.status, accepted)}>
+          {kind === "po" && accepted ? "Accepted" : STAGE_LABEL[row.status] ?? row.status}
+        </span>{" "}
+        {isCo && <span className="dash-pill">CO</span>}{" "}
+        {num ?? fallback}
+        <span className="dash-card__sub"> · {party} · {money(total)}</span>
+      </button>
+    );
+  }
 
   return (
     <PageShell onHome={() => onOpenJob(jobId)} wide>
@@ -203,7 +248,8 @@ export function JobProcurementPage(props: {
       <p className="dash-hint">
         Every purchase order, RFQ round and subcontract on this job, tracked through its
         lifecycle. Click a document to record where it stands — marks here are the office&apos;s
-        record; approvals and sends still happen in their own lanes.
+        record; approvals and sends still happen in their own lanes. Change orders are full
+        documents: created from the original, edited in the lane, and sent like any contract.
       </p>
       {msg && (
         <p className={`wpr-banner ${msg.ok ? "wpr-banner--ok" : "wpr-banner--warn"}`} role="status">
@@ -218,20 +264,16 @@ export function JobProcurementPage(props: {
               <header className="job-sec__head"><h2 className="job-sec__title">Purchase orders</h2></header>
               {poRows.length === 0 && <p className="dash-hint">No purchase orders for this job yet.</p>}
               <ul className="dash-tasklist">
-                {poRows.map((p) => (
-                  <li key={p.id}>
-                    <button type="button" className="proc-item"
-                            aria-label={`Open ${p.po_number ?? `PO draft ${p.id}`}`}
-                            onClick={() => setSelected({ kind: "po", row: p })}>
-                      <span className={stagePill(p.status, p.accepted_at !== null)}>
-                        {p.accepted_at ? "Accepted" : STAGE_LABEL[p.status] ?? p.status}
-                      </span>{" "}
-                      {p.po_number ?? "PO (unnumbered draft)"}
-                      <span className="dash-card__sub">
-                        {" "}· {p.vendor_name ?? "Vendor unset"} · {money(p.total_cents)}
-                        {p.change_order_count > 0 ? ` · ${p.change_order_count} CO` : ""}
-                      </span>
-                    </button>
+                {groupWithCos(poRows).map((g) => (
+                  <li key={g.base.id}>
+                    {renderDocButton("po", g.base, g.base.change_order_of !== null)}
+                    {g.cos.length > 0 && (
+                      <ul className="dash-tasklist proc-colist">
+                        {g.cos.map((co) => (
+                          <li key={co.id}>{renderDocButton("po", co, true)}</li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -273,20 +315,16 @@ export function JobProcurementPage(props: {
               <header className="job-sec__head"><h2 className="job-sec__title">Subcontracts</h2></header>
               {subRows.length === 0 && <p className="dash-hint">No subcontracts for this job yet.</p>}
               <ul className="dash-tasklist">
-                {subRows.map((sc) => (
-                  <li key={sc.id}>
-                    <button type="button" className="proc-item"
-                            aria-label={`Open ${sc.sc_number ?? `Subcontract draft ${sc.id}`}`}
-                            onClick={() => setSelected({ kind: "subcontract", row: sc })}>
-                      <span className={stagePill(sc.status, sc.status === "executed")}>
-                        {STAGE_LABEL[sc.status] ?? sc.status}
-                      </span>{" "}
-                      {sc.sc_number ?? "Subcontract (unnumbered draft)"}
-                      <span className="dash-card__sub">
-                        {" "}· {sc.sub_name ?? "Subcontractor unset"} · {money(sc.contract_price_cents)}
-                        {sc.change_order_count > 0 ? ` · ${sc.change_order_count} CO` : ""}
-                      </span>
-                    </button>
+                {groupWithCos(subRows).map((g) => (
+                  <li key={g.base.id}>
+                    {renderDocButton("subcontract", g.base, g.base.change_order_of !== null)}
+                    {g.cos.length > 0 && (
+                      <ul className="dash-tasklist proc-colist">
+                        {g.cos.map((co) => (
+                          <li key={co.id}>{renderDocButton("subcontract", co, true)}</li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -321,8 +359,22 @@ export function JobProcurementPage(props: {
                 : row.status === "executed";
               const submitted = accepted || row.status === "sent" || row.status === "superseded";
               const generated = !["draft", "queued"].includes(row.status);
+              const isCo = row.change_order_of !== null;
+              const laneRows = (selected.kind === "po" ? poRows : subRows) as
+                | (JobProcurementPo | JobProcurementSub)[]
+                | null;
+              const cos = (laneRows ?? []).filter((r) => r.change_order_of === row.id);
+              const canChangeOrder = !isCo &&
+                (selected.kind === "po" ? row.status === "sent" : row.status === "sent" || row.status === "executed");
               return (
                 <>
+                  {isCo && (
+                    <p className="dash-hint">
+                      Change order CO{row.co_seq ?? "?"} — the original{" "}
+                      {selected.kind === "po" ? "purchase order" : "subcontract"} stays in force;
+                      this document carries the change and ships like any contract.
+                    </p>
+                  )}
                   <ol className="proc-timeline">
                     <li className={generated ? "is-done" : ""}>
                       Generated
@@ -357,50 +409,35 @@ export function JobProcurementPage(props: {
                         Undo accepted
                       </button>
                     )}
+                    {canChangeOrder && (
+                      <button type="button" className="btn btn--secondary" disabled={busy}
+                              onClick={() => void createChangeOrder(selected.kind as "po" | "subcontract", row.id)}>
+                        Create change order
+                      </button>
+                    )}
                   </div>
 
-                  <h3 className="job-sec__title">Change orders</h3>
-                  {cos !== null && cos.length === 0 && (
-                    <p className="dash-hint">No change orders recorded against this document.</p>
+                  {!isCo && (
+                    <>
+                      <h3 className="job-sec__title">Change orders</h3>
+                      {cos.length === 0 && (
+                        <p className="dash-hint">
+                          No change orders against this document.
+                          {canChangeOrder
+                            ? " “Create change order” drafts one from this document's own configuration."
+                            : ""}
+                        </p>
+                      )}
+                      <ul className="dash-tasklist">
+                        {cos
+                          .slice()
+                          .sort((a, b) => (a.co_seq ?? 0) - (b.co_seq ?? 0))
+                          .map((co) => (
+                            <li key={co.id}>{renderDocButton(selected.kind as "po" | "subcontract", co, true)}</li>
+                          ))}
+                      </ul>
+                    </>
                   )}
-                  <ul className="dash-tasklist">
-                    {(cos ?? []).map((co) => (
-                      <li key={co.id}>
-                        <span className={co.status === "approved" ? "dash-pill dash-pill--ok" : co.status === "rejected" ? "dash-pill" : "dash-pill dash-pill--warn"}>
-                          {co.status}
-                        </span>{" "}
-                        CO #{co.seq} · {money(co.amount_cents)}
-                        <span className="dash-card__sub"> — {co.description}</span>
-                        {co.status === "pending" && (
-                          <>
-                            {" "}
-                            <button type="button" className="btn btn--secondary" disabled={busy}
-                                    aria-label={`Approve change order ${co.seq}`}
-                                    onClick={() => void decideCo(co.id, "approved")}>
-                              Approve
-                            </button>{" "}
-                            <button type="button" className="btn btn--secondary" disabled={busy}
-                                    aria-label={`Reject change order ${co.seq}`}
-                                    onClick={() => void decideCo(co.id, "rejected")}>
-                              Reject
-                            </button>
-                          </>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="proc-co-form">
-                    <input className="wpr-field__input" placeholder="Change order description"
-                           aria-label="Change order description"
-                           value={coDesc} onChange={(e) => setCoDesc(e.target.value)} />
-                    <input className="wpr-num" inputMode="decimal" placeholder="$ (− deductive)"
-                           aria-label="Change order amount in dollars"
-                           value={coAmount} onChange={(e) => setCoAmount(e.target.value)} />
-                    <button type="button" className="btn btn--primary" disabled={busy}
-                            onClick={() => void addChangeOrder()}>
-                      Add change order
-                    </button>
-                  </div>
                 </>
               );
             })()}

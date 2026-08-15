@@ -1,8 +1,9 @@
 /**
- * JobProcurementPage (Track D) — per-job lifecycle tracking screen.
- * Pins: lane lists render as clickable items; the panel's three-stage timeline fills from the
- * record; the right action button per state; wrong-state 409 surfaces the current record;
- * change orders add/decide round-trips; RFQ close.
+ * JobProcurementPage (Track D + D2) — per-job lifecycle tracking screen.
+ * Pins: lane lists render as clickable items with CO DOCUMENTS nested under their parent;
+ * the panel's three-stage timeline fills from the record; the right action button per state;
+ * wrong-state 409 surfaces the current record; "Create change order" clones server-side and
+ * hands off to the lane builder; RFQ close.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,9 +14,9 @@ import { useAuth } from "../../lib/auth";
 import { JobProcurementPage } from "../JobProcurementPage";
 
 const PO = {
-  id: 1, po_number: "PO-2026.384-001", revision: 0, supersede_seq: 0, status: "pending_review",
+  id: 1, po_number: "2026.384.1.0.0", revision: 0, supersede_seq: 0, status: "pending_review",
   total_cents: 98700, updated_at: 1, filed: true, vendor_name: "Breaker Supply Co",
-  accepted_at: null, accepted_by: null, change_order_count: 0,
+  accepted_at: null, accepted_by: null, change_order_of: null, co_seq: null,
 };
 const RESPONSE = {
   purchase_orders: [PO],
@@ -31,17 +32,11 @@ function routeFetch(overrides: Record<string, unknown> = {}) {
     if (u.includes("/procurement") && u.includes("/api/fieldops/jobs/")) {
       return new Response(JSON.stringify(overrides.list ?? RESPONSE), { status: 200 });
     }
-    if (u.includes("/change-orders") && (!init || init.method !== "POST")) {
-      return new Response(JSON.stringify(overrides.cos ?? { change_orders: [] }), { status: 200 });
-    }
     if (u.includes("/lifecycle")) {
       return (overrides.lifecycle as Response | undefined) ?? new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
-    if (u.endsWith("/change-orders") && init?.method === "POST") {
-      return new Response(JSON.stringify({ ok: true, id: 5, seq: 1 }), { status: 201 });
-    }
-    if (u.includes("/decide")) {
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    if (u.includes("/change-order") && init?.method === "POST") {
+      return new Response(JSON.stringify({ ok: true, id: 55, change_order_of: 1, co_seq: 1 }), { status: 201 });
     }
     return new Response("{}", { status: 200 });
   });
@@ -63,7 +58,7 @@ afterEach(() => {
 describe("JobProcurementPage", () => {
   it("renders lanes, opens the panel, and offers Mark submitted for a generated document", async () => {
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
-    fireEvent.click(await screen.findByLabelText("Open PO-2026.384-001"));
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
     expect(await screen.findByText("Generated")).toBeTruthy();
     expect(screen.getByText(/Submitted to vendor/)).toBeTruthy();
     const mark = screen.getByRole("button", { name: "Mark submitted" });
@@ -75,13 +70,13 @@ describe("JobProcurementPage", () => {
   it("offers Mark accepted on a submitted document and Undo on an accepted one", async () => {
     routeFetch({ list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "sent" }] } });
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
-    fireEvent.click(await screen.findByLabelText("Open PO-2026.384-001"));
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
     expect(await screen.findByRole("button", { name: "Mark accepted" })).toBeTruthy();
 
     cleanup();
     routeFetch({ list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "sent", accepted_at: "2026-08-14", accepted_by: "adm" }] } });
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
-    fireEvent.click(await screen.findByLabelText("Open PO-2026.384-001"));
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
     expect(await screen.findByRole("button", { name: "Undo accepted" })).toBeTruthy();
     expect(screen.getByText(/2026-08-14 by adm/)).toBeTruthy();
   });
@@ -91,29 +86,54 @@ describe("JobProcurementPage", () => {
       lifecycle: new Response(JSON.stringify({ error: "wrong_state", current_status: "sent" }), { status: 409 }),
     });
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
-    fireEvent.click(await screen.findByLabelText("Open PO-2026.384-001"));
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
     fireEvent.click(await screen.findByRole("button", { name: "Mark submitted" }));
     expect(await screen.findByText(/currently "Submitted"/)).toBeTruthy();
   });
 
-  it("adds a change order (dollars → signed cents) and decides a pending one", async () => {
+  it("nests CO documents under their parent and shows the CO context on the panel", async () => {
     routeFetch({
-      list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "sent" }] },
-      cos: { change_orders: [{ id: 5, seq: 1, description: "Add piles", amount_cents: 250000, status: "pending", created_by: "adm", created_at: 1, decided_by: null, decided_at: null }] },
+      list: {
+        ...RESPONSE,
+        purchase_orders: [
+          { ...PO, status: "sent" },
+          { ...PO, id: 55, po_number: "2026.384.1.0.0-CO1", status: "draft", filed: false, change_order_of: 1, co_seq: 1 },
+        ],
+      },
     });
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
-    fireEvent.click(await screen.findByLabelText("Open PO-2026.384-001"));
-    fireEvent.change(await screen.findByLabelText("Change order description"), { target: { value: "Deduct conduit" } });
-    fireEvent.change(screen.getByLabelText("Change order amount in dollars"), { target: { value: "-500" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add change order" }));
+    const coBtn = await screen.findByLabelText("Open 2026.384.1.0.0-CO1");
+    // Nested list container carries the CO row.
+    expect(coBtn.closest(".proc-colist")).toBeTruthy();
+    fireEvent.click(coBtn);
+    expect(await screen.findByText(/Change order CO1 —/)).toBeTruthy();
+    expect(screen.getByText(/original\s+purchase order stays in force/)).toBeTruthy();
+  });
+
+  it("creates a change order server-side from a sent document and hands off to the lane builder", async () => {
+    const openPoDraft = vi.fn();
+    routeFetch({ list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "sent" }] } });
+    render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} onOpenPoDraft={openPoDraft} />);
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
+    fireEvent.click(await screen.findByRole("button", { name: "Create change order" }));
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/change-orders") && (c[1] as RequestInit)?.method === "POST");
+      const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/api/po/1/change-order") && (c[1] as RequestInit)?.method === "POST");
       expect(call).toBeTruthy();
-      expect(JSON.parse(String((call![1] as RequestInit).body))).toMatchObject({ amount_cents: -50000 });
+      expect(openPoDraft).toHaveBeenCalledWith(55);
     });
-    fireEvent.click(screen.getByLabelText("Approve change order 1"));
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/change-orders/5/decide"))).toBe(true));
+  });
+
+  it("never offers Create change order on a document that is itself a CO", async () => {
+    routeFetch({
+      list: {
+        ...RESPONSE,
+        purchase_orders: [{ ...PO, id: 55, po_number: "2026.384.1.0.0-CO1", status: "sent", change_order_of: 1, co_seq: 1 }],
+      },
+    });
+    render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} onOpenPoDraft={() => {}} />);
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0-CO1"));
+    expect(await screen.findByRole("button", { name: "Mark accepted" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Create change order" })).toBeNull();
   });
 
   it("closes an RFQ round and explains where acceptance lives", async () => {
