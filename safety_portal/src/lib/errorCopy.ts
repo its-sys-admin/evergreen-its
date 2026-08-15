@@ -309,6 +309,7 @@ export const ERROR_COPY: Record<string, string> = {
   // so the copy must read correctly for both. A subcontract supersedes from sent OR executed.
   not_supersedable: "That record can't be superseded — it isn't in force, or it's a change order (issue the next change order against the original instead).",
   has_change_orders: "This document has change orders — make further changes as the next change order instead of replacing it.",
+  co_scope_missing: "Pick what this change order covers (the choice above the scope text) before generating — trim the scope text first if it's at the length limit.",
   supersede_in_progress: "A replacement for that record is already in progress — it was opened instead.",
   not_cancelable: "That record can't be canceled from its current status.",
   invalid_approver: "The approver name/title is too long.",

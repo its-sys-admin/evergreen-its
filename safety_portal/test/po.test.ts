@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { CO_SCOPE_PO_DELTA } from "../worker/wire-types";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, p, g, json } from "./helpers";
 import { hmacHex } from "../worker/hmac";
@@ -873,6 +874,27 @@ describe("change-order documents (Track D2)", () => {
     expect((await p(admin, `/api/po/${coId}/change-order`)).status).toBe(409);
     // … and not a supersede source either.
     expect((await p(admin, `/api/po/${coId}/supersede`)).status).toBe(409);
+  });
+
+  it("seeds the scope declaration fit-aware and ENFORCES it at generate (Q3/W8): an at-cap parent clones unseeded, generate refuses, a declared trim generates", async () => {
+    // Parent whose sow_text is within seed-length of MAX_SOW (8192): the clone must NOT
+    // write an over-bound sow (raw INSERT bypasses parseDraftBody) and must NOT truncate.
+    const idA = await makeQueued(admin, { sow_text: "x".repeat(8150) });
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    expect(co.status, await co.clone().text()).toBe(201);
+    const { id: coId } = await json<{ id: number }>(co);
+    const row = await poRow(coId);
+    expect(String(row.sow_text)).toBe("x".repeat(8150)); // unseeded, untruncated
+    // Generate refuses until the declaration exists — recoverable, never silent.
+    const gen1 = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen1.status).toBe(409);
+    expect((await json<{ error: string }>(gen1)).error).toBe("co_scope_missing");
+    // The office trims + declares (the builder radio path) — generate proceeds.
+    const upd = await p(admin, `/api/po/drafts/${coId}/update`, draftBody({ sow_text: `${CO_SCOPE_PO_DELTA}\n\ntrimmed scope` }));
+    expect(upd.status, await upd.clone().text()).toBe(200);
+    const gen2 = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen2.status, await gen2.clone().text()).toBe(200);
   });
 
   it("blocks superseding a parent with a non-canceled change order (Q1/A); canceling the CO unblocks it", async () => {

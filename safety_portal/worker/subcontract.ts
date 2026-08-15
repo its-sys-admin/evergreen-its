@@ -4,7 +4,7 @@ import type { FieldopsApp } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
 import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { hmacHex } from "./hmac";
-import { CO_SCOPE_SUB_DELTA } from "./wire-types";
+import { CO_SCOPE_SUB_DELTA, CO_SCOPE_SUB_RESTATEMENT } from "./wire-types";
 import { MAX_ADDRESS } from "./constants";
 // SC-S3c wiring — the SC-S2 terms manifest + versioned contractor/payment-terms config, imported at
 // BUILD time from subcontracts/ (the same files the Mac renderer reads at render time). A subcontract
@@ -1145,6 +1145,14 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
       if (parent.status !== "sent" && parent.status !== "executed") {
         return c.json({ error: "parent_not_in_force" }, 409);
       }
+      // Q3 enforcement (the po.ts twin): every CO declares its scope semantics as the first
+      // line of the signed Exhibit A work text.
+      if (
+        !sub.exhibit_a_work_text.startsWith(CO_SCOPE_SUB_DELTA) &&
+        !sub.exhibit_a_work_text.startsWith(CO_SCOPE_SUB_RESTATEMENT)
+      ) {
+        return c.json({ error: "co_scope_missing" }, 409);
+      }
       revision = null;
       scNumber = `${parent.sc_number}-CO${sub.co_seq}`;
     } else {
@@ -1328,7 +1336,8 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
               // subcontract's scope instrument, signed via the sub:v1 canonical. NOT
               // scope_summary: that field is 512-capped (MAX_LINE_TEXT), and seeding it could
               // push an otherwise-valid draft over the bound and make it unsaveable.
-              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, ?4 || exhibit_a_work_text, " +
+              "sub_key, trade, exhibit_a_template_id, exhibit_a_template_version, " +
+              "CASE WHEN length(exhibit_a_work_text) + length(?4) <= 100000 THEN ?4 || exhibit_a_work_text ELSE exhibit_a_work_text END, " +
               "scope_summary, price_basis, contract_price_cents, retainage_bp, subtotal_cents, " +
               "start_date, completion_date, terms_profile_id, terms_version, template_family, " +
               "?1, (SELECT COALESCE(MAX(co_seq), 0) + 1 FROM subcontracts WHERE change_order_of = ?1), " +

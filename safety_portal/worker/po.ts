@@ -3,7 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import type { FieldopsApp } from "./fieldops_gates";
 import { auditStmt, auditStmtIfChanged, isUniqueViolation } from "./audit";
 import { hmacHex } from "./hmac";
-import { CO_SCOPE_PO_DELTA } from "./wire-types";
+import { CO_SCOPE_PO_DELTA, CO_SCOPE_PO_RESTATEMENT } from "./wire-types";
 import { MAX_ADDRESS } from "./constants";
 // S2b wiring — the S3 terms manifest + versioned purchaser/tax config, imported at
 // BUILD time from po_materials/ (the same files the Mac renderer reads at render time).
@@ -105,7 +105,11 @@ const MAX_SHORT = 64;
 const MAX_PHONE = 40;
 const MAX_EMAIL = 320;
 const MAX_NOTES = 2000;
-const MAX_SOW = 8000;
+// 8192, not 8000: the CO clone seeds the ~120-char scope declaration ONTO the parent's
+// sow_text (Q3), and an at-cap original must stay round-trippable through the update
+// route — a bound the seed can breach makes the CO draft unsaveable. Headroom, never
+// silent truncation of contract text.
+const MAX_SOW = 8192;
 const MAX_INSTRUCTIONS = 4000;
 const MAX_TERMS_TEXT = 2000;
 const MAX_CATEGORIES = 20;
@@ -1150,6 +1154,13 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
       // parent since superseded or canceled. A CO drafted before its parent was replaced is
       // refused here and re-issued against the successor (design-completion review, 2026-08-15).
       if (parent.status !== "sent") return c.json({ error: "parent_not_in_force" }, 409);
+      // Q3 enforcement: every CO document DECLARES delta-vs-restatement semantics as the
+      // first line of its signed sow_text. Missing (an unseeded at-cap clone, or the office
+      // deleted it) → a recoverable refusal: pick the radio in the builder (trimming the
+      // scope text first if it is at the bound).
+      if (!po.sow_text.startsWith(CO_SCOPE_PO_DELTA) && !po.sow_text.startsWith(CO_SCOPE_PO_RESTATEMENT)) {
+        return c.json({ error: "co_scope_missing" }, 409);
+      }
       revision = null;
       poNumber = `${parent.po_number}-CO${po.co_seq}`;
     } else {
@@ -1347,8 +1358,13 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
               // The scope declaration seeds as the FIRST LINE of the cloned sow_text
               // (operator-ratified Q3): delta semantics by default — the builder's radio
               // swaps it. sow_text is in the signed canonical, so the declaration the
-              // vendor reads is signature-covered.
-              "?4 || sow_text, delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
+              // vendor reads is signature-covered. FIT-AWARE (review W8): a parent whose
+              // sow_text sits within seed-length of MAX_SOW clones UNSEEDED rather than
+              // over-bound (a raw INSERT bypasses parseDraftBody) or truncated (contract
+              // text is never silently cut) — the generate-time declaration check below
+              // makes the missing sentence a visible, recoverable refusal, not a loss.
+              "CASE WHEN length(sow_text) + length(?4) <= 8192 THEN ?4 || sow_text ELSE sow_text END, " +
+              "delivery_instructions, payment_terms_text, terms_profile_id, terms_version, " +
               "subtotal_cents, tax_mode, tax_rate_bp, tax_cents, shipping_cents, total_cents, " +
               "line_column_variant, ?1, " +
               "(SELECT COALESCE(MAX(co_seq), 0) + 1 FROM purchase_orders WHERE change_order_of = ?1), " +

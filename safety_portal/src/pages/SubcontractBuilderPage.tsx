@@ -1098,6 +1098,11 @@ export function SubcontractBuilderPage({
                 {" "}{opt.label}
               </label>
             ))}
+            {!exhibitAWorkText.startsWith(CO_SCOPE_SUB_DELTA) && !exhibitAWorkText.startsWith(CO_SCOPE_SUB_RESTATEMENT) && (
+              <p className="muted">
+                Choose one — it becomes the first line of Exhibit A, and Generate requires it.
+              </p>
+            )}
           </fieldset>
         )}
         <label className="field">

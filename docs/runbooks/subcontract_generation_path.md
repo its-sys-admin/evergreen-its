@@ -443,6 +443,8 @@ structural fault (permissions on the Jobs folder, a deleted parent, a Smartsheet
 
 ## Change-order documents (`{parent}-CO{n}`) — not a duplicate, not a special case
 
+**Undoing a countersign mark (portal "Undo accepted"):** the portal's undo flips D1 back to sent and clears the acceptance record, but the ledger sync re-asserts `executed` on the next ~120s cycle if the Subcontract_Log Status cell still reads executed — a true correction edits the Smartsheet ledger row too, not just the portal button. The portal's confirm dialog states this; both directions are audited.
+
 A **change order** is a normal subcontract cloned in the portal from a SENT or EXECUTED parent. Its
 number is the parent's number plus a `-CO<n>` suffix (parent `2026.384.1.0.0` → change
 orders `2026.384.1.0.0-CO1`, `-CO2`, …), and the Subcontract body .docx carries a prominent

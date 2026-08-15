@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { env } from "cloudflare:test";
+import { CO_SCOPE_SUB_DELTA } from "../worker/wire-types";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, p, g, json } from "./helpers";
 import { hmacHex } from "../worker/hmac";
@@ -884,6 +885,24 @@ describe("change-order documents (Track D2)", () => {
     await driveTo(coId, "approved", "sent");
     expect((await p(admin, `/api/subcontracts/${coId}/change-order`)).status).toBe(409);
     expect((await p(admin, `/api/subcontracts/${coId}/supersede`)).status).toBe(409);
+  });
+
+  it("enforces the CO scope declaration at generate (Q3): a declaration-stripped draft refuses; restoring it generates", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+    const co = await p(admin, `/api/subcontracts/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    // The office strips the seeded sentence via a full-replace edit → generate refuses.
+    const strip = await p(admin, `/api/subcontracts/drafts/${coId}/update`, draftBody());
+    expect(strip.status, await strip.clone().text()).toBe(200);
+    const gen1 = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen1.status).toBe(409);
+    expect((await json<{ error: string }>(gen1)).error).toBe("co_scope_missing");
+    const restore = await p(admin, `/api/subcontracts/drafts/${coId}/update`,
+      draftBody({ exhibit_a_work_text: `${CO_SCOPE_SUB_DELTA}\n\nthe work` }));
+    expect(restore.status, await restore.clone().text()).toBe(200);
+    const gen2 = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen2.status, await gen2.clone().text()).toBe(200);
   });
 
   it("blocks superseding a parent with a non-canceled change order (Q1/A)", async () => {

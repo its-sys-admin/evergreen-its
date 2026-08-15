@@ -1490,11 +1490,17 @@ export function PoBuilderPage({
                 {" "}{opt.label}
               </label>
             ))}
+            {!sow.startsWith(CO_SCOPE_PO_DELTA) && !sow.startsWith(CO_SCOPE_PO_RESTATEMENT) && (
+              <p className="muted">
+                Choose one — it becomes the first line of the scope text, and Generate requires
+                it. (If the scope text is at its length limit, trim it first.)
+              </p>
+            )}
           </fieldset>
         )}
         <label className="field">
           <span className="field__label">Scope of work</span>
-          <textarea className="field__textarea" aria-label="Scope of work" value={sow} maxLength={8000} rows={5} onChange={(e) => setSow(e.target.value)} />
+          <textarea className="field__textarea" aria-label="Scope of work" value={sow} maxLength={8192} rows={5} onChange={(e) => setSow(e.target.value)} />
         </label>
         <label className="field">
           <span className="field__label">Delivery instructions</span>
