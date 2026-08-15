@@ -196,13 +196,17 @@ export function App() {
   const routeRef = useRef<AppRoute>(route);
   // R3: FormFillPage's unsaved-input flag, consulted by the popstate guard before discarding.
   const formDirtyRef = useRef(false);
-  // Track D2: the job Procurement screen created a change-order DRAFT in a lane — carry the
+  // Track D2: the job Procurement screen created (or wants opened) a lane DRAFT — carry the
   // draft id into that lane's builder as a nonce-keyed one-shot (refs, not state: navigate()
   // triggers the re-render that delivers the request; bumping must not re-render by itself).
   // Declared HERE, above the loading/signed-out early returns — hooks after those returns
   // change the hook count across auth transitions and crash the renderer.
+  // The consumer CLEARS its ref via onConsumed after adopting — without that, the consumers'
+  // own dedupe state (refs) resets on remount and a long-consumed request replays on every
+  // later visit to the lane (design-completion review, 2026-08-15). `origin` lets the PO
+  // builder pick copy: its one-shot channel also serves estimate imports.
   const builderOpenNonceRef = useRef(0);
-  const poExternalOpenRef = useRef<{ id: number; nonce: number } | null>(null);
+  const poExternalOpenRef = useRef<{ id: number; nonce: number; origin: "change_order" } | null>(null);
   const subExternalOpenRef = useRef<{ id: number; nonce: number } | null>(null);
 
   // G2.5 history integration: canonicalize the entry URL, then restore routes on popstate.
@@ -344,7 +348,7 @@ export function App() {
   };
   // Track D2 handoff callbacks (the refs live above the auth early-returns).
   const openPoDraftInBuilder = (id: number) => {
-    poExternalOpenRef.current = { id, nonce: ++builderOpenNonceRef.current };
+    poExternalOpenRef.current = { id, nonce: ++builderOpenNonceRef.current, origin: "change_order" };
     setEditing(false);
     navigate({ view: "po-builder" });
   };
@@ -352,6 +356,14 @@ export function App() {
     subExternalOpenRef.current = { id, nonce: ++builderOpenNonceRef.current };
     setEditing(false);
     navigate({ view: "subcontract-builder" });
+  };
+  // One-shot consumption: the consumer reports the nonce it adopted; clearing here is what
+  // makes it truly one-shot across lane remounts.
+  const consumePoExternalOpen = (nonce: number) => {
+    if (poExternalOpenRef.current?.nonce === nonce) poExternalOpenRef.current = null;
+  };
+  const consumeSubExternalOpen = (nonce: number) => {
+    if (subExternalOpenRef.current?.nonce === nonce) subExternalOpenRef.current = null;
   };
 
   // The effective FormFillPage prefill: the route's shareable fields + the in-memory S5 draft.
@@ -448,8 +460,10 @@ export function App() {
         key={`${popEpoch}:procurement:${route.jobId}`}
         jobId={route.jobId}
         onOpenJob={openJobTracker}
+        onHome={home}
         onOpenPurchaseOrders={has("cap.po.manage") ? () => navigate({ view: "po-builder" }) : undefined}
         onOpenSubcontracts={has("cap.subcontracts.manage") ? () => navigate({ view: "subcontract-builder" }) : undefined}
+        onOpenRfqs={has("cap.po.manage") ? () => navigate({ view: "po-rfqs" }) : undefined}
         onOpenPoDraft={has("cap.po.manage") ? openPoDraftInBuilder : undefined}
         onOpenSubDraft={has("cap.subcontracts.manage") ? openSubDraftInBuilder : undefined}
       />
@@ -485,6 +499,7 @@ export function App() {
         onTabChange={(t) => navigate({ view: PO_VIEW_BY_TAB[t] }, true)}
         onBack={home}
         externalOpenDraft={poExternalOpenRef.current}
+        onExternalOpenConsumed={consumePoExternalOpen}
       />
     );
   } else if (route.view === "po-vendors" && allowed) {
@@ -494,7 +509,13 @@ export function App() {
   } else if (route.view === "subcontractors" && allowed) {
     page = <SubcontractorsPage onBack={home} />;
   } else if (route.view === "subcontract-builder" && allowed) {
-    page = <SubcontractBuilderPage onBack={home} openDraftRequest={subExternalOpenRef.current} />;
+    page = (
+      <SubcontractBuilderPage
+        onBack={home}
+        openDraftRequest={subExternalOpenRef.current}
+        onOpenDraftConsumed={consumeSubExternalOpen}
+      />
+    );
   } else {
     page = (
       <HomePage

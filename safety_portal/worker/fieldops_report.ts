@@ -683,6 +683,10 @@ async function buildReportData(
         pool_id: p.pool_id, box_file_id: p.box_file_id, caption: p.caption, work_date: p.work_date,
       })),
       auto_selected: office.photos === null,
+      // A full page means the pool may hold MORE clean photos than were offered — say so
+      // rather than letting the picker read as complete (no-silent-caps rule). Additive key;
+      // the Mac reader consumes photos.selected only and ignores unknown keys (Track B).
+      truncated: photosAvailable.length >= PHOTO_CAP,
     },
     // The living task list (0071). NULL — not an empty object — when the job has no committed
     // schedule, so the renderer prints its honest empty state rather than an empty table.

@@ -44,6 +44,7 @@ function routeFetch(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("confirm", vi.fn(() => true));
   vi.mocked(useAuth).mockReturnValue({
     user: { username: "adm", role: "admin", capabilities: ["cap.po.manage", "cap.subcontracts.manage"] },
     loading: false, login: vi.fn(), logout: vi.fn(),
@@ -56,7 +57,8 @@ afterEach(() => {
 });
 
 describe("JobProcurementPage", () => {
-  it("renders lanes, opens the panel, and offers Mark submitted for a generated document", async () => {
+  it("renders lanes, opens the panel, and offers Mark submitted ONLY once approved (confirm-gated)", async () => {
+    routeFetch({ list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "approved" }] } });
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
     fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
     expect(await screen.findByText("Generated")).toBeTruthy();
@@ -65,6 +67,23 @@ describe("JobProcurementPage", () => {
     fireEvent.click(mark);
     await waitFor(() =>
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/procurement/po/1/lifecycle"))).toBe(true));
+    expect(window.confirm).toHaveBeenCalled();
+  });
+
+  it("shows the awaiting-approval hint instead of a doomed Mark submitted on pending_review", async () => {
+    render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);
+    fireEvent.click(await screen.findByLabelText("Open 2026.384.1.0.0"));
+    expect(await screen.findByText(/Awaiting approval/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mark submitted" })).toBeNull();
+  });
+
+  it("offers Open in the lane builder on a draft row", async () => {
+    const openPoDraft = vi.fn();
+    routeFetch({ list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "draft", po_number: null }] } });
+    render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} onOpenPoDraft={openPoDraft} />);
+    fireEvent.click(await screen.findByLabelText("Open PO (unnumbered draft)"));
+    fireEvent.click(await screen.findByRole("button", { name: "Open in the lane builder →" }));
+    expect(openPoDraft).toHaveBeenCalledWith(1);
   });
 
   it("offers Mark accepted on a submitted document and Undo on an accepted one", async () => {
@@ -83,6 +102,7 @@ describe("JobProcurementPage", () => {
 
   it("surfaces a wrong-state refusal with the record's current stage", async () => {
     routeFetch({
+      list: { ...RESPONSE, purchase_orders: [{ ...PO, status: "approved" }] },
       lifecycle: new Response(JSON.stringify({ error: "wrong_state", current_status: "sent" }), { status: 409 }),
     });
     render(<JobProcurementPage jobId="JOB-P" onOpenJob={() => {}} />);

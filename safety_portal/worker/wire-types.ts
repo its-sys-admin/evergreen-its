@@ -108,6 +108,9 @@ export interface JobProcurementResponse {
   purchase_orders: JobProcurementPo[] | null;
   rfqs: JobProcurementRfq[] | null;
   subcontracts: JobProcurementSub[] | null;
+  /** Lane names whose lists hit the per-lane row cap — older documents were dropped; the SPA
+   *  points at the lane pages (no-silent-caps rule). */
+  truncated_lanes: string[];
 }
 
 /** GET /api/fieldops/portfolio (A6) — the tracker list's cross-job strip. Active jobs with ≥1
@@ -1197,7 +1200,9 @@ export interface ProductionReportResponse {
     qty: string; unit: string; vendor: string; bol_number: string; carrier: string;
   }[];
   material_incidents: { work_date: string; material: string; issue: string; details: string }[];
-  photos: { available: WeeklyReportPhotoOffered[]; selected: WeeklyReportPhoto[]; auto_selected: boolean };
+  photos: { available: WeeklyReportPhotoOffered[]; selected: WeeklyReportPhoto[]; auto_selected: boolean;
+    /** True when the offered list hit the pool cap — more clean photos exist than were offered. */
+    truncated: boolean };
   /** Page 3. NULL when the job has no committed schedule (0071) — the renderer prints its
    *  honest empty state. `percent: null` on an item is the table's "never reported" state (no
    *  portal mark, no committed schedule value), which prints as an em dash, never 0%. */

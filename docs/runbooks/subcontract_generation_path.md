@@ -443,7 +443,7 @@ structural fault (permissions on the Jobs folder, a deleted parent, a Smartsheet
 
 ## Change-order documents (`{parent}-CO{n}`) — not a duplicate, not a special case
 
-A **change order** is a normal subcontract cloned in the portal from a SENT parent. Its
+A **change order** is a normal subcontract cloned in the portal from a SENT or EXECUTED parent. Its
 number is the parent's number plus a `-CO<n>` suffix (parent `2026.384.1.0.0` → change
 orders `2026.384.1.0.0-CO1`, `-CO2`, …), and the Subcontract body .docx carries a prominent
 notice directly under the title naming the parent: *"THIS DOCUMENT IS CHANGE ORDER NO. n TO

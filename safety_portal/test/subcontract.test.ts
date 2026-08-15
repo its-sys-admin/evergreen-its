@@ -883,6 +883,30 @@ describe("change-order documents (Track D2)", () => {
     expect((await p(admin, `/api/subcontracts/${coId}/change-order`)).status).toBe(409);
     expect((await p(admin, `/api/subcontracts/${coId}/supersede`)).status).toBe(409);
   });
+
+  it("refuses generating a CO whose parent is no longer in force; update locks counterparty + job identity but preserves linkage on a clean edit", async () => {
+    const idA = await makeQueued(admin);
+    await driveTo(idA, "approved", "sent");
+    const co = await p(admin, `/api/subcontracts/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+
+    // Identity repoint refused; clean edit preserves the linkage.
+    await seedSubcontractor("SUB-000099");
+    const repoint = await p(admin, `/api/subcontracts/drafts/${coId}/update`, draftBody({ sub_key: "SUB-000099" }));
+    expect(repoint.status).toBe(409);
+    expect((await json<{ error: string }>(repoint)).error).toBe("co_identity_locked");
+    const edit = await p(admin, `/api/subcontracts/drafts/${coId}/update`, draftBody());
+    expect(edit.status, await edit.clone().text()).toBe(200);
+    const row = await subRow(coId);
+    expect(row.change_order_of).toBe(idA);
+    expect(row.co_seq).toBe(1);
+
+    // Parent leaves force → generate refused.
+    await env.DB.prepare("UPDATE subcontracts SET status='superseded' WHERE id=?1").bind(idA).run();
+    const gen = await p(admin, `/api/subcontracts/drafts/${coId}/generate`, { contract_price_cents: CONTRACT_PRICE_CENTS });
+    expect(gen.status).toBe(409);
+    expect((await json<{ error: string }>(gen)).error).toBe("parent_not_in_force");
+  });
 });
 
 // ── cancel guards (refusing approved/sent/executed) ───────────────────────────
@@ -928,7 +952,7 @@ describe("cancel", () => {
     const queuedId = await makeQueued(admin);
     const del = await p(admin, `/api/subcontracts/${queuedId}/delete`);
     expect(del.status).toBe(409);
-    expect((await json<{ error: string }>(del)).error).toBe("not_deletable");
+    expect((await json<{ error: string }>(del)).error).toBe("record_not_deletable");
     expect((await subRow(queuedId)).status).toBe("queued");
     expect(await nLines(queuedId)).toBeGreaterThan(0);
 

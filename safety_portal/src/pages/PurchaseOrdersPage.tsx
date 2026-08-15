@@ -44,29 +44,36 @@ export function PurchaseOrdersPage({
   onTabChange,
   onBack,
   externalOpenDraft,
+  onExternalOpenConsumed,
 }: {
   tab: PoTab;
   onTabChange: (t: PoTab) => void;
   onBack: () => void;
   /** App-level one-shot (Track D2): open this draft in the builder — the job Procurement
    *  screen's just-created change order. Own nonce counter; adopted into the internal
-   *  request stream below. */
-  externalOpenDraft?: { id: number; nonce: number } | null;
+   *  request stream below. `origin` picks the builder's copy (this channel also serves
+   *  estimate imports internally). */
+  externalOpenDraft?: { id: number; nonce: number; origin: "change_order" } | null;
+  /** Report the adopted nonce so App clears its ref — WITHOUT this the hub's own dedupe ref
+   *  resets on remount and a long-consumed request replays on every later visit. */
+  onExternalOpenConsumed?: (nonce: number) => void;
 }) {
   // Monotonic nonce for the cross-tab one-shot requests below: a fresh nonce re-fires the
   // consumer's effect even when the same id is requested twice (e.g. review, back out, review
   // again). Refs, not state — bumping one must not itself re-render.
   const nonceRef = useRef(0);
-  const openDraftReqRef = useRef<{ id: number; nonce: number } | null>(null);
+  const openDraftReqRef = useRef<{ id: number; nonce: number; origin?: "estimate" | "change_order" } | null>(null);
   const reviewReqRef = useRef<{ id: number; nonce: number } | null>(null);
 
   // Render-phase adoption of the external one-shot (idempotent under StrictMode double-render:
   // the second pass sees the nonce already recorded and skips). The render that carries the
-  // new prop is itself the render that must hand the request to PoBuilderPage below.
+  // new prop is itself the render that must hand the request to PoBuilderPage below. Consumption
+  // is reported UP so the App-held request cannot outlive this mount and replay later.
   const lastExternalNonceRef = useRef(0);
   if (externalOpenDraft && externalOpenDraft.nonce !== lastExternalNonceRef.current) {
     lastExternalNonceRef.current = externalOpenDraft.nonce;
-    openDraftReqRef.current = { id: externalOpenDraft.id, nonce: ++nonceRef.current };
+    openDraftReqRef.current = { id: externalOpenDraft.id, nonce: ++nonceRef.current, origin: externalOpenDraft.origin };
+    onExternalOpenConsumed?.(externalOpenDraft.nonce);
   }
 
   // Mount-on-first-visit set. Mutated during render (idempotent add — safe under StrictMode
@@ -83,7 +90,7 @@ export function PurchaseOrdersPage({
   };
   /** Disposition minted a draft PO → open it in the builder on the Orders tab. */
   const goDraft = (poId: number) => {
-    openDraftReqRef.current = { id: poId, nonce: ++nonceRef.current };
+    openDraftReqRef.current = { id: poId, nonce: ++nonceRef.current, origin: "estimate" };
     onTabChange("orders");
   };
 

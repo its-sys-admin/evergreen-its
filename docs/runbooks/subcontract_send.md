@@ -72,6 +72,8 @@ never by forcing the send.
   `Workstream` cell is not `subcontracts` (or a `subcontracts` row on WSR/WPR/PO). This is a
   contamination signal → **escalate to Seth** (do NOT re-tag the row).
 
+> **Change-order documents:** a review row whose number carries a `-CO<n>` suffix (e.g. `2026.384.1.0.0-CO1`) is a CHANGE ORDER to the named parent subcontract — a distinct document, not a duplicate send of the parent. It dispatches exactly like any other row; the parent stays in force.
+
 ## The send gate / daemon won't run / appears stale
 
 - The poller is the launchd job **`org.solutionsmith.its.subcontract-send`** (interval 15 min,

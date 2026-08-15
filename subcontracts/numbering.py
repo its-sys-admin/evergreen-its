@@ -75,8 +75,10 @@ def parse_sc_number(value: str) -> ScNumber:
     """Parse a D7 SC number into its components; `ScNumberError` on any malformation.
 
     Round-trip stable: `format_sc_number(*parse_sc_number(s)) == s` for every valid
-    `s` (the segments carry no padding). Used by the status pass to sanity-check a
-    review-row's Notes-encoded number and by the supersession display helpers.
+    `s` (the segments carry no padding). NO production caller today (tests only) —
+    kept as the grammar's executable definition; live code treats numbers as opaque
+    strings, and change-order clause derivation is a deliberate rsplit in the render
+    module, not a parse_* call.
     """
     m = _SC_NUMBER_RE.match((value or "").strip())
     if m is None:

@@ -877,6 +877,35 @@ describe("change-order documents (Track D2)", () => {
     await driveToSent(idA);
     expect((await p(submitter, `/api/po/${idA}/change-order`)).status).toBe(403);
   });
+
+  it("refuses generating a CO whose parent is no longer in force — the clause must never assert a void parent", async () => {
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+    await env.DB.prepare("UPDATE purchase_orders SET status='superseded' WHERE id=?1").bind(idA).run();
+    const gen = await p(admin, `/api/po/drafts/${coId}/generate`, EXPECTED);
+    expect(gen.status).toBe(409);
+    expect((await json<{ error: string }>(gen)).error).toBe("parent_not_in_force");
+  });
+
+  it("locks a CO draft's counterparty + job identity (update 409s a repoint; a same-identity edit preserves the linkage)", async () => {
+    await seedVendor("VEN-000002");
+    const idA = await makeQueued(admin);
+    await driveToSent(idA);
+    const co = await p(admin, `/api/po/${idA}/change-order`);
+    const { id: coId } = await json<{ id: number }>(co);
+
+    const repoint = await p(admin, `/api/po/drafts/${coId}/update`, draftBody({ vendor_key: "VEN-000002" }));
+    expect(repoint.status).toBe(409);
+    expect((await json<{ error: string }>(repoint)).error).toBe("co_identity_locked");
+
+    const edit = await p(admin, `/api/po/drafts/${coId}/update`, draftBody());
+    expect(edit.status, await edit.clone().text()).toBe(200);
+    const row = await poRow(coId);
+    expect(row.change_order_of).toBe(idA); // linkage survives a full-replace edit
+    expect(row.co_seq).toBe(1);
+  });
 });
 
 // ── cancel guards ─────────────────────────────────────────────────────────────
@@ -911,7 +940,7 @@ describe("cancel", () => {
     const queuedId = await makeQueued(admin);
     const del = await p(admin, `/api/po/${queuedId}/delete`);
     expect(del.status).toBe(409);
-    expect((await json<{ error: string }>(del)).error).toBe("not_deletable");
+    expect((await json<{ error: string }>(del)).error).toBe("record_not_deletable");
     expect((await poRow(queuedId)).status).toBe("queued");
     expect(await nLines(queuedId)).toBeGreaterThan(0);
 

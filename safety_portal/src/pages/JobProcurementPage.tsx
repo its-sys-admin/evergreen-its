@@ -104,27 +104,41 @@ type Selected =
 export function JobProcurementPage(props: {
   jobId: string;
   onOpenJob: (jobId: string) => void;
+  /** The shell's '← Home' control — a true Home, per the sibling job-scoped pages. Falls back
+   *  to the job detail so the control never dead-ends when unwired. */
+  onHome?: () => void;
   onOpenPurchaseOrders?: () => void;
   onOpenSubcontracts?: () => void;
-  /** Track D2: open the lane builder ON a specific draft (the just-created change order). */
+  onOpenRfqs?: () => void;
+  /** Track D2: open the lane builder ON a specific draft (a change-order or other draft). */
   onOpenPoDraft?: (id: number) => void;
   onOpenSubDraft?: (id: number) => void;
 }) {
-  const { jobId, onOpenJob, onOpenPurchaseOrders, onOpenSubcontracts, onOpenPoDraft, onOpenSubDraft } = props;
+  const { jobId, onOpenJob, onHome, onOpenPurchaseOrders, onOpenSubcontracts, onOpenRfqs, onOpenPoDraft, onOpenSubDraft } = props;
   const [data, setData] = useState<JobProcurementResponse | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/fieldops/jobs/${encodeURIComponent(jobId)}/procurement`, {
-      credentials: "same-origin",
-    });
-    if (!res.ok) {
-      setMsg({ ok: false, text: "Could not load this job's procurement." });
-      return;
+    // Failure here must never be silent (offline/flaky-cell is a real office condition):
+    // both the network throw and a non-OK body land on the banner + the Retry affordance.
+    try {
+      const res = await fetch(`/api/fieldops/jobs/${encodeURIComponent(jobId)}/procurement`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        setLoadFailed(true);
+        setMsg({ ok: false, text: "Could not load this job's procurement." });
+        return;
+      }
+      setData((await res.json()) as JobProcurementResponse);
+      setLoadFailed(false);
+    } catch {
+      setLoadFailed(true);
+      setMsg({ ok: false, text: "Could not load this job's procurement — check the connection and retry." });
     }
-    setData((await res.json()) as JobProcurementResponse);
   }, [jobId]);
 
   useEffect(() => {
@@ -146,8 +160,11 @@ export function JobProcurementPage(props: {
     });
   }, [load]);
 
-  async function lifecycle(kind: Selected["kind"], id: number, action: string) {
+  async function lifecycle(kind: Selected["kind"], id: number, action: string, confirmText?: string) {
     if (busy) return;
+    // Lifecycle marks record commercial facts and most have no undo — a mis-tap must not be
+    // one click. The confirm names exactly what will be recorded.
+    if (confirmText && !window.confirm(confirmText)) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -155,7 +172,7 @@ export function JobProcurementPage(props: {
       if (res.ok) {
         await refreshKeeping(kind, id);
       } else {
-        const body = (await res.json()) as { error?: string; current_status?: string };
+        const body = (await res.json().catch(() => ({}))) as { error?: string; current_status?: string };
         setMsg({
           ok: false,
           text: body.error === "wrong_state"
@@ -163,6 +180,8 @@ export function JobProcurementPage(props: {
             : "Could not record that. Reload and try again.",
         });
       }
+    } catch {
+      setMsg({ ok: false, text: "Could not record that — check the connection and try again." });
     } finally {
       setBusy(false);
     }
@@ -192,8 +211,15 @@ export function JobProcurementPage(props: {
           await refreshKeeping(kind, id);
         }
       }
-    } catch {
-      setMsg({ ok: false, text: "Could not create the change order draft. Reload and try again." });
+    } catch (err) {
+      // ApiError.message is already the office-facing copy (errorText in its constructor) —
+      // surface it rather than a generic line that hides the actual refusal.
+      setMsg({
+        ok: false,
+        text: err instanceof Error && err.message
+          ? err.message
+          : "Could not create the change order draft. Reload and try again.",
+      });
     } finally {
       setBusy(false);
     }
@@ -237,8 +263,10 @@ export function JobProcurementPage(props: {
     );
   }
 
+  const truncated = data?.truncated_lanes ?? [];
+
   return (
-    <PageShell onHome={() => onOpenJob(jobId)} wide>
+    <PageShell onHome={onHome ?? (() => onOpenJob(jobId))} wide>
       <div className="dash-back-btn">
         <button type="button" className="btn btn--secondary" onClick={() => onOpenJob(jobId)}>
           ← Back to job
@@ -256,6 +284,11 @@ export function JobProcurementPage(props: {
           {msg.text}
         </p>
       )}
+      {loadFailed && (
+        <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void load()}>
+          Retry loading
+        </button>
+      )}
 
       <div className="proc-shell">
         <div className="proc-lists">
@@ -263,6 +296,9 @@ export function JobProcurementPage(props: {
             <section className="card dash-section" id="pl-pos">
               <header className="job-sec__head"><h2 className="job-sec__title">Purchase orders</h2></header>
               {poRows.length === 0 && <p className="dash-hint">No purchase orders for this job yet.</p>}
+              {truncated.includes("purchase_orders") && (
+                <p className="dash-hint">Showing the newest {poRows.length} — older purchase orders live on the lane page.</p>
+              )}
               <ul className="dash-tasklist">
                 {groupWithCos(poRows).map((g) => (
                   <li key={g.base.id}>
@@ -293,6 +329,9 @@ export function JobProcurementPage(props: {
                   appear here — find them on the RFQs page.)
                 </p>
               )}
+              {truncated.includes("rfqs") && (
+                <p className="dash-hint">Showing the newest {rfqRows.length} — older RFQ rounds live on the RFQs page.</p>
+              )}
               <ul className="dash-tasklist">
                 {rfqRows.map((r) => (
                   <li key={r.id}>
@@ -308,12 +347,20 @@ export function JobProcurementPage(props: {
                   </li>
                 ))}
               </ul>
+              {onOpenRfqs && (
+                <button type="button" className="btn btn--secondary" onClick={onOpenRfqs}>
+                  Open RFQs lane →
+                </button>
+              )}
             </section>
           )}
           {subRows !== null && (
             <section className="card dash-section" id="pl-subs">
               <header className="job-sec__head"><h2 className="job-sec__title">Subcontracts</h2></header>
               {subRows.length === 0 && <p className="dash-hint">No subcontracts for this job yet.</p>}
+              {truncated.includes("subcontracts") && (
+                <p className="dash-hint">Showing the newest {subRows.length} — older subcontracts live on the lane page.</p>
+              )}
               <ul className="dash-tasklist">
                 {groupWithCos(subRows).map((g) => (
                   <li key={g.base.id}>
@@ -391,15 +438,29 @@ export function JobProcurementPage(props: {
                     </li>
                   </ol>
                   <div className="proc-actions">
-                    {!submitted && generated && (
+                    {/* mark_submitted only from 'approved' (the worker's own guard) — offering
+                        it on pending_review/canceled was a doomed button that always 409'd. */}
+                    {row.status === "approved" && (
                       <button type="button" className="btn btn--primary" disabled={busy}
-                              onClick={() => void lifecycle(selected.kind, row.id, "mark_submitted")}>
+                              onClick={() => void lifecycle(selected.kind, row.id, "mark_submitted",
+                                "Record this document as submitted to the " +
+                                (selected.kind === "po" ? "vendor" : "subcontractor") +
+                                "? This marks paper that went out outside ITS.")}>
                         Mark submitted
                       </button>
                     )}
+                    {["queued", "pending_review"].includes(row.status) && (
+                      <p className="dash-hint">
+                        Awaiting approval — once approved, it can be sent by ITS or marked
+                        submitted here.
+                      </p>
+                    )}
                     {submitted && !accepted && row.status === "sent" && (
                       <button type="button" className="btn btn--primary" disabled={busy}
-                              onClick={() => void lifecycle(selected.kind, row.id, "mark_accepted")}>
+                              onClick={() => void lifecycle(selected.kind, row.id, "mark_accepted",
+                                selected.kind === "subcontract"
+                                  ? "Record the subcontractor's countersign? This marks the subcontract executed and cannot be undone here."
+                                  : undefined)}>
                         Mark accepted
                       </button>
                     )}
@@ -413,6 +474,12 @@ export function JobProcurementPage(props: {
                       <button type="button" className="btn btn--secondary" disabled={busy}
                               onClick={() => void createChangeOrder(selected.kind as "po" | "subcontract", row.id)}>
                         Create change order
+                      </button>
+                    )}
+                    {row.status === "draft" && (selected.kind === "po" ? onOpenPoDraft : onOpenSubDraft) && (
+                      <button type="button" className="btn btn--secondary" disabled={busy}
+                              onClick={() => (selected.kind === "po" ? onOpenPoDraft! : onOpenSubDraft!)(row.id)}>
+                        Open in the lane builder →
                       </button>
                     )}
                   </div>
@@ -453,7 +520,8 @@ export function JobProcurementPage(props: {
                   </p>
                   {["generated", "partially_sent", "sent"].includes(row.status) && (
                     <button type="button" className="btn btn--primary" disabled={busy}
-                            onClick={() => void lifecycle("rfq", row.id, "close")}>
+                            onClick={() => void lifecycle("rfq", row.id, "close",
+                              "Close this RFQ round? A closed round cannot be reopened from here.")}>
                       Close this RFQ round
                     </button>
                   )}

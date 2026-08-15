@@ -215,8 +215,9 @@ export function PoBuilderPage({
   onReviewEstimate: (estimateId: number) => void;
   /** Jump to the Vendor Estimates tab (the "none ready — upload one" affordance). */
   onOpenEstimatesTab: () => void;
-  /** Nonce-keyed one-shot from the hub: open this just-imported draft in the builder. */
-  openDraftRequest?: { id: number; nonce: number } | null;
+  /** Nonce-keyed one-shot from the hub: open this draft in the builder. `origin` picks the
+   *  copy — the channel serves BOTH estimate imports and job-screen change-order handoffs. */
+  openDraftRequest?: { id: number; nonce: number; origin?: "estimate" | "change_order" } | null;
 }) {
   const { user } = useAuth();
   const caps = user?.capabilities ?? [];
@@ -722,18 +723,25 @@ export function PoBuilderPage({
   useEffect(() => {
     if (!openDraftRequest) return;
     const { id } = openDraftRequest;
+    // The channel serves two producers with different copy: an estimate disposition minted
+    // this draft, or the job Procurement screen created a change order from a sent PO.
+    const co = openDraftRequest.origin === "change_order";
+    const noun = co ? "change-order draft" : "imported draft";
     setFromEstOpen(false);
     setFromEstRows(null);
     void (async () => {
       if (
         view === "builder" &&
+        draftId !== id && // re-opening the SAME draft loses nothing — don't threaten it
         !window.confirm(
-          `Open imported draft #${id} now? The purchase order you were editing will be replaced (unsaved changes are lost).`,
+          `Open ${noun} #${id} now? The purchase order you were editing will be replaced (unsaved changes are lost).`,
         )
       ) {
         setMsg({
           ok: true,
-          text: `Estimate imported into draft #${id} — open it from the list when you're ready.`,
+          text: co
+            ? `Change-order draft #${id} is in the list — open it when you're ready.`
+            : `Estimate imported into draft #${id} — open it from the list when you're ready.`,
         });
         reloadPos(statusFilter === "all" ? undefined : statusFilter);
         return;
@@ -742,7 +750,9 @@ export function PoBuilderPage({
       if (ok) {
         setMsg({
           ok: true,
-          text: `Estimate imported into draft #${id} — adjust lines, attachments, and terms below, then Generate.`,
+          text: co
+            ? `Change-order draft #${id} opened — edit what changed, then Generate.`
+            : `Estimate imported into draft #${id} — adjust lines, attachments, and terms below, then Generate.`,
         });
       }
       reloadPos(statusFilter === "all" ? undefined : statusFilter);
@@ -1036,7 +1046,9 @@ export function PoBuilderPage({
   }
 
   // ── Render: the tracker ────────────────────────────────────────────────────────────────────────
-  const sentPos = useMemo(() => pos.filter((p) => p.status === "sent"), [pos]);
+  // Supersede sources: in-force BASE documents only — a change order categorically can't be
+  // superseded (the worker refuses; offering one here was a doomed pick).
+  const sentPos = useMemo(() => pos.filter((p) => p.status === "sent" && p.change_order_of === null), [pos]);
 
   function trackerRow(p: api.PoListRow) {
     const vendor = vendorByKey.get(p.vendor_key);
@@ -1054,6 +1066,7 @@ export function PoBuilderPage({
             <span className="dash-chip">{formatCents(p.total_cents)}</span>
             <span className="dash-chip">Updated {fmtDate(p.updated_at)}</span>
             {p.supersedes_po_id !== null ? <span className="dash-chip">Supersedes #{p.supersedes_po_id}</span> : null}
+            {p.change_order_of !== null ? <span className="dash-chip">Change order of #{p.change_order_of}</span> : null}
           </div>
         </div>
         {canManage ? (

@@ -1011,6 +1011,20 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
       .first();
     if (!subcontractor) return c.json({ error: "unknown_subcontractor" }, 422);
 
+    // Track D2 identity lock (the po.ts twin): a change-order draft amends ONE parent
+    // contract — counterparty + job identity are the parent's. Scope, SOV, price, dates and
+    // terms stay freely editable; that IS the change order.
+    const cur = await c.env.DB
+      .prepare("SELECT change_order_of, sub_key, job_no, site_phase, job_id FROM subcontracts WHERE id = ?1")
+      .bind(id)
+      .first<{ change_order_of: number | null; sub_key: string; job_no: string; site_phase: number; job_id: string }>();
+    if (
+      cur && cur.change_order_of !== null &&
+      (d.sub_key !== cur.sub_key || d.job_no !== cur.job_no || d.site_phase !== cur.site_phase || d.job_id !== cur.job_id)
+    ) {
+      return c.json({ error: "co_identity_locked" }, 409);
+    }
+
     const actor = c.get("session").username;
     const guard = "(SELECT status FROM subcontracts WHERE id = ?1) = 'draft'";
     const res = await c.env.DB.batch([
@@ -1118,11 +1132,18 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     let revision: number | null;
     let scNumber: string;
     if (sub.change_order_of !== null) {
+      // Corrupt-linkage guard: co_seq must exist or the mint below would sign "…-COnull".
+      if (sub.co_seq === null) return c.json({ error: "co_linkage_invalid" }, 409);
       const parent = await c.env.DB
-        .prepare("SELECT sc_number FROM subcontracts WHERE id = ?1")
+        .prepare("SELECT sc_number, status FROM subcontracts WHERE id = ?1")
         .bind(sub.change_order_of)
-        .first<{ sc_number: string | null }>();
+        .first<{ sc_number: string | null; status: string }>();
       if (!parent?.sc_number) return c.json({ error: "parent_not_generated" }, 409);
+      // The rendered notice asserts the parent REMAINS IN FORCE — never sign that against a
+      // parent since superseded or canceled ('sent' and 'executed' are the in-force states).
+      if (parent.status !== "sent" && parent.status !== "executed") {
+        return c.json({ error: "parent_not_in_force" }, 409);
+      }
       revision = null;
       scNumber = `${parent.sc_number}-CO${sub.co_seq}`;
     } else {
@@ -1359,7 +1380,8 @@ export function registerSubcontractRoutes(app: FieldopsApp, gates: SubcontractGa
     ]);
     if ((res[1].meta.changes ?? 0) === 0) {
       const row = await c.env.DB.prepare("SELECT status FROM subcontracts WHERE id = ?1").bind(id).first();
-      return row ? c.json({ error: "not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
+      // record_not_deletable, not not_deletable — the photo pool owns that code (see po.ts).
+      return row ? c.json({ error: "record_not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
     }
     return c.json({ ok: true, id });
   });

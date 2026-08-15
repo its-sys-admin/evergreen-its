@@ -14,8 +14,8 @@ import type { JobProcurementResponse, JobProcurementPo, JobProcurementRfq, JobPr
 // `executed`, RFQs derive their parent status from per-vendor pending→filed→sent→responded.
 // Everything at `approved` or beyond is a CACHE of the Mac/Smartsheet-side authoritative state
 // with poll latency (the lanes' status-sync passes) — the SPA labels it "as of last sync".
-// `rfqs.closed` exists in the CHECK but has NO writer today — deliberately not rendered as a
-// reachable state here.
+// `rfqs.closed` was a dead CHECK state at birth; the Track D lifecycle route below is now its
+// ONE writer (the office retiring a finished round).
 //
 // CAPABILITY POSTURE (least-privilege; the fieldops_jobtracker routing-block precedent): the
 // lanes' own admin-only caps gate their own data — cap.po.manage for POs + RFQs (one
@@ -157,7 +157,13 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
           co_seq: (r.co_seq as number | null) ?? null,
         }));
       }
-      const payload: JobProcurementResponse = { purchase_orders: pos, rfqs, subcontracts: subs };
+      // A lane returning exactly LANE_CAP_ROWS rows may have dropped older documents — say so
+      // (the no-silent-caps rule); the SPA renders a hint pointing at the lane pages.
+      const truncated_lanes: string[] = [];
+      if (pos && pos.length === LANE_CAP_ROWS) truncated_lanes.push("purchase_orders");
+      if (rfqs && rfqs.length === LANE_CAP_ROWS) truncated_lanes.push("rfqs");
+      if (subs && subs.length === LANE_CAP_ROWS) truncated_lanes.push("subcontracts");
+      const payload: JobProcurementResponse = { purchase_orders: pos, rfqs, subcontracts: subs, truncated_lanes };
       return c.json(payload, 200);
     },
   );
@@ -193,7 +199,11 @@ export function registerJobProcurementRoutes(app: FieldopsApp, gates: FieldopsGa
       }
       const action = typeof body.action === "string" ? body.action : "";
       const actor = c.get("session").username;
-      const today = new Date().toISOString().slice(0, 10);
+      // Pacific wall-clock date (en-CA formats YYYY-MM-DD) — the repo's date convention; a UTC
+      // slice stamps tomorrow's date for any evening mark (design-completion review, 2026-08-15).
+      const today = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(new Date());
 
       if (docType === "po") {
         if (!caps.has(LANE_CAP_PO)) return c.json({ error: "forbidden" }, 403);

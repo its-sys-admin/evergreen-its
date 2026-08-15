@@ -1012,6 +1012,23 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
       .first();
     if (!vendor) return c.json({ error: "unknown_vendor" }, 422);
 
+    // Track D2 identity lock: a change-order draft amends ONE parent contract — its
+    // counterparty and job identity are the parent's, and its number will be minted off the
+    // parent's. The full-replace body always carries these fields, so a repoint (new vendor,
+    // different job) would silently produce a CO numbered against a contract it no longer
+    // amends. Everything else (lines, totals, sow, terms, ship-to) stays freely editable —
+    // that IS the change order.
+    const cur = await c.env.DB
+      .prepare("SELECT change_order_of, vendor_key, job_no, site_phase, job_id FROM purchase_orders WHERE id = ?1")
+      .bind(id)
+      .first<{ change_order_of: number | null; vendor_key: string; job_no: string; site_phase: number; job_id: string }>();
+    if (
+      cur && cur.change_order_of !== null &&
+      (d.vendor_key !== cur.vendor_key || d.job_no !== cur.job_no || d.site_phase !== cur.site_phase || d.job_id !== cur.job_id)
+    ) {
+      return c.json({ error: "co_identity_locked" }, 409);
+    }
+
     const actor = c.get("session").username;
     const guard = "(SELECT status FROM purchase_orders WHERE id = ?1) = 'draft'";
     const res = await c.env.DB.batch([
@@ -1121,11 +1138,17 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     let revision: number | null;
     let poNumber: string;
     if (po.change_order_of !== null) {
+      // Corrupt-linkage guard: co_seq must exist or the mint below would sign "…-COnull".
+      if (po.co_seq === null) return c.json({ error: "co_linkage_invalid" }, 409);
       const parent = await c.env.DB
-        .prepare("SELECT po_number FROM purchase_orders WHERE id = ?1")
+        .prepare("SELECT po_number, status FROM purchase_orders WHERE id = ?1")
         .bind(po.change_order_of)
-        .first<{ po_number: string | null }>();
+        .first<{ po_number: string | null; status: string }>();
       if (!parent?.po_number) return c.json({ error: "parent_not_generated" }, 409);
+      // The rendered clause asserts the parent REMAINS IN FORCE — never sign that against a
+      // parent since superseded or canceled. A CO drafted before its parent was replaced is
+      // refused here and re-issued against the successor (design-completion review, 2026-08-15).
+      if (parent.status !== "sent") return c.json({ error: "parent_not_in_force" }, 409);
       revision = null;
       poNumber = `${parent.po_number}-CO${po.co_seq}`;
     } else {
@@ -1386,7 +1409,9 @@ export function registerPoRoutes(app: FieldopsApp, gates: PoGates): void {
     ]);
     if ((res[3].meta.changes ?? 0) === 0) {
       const row = await c.env.DB.prepare("SELECT status FROM purchase_orders WHERE id = ?1").bind(id).first();
-      return row ? c.json({ error: "not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
+      // record_not_deletable, not not_deletable: the photo pool owns that code with
+      // screening-specific copy — one errorCopy key was serving two meanings.
+      return row ? c.json({ error: "record_not_deletable" }, 409) : c.json({ error: "not_found" }, 404);
     }
     return c.json({ ok: true, id });
   });
