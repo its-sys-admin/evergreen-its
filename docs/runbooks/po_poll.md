@@ -486,6 +486,25 @@ the same attachment loops transient across many cycles (possible code defect).
 
 ---
 
+## Change-order documents (`{parent}-CO{n}`) — not a duplicate, not a special case
+
+A **change order** is a normal PO cloned in the portal from a SENT parent. Its number is the
+parent's number plus a `-CO<n>` suffix (parent `2026.384.1.0.0` → change orders
+`2026.384.1.0.0-CO1`, `-CO2`, …), and its PDF carries a prominent in-body clause naming the
+parent: *"THIS DOCUMENT IS CHANGE ORDER NO. n TO PURCHASE ORDER {parent}. PURCHASE ORDER
+{parent} REMAINS IN FORCE AS MODIFIED HEREBY."* The **parent stays in force** — a change
+order is NOT a supersession (no "SUPERSEDE AND REPLACE" clause, and the prior PO is not
+voided).
+
+For this daemon a change order is just another queued PO: **no config gate, no repair step,
+and no symptom above differs** — HMAC verify, totals assert, render, Box filing, PO_Log and
+review rows all behave identically. The one thing a Tier-2 operator needs to know: a filed
+PDF whose clause names a parent PO is **NOT a duplicate of that parent** — the parent and
+each of its change orders are separate, correctly-filed documents that deliberately share
+the parent's number as a prefix. Do not fence, delete, or report one as a double-filing.
+
+---
+
 ## Other quiet failure modes (low-severity, self-healing)
 
 - **`po_pending_fetch_failed` / `po_filing_transient` / `po_filing_unexpected` (ERROR)** —

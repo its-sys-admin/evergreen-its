@@ -21,6 +21,19 @@ subcontract's own D1 id (`subcontract_log.find_row_by_sc_number` → `d1_id` mat
 not a collision — it is a crash-retry of a partially-filed subcontract and the
 caller resumes idempotently.
 
+Change-order numbers (`{parent}-CO{seq}`)
+-----------------------------------------
+A change order is a NORMAL lane document cloned from a SENT parent; the Worker
+mints its number as `{parent_sc_number}-CO{seq}` at generate time (e.g.
+`2026.384.1.0.0` → `2026.384.1.0.0-CO1`, second one `-CO2`). The parent stays in
+force — a CO is not a supersession. That suffixed grammar is NOT part of the base
+D7 scheme: `parse_sc_number` handles BASE family numbers ONLY and REJECTS a
+CO-suffixed string (`ScNumberError`). Nothing on the Mac parses a CO number into
+D7 components — the render module derives the change-order clause's parent by a
+deliberate local rsplit on `-CO` (`subcontract_docx._change_order_parts`), because
+the sc_number is inside the signed HMAC string while the Worker's change-order D1
+columns are store-only/unsigned (outside the sub:v1 canonical).
+
 Deterministic string/lookup helpers only — no network beyond the Subcontract_Log
 read the caller passes through `subcontracts.subcontract_log`. Smartsheet failures
 propagate typed (the caller's per-row fence decides transient-vs-permanent).

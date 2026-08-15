@@ -328,6 +328,50 @@ def test_render_supersession_degrades_without_predecessor_number() -> None:
     assert "SERIES 2026.001.2.0" in text  # family form, never an invented number
 
 
+# ---- change-order clause ----------------------------------------------------
+
+
+def test_change_order_parts_grammar() -> None:
+    """The `-CO<digits>` split: parent from the SIGNED number string, None on any
+    malformation (a malformed suffix renders NO clause rather than a wrong one)."""
+    parts = po_generate._change_order_parts
+    assert parts("2026.384.1.0.0-CO1") == ("2026.384.1.0.0", 1)
+    assert parts("2026.384.1.0.0-CO12") == ("2026.384.1.0.0", 12)
+    assert parts("  2026.384.1.0.0-CO2  ") == ("2026.384.1.0.0", 2)  # tolerant of padding
+    # The LAST -CO wins (a CO minted off a CO parent keeps the full parent number).
+    assert parts("2026.384.1.0.0-CO1-CO2") == ("2026.384.1.0.0-CO1", 2)
+    assert parts("2026.384.1.0.0") is None      # a normal PO never matches
+    assert parts("2026.384.1.0.0-COX") is None  # non-digit tail
+    assert parts("2026.384.1.0.0-CO") is None   # empty tail
+    assert parts("-CO1") is None                # empty head
+    assert parts("") is None
+
+
+def test_render_change_order_clause_when_co_numbered() -> None:
+    """A CO-numbered PO renders the change-order clause (parent named from the signed
+    number) and NOT the supersession clause — a CO is not a supersession."""
+    co_po = dict(PO, po_number="2026.001.2.0.0-CO1")
+    text = " ".join(_page_text(_render(po=co_po)).split())  # collapse PDF line wraps
+    assert "THIS DOCUMENT IS CHANGE ORDER NO. 1 TO PURCHASE ORDER 2026.001.2.0.0." in text
+    assert "PURCHASE ORDER 2026.001.2.0.0 REMAINS IN FORCE AS MODIFIED HEREBY." in text
+    assert "SUPERSEDE AND REPLACE" not in text
+
+
+def test_render_normal_po_renders_neither_clause() -> None:
+    text = " ".join(_page_text(_render()).split())
+    assert "CHANGE ORDER NO." not in text
+    assert "SUPERSEDE AND REPLACE" not in text
+
+
+def test_render_non_digit_co_tail_renders_no_clause() -> None:
+    """`-COX` is not the CO grammar — the helper returns None and NO clause renders
+    (never a clause naming a parent the malformed suffix can't prove)."""
+    bad = dict(PO, po_number="2026.001.2.0.0-COX")
+    text = " ".join(_page_text(_render(po=bad)).split())
+    assert "CHANGE ORDER NO." not in text
+    assert "SUPERSEDE AND REPLACE" not in text
+
+
 def test_render_per_watt_variant() -> None:
     per_watt_lines = [{
         "position": 1, "part_number": "", "description": "VSUN 545W modules",

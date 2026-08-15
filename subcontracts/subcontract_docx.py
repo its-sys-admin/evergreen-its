@@ -68,6 +68,44 @@ def _agreement_datetime(subcontract: dict[str, Any]) -> datetime:
         raise SubcontractDocxError(f"invalid agreement_ymd {ymd!r}: {exc}") from exc
 
 
+def _change_order_parts(sc_number: str) -> tuple[str, int] | None:
+    """Split a change-order SC number `{parent}-CO{seq}` → (parent_number, seq), else None.
+
+    A change order is a NORMAL lane document cloned from a SENT parent; the Worker
+    mints its number as `{parent_sc_number}-CO{seq}` at generate time. The parent
+    stays in force — a CO is NOT a supersession (`supersedes_sc_id` is NULL on one).
+
+    §42 — why derive from the number STRING and not a D1 column: the sc_number is
+    inside the signed HMAC string the daemon has already verified (`verify_sub`), so
+    the parent identity printed in a contract clause re-derives from SIGNED data.
+    The Worker's change-order columns are STORE-ONLY (the `estimate_id` precedent,
+    worker/po.ts) and outside the sub:v1 canonical — an unsigned column could drift
+    or be tampered without failing verification. The `-CO<digits>` suffix is
+    deliberately NOT part of the base D7 grammar (`numbering.parse_sc_number`
+    rejects it; see subcontracts/numbering.py), so this is a local rsplit, not a
+    parse_* call. A malformed tail (non-digits, empty head) returns None — NO
+    clause renders rather than a wrong one. Mirrors po_materials/po_generate.py's
+    twin (§14: two 10-line consumers in unlinked lanes — duplicated, cross-referenced).
+    """
+    value = (sc_number or "").strip()
+    if "-CO" not in value:
+        return None
+    head, tail = value.rsplit("-CO", 1)
+    if not head or not tail.isascii() or not tail.isdigit():
+        return None
+    return head, int(tail)
+
+
+def _add_change_order_notice(doc: Any, text: str) -> None:
+    """Append the bold, centered change-order notice paragraph (the CO twin of the
+    title styling — prominent, near the top, TEXT verbatim from the derived clause)."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(12)
+    run = p.add_run(text)
+    run.bold = True
+
+
 _CORE_DT_RE = re.compile(rb"(<dcterms:(created|modified)[^>]*>)[^<]+(</dcterms:\2>)")
 
 
@@ -135,6 +173,21 @@ def render_subcontract_docx(
     normal.font.name = "Times New Roman"
     normal.font.size = Pt(11)
 
+    # Change-order notice (see _change_order_parts): a CO-numbered subcontract carries
+    # a prominent clause DIRECTLY UNDER the title (or as the very first paragraph if a
+    # body ever lacks the title line) naming the parent that REMAINS IN FORCE. Derived
+    # from the SIGNED sc_number, never a store-only D1 column; a base-numbered
+    # subcontract renders no notice. Deterministic — pure function of the record.
+    co_parts = _change_order_parts(str(subcontract.get("sc_number") or ""))
+    co_notice: str | None = None
+    if co_parts is not None:
+        parent_number, co_seq = co_parts
+        co_notice = (
+            f"THIS DOCUMENT IS CHANGE ORDER NO. {co_seq} TO SUBCONTRACT "
+            f"{parent_number}. SUBCONTRACT {parent_number} REMAINS IN FORCE AS "
+            f"MODIFIED HEREBY."
+        )
+
     lines = body.split("\n")
     first_seen = False
     for raw in lines:
@@ -151,7 +204,15 @@ def render_subcontract_docx(
             run.bold = True
             run.font.size = Pt(15)
             first_seen = True
+            if co_notice is not None:
+                _add_change_order_notice(doc, co_notice)
+                co_notice = None
             continue
+        if co_notice is not None:
+            # Defensive: the body's first content line was not the title — the notice
+            # still lands at the very top, ahead of any contract language.
+            _add_change_order_notice(doc, co_notice)
+            co_notice = None
         first_seen = True
         if _ARTICLE_HEADING_RE.match(line):
             p = doc.add_paragraph()
