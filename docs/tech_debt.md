@@ -16,7 +16,19 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
-## [OPEN 2026-08-13, high] Public-window exposure remediation DEFERRED — repo is PRIVATE; history rewrite pending any re-publicization
+## [OPEN 2026-08-13, high] Public-window exposure remediation OUTSTANDING — repo was RE-PUBLICIZED 2026-08-15 without the rewrite; the exposure surface is LIVE
+
+> **UPDATE 2026-08-15 — the "stay private" mitigation was REVERSED.** The operator made the repo
+> PUBLIC again on 2026-08-15 to restore free GitHub Actions minutes after the private-repo CI
+> exhausted the free tier in 3 days (see the "GitHub Actions cost controls" entry below). The
+> history rewrite was **NOT** run first — the precondition this entry set was overridden, not
+> satisfied. So the full exposure surface (tree + history PII/business-data, the burned
+> anonymization map, the dangling commit `a98bc0e`) is **publicly reachable again**. Do not read
+> re-publicization as evidence the purge happened. Branch protection is back ON now that the repo
+> is public (verified 2026-08-15: required `test`/`portal`/`secrets` + `enforce_admins`). The
+> outstanding action is the same rewrite + Support purge, but now against a LIVE public window, so
+> it is more urgent, not less — a standing high-severity item until the operator either runs the
+> rewrite or explicitly accepts the exposure.
 
 The exec repo was PUBLIC from creation (2026-07-25) to 2026-08-13, when a four-lens exposure screen
 plus an operator directive flipped it PRIVATE. **No secrets leaked** (gitleaks-green, confirmed by
@@ -32,23 +44,29 @@ re-enumerating specifics): auto-memory `repo-was-public-exposure-window`, workfl
 **Operator decision (2026-08-13): handle the exposure by staying PRIVATE; do NOT rewrite history
 now.** Rationale: the repo is private with 0 forks, so a rewrite retrieves no already-scraped copy
 and only matters before re-publicization or before adding a collaborator who shouldn't see history.
+**(SUPERSEDED 2026-08-15 — see the UPDATE above: the repo was made public again without the
+rewrite, so this "private is the mitigation" posture no longer holds.)**
 
 **Deferred / still open:**
 - A git history rewrite (`git filter-repo` + force-push, **operator-run** — force-push is
-  CC-hook-blocked) MUST run BEFORE the repo is ever made public again or shared with a new
-  collaborator. Steps staged at `scratchpad/REMEDIATION-operator-run.md` (deliberately uncommitted).
+  CC-hook-blocked) should run to remove the historical PII/business-data; the "before
+  re-publicization" window this originally guarded has already passed (repo is public again),
+  so this is now remediation of a LIVE exposure, not a precondition. Steps staged at
+  `scratchpad/REMEDIATION-operator-run.md` (deliberately uncommitted).
 - The dangling commit `a98bc0e` is git-unremovable server-side; only a **GitHub Support purge**
   (or the rewrite orphaning it) erases it.
-- **Branch protection is DISABLED** while the repo is private on the free plan — direct push-to-main
-  is no longer server-blocked; restore via GitHub Pro or keep the manual poll-CI-then-merge
-  discipline used for PRs #128/#129.
+- Branch protection: **DISABLED while private → RESTORED on the 2026-08-15 re-publicization**
+  (verified: required `test`/`portal`/`secrets` + `enforce_admins`). If the repo is ever taken
+  private again on the free plan, protection auto-disables — land the CI cost controls first (see
+  that entry) and fall back to manual poll-CI-then-merge.
 - Treat the Coker/KSI/Bonacci/Deeplake schedule-fixture anonymization map as **BURNED** (`main`
   commit `40c5535` published the reversal).
 
 **Tag:** `security`, `exposure`, `host-migration`, `repo-topology`, `high`.
 
-**Revisit when:** BEFORE any decision to make the repo public again or add a collaborator; or when
-GitHub Pro / branch protection is restored.
+**Revisit when:** now standing/urgent while the repo is public — whenever the operator schedules
+the history rewrite + Support purge, or explicitly accepts the live exposure and this entry can be
+closed with that decision recorded.
 
 Surfaced: 2026-08-13 exposure screen + operator private-flip decision.
 
