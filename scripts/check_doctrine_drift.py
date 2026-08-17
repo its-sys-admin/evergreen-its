@@ -74,7 +74,12 @@ ENTRYPOINTS = [
 # finding for the doc-reconciliation-auditor; it just does not gate CI. M3/M5/M6 are
 # 'coverage' (informational). M1 (version), M4 (sheet-id), and M7 (citation-resolver)
 # are FP-free by construction and are the class-#4 core (forensic lessons-learned 2026-06-28).
-STRICT_BLOCKING_CHECKS: frozenset[str] = frozenset({"M1", "M4", "M7"})
+# M8 (manifest-vs-live-blueprint version drift) is blocking too, and is the one
+# blocking check CI can never fire: the runner has no ../its-blueprint, so M8
+# reports COVERAGE there and gates only the operator's local --strict. That is
+# the point — H-5 was that the arbiter of doctrine currency had no currency
+# check anywhere, and the only place one can run is where the blueprint is.
+STRICT_BLOCKING_CHECKS: frozenset[str] = frozenset({"M1", "M4", "M7", "M8"})
 
 
 @dataclass
@@ -346,6 +351,137 @@ def check_module_docstring_versions(m: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+# ---- M8: is the MANIFEST ITSELF current? (local mode only) --------------------
+#
+# Audit 2026-08-16 H-5, verbatim: "the single artifact that determines whether
+# every other doctrine claim is current is the one artifact with no automated
+# freshness check." Every other check in this file validates the repo AGAINST the
+# manifest. Nothing validated the manifest. Both its head pins were stale at audit
+# time and had been for weeks, and no surface said so.
+#
+# WHY CI STRUCTURALLY CANNOT DO THIS. The GitHub runner checks out ~/its alone;
+# ../its-blueprint is absent, which is the entire reason the manifest lives in
+# this repo (see its own HOME DECISION block). So in CI this check emits a
+# COVERAGE line saying it could not run — visible, rather than a silent skip,
+# because a check that quietly no-ops is indistinguishable from a passing one.
+#
+# WHAT IT COMPARES, AND WHAT IT DELIBERATELY DOES NOT.
+#   * `version:` frontmatter of each blueprint doctrine file vs the manifest's
+#     recorded `current` -> DRIFT, and BLOCKING under --strict. This is the fact
+#     every downstream claim is derived from, and it is FP-free: either the live
+#     file says 21 and the manifest says 21, or someone bumped doctrine without
+#     syncing.
+#   * `meta.blueprint_head` vs the blueprint's live HEAD -> COVERAGE only, never
+#     blocking. The blueprint's HEAD advances on every session log, and most such
+#     commits touch no doctrine at all. Gating on it would red-line the operator's
+#     local --strict several times a week for nothing — the alarm-fatigue failure
+#     (§57) that produced several of this audit's other findings. The pointer is
+#     worth REPORTING stale; it is not worth blocking on.
+BLUEPRINT_ROOT = REPO_ROOT.parent / "its-blueprint"
+
+
+def _blueprint_frontmatter_version(path: Path) -> int | None:
+    """Read `version: N` from a doctrine file's YAML frontmatter, or None."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    _, _, rest = text.partition("---")
+    body, _, _ = rest.partition("\n---")
+    try:
+        data = yaml.safe_load(body)
+    except yaml.YAMLError:
+        return None
+    version = (data or {}).get("version") if isinstance(data, dict) else None
+    return version if isinstance(version, int) else None
+
+
+def _blueprint_head() -> str | None:
+    """Short HEAD sha of the sibling blueprint checkout, or None if unreadable."""
+    import subprocess  # noqa: PLC0415 — local-mode only; keeps the CI path import-free
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(BLUEPRINT_ROOT), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def check_manifest_freshness(m: dict[str, Any]) -> list[Finding]:
+    """M8 — validate the manifest against the LIVE blueprint (local mode only)."""
+    findings: list[Finding] = []
+    rel = "docs/doctrine_manifest.yaml"
+
+    if not BLUEPRINT_ROOT.is_dir():
+        return [
+            Finding(
+                "M8", "coverage", rel,
+                f"blueprint not present at {BLUEPRINT_ROOT} — manifest currency NOT "
+                "checked in this run (CI mode). The manifest is validated against live "
+                "doctrine only in local mode, where ../its-blueprint exists.",
+            )
+        ]
+
+    for name, entry in (m.get("doctrine_versions") or {}).items():
+        source = str(entry.get("source", ""))
+        if not source.startswith("../its-blueprint/"):
+            continue
+        if entry.get("source_field") != "frontmatter.version":
+            continue
+        path = REPO_ROOT.parent / source[len("../") :]
+        if not path.exists():
+            findings.append(
+                Finding("M8", "drift", rel,
+                        f"{name}.source points at {source}, which does not exist in the "
+                        "live blueprint — the manifest names a file that moved or was renamed")
+            )
+            continue
+        live = _blueprint_frontmatter_version(path)
+        recorded = entry.get("current")
+        if live is None:
+            findings.append(
+                Finding("M8", "coverage", rel,
+                        f"{name}: could not read `version:` frontmatter from {source}")
+            )
+        elif live != recorded:
+            findings.append(
+                Finding("M8", "drift", rel,
+                        f"{name}: manifest records current={recorded}, live blueprint "
+                        f"frontmatter says version={live}. Every downstream doctrine claim "
+                        f"derives from this number — sync the manifest (and any stale "
+                        f"v{recorded} citations) before trusting a clean run.")
+            )
+
+    recorded_head = str((m.get("meta") or {}).get("blueprint_head", "")).strip()
+    live_head = _blueprint_head()
+    if live_head is None:
+        findings.append(
+            Finding("M8", "coverage", rel,
+                    f"blueprint present at {BLUEPRINT_ROOT} but its git HEAD is unreadable "
+                    "— head-pin freshness not checked")
+        )
+    elif recorded_head and not live_head.startswith(recorded_head[:7]):
+        findings.append(
+            Finding("M8", "coverage", rel,
+                    f"meta.blueprint_head={recorded_head} but the live blueprint HEAD is "
+                    f"{live_head}. Informational, never blocking: the blueprint's HEAD moves "
+                    f"on every session log and most such commits touch no doctrine. Refresh "
+                    f"the pin on the next doctrine sync.")
+        )
+
+    return findings
+
+
 def run_all() -> list[Finding]:
     m = _load_manifest()
     findings: list[Finding] = []
@@ -356,6 +492,7 @@ def run_all() -> list[Finding]:
     findings += check_workstream_coverage(m)
     findings += check_section42(m)
     findings += check_module_docstring_versions(m)
+    findings += check_manifest_freshness(m)
     return findings
 
 
@@ -397,7 +534,16 @@ def main(argv: list[str] | None = None) -> int:
           "this script never writes.")
 
     if args.strict:
-        blocking = [f for f in findings if f.check in STRICT_BLOCKING_CHECKS]
+        # Severity is part of the gate, not just the check id. A `coverage`
+        # finding is informational BY DEFINITION — filtering on the id alone made
+        # M8's deliberately-non-blocking head-pin note fail --strict, which is the
+        # narrated-not-enforced shape (a comment reading "never blocking" sitting
+        # over code that blocks) this whole change exists to remove. Caught by
+        # running it. M1/M4/M7 emit only `drift`, so this is a no-op for them.
+        blocking = [
+            f for f in findings
+            if f.check in STRICT_BLOCKING_CHECKS and f.severity == "drift"
+        ]
         if blocking:
             print(
                 f"\nSTRICT: {len(blocking)} BLOCKING drift finding(s) "

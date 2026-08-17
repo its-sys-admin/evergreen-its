@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 
 # scripts/ is not a Python package; use the same sys.path-insert idiom as
@@ -131,3 +133,167 @@ def test_workstream_count_matches_the_slug_list():
         f"{len(slugs)} entries: {slugs}"
     )
     assert len(set(slugs)) == len(slugs), f"duplicate workstream slugs: {slugs}"
+
+
+# ---- M8: is the MANIFEST ITSELF current? (audit 2026-08-16 H-5) ---------------
+#
+# Every other check validates the repo AGAINST the manifest. Nothing validated the
+# manifest, and both its head pins were stale for weeks with no surface saying so.
+# M8 closes that, and can only run where ../its-blueprint exists — which is never
+# in CI, and is exactly why the gap survived.
+
+_DOCTRINE_MD = """---
+type: doctrine
+version: {version}
+status: canonical
+---
+
+# Operational Standards
+"""
+
+
+def _fake_world(tmp_path, *, recorded: int, live: int, head: str = "abc1234"):
+    """A tmp repo + sibling blueprint, so M8 can be driven without touching either
+    real checkout."""
+    repo = tmp_path / "its"
+    blueprint = tmp_path / "its-blueprint"
+    (blueprint / "doctrine").mkdir(parents=True)
+    (blueprint / "doctrine" / "operational-standards.md").write_text(
+        _DOCTRINE_MD.format(version=live), encoding="utf-8"
+    )
+    repo.mkdir()
+    manifest = {
+        "meta": {"blueprint_head": head},
+        "doctrine_versions": {
+            "operational_standards": {
+                "current": recorded,
+                "source": "../its-blueprint/doctrine/operational-standards.md",
+                "source_field": "frontmatter.version",
+            }
+        },
+    }
+    return repo, blueprint, manifest
+
+
+def test_m8_is_in_the_strict_gate():
+    assert "M8" in cdd.STRICT_BLOCKING_CHECKS
+
+
+def test_m8_reports_coverage_not_drift_when_the_blueprint_is_absent(tmp_path, monkeypatch):
+    """CI mode. The runner checks out ~/its alone, so M8 cannot run — it must SAY
+    so rather than silently no-op, because a quiet skip is indistinguishable from
+    a pass. And it must never block: CI has no way to satisfy it."""
+    monkeypatch.setattr(cdd, "BLUEPRINT_ROOT", tmp_path / "nope")
+
+    findings = cdd.check_manifest_freshness({"doctrine_versions": {}})
+
+    assert [f.severity for f in findings] == ["coverage"]
+    assert "NOT checked in this run" in findings[0].detail
+    assert not [
+        f for f in findings
+        if f.check in cdd.STRICT_BLOCKING_CHECKS and f.severity == "drift"
+    ]
+
+
+def test_m8_blocks_when_the_manifest_records_a_stale_doctrine_version(
+    tmp_path, monkeypatch
+):
+    """The headline case: doctrine bumped, the manifest did not. Every downstream
+    claim derives from this number, so it is drift and it blocks."""
+    repo, blueprint, manifest = _fake_world(tmp_path, recorded=20, live=21)
+    monkeypatch.setattr(cdd, "REPO_ROOT", repo)
+    monkeypatch.setattr(cdd, "BLUEPRINT_ROOT", blueprint)
+
+    findings = cdd.check_manifest_freshness(manifest)
+    drift = [f for f in findings if f.severity == "drift"]
+
+    assert len(drift) == 1
+    assert drift[0].check == "M8"
+    assert "current=20" in drift[0].detail and "version=21" in drift[0].detail
+
+
+def test_m8_is_silent_when_the_manifest_is_current(tmp_path, monkeypatch):
+    repo, blueprint, manifest = _fake_world(tmp_path, recorded=21, live=21)
+    monkeypatch.setattr(cdd, "REPO_ROOT", repo)
+    monkeypatch.setattr(cdd, "BLUEPRINT_ROOT", blueprint)
+
+    assert not [f for f in cdd.check_manifest_freshness(manifest) if f.severity == "drift"]
+
+
+def test_m8_flags_a_source_path_that_no_longer_exists(tmp_path, monkeypatch):
+    """A manifest naming a doctrine file that moved is silently unverifiable — the
+    version comparison would just be skipped. It has to be loud."""
+    repo, blueprint, manifest = _fake_world(tmp_path, recorded=21, live=21)
+    manifest["doctrine_versions"]["operational_standards"]["source"] = (
+        "../its-blueprint/doctrine/renamed-away.md"
+    )
+    monkeypatch.setattr(cdd, "REPO_ROOT", repo)
+    monkeypatch.setattr(cdd, "BLUEPRINT_ROOT", blueprint)
+
+    drift = [f for f in cdd.check_manifest_freshness(manifest) if f.severity == "drift"]
+    assert len(drift) == 1
+    assert "does not exist in the live blueprint" in drift[0].detail
+
+
+def test_m8_head_pin_staleness_is_coverage_never_blocking(tmp_path, monkeypatch):
+    """The blueprint's HEAD advances on every session log and most such commits
+    touch no doctrine. Reporting the stale pointer is useful; BLOCKING on it would
+    red-line the operator's local --strict several times a week — the §57
+    alarm-fatigue failure that produced this audit's other findings."""
+    repo, blueprint, manifest = _fake_world(tmp_path, recorded=21, live=21, head="dead000")
+    monkeypatch.setattr(cdd, "REPO_ROOT", repo)
+    monkeypatch.setattr(cdd, "BLUEPRINT_ROOT", blueprint)
+    monkeypatch.setattr(cdd, "_blueprint_head", lambda: "beef111")
+
+    findings = cdd.check_manifest_freshness(manifest)
+    head_notes = [f for f in findings if "blueprint_head" in f.detail]
+
+    assert len(head_notes) == 1
+    assert head_notes[0].severity == "coverage", (
+        "the head pin must never gate — see the docstring"
+    )
+    assert not [f for f in findings if f.severity == "drift"]
+
+
+def test_strict_gate_ignores_coverage_severity(monkeypatch, capsys):
+    """Regression pin.
+
+    The strict filter originally keyed on the check ID alone, so M8's
+    deliberately-non-blocking head-pin note failed --strict — a comment reading
+    'never blocking' sitting over code that blocked, which is the exact
+    narrated-not-enforced shape this work exists to remove. Found by running it.
+    """
+    coverage_only = [
+        cdd.Finding("M8", "coverage", "docs/doctrine_manifest.yaml", "informational"),
+    ]
+    monkeypatch.setattr(cdd, "run_all", lambda: coverage_only)
+
+    assert cdd.main(["--strict"]) == 0
+    assert "no blocking drift" in capsys.readouterr().out
+
+
+def test_strict_gate_still_blocks_on_drift_severity(monkeypatch, capsys):
+    """The other half — tightening the filter must not disarm it."""
+    monkeypatch.setattr(
+        cdd, "run_all",
+        lambda: [cdd.Finding("M8", "drift", "docs/doctrine_manifest.yaml", "stale")],
+    )
+
+    assert cdd.main(["--strict"]) == 1
+    assert "BLOCKING drift" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[2] / "its-blueprint").is_dir(),
+    reason="local mode only — CI has no sibling blueprint checkout",
+)
+def test_committed_manifest_is_current_against_the_live_blueprint():
+    """The manifest in THIS commit must match live doctrine.
+
+    Skipped in CI by necessity, which is the whole H-5 finding — so it runs
+    wherever it can, and a merge from a machine with the blueprint present will
+    catch a stale pin before it lands.
+    """
+    findings = cdd.check_manifest_freshness(cdd._load_manifest())
+    drift = [f for f in findings if f.severity == "drift"]
+    assert not drift, [f.detail for f in drift]

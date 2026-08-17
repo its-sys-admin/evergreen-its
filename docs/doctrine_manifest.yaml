@@ -38,8 +38,8 @@
 meta:
   manifest_version: 1
   generated: "2026-06-07"
-  its_head: e242074              # ~/its origin/main this manifest was validated against (2026-07-12 documentation-reconciliation pass: subcontracts SC-S1→S3c + PO / progress / field-ops / operator-dashboard / docs-pdf reconciled to as-built; taxonomy + workstream_tags refreshed to live HEAD in that pass). Prior: 44370e1 (2026-06-12 photo/download/Form-Request program).
-  blueprint_head: 0501dc3        # ~/its-blueprint main this manifest is synced against (refreshed on doctrine bump, per UPDATE DISCIPLINE above); 0501dc3 = 2026-07-14 §44 v21.x rider (Developer-Operator credential self-service, current-credential-gated; version UNCHANGED at 21); prior 1e24574 = 2026-07-12 doctrine v21 elevation (Op Stds v21 §55 + reconstructed §§4-22/25-30; Handover v10; FM Invariant-1 + Vision §1.4.3 amended). Op Stds v21 / Handover v10 / FM v11 / V&R v9
+  its_head: 7b668cf              # ~/its origin/main this manifest was validated against (2026-08-17 audit-remediation pass: fail-closed guards C-1, heartbeat armed + watchdog Check Z C-2, coverage floor H-1, supply-chain scanning H-2, toolchain pins H-4, and this manifest refresh H-5). Prior: e242074 (2026-07-12 documentation-reconciliation pass); 44370e1 (2026-06-12 photo/download/Form-Request program). NOTE: this pin is advisory and goes stale on the very next merge — nothing gates on it. The gating check is M8 in scripts/check_doctrine_drift.py, which compares each doctrine file's LIVE frontmatter version against the `current` values below.
+  blueprint_head: 6a813d7        # ~/its-blueprint main this manifest is synced against (refreshed on doctrine bump, per UPDATE DISCIPLINE above); 6a813d7 = 2026-08-16 session-close (VC-07 reversal + repo public->private flip, §G89) — verified 2026-08-17 against BOTH the local checkout and `gh api repos/its-sys-admin/its-blueprint/commits/main`. Doctrine versions UNCHANGED across the gap: Op Stds v21 / Handover v10 / FM v11 / V&R v9 / Excellence v5, each re-read from live frontmatter by M8. Prior 0501dc3 = 2026-07-14 §44 v21.x rider (version UNCHANGED at 21); 1e24574 = 2026-07-12 doctrine v21 elevation (Op Stds v21 §55 + reconstructed §§4-22/25-30; Handover v10; FM Invariant-1 + Vision §1.4.3 amended).
   seeded_by: "doc-reconciliation series PR 2 (manifest)"
 
 # --- Doctrine versions (the headline drift class) ------------------------------
@@ -54,7 +54,7 @@ doctrine_versions:
     max_section: 55
     source: "../its-blueprint/doctrine/operational-standards.md"
     source_field: "frontmatter.version"
-    blueprint_verified_against: 0501dc3   # 2026-07-14 §44 v21.x rider (Developer-Operator credential self-service; version UNCHANGED at 21); prior: 1e24574 (2026-07-12 v21 elevation §55 + reconstruct §§4-22/25-30); 33fce61 (v20)
+    blueprint_verified_against: 6a813d7   # re-verified unchanged at v21, 2026-08-17 (M8 reads it live); prior 0501dc3 = 2026-07-14 §44 v21.x rider (Developer-Operator credential self-service; version UNCHANGED at 21); prior: 1e24574 (2026-07-12 v21 elevation §55 + reconstruct §§4-22/25-30); 33fce61 (v20)
     notes: >
       v12 added §§37-41; v13 added §42 (code-level self-documentation discipline);
       v14 reframed the kill switch as an operator-convenience pause that is fail-open
@@ -89,7 +89,7 @@ doctrine_versions:
     current: 11
     source: "../its-blueprint/doctrine/foundation-mission.md"
     source_field: "frontmatter.version"
-    blueprint_verified_against: 0e85a1a   # re-verified unchanged at v11, 2026-06-07; prior: 8c708b9 (FM v11)
+    blueprint_verified_against: 6a813d7   # re-verified unchanged at v11, 2026-08-17 (M8 reads it live); prior 0e85a1a = re-verified 2026-06-07; prior: 8c708b9 (FM v11)
     notes: >
       FM v8 added Invariant 2 Layer 6 (attachment screening); v9 reframed Invariant 2
       Layer 5 (anomaly logging on extraction output) from a defense layer to a detection
