@@ -66,7 +66,17 @@ CFG_SCHEDULED_SEND_LOCAL = "safety_reports.weekly_send.scheduled_send_local"
 DEFAULT_SCHEDULED_SEND_LOCAL = "MON 07:00"
 SEND_TZ = "America/Los_Angeles"
 
-DEFAULT_POLLING_ENABLED = True
+# HOUSE_REFLEXES §5 (dark-ship default-False), extending the CO-1 flip already applied to
+# po_send_poll / rfq_send_poll / subcontract_send_poll to the last two fail-open lanes: a
+# MISSING/malformed `safety_reports.weekly_send.polling_enabled` row must fail SAFE (send
+# daemon disabled), never fail-open to SENDING. This lane defaulted True from before the
+# reflex existed, which meant `send_poll_core._read_str_setting`'s three fallback branches
+# (SmartsheetNotFoundError — which logs NOTHING — plus circuit-open and transient read
+# error) silently RE-ARMED an operator-paused send daemon: deleting or renaming the config
+# row resumed customer email with no signal on any surface. The seeded row is load-bearing
+# for normal operation; this default only governs the row-absent case. A send gate never
+# fails open.
+DEFAULT_POLLING_ENABLED = False
 DEFAULT_POLL_INTERVAL = 900  # 15 minutes
 
 # State paths.
