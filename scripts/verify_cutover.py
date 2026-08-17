@@ -166,7 +166,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from shared import keychain, review_queue, sheet_ids, smartsheet_client
+from shared import heartbeat_client, keychain, review_queue, sheet_ids, smartsheet_client
 from shared.smartsheet_client import SmartsheetNotFoundError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -898,7 +898,18 @@ def _check_d1_migrations(opts: Options) -> CheckOutcome:
 
 
 def _check_heartbeat_url(opts: Options) -> CheckOutcome:
-    """UptimeRobot heartbeat URL configured (watchdog's external dead-man ping)."""
+    """Healthchecks.io heartbeat URL configured (watchdog's external dead-man ping).
+
+    Delegates the verdict to ``heartbeat_client.is_configured`` — the SAME
+    predicate ``scripts/watchdog.py`` main() gates the actual ping on. That
+    shared call is the point of this check: a PASS here has to mean the beacon
+    really fires, and it only means that if both sides answer one question with
+    one rule. Until 2026-08-17 they did not — this check tested
+    ``startswith("https://")`` while the ping tested ``!= <placeholder literal>``,
+    so an ``https://PLACEHOLDER…`` value would have passed VC-09 while the
+    watchdog happily pinged a dead endpoint, and any future edit to one rule
+    silently desynchronised the other.
+    """
     try:
         value = smartsheet_client.get_setting("system.heartbeat_url", workstream="global")
     except SmartsheetNotFoundError:
@@ -906,11 +917,20 @@ def _check_heartbeat_url(opts: Options) -> CheckOutcome:
             passed=False,
             summary="ITS_Config row system.heartbeat_url [global] MISSING.",
         )
-    text = (value or "").strip()
-    if not text.startswith("https://"):
+    if not heartbeat_client.is_configured(value):
+        text = (value or "").strip()
+        reason = (
+            "still the unprovisioned seed placeholder"
+            if text == heartbeat_client.PLACEHOLDER_URL
+            else ("blank" if not text else "not an https URL")
+        )
         return CheckOutcome(
             passed=False,
-            summary="system.heartbeat_url is blank or not an https URL.",
+            summary=(
+                f"system.heartbeat_url is {reason} — the watchdog SKIPS its ping, so "
+                "total-host death (crash, disk-full, launchd unload, logout) raises no "
+                "alarm anywhere."
+            ),
         )
     return CheckOutcome(passed=True, summary="system.heartbeat_url configured (https).")
 

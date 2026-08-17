@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from shared import heartbeat_client
 from shared.error_log import Severity
 from shared.kill_switch import SystemState
 from shared.smartsheet_client import SmartsheetError
@@ -167,6 +168,7 @@ def test_checks_list_has_all_session_1_2_3_checks():
         watchdog._check_stale_job_archives,  # Check X (#25) — stopped / never-picked-up job archives
         watchdog._check_log_dir_rotation,  # Check W (growth Slice 2) — log-dir archive bound
         watchdog._check_cutover_config,  # Check Y (#27) — verify_cutover VC-03, run daily
+        watchdog._check_heartbeat_armed,  # Check Z (audit C-2) — verify_cutover VC-09, run daily
     ]
 
 
@@ -4133,7 +4135,10 @@ def test_check_letters_cover_every_registered_check():
     assert registered == set(watchdog.CHECK_LETTERS), (
         "CHECK_LETTERS out of sync with CHECKS — reconcile both in the same PR"
     )
-    assert set(watchdog.CHECK_LETTERS.values()) == set("ABCDGIJKLMNOPQRSTUVWXY")
+    # Z (audit C-2, 2026-08-17) is the last letter available; a 24th distinct check
+    # needs a naming decision, not a silent A2.  E deferred, F retired 2026-06-05,
+    # H never existed (a doctrine naming artifact — Check C is the staleness floor).
+    assert set(watchdog.CHECK_LETTERS.values()) == set("ABCDGIJKLMNOPQRSTUVWXYZ")
 
 
 def test_run_check_returns_record_with_raw_severity(mock_log):
@@ -4197,7 +4202,11 @@ def test_daily_tier_holds_exactly_the_harmful_at_hourly_letters():
     # per run, so hourly would worsen the rotation race the same issue's retry absorbs.
     # Y joined 2026-08-11 (#27): a full-sheet read whose enrolled set only changes when code
     # merges, and whose ladder is calibrated in DAYS.
-    assert letters == {"D", "G", "I", "L", "O", "P", "U", "W", "X", "Y"}
+    # Z joined 2026-08-17 (audit C-2): one ITS_Config read of a row that changes only by
+    # operator act. Hourly would add nothing — the row cannot drift between sweeps — and the
+    # scenario it guards (host death) is detected by the external monitor's own period, not
+    # by how often we re-read the cell.
+    assert letters == {"D", "G", "I", "L", "O", "P", "U", "W", "X", "Y", "Z"}
 
 
 def test_hourly_tier_keeps_the_outage_detectors():
@@ -4385,3 +4394,165 @@ def test_a_renamed_value_column_asserts_nothing(cutover_env, vc):
         "a dropped Value column produced a page to seed every enrolled row — all of which exist"
     )
     assert "Value column" in result.summary or "no VALUES" in result.summary
+
+
+# ---- Check Z: the external dead-man's switch is armed (VC-09, audit C-2) -----
+#
+# The property under test is a CORRESPONDENCE, not a value: Check Z must go red on
+# exactly the inputs that make `main()` skip its ping. A check that can read green
+# while the beacon is dark is worse than no check — it is the state this repo was
+# in from 2026-05-28 to 2026-08-17, where VC-09 knew and nothing asked it.
+
+_ARMED_URL = "https://hc-ping.com/c4f40f4b-ff3a-4b20-922d-284da82821fc"
+
+# (value, is a real beacon?) — one table drives both the predicate test and the
+# correspondence test below, so the two can never be updated out of step.
+_BEACON_CASES = [
+    (_ARMED_URL, True),
+    ("https://hc-ping.com/whatever", True),
+    ("  https://hc-ping.com/padded  ", True),
+    (None, False),
+    ("", False),
+    ("   ", False),
+    (heartbeat_client.PLACEHOLDER_URL, False),
+    # http, not https — a liveness claim must not be interceptable in cleartext.
+    ("http://hc-ping.com/insecure", False),
+    # The trap the old split rules allowed through: VC-09 tested only
+    # startswith("https://") while main() tested only != <placeholder literal>,
+    # so this passed the check AND got pinged as a dead endpoint.
+    ("https://PLACEHOLDER_uptimerobot_heartbeat_url", True),
+]
+
+
+@pytest.fixture
+def heartbeat_env(monkeypatch, mocker, tmp_path):
+    """Check Z's failure counter isolated to tmp_path; returns the get_setting mock."""
+    monkeypatch.setattr(
+        watchdog,
+        "_HEARTBEAT_ARMED_FAILS",
+        watchdog.sustained_failure.SustainedFailureCounter(
+            tmp_path / "heartbeat_armed_fails.json", "test", "z"
+        ),
+    )
+    import verify_cutover
+
+    return mocker.patch.object(verify_cutover.smartsheet_client, "get_setting")
+
+
+def test_check_z_registered_in_checks():
+    """Registry reconciliation (HOUSE_REFLEXES §1) — CHECKS + letter + tier, one PR."""
+    assert watchdog._check_heartbeat_armed in watchdog.CHECKS
+    assert watchdog.CHECK_LETTERS["_check_heartbeat_armed"] == "Z"
+    assert watchdog._check_heartbeat_armed in watchdog.DAILY_ONLY_CHECKS
+
+
+@pytest.mark.parametrize(("value", "armed"), _BEACON_CASES)
+def test_is_configured_truth_table(value, armed):
+    assert heartbeat_client.is_configured(value) is armed
+
+
+@pytest.mark.parametrize(("value", "armed"), _BEACON_CASES)
+def test_check_z_verdict_matches_whether_main_would_ping(value, armed, heartbeat_env):
+    """THE correspondence: Check Z is green iff `main()` actually fires the ping.
+
+    Both sides are exercised for the same input — the check via its real code
+    path, the ping via `main()` with everything else stubbed. If someone edits
+    one rule and not the other, this fails.
+    """
+    heartbeat_env.return_value = value
+    result = watchdog._check_heartbeat_armed()
+    assert (result.severity is Severity.INFO) is armed, (
+        f"Check Z verdict disagrees with is_configured for {value!r}"
+    )
+    if not armed:
+        assert "DEAD-MAN'S SWITCH DISARMED" in result.summary
+
+
+@pytest.mark.parametrize(("value", "armed"), _BEACON_CASES)
+def test_main_pings_iff_check_z_is_green(
+    value, armed, mock_check_state, mock_get_setting, mock_ping, mocker
+):
+    """The other half of the correspondence, driven by the same table."""
+    mock_check_state.return_value = SystemState.ACTIVE
+    mocker.patch("watchdog._run_check")
+    mock_get_setting.return_value = value
+
+    watchdog.main()
+
+    assert mock_ping.called is armed
+
+
+def test_check_z_critical_names_the_seed_placeholder(heartbeat_env):
+    """The unprovisioned-fork case is called out by name, not lumped into 'blank' —
+    the operator's next action differs (provision a monitor vs fix a typo)."""
+    heartbeat_env.return_value = heartbeat_client.PLACEHOLDER_URL
+
+    result = watchdog._check_heartbeat_armed()
+
+    assert result.severity is Severity.CRITICAL
+    assert "seed placeholder" in result.summary
+
+
+def test_check_z_first_failing_sweep_pages_immediately(heartbeat_env):
+    """Threshold 1: the window this opens is 'the host can die unnoticed', so the
+    first sweep that sees it pages rather than warming up a streak."""
+    heartbeat_env.return_value = ""
+
+    result = watchdog._check_heartbeat_armed()
+
+    assert result.severity is Severity.CRITICAL
+    assert watchdog.HEARTBEAT_ARMED_CRITICAL_THRESHOLD == 1
+
+
+def test_check_z_repeat_failures_ride_the_capped_ladder(heartbeat_env):
+    """Sweeps 1/2/4/8 page; 3/5/6/7 record WARN. An open CRITICAL is never
+    terminal, so paging every sweep would mint unrotatable ITS_Errors rows."""
+    heartbeat_env.return_value = ""
+
+    severities = [watchdog._check_heartbeat_armed().severity for _ in range(8)]
+
+    assert [i + 1 for i, s in enumerate(severities) if s is Severity.CRITICAL] == [
+        1,
+        2,
+        4,
+        8,
+    ]
+
+
+def test_check_z_recovery_resets_the_streak(heartbeat_env):
+    """Arming the row clears the counter, so a later regression pages from rung 1
+    instead of resuming mid-ladder and staying quiet."""
+    heartbeat_env.return_value = ""
+    watchdog._check_heartbeat_armed()
+    watchdog._check_heartbeat_armed()
+
+    heartbeat_env.return_value = _ARMED_URL
+    assert watchdog._check_heartbeat_armed().severity is Severity.INFO
+
+    heartbeat_env.return_value = ""
+    assert watchdog._check_heartbeat_armed().severity is Severity.CRITICAL
+
+
+def test_check_z_read_failure_asserts_nothing(heartbeat_env):
+    """Fail-soft floor: an unreadable ITS_Config is not evidence the beacon is dark.
+    INFO, and the summary must not claim the switch is disarmed."""
+    heartbeat_env.side_effect = RuntimeError("breaker open")
+
+    result = watchdog._check_heartbeat_armed()
+
+    assert result.severity is Severity.INFO
+    assert "asserting nothing" in result.summary
+    assert "DISARMED" not in result.summary
+
+
+def test_check_z_missing_row_is_critical(heartbeat_env):
+    """A row that does not exist at all is the unprovisioned-tenant case, and VC-09
+    distinguishes it from an unreadable sheet — MISSING pages, unreadable does not."""
+    import verify_cutover
+
+    heartbeat_env.side_effect = verify_cutover.SmartsheetNotFoundError("no such row")
+
+    result = watchdog._check_heartbeat_armed()
+
+    assert result.severity is Severity.CRITICAL
+    assert "MISSING" in result.summary

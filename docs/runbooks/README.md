@@ -20,6 +20,7 @@ docs — the convention has no separate `runbook` type).
 <!-- BEGIN AUTO-INDEX -->
 | Date | Type | Status | Workstream | Title | PRs |
 |------|------|--------|------------|-------|-----|
+| 2026-08-17 | operations | active | infrastructure | [Runbook — the dead-man's switch (Successor-Remediation, Op Stds §43)](watchdog_heartbeat.md) | _–_ |
 | 2026-08-11 | operations | active | progress_reports | [Runbook — the client-facing Weekly Production Report (Successor-Remediation, Op Stds §43)](progress_weekly_report.md) | _–_ |
 | 2026-08-11 | operations | active | field_ops | [Runbook — Job-schedule importer (`schedule_poll`) (an uploaded schedule PDF stuck / refused / dark) (Successor-Remediation, Op Stds §43)](schedule_import_path.md) | _–_ |
 | 2026-08-10 | operations | active | field_ops | [Runbook — Job archive / un-archive (`job_archive`) (a press that never moves, a partial, a refused restore) (Successor-Remediation, Op Stds §43)](job_archive.md) | _–_ |

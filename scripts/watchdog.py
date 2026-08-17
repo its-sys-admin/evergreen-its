@@ -3190,8 +3190,13 @@ def _check_stale_job_archives() -> CheckResult:
 #                    not a fix; it stays excluded until someone makes that call deliberately.
 #   VC-08 portal     shells out to `npx wrangler --remote`: far too heavy and too flaky for a
 #                    daily unattended sweep, and Check Q already covers portal fetch outages.
-#   VC-09 heartbeat  fails for a KNOWN, TRACKED reason — the Healthchecks.io dead-man's switch
-#                    is unarmed (`system.heartbeat_url` still holds its seed placeholder).
+#   VC-09 heartbeat  NO LONGER EXCLUDED. It was, for a KNOWN, TRACKED reason — the
+#                    Healthchecks.io dead-man's switch was unarmed and the row held its seed
+#                    placeholder. The row was armed 2026-08-17 (live ping URL, verified HTTP
+#                    200), so VC-09 now satisfies the green-today bar and is enrolled as its
+#                    own Check Z. Kept in this list rather than deleted, because "excluded
+#                    because it was red" is the exact reasoning this runner has to stay
+#                    suspicious of: the fix was to arm the row, never to keep muting the check.
 #   VC-10 shares     fails for a KNOWN, TRACKED reason — production approver shares are
 #                    deliberately not seeded before cutover.
 #
@@ -3405,6 +3410,129 @@ def _check_cutover_config() -> CheckResult:
     )
 
 
+# ---- Check Z: the external dead-man's switch is armed (VC-09, audit C-2) -----
+#
+# WHAT THIS COVERS, AND WHY IT IS NOT REDUNDANT WITH ANY OTHER CHECK: every other
+# check in this file reports on something INSIDE the tenant, and every one of them
+# goes silent together the moment the host dies — crash, disk-full, launchd unload,
+# user logout. The Healthchecks.io ping fired at the end of main() is the ONLY
+# signal that survives that scenario, because its absence is what raises the alarm.
+# A watchdog cannot page about its own death; the external monitor can.
+#
+# WHY IT NEEDS A CHECK AT ALL: the ping is CONDITIONAL. main() skips it when
+# `system.heartbeat_url` is unset or still the seed placeholder, and that skip logs
+# INFO — invisible on every surface keyed to WARN or CRITICAL. From 2026-05-28 to
+# 2026-08-17 the row held its placeholder and the beacon never fired once on any
+# host. The gap was known and tracked in docs/tech_debt.md, which is precisely the
+# §57 failure: the compensating control for a disarmed alarm was a document, and a
+# document pages nobody. VC-09 would have said so on any run — and VC-09 ran
+# nowhere, having been excluded from this runner for failing "for a known reason".
+# A check excluded because it is red is a check deleted.
+#
+# WHY IT IS SAFE TO ENROLL NOW: it is GREEN. The row was armed 2026-08-17 with a
+# live Healthchecks.io URL, verified by an actual ping returning HTTP 200 "OK".
+# That satisfies Check Y's governing principle verbatim — "green today, red only on
+# a real regression" — which is the bar for entering this runner. It was never the
+# check that was wrong; it was the row.
+#
+# WHAT MAKES A PASS MEAN SOMETHING: `heartbeat_client.is_configured` is ONE
+# predicate shared by main()'s ping guard, VC-09, and this check. A green Check Z
+# therefore means the ping branch is genuinely taken, not merely that the cell is
+# non-empty. Before that predicate existed the two sides tested different things
+# (`!= <placeholder literal>` here vs `startswith("https://")` there), so a value
+# like `https://PLACEHOLDER…` would have read green while the beacon pinged a dead
+# endpoint. Keep them sharing the predicate.
+#
+# WHAT IT STILL DOES NOT COVER: this proves the URL is CONFIGURED, not that
+# Healthchecks.io has RECEIVED a recent ping. Confirming receipt needs the
+# Healthchecks management API and an API key in Keychain — deliberately out of
+# scope here, and tracked in docs/tech_debt.md. The residual gap is narrow: a
+# configured URL plus a running watchdog produces a ping, and if the watchdog is
+# not running, that IS the condition the external monitor detects on its own.
+#
+# SEVERITY: CRITICAL, threshold 1 — the first sweep that sees the beacon
+# unconfigured pages immediately, because the window it opens is "the host can die
+# unnoticed". TIER: DAILY (a config read; the row changes only by operator act).
+# Escalation rides the CAPPED re-notify ladder for the same reason Checks W/X/Y do:
+# an open CRITICAL is never terminal per `shared/errors_rotation`, so paging every
+# sweep while the row stays unset would mint unrotatable ITS_Errors rows against
+# the 20,000-row cap that has locked out before. Rungs 1, 2, 4, 8, then every 8.
+HEARTBEAT_ARMED_CRITICAL_THRESHOLD = 1
+_HEARTBEAT_ARMED_FAILS = sustained_failure.SustainedFailureCounter(
+    STATE_DIR / "heartbeat_armed_fails.json",
+    _SCRIPT,
+    "heartbeat_armed_counter_failed",
+)
+
+
+def _check_heartbeat_armed() -> CheckResult:
+    """Check Z: verify_cutover VC-09 — the total-host-death beacon is configured.
+
+    CRITICAL when `system.heartbeat_url` is missing, blank, non-https, or still the
+    seed placeholder, because main() then SKIPS its ping and nothing outside this
+    host can detect the host dying. Fail-soft to INFO on a read error, asserting
+    nothing — an unreachable ITS_Config is not evidence that the beacon is dark.
+    """
+    # LAZY + BARE import, for exactly the reasons spelled out on Check Y: `scripts/`
+    # is not a package, so a module-scope import raises under launchd and would take
+    # down every check in CHECKS at once.
+    import verify_cutover  # noqa: PLC0415 — see Check Y's LAZY + BARE note
+
+    # Resolve through the PUBLIC registry rather than reaching for the private
+    # `_check_heartbeat_url`: if VC-09 is ever renumbered or retired, this raises
+    # loudly (harness-isolated to one ERROR record by _run_check) instead of
+    # quietly checking nothing.
+    try:
+        spec = next(s for s in verify_cutover.CHECKS if s.check_id == "VC-09")
+    except StopIteration:  # pragma: no cover — registry drift, not a runtime state
+        raise RuntimeError(
+            "verify_cutover.CHECKS no longer contains VC-09 — watchdog Check Z "
+            "cannot verify the dead-man's switch. Re-point Check Z at the check "
+            "that replaced it."
+        ) from None
+
+    try:
+        outcome = spec.fn(verify_cutover.Options())
+    except Exception as exc:  # noqa: BLE001 — includes the breaker's short-circuit
+        return CheckResult(
+            severity=Severity.INFO,
+            summary=(
+                "heartbeat beacon: ITS_Config read failed — asserting nothing this "
+                "run (an unreadable sheet is not evidence the beacon is dark)."
+            ),
+            details=repr(exc),
+        )
+
+    if outcome.passed:
+        _HEARTBEAT_ARMED_FAILS.reset()
+        return CheckResult(
+            severity=Severity.INFO,
+            summary=f"heartbeat beacon armed: {outcome.summary}",
+        )
+
+    n = _HEARTBEAT_ARMED_FAILS.record()
+    escalate = sustained_failure.is_escalation_cycle(
+        n, HEARTBEAT_ARMED_CRITICAL_THRESHOLD
+    )
+    return CheckResult(
+        severity=Severity.CRITICAL if escalate else Severity.WARN,
+        summary=(
+            f"DEAD-MAN'S SWITCH DISARMED — {outcome.summary} This is the ONLY "
+            f"external detector for total-host failure; while it is unset, a dead "
+            f"MacBook raises no alarm anywhere and the first signal is a human "
+            f"noticing missing output days later. Set ITS_Config "
+            f"system.heartbeat_url [global] to the Healthchecks.io ping URL."
+        ),
+        details=(
+            f"consecutive daily sweeps with the beacon unconfigured: {n} (next "
+            f"CRITICAL at "
+            f"{sustained_failure.next_escalation_cycle(n, HEARTBEAT_ARMED_CRITICAL_THRESHOLD)} "
+            f"on the capped re-notify ladder). This is verify_cutover VC-09, run "
+            f"daily. Runbook: docs/runbooks/watchdog_heartbeat.md"
+        ),
+    )
+
+
 # ---- Entrypoint ---------------------------------------------------------
 
 
@@ -3512,6 +3640,13 @@ CHECKS: list[Callable[..., CheckResult]] = [
     # and BARE inside the check — a module-scope import would take down every check in CHECKS.
     # (X went to the stale-archive check; Y is the first free letter after it.)
     _check_cutover_config,
+    # Check Z (audit C-2): verify_cutover VC-09 — the Healthchecks.io dead-man's switch is
+    # armed. Enrolled 2026-08-17, the day the row was armed with a live ping URL; it had been
+    # excluded from this runner for "failing for a known reason", which is how the ONLY
+    # detector for total-host death stayed dark for eleven weeks with a tech-debt entry as its
+    # compensating control. Read-only; returns a CheckResult, so _run_check pages +
+    # MAINTENANCE-defers it. DAILY tier, capped re-notify ladder, threshold 1.
+    _check_heartbeat_armed,
     # Check E (Anthropic spend trend) deferred to a follow-on PR (the
     # Check E shipping PR) — requires an Admin API key (sk-ant-admin01-...
     # prefix) provisioned in Keychain under ITS_ANTHROPIC_ADMIN_API_KEY.
@@ -3552,6 +3687,7 @@ CHECK_LETTERS: dict[str, str] = {
     "_check_log_dir_rotation": "W",
     "_check_stale_job_archives": "X",
     "_check_cutover_config": "Y",
+    "_check_heartbeat_armed": "Z",
 }
 
 
@@ -3639,6 +3775,7 @@ DAILY_ONLY_CHECKS: frozenset[Callable[..., CheckResult]] = frozenset(
         _check_log_dir_rotation,
         _check_stale_job_archives,
         _check_cutover_config,
+        _check_heartbeat_armed,
     }
 )
 
@@ -3794,9 +3931,14 @@ def main() -> None:
 
     # Guard: skip the ping when unconfigured. A fork that hasn't provisioned
     # a monitor leaves the seeded placeholder in place — pinging it is a
-    # guaranteed failure, so no-op (INFO) rather than WARN every run. This
-    # token MUST stay equal to the seed Value in scripts/seed_its_config.py.
-    if heartbeat_url and heartbeat_url != "PLACEHOLDER_uptimerobot_heartbeat_url":
+    # guaranteed failure, so no-op (INFO) rather than WARN every run.
+    #
+    # `heartbeat_client.is_configured` is the SHARED predicate: Check Z and
+    # verify_cutover VC-09 go red on exactly the inputs that make this branch
+    # skip. Before 2026-08-17 this was a bare literal compared here and a
+    # separate `startswith("https://")` test inside VC-09 — two rules answering
+    # one question, which is how a check reads green while the beacon is dark.
+    if heartbeat_client.is_configured(heartbeat_url):
         heartbeat_client.ping(heartbeat_url)
     else:
         log(
