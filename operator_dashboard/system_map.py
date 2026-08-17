@@ -655,10 +655,14 @@ NODES: tuple[MapNode, ...] = (
     ),
     MapNode(
         id="alerts", label="operator alerts", kind="external", lane="outside", band="machine",
-        blurb="Resend (CRITICAL email) + Sentry (capture) + UptimeRobot (dead-man's switch). "
+        blurb="Resend (CRITICAL email) + Sentry (capture) + Healthchecks.io (dead-man's switch). "
               "These page the OPERATOR — they are not customer sends, so they live outside the "
-              "Send Gate on their own sanctioned path (§3.1).",
-        script_path="shared/resend_client.py",
+              "Send Gate on their own sanctioned path (§3.1). Resend and Sentry only fire while "
+              "the host is alive; the Healthchecks ping is the one signal whose ABSENCE is the "
+              "alarm, so it is the only thing that can report a dead Mac. Check Z proves it is "
+              "still configured — the watchdog silently skips the ping when it is not.",
+        script_path="shared/resend_client.py", watchdog_checks=("Z",),
+        docs=(("integration reference", "docs/references/integration_reference.md"),),
     ),
 )
 

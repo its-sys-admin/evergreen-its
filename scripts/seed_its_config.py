@@ -29,7 +29,7 @@ import json
 import os
 import sys
 
-from shared import sheet_ids, smartsheet_client
+from shared import heartbeat_client, sheet_ids, smartsheet_client
 from shared.defaults import DEFAULT_REVIEWER_CHAINS
 
 
@@ -60,7 +60,9 @@ def _build_seed_rows() -> list[dict[str, str]]:
         },
         {
             "Setting": "system.heartbeat_url",
-            "Value": "PLACEHOLDER_uptimerobot_heartbeat_url",
+            # FROZEN token, shared with the watchdog ping guard + VC-09 so the
+            # seed and its consumers cannot drift (see heartbeat_client).
+            "Value": heartbeat_client.PLACEHOLDER_URL,
             "Workstream": "global",
             "Description": "Healthchecks.io heartbeat URL pinged by scripts/watchdog.py.",
         },

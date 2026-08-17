@@ -997,11 +997,12 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
     ),
     "alerts": NodeBrief(
         what=(
-            "A CRITICAL pages you: the ITS_Errors row, the alert email, and the forensic event "
-            "all carry one Correlation_ID. Repeats of the same script and error code are "
-            "suppressed for a tunable window, and email is capped per hour: a storm reaches you "
-            "as a digest, not a flood, while the row lands every time. With a ping URL set, a "
-            "dead Mac shows up only as a missed watchdog ping to an outside monitor."
+            "A CRITICAL pages you, and its ITS_Errors row, email and forensic event share one "
+            "Correlation_ID. Repeats of the same script and error code are "
+            "suppressed for a tunable window and email is capped per hour, so a storm reaches "
+            "you as a digest while the row lands every time. A dead Mac pages through none of "
+            "it — every in-tenant signal stops — so its one detector is the watchdog's hourly "
+            "ping to an outside monitor, where the MISSED ping is the alarm."
             "\n\n"
             "Day-to-day nothing here needs running: start from the alert's Correlation_ID in "
             "ITS_Errors. If an expected page never came, check the dedupe window, the cap and the "
@@ -1011,7 +1012,8 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
         key_label="Key facts",
         key_line=(
             "CRITICALs page you · email deduped and hourly-capped, the event deduped only, the "
-            "ITS_Errors row never · window, cap, recipient in ITS_Config"
+            "ITS_Errors row never · window, cap, recipient and the monitor ping URL "
+            "(system.heartbeat_url, Check Z) in ITS_Config"
         ),
     ),
 }
