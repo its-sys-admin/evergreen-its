@@ -19,12 +19,23 @@ concurrency:
 permissions:
   contents: read
 
-# Single edit point for the §58 coverage floor. Measured baseline on the
-# shared/ + safety_reports/ core was 89% (audit 2026-08-16). The widened scope
-# below establishes a NEW baseline on first green run — set this to that value
-# and ratchet upward only.
+# Single edit point for the §58 coverage floor. RAISE-ONLY: lowering it requires
+# a docs/tech_debt.md entry naming what regressed, why, and when it is restored.
+#
+# 84 is measured reality on the widened eight-package scope, not an aspiration.
+# The first two green CI runs on that scope reported 84.94% (22,855 stmts / 3,441
+# missed, run 32044273594) and 84.95% (22,862 / 3,441, run 32046851815), rounded
+# DOWN to the whole percent. The prior 70 was a deliberately conservative
+# placeholder shipped with the widening so the gate could land before the number
+# was known; this replaces it with the number.
+#
+# The floor is set from the CI figure, NOT the local one. macOS measures ~0.24pp
+# HIGHER than ubuntu on this tree (85.18% local vs 84.94% CI, a 53-statement
+# difference) because the Darwin-only paths — Keychain via the `security` CLI,
+# pyobjc/Quartz, ocrmac — execute locally and are skipped on Linux. A floor set
+# from a local run red-lines main on the first push.
 env:
-  COVERAGE_FLOOR: "70"
+  COVERAGE_FLOOR: "84"
 
 jobs:
   test:
