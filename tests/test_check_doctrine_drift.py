@@ -38,7 +38,7 @@ def test_runs_and_emits_json():
     assert isinstance(data, list)
     for f in data:
         assert set(f) >= {"check", "severity", "location", "detail"}
-        assert f["check"] in {"M1", "M2", "M3", "M4", "M5", "M6", "M7"}
+        assert f["check"] in cdd.KNOWN_CHECKS
         assert f["severity"] in {"drift", "coverage", "clean"}
 
 
@@ -297,3 +297,31 @@ def test_committed_manifest_is_current_against_the_live_blueprint():
     findings = cdd.check_manifest_freshness(cdd._load_manifest())
     drift = [f for f in findings if f.severity == "drift"]
     assert not drift, [f.detail for f in drift]
+
+
+def test_ci_mode_json_contract_holds_with_the_blueprint_absent(monkeypatch) -> None:
+    """The case a machine WITH ../its-blueprint cannot reach on its own.
+
+    CI checks out ~/its alone, so M8 always emits its "could not run here"
+    coverage line — and the full-suite run on a developer box, where the manifest
+    is current and M8 is silent, never sees it. That divergence shipped a red CI
+    on this very PR: the id assertion above was a hard-coded {M1..M7} literal.
+    Simulating CI mode here is the only way the local suite can catch it.
+    """
+    monkeypatch.setattr(cdd, "BLUEPRINT_ROOT", Path("/nonexistent/its-blueprint"))
+
+    findings = cdd.run_all()
+
+    m8 = [f for f in findings if f.check == "M8"]
+    assert len(m8) == 1, "CI mode must emit exactly one M8 line, not zero and not many"
+    assert m8[0].severity == "coverage"
+    for f in findings:
+        assert f.check in cdd.KNOWN_CHECKS, f"undeclared check id {f.check!r}"
+        assert f.severity in {"drift", "coverage", "clean"}
+
+
+def test_known_checks_covers_every_id_the_module_actually_emits() -> None:
+    """Registry parity in the other direction — a new check must join KNOWN_CHECKS."""
+    emitted = {f.check for f in cdd.run_all()}
+    undeclared = sorted(emitted - cdd.KNOWN_CHECKS)
+    assert not undeclared, f"emitted check id(s) missing from KNOWN_CHECKS: {undeclared}"

@@ -81,6 +81,15 @@ ENTRYPOINTS = [
 # check anywhere, and the only place one can run is where the blueprint is.
 STRICT_BLOCKING_CHECKS: frozenset[str] = frozenset({"M1", "M4", "M7", "M8"})
 
+# Every check id this module can emit. Declared so consumers assert against ONE
+# list instead of their own copy: `tests/test_check_doctrine_drift.py` previously
+# hard-coded {M1..M7}, which passed locally (M8 is silent when the manifest is
+# current) and failed in CI, where the blueprint is absent and M8 always emits its
+# "could not run here" line. A literal in a test is a second registry.
+KNOWN_CHECKS: frozenset[str] = frozenset(
+    {"M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"}
+)
+
 
 @dataclass
 class Finding:
