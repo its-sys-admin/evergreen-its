@@ -19,6 +19,13 @@ concurrency:
 permissions:
   contents: read
 
+# Single edit point for the §58 coverage floor. Measured baseline on the
+# shared/ + safety_reports/ core was 89% (audit 2026-08-16). The widened scope
+# below establishes a NEW baseline on first green run — set this to that value
+# and ratchet upward only.
+env:
+  COVERAGE_FLOOR: "70"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -40,8 +47,43 @@ jobs:
       - name: Type-check (mypy, blocking)
         run: mypy .
 
-      - name: Tests (pytest + coverage)
-        run: pytest --cov=shared --cov=safety_reports --cov-report=term-missing -q
+      # §58 verification scope parity (audit 2026-08-16 H-1). Coverage previously
+      # measured ONLY shared/ + safety_reports/ — leaving ~70K LOC across seven
+      # production packages with no coverage signal at all, including the PIN-gated
+      # operator_dashboard ACT surface and the po_materials hostile-PDF sandbox.
+      # `--cov-fail-under` makes the number a DEFENDED FLOOR rather than a reported
+      # statistic: it ratchets upward only. Lowering it requires a docs/tech_debt.md
+      # entry naming what regressed and why.
+      - name: Tests (pytest + coverage, all production packages)
+        run: |
+          pytest -q --cov-report=term-missing \
+            --cov=shared --cov=safety_reports --cov=field_ops \
+            --cov=progress_reports --cov=po_materials --cov=subcontracts \
+            --cov=docs_pdf --cov=operator_dashboard \
+            --cov-fail-under=${{ env.COVERAGE_FLOOR }}
+
+      # §60 supply-chain visibility (audit 2026-08-16 H-2). The repo runs a
+      # full-history secret scan and a hostile-PDF sandbox but had ZERO visibility
+      # into its own dependency CVEs.
+      #
+      # `--skip-editable` is REQUIRED, not cosmetic: CI installs this repo with
+      # `pip install -e ".[dev]"`, and pip-audit cannot resolve the local `its`
+      # distribution on PyPI. Under `--strict` that is a hard ERROR — the audit
+      # aborts before scanning anything and exits 1, which a trailing `|| true`
+      # then swallows, leaving a step that looks green and scanned nothing.
+      # Verified 2026-08-17: `--strict --desc` exits 1 reporting zero findings;
+      # `--desc --skip-editable` exits 0 having audited the full resolved set.
+      #
+      # NON-BLOCKING by design. The blocking supply-chain tier is the portal job's
+      # `npm audit --omit=dev --audit-level=high` (production runtime). pip-audit
+      # has no prod/dev split for an installed environment and this repo's dev
+      # extras pull the whole test toolchain, so gating here would red-line main on
+      # a build-only advisory — the alarm-fatigue failure §57 names. Findings surface
+      # as a CI annotation and are triaged in docs/tech_debt.md.
+      - name: Dependency CVE scan (pip-audit — informational)
+        run: |
+          pip-audit --desc --skip-editable \
+            || echo "::warning::pip-audit findings — triage in docs/tech_debt.md (blocking tier is the portal npm audit)."
 
       # Warn-only during the retrofit window (see docs/operations/doc_conventions.md
       # "Retrofit policy"). Both invocations are designed to exit 0 even with
@@ -93,6 +135,17 @@ jobs:
 
       - name: Install (npm ci)
         run: npm ci
+
+      # §60 supply-chain visibility (audit 2026-08-16 H-2). BLOCKING on PRODUCTION
+      # runtime deps only (`--omit=dev`): a CVE in hono/react/bcryptjs serves real
+      # traffic. The full tree (wrangler/miniflare/vitest/sharp toolchain) is scanned
+      # non-blocking so the backlog is visible without red-lining main on a
+      # build-only advisory.
+      - name: Dependency CVE scan — production runtime (blocking)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Dependency CVE scan — full tree (informational)
+        run: npm audit || echo "::warning::npm audit findings in the dev/build toolchain — see log."
 
       - name: Typecheck (tsc — SPA + Worker)
         run: npm run typecheck

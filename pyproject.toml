@@ -109,17 +109,23 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+    "pytest>=8.0,<10.0",
     "pytest-mock>=3.12",
     "pytest-cov>=5.0",
     "pytest-rerunfailures>=14.0",
-    "ruff>=0.5.0",
-    "mypy>=1.10",
+    # §59 toolchain pin parity: the gates that DEFINE the quality bar are bounded to
+    # the same standard as runtime deps (§41). A ruff/mypy major can change what the
+    # blocking gate enforces with no commit — two CI runs months apart must check the
+    # same things. Bump deliberately after reading release notes. Audit 2026-08-16 H-4.
+    "ruff>=0.5.0,<0.17.0",
+    "mypy>=1.10,<3.0",
     "types-requests>=2.32",
     "types-jsonschema>=4.0",
     # Starlette's TestClient (used by tests/test_operator_dashboard.py) is
     # httpx-backed; needed only for the test suite, not at runtime.
     "httpx>=0.27",
+    # §60 supply-chain visibility: dependency CVE scan, run in CI. Audit 2026-08-16 H-2.
+    "pip-audit>=2.7",
 ]
 
 [tool.setuptools]
@@ -146,6 +152,12 @@ testpaths = ["tests"]
 # explicitly with `pytest -m integration` pre-deployment / after any
 # smartsheet_client.py change. CI doesn't have live credentials, so
 # default-skip keeps CI green.
+# §58 verification scope parity (audit 2026-08-16 H-1) is enforced in CI, NOT
+# here: .github/workflows/ci.yml passes the eight `--cov=<pkg>` flags plus
+# `--cov-fail-under=${COVERAGE_FLOOR}`, and that floor ratchets UPWARD only.
+# Deliberately absent from `addopts` — otherwise a bare local
+# `pytest tests/test_one_thing.py` would instrument the whole tree and fail the
+# floor on a single-file run. ci.yml is the live scope + floor of record.
 addopts = "-q --strict-markers -m 'not integration'"
 markers = [
     "integration: live-API tests against Smartsheet sandbox. Skipped by default; run with `pytest -m integration`. Requires ITS_SMARTSHEET_TOKEN in Keychain. NOT executed in CI.",
