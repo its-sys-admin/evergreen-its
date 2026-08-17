@@ -24,7 +24,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -146,11 +146,11 @@ jobs:
       run:
         working-directory: safety_portal
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node
         # v6 is the current stable line (latest v6.4.0) and matches the repo's
-        # actions/checkout@v6 + setup-python@v6 pins. §41 review: v6's only breaking
+        # actions/checkout@v7 + setup-python@v6 pins. §41 review: v6's only breaking
         # change vs v4 is that automatic caching is limited to npm — which is exactly
         # this job's explicit `cache: npm`, so it is a no-op for us. (v5 bumped the
         # action runtime to node24; GitHub-hosted ubuntu runners are well past the
@@ -198,7 +198,7 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full commit history for the `gitleaks git` scan
 
