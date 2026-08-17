@@ -37,13 +37,20 @@ Failure modes
   path on purpose: a mistyped URL (404) or a Healthchecks.io outage (5xx)
   is a real "the beacon isn't landing" signal worth a log line, not a
   silent success.
-- Blank / placeholder / missing URL is the CALLER's guard (watchdog), not
-  this module's — see ``scripts/watchdog.py`` ``main()``.
+- Blank / placeholder / missing URL is decided by ``is_configured()`` here
+  and ACTED ON by the caller — ``scripts/watchdog.py`` ``main()`` skips the
+  ping, watchdog Check Z / VC-09 go red. The predicate lives here so those
+  three cannot disagree about what "configured" means.
 
 Consumers
 ---------
-- ``scripts/watchdog.py`` ``main()`` — the sole caller, fires one ping per
-  run after all checks complete.
+- ``scripts/watchdog.py`` ``main()`` — the sole ``ping()`` caller, fires one
+  ping per run after all checks complete, gated on ``is_configured()``.
+- ``scripts/watchdog.py`` ``_check_heartbeat_armed`` (Check Z) — pages when
+  the beacon is unconfigured.
+- ``scripts/verify_cutover.py`` ``_check_heartbeat_url`` (VC-09) — same
+  verdict, via the same predicate.
+- ``scripts/seed_its_config.py`` — seeds ``PLACEHOLDER_URL`` verbatim.
 
 Reference
 ---------
@@ -56,6 +63,8 @@ body — just a fire-and-forget GET with a timeout).
 """
 from __future__ import annotations
 
+from typing import TypeGuard
+
 import requests  # type: ignore[import-untyped]
 
 from .error_log import Severity, log
@@ -66,6 +75,49 @@ _SCRIPT = "shared.heartbeat_client"
 # hang the watchdog waiting on a slow monitor. 10s is generous for a single
 # GET to Healthchecks.io and well under the watchdog's launchd cadence.
 _DEFAULT_TIMEOUT = 10.0
+
+# The seed `Value` for ITS_Config `system.heartbeat_url` on an unprovisioned
+# tenant. FROZEN TOKEN — `scripts/seed_its_config.py` writes exactly this
+# string and every consumer must compare against exactly this string.
+#
+# It lived as a bare literal in `scripts/watchdog.py` main() until 2026-08-17.
+# That was the narrated-not-enforced (§52) shape of the correspondence
+# documented in docs/references/integration_reference.md: "must stay
+# char-for-char equal to the watchdog guard token" was a sentence, not a
+# mechanism. It is a shared constant now, so the seed, the ping guard and the
+# VC-09 check cannot drift apart.
+#
+# Historical note: the token says "uptimerobot" but the provisioned vendor is
+# Healthchecks.io (the free UptimeRobot tier gates heartbeat monitoring behind
+# Pro and restricts commercial use). The token is deliberately NOT renamed —
+# renaming it would require a lockstep edit of the seed and every guard for no
+# behavioural gain. See docs/session_logs/2026-05-28_f16-heartbeat-ping.md.
+PLACEHOLDER_URL = "PLACEHOLDER_uptimerobot_heartbeat_url"
+
+
+def is_configured(url: str | None) -> TypeGuard[str]:
+    """True when ``url`` is a real, pingable beacon rather than the unset seed.
+
+    Declared as a ``TypeGuard[str]`` rather than a plain ``bool`` so the caller's
+    ``str | None`` narrows to ``str`` inside the guarded branch — otherwise every
+    call site needs a redundant second truthiness test to satisfy mypy, and a
+    redundant test is a place where the two conditions can drift apart.
+
+    THE correspondence predicate: `scripts/watchdog.py` main() skips the ping
+    when this is False, and `scripts/verify_cutover.py` VC-09 / watchdog Check Z
+    go red when this is False. One predicate, three consumers — so "the check is
+    green" and "the ping actually fires" cannot disagree, which is the only
+    property that makes the dead-man's switch trustworthy.
+
+    False for: None, blank/whitespace, the frozen ``PLACEHOLDER_URL`` seed, and
+    anything that is not an ``https://`` URL. The https requirement is not
+    cosmetic — a ping URL carries the host-liveness claim and must not be
+    interceptable in cleartext.
+    """
+    text = (url or "").strip()
+    if not text or text == PLACEHOLDER_URL:
+        return False
+    return text.startswith("https://")
 
 
 class HeartbeatError(Exception):
