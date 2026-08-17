@@ -364,17 +364,39 @@ The items below are what stand-up left open.
   and acceptance-evidence capture. Nothing runs on the production host yet except the repo/venv/
   Keychain/Box scaffolding. **Trigger:** next production-host session, before relying on it while
   Seth is unreachable. **Tag:** `host-migration`, `cutover-adjacent`.
-- **PM-2 (HIGH, single point of total-failure detection) — external dead-man's switch unarmed.**
-  `system.heartbeat_url` is still the literal `PLACEHOLDER_uptimerobot_heartbeat_url` — never
-  seeded with a real endpoint. The vendor actually wired in code is **Healthchecks.io**
-  (`shared/heartbeat_client.py`; tests hit `hc-ping.com`), not UptimeRobot as most docs
-  (including CLAUDE.md's "Observability stack" section) claim — a doc/code naming drift on top of
-  the unset value. This is the ONE check in the Tier-1 self-heal model (CLAUDE.md "Maintenance &
-  successor-operator model") that catches total host death, and it is currently fully
-  unmonitored. Once armed, the beacon fires once daily at 07:00 — ~24h detection latency even
-  when live, so arm it well before Seth is unreachable for an extended stretch, not the day of.
-  **Trigger:** next production-host session. **Tag:** `host-migration`, `alerting`,
-  `cutover-blocking-adjacent`.
+- **PM-2 — RESOLVED 2026-08-17 (audit C-2). External dead-man's switch ARMED.**
+  `system.heartbeat_url` held the literal `PLACEHOLDER_uptimerobot_heartbeat_url` from
+  2026-05-28 to 2026-08-17, so the watchdog skipped its ping on every run of every host and the
+  beacon never fired once. The operator supplied a live Healthchecks.io ping URL; the row was
+  written and read back, and the ping was live-fired through `heartbeat_client.ping` returning
+  HTTP 200 `OK`. The beacon now fires HOURLY, not daily (the watchdog moved to an hourly
+  `StartInterval` on 2026-08-07), so detection latency is ~1h + the monitor's grace, not ~24h.
+  Three follow-on fixes landed with it, each closing a way this could recur silently:
+  (a) **watchdog Check Z** runs verify_cutover VC-09 daily and CRITICALs on the first sweep that
+  finds the beacon unconfigured — previously VC-09 was *excluded from the runner for failing*,
+  which is how the only total-host-death detector stayed dark for eleven weeks with a tech-debt
+  entry as its compensating control (the §57 pattern, applied to the alarm itself);
+  (b) the placeholder token and the "is this a real beacon" rule are now ONE shared predicate
+  (`heartbeat_client.PLACEHOLDER_URL` / `is_configured`, a `TypeGuard[str]`) consumed by the seed
+  script, the ping guard and VC-09, so a green check cannot coexist with a skipped ping — the old
+  split rules would have passed `https://PLACEHOLDER_uptimerobot_heartbeat_url` while pinging a
+  dead endpoint; (c) §43 runbook `docs/runbooks/watchdog_heartbeat.md`, which separates the two
+  opposite alarms (ITS says the switch is disarmed vs Healthchecks says ITS is gone).
+  **Residual, deliberately not closed:** Check Z proves the URL is CONFIGURED, not that
+  Healthchecks.io has RECEIVED a recent ping — reading receipt back needs a Healthchecks
+  management API key in Keychain. The gap is narrow (a configured URL plus a running watchdog
+  produces a ping; a watchdog that is NOT running is the condition the monitor detects itself),
+  so this is logged rather than built. See the ping-receipt entry below.
+- **HB-1 (LOW, narrow residual of PM-2) — no read-back that the heartbeat ping actually
+  LANDED.** Check Z and VC-09 both verify `system.heartbeat_url` is a configured https beacon;
+  neither asks Healthchecks.io whether a ping arrived. A URL that is well-formed but points at a
+  deleted or wrong check would read green on both while the real alarm is silent — the operator
+  is instructed in `docs/runbooks/watchdog_heartbeat.md` to confirm from the Healthchecks side
+  after any edit, which is a human step, not a mechanism. Closing it needs a Healthchecks
+  management API key (a new Keychain secret → `verify_cutover` VC-01 + the host-migration A5
+  table) and a check that reads the last-ping timestamp. **Trigger:** if the ping URL is ever
+  edited again, or before the next customer fork inherits this. **Tag:** `alerting`,
+  `monitoring`, `narrow-residual`.
 - **PM-3 (MEDIUM, silent alert-delivery failure) — Resend `DEFAULT_FROM` is still the sandbox
   sender; NOT a new item, already tracked — see "resend_client.DEFAULT_FROM swap — blocked on
   CL-10 solutionsmith sender-domain verification" below (`OPEN 2026-07-23`), enriched with this

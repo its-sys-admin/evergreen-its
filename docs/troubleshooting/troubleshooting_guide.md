@@ -1296,6 +1296,42 @@ The shared infrastructure every workstream rides on: launchd, heartbeats + marke
 
 **See also:** runbook `docs/runbooks/daemon_health_self_provision.md`
 
+#### ITS reports that its dead-man's switch is disarmed.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** DEAD-MAN'S SWITCH DISARMED, system.heartbeat_url, seed placeholder, skipping heartbeat ping, heartbeat beacon
+
+**Checks (in order):**
+- ITS is ALIVE — this alarm proves it is running well enough to complain. What is broken is its ability to tell you if it dies LATER. Urgent, not an outage.
+- Read ITS_Config `system.heartbeat_url` [global]. The watchdog skips its ping when that Value is blank, not an https URL, or still the seeded `PLACEHOLDER_...` text — and the skip logs only INFO, which is why this check exists.
+- Compare the Value against the ping URL of the ITS check in Healthchecks.io. A URL belonging to some OTHER check reads green here while silencing the real alarm — the worst of both states.
+
+**Resolutions (in order):**
+- If you have the correct Healthchecks.io ping URL, pasting it into that one cell is a documented low-class repair; the next hourly sweep should report `heartbeat beacon armed`.
+- Confirm from the other side too — the Healthchecks.io check must go green with a last-ping inside the last hour. A green Check Z only proves the URL is CONFIGURED, not that a ping LANDED.
+- Provisioning a NEW monitor, or any inaccessible-account case, is a credential act — a FIXED high-capability class. Escalate to Seth.
+
+**See also:** runbook `docs/runbooks/watchdog_heartbeat.md` · watchdog `_check_heartbeat_armed`
+
+#### Healthchecks.io emails you that ITS has stopped checking in.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** Healthchecks.io DOWN, check is DOWN, has not reported in, missed ping, hc-ping
+
+**Checks (in order):**
+- This is the OPPOSITE alarm to the one above and it does NOT come from ITS. It means ITS stopped pinging — the Mac may be off, asleep, offline, crashed, or its background jobs unloaded. Expect NO accompanying ITS alert; that absence is the whole point.
+- Is the Mac powered, awake, logged in and online? Most DOWN emails end here, and a Mac merely asleep needs nothing but waking.
+- A closed lid overnight, an internet outage, or a maintenance window can all trip this legitimately. Confirm liveness BEFORE repairing anything.
+
+**Resolutions (in order):**
+- Wake / reconnect the Mac, then wait one hourly watchdog run and re-check Healthchecks.io for a fresh ping — the background jobs restart on their own schedule.
+- After a long outage, check ITS_Review_Queue and the pending-review sheets for work that queued up while ITS was down; it is waiting, not lost.
+- Mac on, awake, online and still not pinging after two hours — escalate to Seth.
+
+**See also:** runbook `docs/runbooks/watchdog_heartbeat.md`
+
 ### Circuit breaker + the alert path
 
 | What happens | |

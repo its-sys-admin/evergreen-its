@@ -146,7 +146,7 @@ docs:
     title: "ITS Integration Reference"
     version: v1
     source: docs/references/integration_reference.md
-    sha256: 2905213e89aff414f7d6bb33f5c15a079294d97330f2acf1ed6034d9d4336a41
+    sha256: 742437ed2b9ee37576e47974f124cf0ed9dcfb4930524751cd8866932f9fd377
     audience: operator
 
   - key: security_trust_model
@@ -185,5 +185,5 @@ docs:
     title: "ITS Troubleshooting Guide"
     version: v1
     source: docs/troubleshooting/troubleshooting_guide.md
-    sha256: 802f10c97b1805cfdafcaf7d25efc11c8ae0ace1e2c382ff2fc79f4d92c92a31
+    sha256: e522d7dff76aee6ae545d463155f1e8b7bba3fd4eeb3891b39023bda83613790
     audience: operator

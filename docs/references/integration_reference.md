@@ -553,8 +553,12 @@ ping within its configured period+grace, it alerts the operator out-of-band. Thi
 There is **no auth and no Keychain secret** — the ping URL is itself the write-only
 credential. It is read from `ITS_Config` row `system.heartbeat_url` (Workstream
 `global`) by the watchdog, **not** from Keychain. The watchdog skips the ping when the
-value is unset or still the seeded placeholder `PLACEHOLDER_uptimerobot_heartbeat_url`
-(so a fork that hasn't provisioned a monitor doesn't ping a dead URL).
+value is unset, not an `https://` URL, or still the seeded placeholder
+`PLACEHOLDER_uptimerobot_heartbeat_url` (so a fork that hasn't provisioned a monitor doesn't
+ping a dead URL). That skip is decided by the single predicate
+`shared.heartbeat_client.is_configured`, which **watchdog Check Z** and **VC-09** also use —
+so a green check cannot coexist with a skipped ping. Check Z CRITICALs on the first daily
+sweep that finds the beacon unconfigured; §43 runbook `docs/runbooks/watchdog_heartbeat.md`.
 
 | Item | Name | Notes |
 |------|------|-------|
@@ -566,7 +570,7 @@ value is unset or still the seeded placeholder `PLACEHOLDER_uptimerobot_heartbea
 `ping()` is **fail-soft — it never raises**. A dead monitoring endpoint or network blip
 must not break the watchdog's real checks. Any failure — connection refused, timeout, or
 non-2xx (routed through `raise_for_status`) — is logged WARN under `error_log` category
-`heartbeat_ping_failed` and the next daily run retries. Timeout is 10s.
+`heartbeat_ping_failed` and the next run retries (hourly since 2026-08-07). Timeout is 10s.
 
 <!-- src: scripts/watchdog.py:2460-2478 | verified 2026-07-14 -->
 The ping fires on **every non-PAUSED run, including MAINTENANCE** — suppressing it during
@@ -593,11 +597,12 @@ the ping (a deliberate operator pause is not host death).
 > declared closed from this repo.
 >
 > **One deliberate exception — do not "fix" it.** The seeded placeholder literal
-> `PLACEHOLDER_uptimerobot_heartbeat_url` is a **frozen token** that must stay
-> byte-identical across `scripts/seed_its_config.py`, `scripts/watchdog.py`,
-> `tests/test_watchdog.py` and `tests/test_heartbeat_client_integration.py` — the watchdog
-> compares against it to decide whether the beacon is armed. Renaming it is a code change,
-> not a doc change.
+> `PLACEHOLDER_uptimerobot_heartbeat_url` is a **frozen token**: the watchdog compares
+> against it to decide whether the beacon is armed. Renaming it is a code change, not a doc
+> change. As of 2026-08-17 it is no longer copied across four files — it is
+> `shared.heartbeat_client.PLACEHOLDER_URL`, imported by `scripts/seed_its_config.py`,
+> `scripts/verify_cutover.py` (VC-09) and `scripts/watchdog.py`, so the byte-identical
+> requirement that used to be a rule in this paragraph is now a property of the code.
 
 ---
 
