@@ -12,6 +12,7 @@ Operations docs use `topic-slug.md` filenames (no date prefix); the
 <!-- BEGIN AUTO-INDEX -->
 | Date | Type | Status | Workstream | Title | PRs |
 |------|------|--------|------------|-------|-----|
+| 2026-08-17 | operations | active | _–_ | [Complexity budget — extract at the touch point, never in a sweep](complexity_budget.md) | _–_ |
 | 2026-07-23 | operations | active | _–_ | [Phase-1 Cutover Decisions (identity / mailbox / Cloudflare)](phase1_cutover_decisions.md) | _–_ |
 | 2026-07-18 | operations | active | _–_ | [Evergreen Cutover Brief — What We Need to Go Live](evergreen_cutover_brief.md) | _–_ |
 | 2026-07-12 | operations | active | _–_ | [Production Worker route + daemon-load posture decision (cutover)](production_worker_route_decision.md) | _–_ |
