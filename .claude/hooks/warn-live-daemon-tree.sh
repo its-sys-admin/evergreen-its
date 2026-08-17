@@ -9,11 +9,24 @@
 # and always exits 0 (the doc worktree_discipline.md reserved exactly this lightweight,
 # low-false-positive surface).
 
-cwd="$(pwd -P 2>/dev/null)"
-its="$(cd "$HOME/its" 2>/dev/null && pwd -P)"
+# --- §56 strict mode, ADVISORY variant ----------------------------------------
+# Strict mode is applied here for consistency with the block-*.sh guards, but
+# this hook's contract is the OPPOSITE of theirs: it is a SessionStart advisory
+# that MUST always exit 0 (SessionStart cannot block, and a non-zero exit here
+# surfaces as a hook error on every session start). It invokes no `jq`, so it
+# carries no dependency assertion.
+#
+# Every command substitution below is therefore explicitly tolerant (`|| true`).
+# Without that, `set -e` makes a MISSING $HOME/its fatal — which is the normal
+# state on every customer fork inheriting .claude/hooks/ and on any non-ITS
+# checkout. Verified 2026-08-17: the un-tolerated form exits 1 there.
+set -euo pipefail
+
+cwd="$(pwd -P 2>/dev/null || true)"
+its="$(cd "$HOME/its" 2>/dev/null && pwd -P || true)"
 [ -n "$its" ] && [ "$cwd" = "$its" ] || exit 0
 
-branch=$(git -C "$its" branch --show-current 2>/dev/null)
+branch=$(git -C "$its" branch --show-current 2>/dev/null || true)
 cat <<EOF
 NOTE (ITS topology): this session is rooted at the LIVE daemon tree $its (branch: ${branch:-?}).
 The launchd daemons run this tree from disk every ~60s — uncommitted Python edits go live, and

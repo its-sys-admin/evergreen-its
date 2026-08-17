@@ -1,0 +1,119 @@
+# Dependabot — §60 Supply-Chain Visibility (audit 2026-08-16, finding H-2).
+#
+# WHY THIS EXISTS
+# ---------------
+# Before this file, ITS had no dependency-update automation and no CVE scanning
+# of any kind: no `npm audit` in CI, no `pip-audit`, no Dependabot. That was the
+# single largest asymmetry between the sophistication of the security posture
+# (full-history gitleaks, an rlimited hostile-PDF sandbox, an AST-enforced
+# capability gate) and its actual coverage. A system can be immaculate about the
+# code it writes and still ship a known-vulnerable transitive dependency.
+#
+# CADENCE RATIONALE
+# -----------------
+# Monthly, not weekly. This is a single-operator practice with a squash-only
+# linear history and branch protection requiring three checks; a weekly PR
+# storm would generate exactly the alarm fatigue that Op Stds §57 warns about
+# and that already cost this repo its VC-09 heartbeat coverage. Monthly batches
+# stay reviewable in one sitting.
+#
+# GROUPING RATIONALE
+# ------------------
+# Patch/minor bumps are grouped into a single PR per ecosystem so routine
+# updates cost one review, while MAJOR bumps arrive as individual PRs — a major
+# is a §41 version-bump-verification event requiring release-note review, and
+# it must not ride in on a batch.
+#
+# INTERACTION WITH §59 (toolchain pin parity)
+# -------------------------------------------
+# `pyproject.toml` upper-bounds ruff/mypy/pytest at the next major. Dependabot
+# will propose crossing those bounds; that proposal is the intended trigger for
+# a deliberate §41 review, not something to auto-merge.
+
+version: 2
+
+updates:
+  # --- Python (runtime + dev toolchain) --------------------------------------
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: scope
+    labels:
+      - dependencies
+      - python
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Pinned <3.10 deliberately: a smartsheet-python-sdk release >3.9.0
+      # dropped/moved `smartsheet.exceptions`, which shared/smartsheet_client.py
+      # imports — an unpinned bump broke all 48 test modules at collection.
+      # Loosen only after verifying against shared/smartsheet_client.py.
+      - dependency-name: smartsheet-python-sdk
+        update-types: ["version-update:semver-major"]
+      # Pinned to legacy 3.x: the PyPI `boxsdk` package jumped to a renamed Gen
+      # API at 10.x (imports as `box_sdk_gen`, different surface).
+      # shared/box_client.py uses the boxsdk.OAuth2 + boxsdk.Client API.
+      # Migration is a separate decision, not a dependency bump.
+      - dependency-name: boxsdk
+        update-types: ["version-update:semver-major"]
+
+  # --- Safety Portal (Cloudflare Worker + React SPA) -------------------------
+  - package-ecosystem: npm
+    directory: "/safety_portal"
+    schedule:
+      interval: monthly
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(portal)"
+      include: scope
+    labels:
+      - dependencies
+      - portal
+    groups:
+      # Production runtime deps (hono, react, react-dom, bcryptjs) serve real
+      # traffic — grouped separately from the build/test toolchain so a runtime
+      # bump is never reviewed as if it were a wrangler patch.
+      portal-runtime:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      portal-toolchain:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # --- GitHub Actions ---------------------------------------------------------
+  # Op Stds §41 applies to action versions too: ci.yml pins checkout@v6,
+  # setup-python@v6, setup-node@v6 and a pinned gitleaks BINARY (8.30.1). The
+  # gitleaks pin is a raw curl, so Dependabot cannot see it — it stays a manual
+  # §41 bump. See the GITLEAKS_VERSION comment in ci.yml.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+      include: scope
+    labels:
+      - dependencies
+      - ci
