@@ -169,7 +169,8 @@ PURPOSE_OVERRIDES: dict[str, str] = {
     "subcontracts.subcontract_poll.subcontractors_sync_enabled":
         "Gate for subcontract_poll's §51 subcontractor-sync passes: the ITS_Subcontractors "
         "full-replace down-sync into the Worker's D1 cache AND the dirty-subcontractor up-sync "
-        "back into ITS_Subcontractors (bridge-key find-or-create by Sub Key). Ships dark.",
+        "back into ITS_Subcontractors (bridge-key find-or-create by Sub Key). Off leaves both "
+        "caches stale until it is turned back on; nothing external is sent either way.",
     "alerting.dedupe_window_minutes": "How long (minutes) a repeated CRITICAL alert is suppressed on "
                                       "the push legs (email + Sentry) before it can fire again. The "
                                       "per-occurrence ITS_Errors record is never suppressed.",
@@ -243,9 +244,15 @@ PURPOSE_OVERRIDES: dict[str, str] = {
                                                "button records intent that nothing acts on.",
     "po_materials.config_actuator.polling_enabled": "Runtime gate for the §50 config actuator daemon (applies approved "
                                                     "workstream-config changes on the Mac).",
-    "po_materials.po_poll.polling_enabled": "Runtime gate for the PO pull daemon (pulls submitted POs from the Worker). Ships dark.",
-    "po_materials.po_poll.vendors_sync_enabled": "Sub-gate: push the vendor list down to the portal PO dropdown. Ships dark.",
-    "po_materials.po_poll.status_sync_enabled": "Sub-gate: sync PO statuses back to the portal. Ships dark.",
+    "po_materials.po_poll.polling_enabled": "Runtime gate for the PO pull daemon (pulls submitted POs from "
+                                            "the Worker). Off pauses the pull; queued POs wait in the Worker "
+                                            "and nothing is lost. Generation only — this gate never sends.",
+    "po_materials.po_poll.vendors_sync_enabled": "Sub-gate: push the vendor list down to the portal PO "
+                                                 "dropdown. Off freezes the portal's vendor dropdown at its "
+                                                 "last synced contents; nothing external is sent either way.",
+    "po_materials.po_poll.status_sync_enabled": "Sub-gate: sync PO statuses back to the portal. Off leaves "
+                                                "portal-side PO statuses stale until it is turned back on; "
+                                                "nothing external is sent either way.",
 }
 
 # Suffix-family fallbacks — a purpose for a whole class of keys, keyed by the last dotted

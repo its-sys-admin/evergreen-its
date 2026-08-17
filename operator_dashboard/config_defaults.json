@@ -444,7 +444,7 @@
       "workstream": "po_materials",
       "kind": "bool",
       "default": false,
-      "purpose": "Runtime gate for the PO pull daemon (pulls submitted POs from the Worker). Ships dark.",
+      "purpose": "Runtime gate for the PO pull daemon (pulls submitted POs from the Worker). Off pauses the pull; queued POs wait in the Worker and nothing is lost. Generation only — this gate never sends.",
       "read_by": [
         "po_materials.po_poll"
       ],
@@ -455,7 +455,7 @@
       "workstream": "po_materials",
       "kind": "bool",
       "default": false,
-      "purpose": "Sub-gate: sync PO statuses back to the portal. Ships dark.",
+      "purpose": "Sub-gate: sync PO statuses back to the portal. Off leaves portal-side PO statuses stale until it is turned back on; nothing external is sent either way.",
       "read_by": [
         "po_materials.po_poll"
       ],
@@ -466,7 +466,7 @@
       "workstream": "po_materials",
       "kind": "bool",
       "default": false,
-      "purpose": "Sub-gate: push the vendor list down to the portal PO dropdown. Ships dark.",
+      "purpose": "Sub-gate: push the vendor list down to the portal PO dropdown. Off freezes the portal's vendor dropdown at its last synced contents; nothing external is sent either way.",
       "read_by": [
         "po_materials.po_poll"
       ],
@@ -667,7 +667,7 @@
       "setting": "progress_reports.progress_send.polling_enabled",
       "workstream": "progress_reports",
       "kind": "bool",
-      "default": true,
+      "default": false,
       "purpose": "Runtime on/off gate for the progress_reports.progress_send daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox).",
       "read_by": [
         "progress_reports.progress_send_poll"
@@ -925,7 +925,7 @@
       "setting": "safety_reports.weekly_send.polling_enabled",
       "workstream": "safety_reports",
       "kind": "bool",
-      "default": true,
+      "default": false,
       "purpose": "Runtime on/off gate for the safety_reports.weekly_send daemon. False pauses it without unloading its launchd job (the canonical runtime gate, distinct from the report-filter Enabled checkbox).",
       "read_by": [
         "safety_reports.weekly_send_poll"
@@ -982,7 +982,7 @@
       "workstream": "subcontracts",
       "kind": "bool",
       "default": false,
-      "purpose": "Gate for subcontract_poll's §51 subcontractor-sync passes: the ITS_Subcontractors full-replace down-sync into the Worker's D1 cache AND the dirty-subcontractor up-sync back into ITS_Subcontractors (bridge-key find-or-create by Sub Key). Ships dark.",
+      "purpose": "Gate for subcontract_poll's §51 subcontractor-sync passes: the ITS_Subcontractors full-replace down-sync into the Worker's D1 cache AND the dirty-subcontractor up-sync back into ITS_Subcontractors (bridge-key find-or-create by Sub Key). Off leaves both caches stale until it is turned back on; nothing external is sent either way.",
       "read_by": [
         "subcontracts.subcontract_poll"
       ],
