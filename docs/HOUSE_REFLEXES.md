@@ -75,6 +75,29 @@ that. Loaded via `@import` from `CLAUDE.md`'s START-HERE block.
   backstop: `tests/test_secret_leak_backstop.py` matched `.gitignore *_secret*`; caught by adversarial
   review, not the "green" gate. Fix: rename to dodge the pattern, e.g. `…_redaction_backstop.py`.)
 
+- **A guard that GREPS a config or source file can match a COMMENT. Parse the structure, not the
+  text.** Two CI-invocation guards searched `ci.yml` for `check_quality_ratchet.py` and matched the
+  FIRST occurrence — a comment in an earlier step — so they asserted against prose and passed no
+  matter what the real invocation said. Adding `--skip` to the actual command changed nothing.
+  Parse the YAML (or the AST) and locate the step by its `run` block. The tell is that the guard
+  went green on the very first run without ever having been made to fail. (2026-08-17.)
+- **A default argument binds at DEF time, so `f(path=MODULE_CONST)` cannot be monkeypatched** — a
+  prove-it-bites test that patches the module global then calls `f()` exercises the ORIGINAL value
+  and passes vacuously. Read the module global INSIDE the function when a test needs to redirect
+  it. (Bit `check_quality_ratchet.load_ratchet`, 2026-08-17.)
+- **A local full-suite run cannot reach a CI-only code path — simulate the CI environment in a
+  test.** `check_doctrine_drift`'s M8 is silent when the manifest is current (a developer box, where
+  `../its-blueprint` exists) and ALWAYS emits when the blueprint is absent (CI, by design). A
+  hard-coded `{"M1".."M7"}` id set in a test therefore passed every local run and failed the first
+  CI run. The fix is both halves: declare the id set in the MODULE so a test cannot hold a second
+  copy, and add a test that patches the environment marker (`BLUEPRINT_ROOT`) to the CI shape.
+  Any "only in CI" or "only on the Mac" branch needs the same treatment. (2026-08-17.)
+- **Severity is part of a gate, not just the check id.** `check_doctrine_drift --strict` selected
+  blocking findings by `check in STRICT_BLOCKING_CHECKS` alone, so a finding whose own docstring
+  said "COVERAGE only, never blocking" blocked. A comment asserting a behaviour the code does not
+  implement is §52 narrated-not-enforced, and it is easiest to write inside the very change meant
+  to remove it. (2026-08-17.)
+
 ## 3 — Git / worktree / deploy discipline (the live-tree is a loaded gun)
 
 - **The launchd daemons run the `~/its` working tree from disk every ~60s.** Uncommitted Python-SOURCE edits
@@ -162,6 +185,24 @@ that. Loaded via `@import` from `CLAUDE.md`'s START-HERE block.
   every cycle until the deploy catches up — and the storm looks like a real auth incident, so someone burns
   a chase on it. Root-caused on a subcontract-lane `bearer_rejected` during the 2026-07-14 error-chase;
   apply the ordering to every config-actuator / Worker-secret pairing.
+- **Every numeric quality floor lives in `.quality-ratchet.json` and nowhere else.** CI reads the
+  coverage floor FROM that file rather than holding its own `COVERAGE_FLOOR` — two copies of a
+  floor is a floor that drifts, and the drifted one wins silently. Tightening a bound (raising a
+  floor, lowering a ceiling) needs no ceremony; LOOSENING one requires `regression_reason` +
+  `tech_debt_ref` + `expires`, all three, and CI fails once the date passes, so the relaxation
+  re-arms itself. `scripts/check_quality_ratchet.py` also diffs the file against `origin/main` and
+  fails an undeclared wrong-way move — without that the rule would be advice. Set new bounds from
+  MEASUREMENT, and take the CI number, not the local one (macOS reads ~0.24pp higher on coverage
+  than ubuntu because Darwin-only paths execute locally). (Audit 2026-08-16; landed 2026-08-17.)
+- **Retrofitting `set -euo pipefail` onto an existing script CHANGES BEHAVIOUR — audit every
+  command substitution before adding it.** `set -e` turns a deliberately-tolerant
+  `$(git -C "$HOME/its" … 2>/dev/null)` into a fatal abort: two hooks began exiting 128 and 1 on
+  any host lacking `~/its`, which is every customer fork inheriting `.claude/hooks/` and broke one
+  hook's documented always-exit-0 contract. Guard each tolerant substitution with `|| true` and say
+  in-line why allowing is correct there. Note the distinction that matters: a MISSING risk
+  condition (no live tree to be stale) is not the same as an UNEVALUABLE one (no `jq` to parse the
+  payload) — the first should allow, the second must block. (2026-08-17.)
+
 - **Never `Path.write_text/write_bytes` under `~/its/state/`** — route every state write through
   `shared/state_io.py` (`atomic_write_json/text`, `with_path_lock` on a sidecar `.lock`). Enforced at CI
   (`test_state_write_discipline.py`).
