@@ -126,6 +126,11 @@ dev = [
     "httpx>=0.27",
     # §60 supply-chain visibility: dependency CVE scan, run in CI. Audit 2026-08-16 H-2.
     "pip-audit>=2.7",
+    # Cyclomatic complexity for scripts/check_code_quality_metrics.py (the M-5/M-7
+    # anti-slop metrics feeding .quality-ratchet.json). Upper-bounded per §59: radon's
+    # block model is what the erosion metric is built on — a major that changes how
+    # classes/closures are reported would move every number without a commit.
+    "radon>=6.0,<7.0",
 ]
 
 [tool.setuptools]
@@ -173,5 +178,5 @@ markers = [
 module = ["msal", "msal.*", "smartsheet", "smartsheet.*", "boxsdk", "boxsdk.*", "reportlab", "reportlab.*",
           "PIL", "PIL.*", "pyclamd", "pyclamd.*", "docx", "docx.*", "openpyxl", "openpyxl.*",
           "pdfplumber", "pdfplumber.*", "Quartz", "Quartz.*", "ocrmac", "ocrmac.*",
-          "Vision", "Vision.*"]
+          "Vision", "Vision.*", "radon", "radon.*"]
 ignore_missing_imports = true
