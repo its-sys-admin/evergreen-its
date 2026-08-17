@@ -588,7 +588,11 @@ workflows:
   # ── 4. Purchase order ────────────────────────────────────────────────────────────────────
   - id: purchase_order
     title: Purchase order — build, config, pull/render/file, send
-    summary: The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
+    summary: >-
+      The deterministic PO pipeline (no AI). Every stage is independently gated by its own
+      po_materials.* ITS_Config row, and generation is gated separately from SEND — read
+      ITS_Config (or the dashboard config editor) for the live state of any of them, never
+      this page. Pausing a gate is always available; turning one on is a high-class action.
     steps:
       - id: po_build
         title: A PO is built + signed in the portal
@@ -665,7 +669,7 @@ workflows:
             symptom: Uploaded estimates are not being pulled/filed.
             signals: ["estimate-poll gate off", "designed-dark", "no marker written"]
             checks:
-              - Is estimate-poll loaded AND po_materials.estimate_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design (ships dark until the E2 go-live).
+              - Is estimate-poll loaded AND po_materials.estimate_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design — a stale marker on a gated-off daemon is an intentional pause, not a fault. Read ITS_Config for the gate's live value.
             resolutions:
               - If estimate import is intended, load the plist and flip the gate (go-live is done with Seth); otherwise it is dark by design (not a fault).
             class: daniel_solo
@@ -693,7 +697,7 @@ workflows:
             symptom: Composed RFQs are not being pulled/filed.
             signals: ["rfq-poll gate off", "designed-dark", "no marker written"]
             checks:
-              - Is rfq-poll loaded AND po_materials.rfq_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design (ships dark until the R2 go-live).
+              - Is rfq-poll loaded AND po_materials.rfq_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design — a stale marker on a gated-off daemon is an intentional pause, not a fault. Read ITS_Config for the gate's live value.
             resolutions:
               - If RFQ generation is intended, build the two RFQ sheets, load the plist, and flip the gate (go-live is done with Seth); otherwise it is dark by design (not a fault).
             class: daniel_solo
@@ -749,7 +753,12 @@ workflows:
   # ── 5. Subcontract ───────────────────────────────────────────────────────────────────────
   - id: subcontract
     title: Subcontract — build, legal gate, pull/render, send
-    summary: The deterministic subcontract-package pipeline (no AI), PO-mirror. Ships dark.
+    summary: >-
+      The deterministic subcontract-package pipeline (no AI), PO-mirror. Every stage is
+      independently gated by its own subcontracts.* ITS_Config row, and generation is gated
+      separately from SEND — read ITS_Config (or the dashboard config editor) for the live
+      state of any of them, never this page. Pausing a gate is always available; turning one
+      on is a high-class action.
     steps:
       - id: sub_build
         title: A subcontract is built (with Exhibit A / SoV) in the portal

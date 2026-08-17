@@ -42,6 +42,20 @@ def _row(
     }
 
 
+def _get_setting_stub(key: str, *, workstream: str) -> str:
+    """ITS_Config stub: the polling gate reads ENABLED; every other key falls back.
+
+    Stubbed EXPLICITLY rather than left to the module default, because
+    `DEFAULT_POLLING_ENABLED` is now False (a send gate never fails open) — this suite
+    previously leaned on the fail-open default to get past the gate, which is the very
+    property being removed. Non-gate keys still raise NotFound so their fallbacks stay
+    exercised.
+    """
+    if key == progress_send_poll.CFG_POLLING_ENABLED:
+        return "true"
+    raise send_poll_core.smartsheet_client.SmartsheetNotFoundError("default test stub")
+
+
 @pytest.fixture
 def _patch_all(mocker):
     return {
@@ -52,7 +66,7 @@ def _patch_all(mocker):
         ),
         "get_setting": mocker.patch(
             "safety_reports.send_poll_core.smartsheet_client.get_setting",
-            side_effect=send_poll_core.smartsheet_client.SmartsheetNotFoundError("default test stub"),
+            side_effect=_get_setting_stub,
         ),
         "workspace_shares": mocker.patch(
             "safety_reports.send_poll_core.smartsheet_client.list_workspace_share_emails",
@@ -88,6 +102,33 @@ def test_sending_excluded_from_dispatch_statuses():
     assert progress_send_poll.DISPATCH_STATUSES == frozenset(
         {wpr_review.STATUS_PENDING, wpr_review.STATUS_FAILED}
     )
+
+
+def test_default_polling_enabled_is_false_fail_safe():
+    # HOUSE_REFLEXES §5: a send daemon's row-absent default must be dark (False), never
+    # fail-open to SENDING. Pins the constant AND its propagation into the DaemonConfig.
+    assert progress_send_poll.DEFAULT_POLLING_ENABLED is False
+    assert progress_send_poll.CONFIG.default_polling_enabled is False
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        send_poll_core.smartsheet_client.SmartsheetNotFoundError("row absent"),
+        send_poll_core.smartsheet_client.SmartsheetCircuitOpenError("breaker open"),
+        send_poll_core.smartsheet_client.SmartsheetError("5xx"),
+    ],
+)
+def test_unreadable_polling_config_skips_the_cycle_without_sending(_patch_all, exc):
+    # PROVE-IT-BITES, across ALL THREE `_read_str_setting` fallback branches (the NotFound
+    # one logs nothing at all): with the gate row unreadable, the cycle short-circuits
+    # fail-safe instead of dispatching an approved send_now row to the CUSTOMER.
+    _patch_all["get_setting"].side_effect = exc
+    _patch_all["get_rows"].return_value = [_row(row_id=90)]
+    stats = poll_once()
+    assert stats.skipped_disabled is True
+    assert stats.dispatched == 0 and stats.sent == 0
+    _patch_all["send_one_row"].assert_not_called()
 
 
 # ---- filter (delegates to the shared core) -------------------------------
