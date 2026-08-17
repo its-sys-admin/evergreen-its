@@ -3663,6 +3663,23 @@ CHECKS: list[Callable[..., CheckResult]] = [
 # tests/test_watchdog.py::test_check_letters_cover_every_registered_check
 # enforces the parity. Check I appears twice deliberately (safety + progress
 # catch-up wrappers share the letter).
+# verify_cutover checks this runner actually executes. THE declared enrolment set,
+# and the denominator's counterpart for the `excluded_verify_checks` ratchet metric
+# (scripts/check_quality_ratchet.py counts len(verify_cutover.CHECKS) minus this).
+#
+# It is a declaration, not a derivation, because the two enrolled checks do not
+# call verify_cutover uniformly — Check Y reimplements VC-03's comparison against
+# `verify_cutover.CONFIG_ROWS`, Check Z dispatches through the CHECKS registry — so
+# there is nothing honest to infer it from. `tests/test_quality_ratchet.py` pins
+# that every id named here exists in verify_cutover.CHECKS, and Checks Y and Z each
+# carry their own registration test, so the pair cannot silently disagree.
+#
+# The exclusion rationale for every check NOT listed here lives in the Check Y
+# block comment above. Enrolling one is a scope decision, and the bar is Check Y's
+# governing principle: green today, red only on a real regression.
+VERIFY_RUNNER_ENROLLED: frozenset[str] = frozenset({"VC-03", "VC-09"})
+
+
 CHECK_LETTERS: dict[str, str] = {
     "_check_stale_review_queue": "A",
     "_check_open_criticals": "B",

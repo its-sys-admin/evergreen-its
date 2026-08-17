@@ -12,6 +12,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .coverage
+# Written by the CI coverage step for scripts/check_quality_ratchet.py to read
+# back. A build artifact, never committed.
+coverage.json
 htmlcov/
 
 # macOS

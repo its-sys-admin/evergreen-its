@@ -1,0 +1,17 @@
+{
+  "_readme": "Every numeric quality floor in ITS lives HERE and nowhere else. scripts/check_quality_ratchet.py enforces it as a blocking CI step, and .github/workflows/ci.yml reads the coverage floor FROM this file rather than holding its own copy — two copies of a floor is a floor that drifts. Keys beginning with _ are prose (JSON has no comments) and are ignored by the checker.",
+
+  "_rule": "A floor may be RAISED and a ceiling LOWERED by any PR, with no ceremony at all. Moving one the other way requires the entry to carry regression_reason + tech_debt_ref + expires (ISO date) — all three. The checker fails on a partial relaxation, fails once expires passes, and fails on a wrong-way move detected against origin/main that carries no declaration.",
+
+  "_why": "Audit 2026-08-16. The finding was not that any one control was wrong; it was that six slope-controls had each been individually, reasonably relaxed, and the aggregate was a safety story that was narrated rather than enforced (Op Stds 52). A threshold that can be lowered under pressure will be, and every lowering will be locally defensible. What breaks that loop is not better judgment — it is an expiry that re-arms the control by itself.",
+
+  "_values": "Set from measurement, never aspiration. Integer metrics sit at the EXACT measured value: one more CC>30 function, one more doc-convention warning, one more excluded verify check is precisely the event worth catching. The two float metrics sit at the measured value rounded UP to the next 0.001 — they are deterministic, so that is a one-notch tolerance rather than slack, and it keeps a single added branch from failing CI on the fourth decimal. Baselines on 14f38a1: erosion 0.38877, verbosity 0.06634, cc30 19, doc warnings 89, mypy 0, excluded verify checks 8, coverage 84.95% (CI-measured; the floor rounds down).",
+
+  "coverage_percent":        { "floor": 84,      "direction": "raise-only" },
+  "structural_erosion":      { "ceiling": 0.389, "direction": "lower-only" },
+  "verbosity":               { "ceiling": 0.067, "direction": "lower-only" },
+  "functions_over_cc30":     { "ceiling": 19,    "direction": "lower-only" },
+  "doc_convention_warnings": { "ceiling": 89,    "direction": "lower-only" },
+  "mypy_errors":             { "ceiling": 0,     "direction": "lower-only" },
+  "excluded_verify_checks":  { "ceiling": 8,     "direction": "lower-only" }
+}

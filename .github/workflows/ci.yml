@@ -19,23 +19,6 @@ concurrency:
 permissions:
   contents: read
 
-# Single edit point for the §58 coverage floor. RAISE-ONLY: lowering it requires
-# a docs/tech_debt.md entry naming what regressed, why, and when it is restored.
-#
-# 84 is measured reality on the widened eight-package scope, not an aspiration.
-# The first two green CI runs on that scope reported 84.94% (22,855 stmts / 3,441
-# missed, run 32044273594) and 84.95% (22,862 / 3,441, run 32046851815), rounded
-# DOWN to the whole percent. The prior 70 was a deliberately conservative
-# placeholder shipped with the widening so the gate could land before the number
-# was known; this replaces it with the number.
-#
-# The floor is set from the CI figure, NOT the local one. macOS measures ~0.24pp
-# HIGHER than ubuntu on this tree (85.18% local vs 84.94% CI, a 53-statement
-# difference) because the Darwin-only paths — Keychain via the `security` CLI,
-# pyobjc/Quartz, ocrmac — execute locally and are skipped on Linux. A floor set
-# from a local run red-lines main on the first push.
-env:
-  COVERAGE_FLOOR: "84"
 
 jobs:
   test:
@@ -65,13 +48,23 @@ jobs:
       # `--cov-fail-under` makes the number a DEFENDED FLOOR rather than a reported
       # statistic: it ratchets upward only. Lowering it requires a docs/tech_debt.md
       # entry naming what regressed and why.
+      # The floor is READ FROM .quality-ratchet.json, never duplicated here. That file
+      # is the single location for every numeric quality floor in the repo; a second
+      # copy in this workflow is a copy that drifts, and the drifted one always wins
+      # silently. `scripts/check_quality_ratchet.py` below enforces the same number
+      # against the same file, so the two cannot disagree.
+      #
+      # `--cov-report=json` is what the ratchet step reads back — it must not be
+      # dropped, or the coverage metric goes UNMEASURED and the ratchet fails closed.
       - name: Tests (pytest + coverage, all production packages)
         run: |
-          pytest -q --cov-report=term-missing \
+          FLOOR=$(python -c "import json;print(json.load(open('.quality-ratchet.json'))['coverage_percent']['floor'])")
+          echo "coverage floor from .quality-ratchet.json: $FLOOR"
+          pytest -q --cov-report=term-missing --cov-report=json:coverage.json \
             --cov=shared --cov=safety_reports --cov=field_ops \
             --cov=progress_reports --cov=po_materials --cov=subcontracts \
             --cov=docs_pdf --cov=operator_dashboard \
-            --cov-fail-under=${{ env.COVERAGE_FLOOR }}
+            --cov-fail-under="$FLOOR"
 
       # §60 supply-chain visibility (audit 2026-08-16 H-2). The repo runs a
       # full-history secret scan and a hostile-PDF sandbox but had ZERO visibility
@@ -117,6 +110,30 @@ jobs:
       # propose-only for the agent + unit tests.
       - name: Doctrine-drift check (blocking — M1/M4/M7 mechanical drift)
         run: python -m scripts.check_doctrine_drift --strict
+
+      # THE SLOPE CONTROL (audit 2026-08-16). Every other gate in this file answers
+      # "is it broken right now". This one answers "is it getting worse", which is
+      # the question the audit found nothing was asking: six controls had each been
+      # individually, reasonably relaxed, and the aggregate was a safety story that
+      # was narrated rather than enforced.
+      #
+      # BLOCKING. The baseline ref must be fetched first and the fetch must NOT be
+      # `|| true` — if origin/main is unresolvable the checker fails, because
+      # silently skipping the wrong-way-move comparison turns the whole relaxation
+      # rule into advice. `actions/checkout` leaves a shallow clone with no
+      # origin/main, hence the explicit refspec.
+      #
+      # No `--skip` and no `--today` here, deliberately: `--skip` would leave a
+      # metric unmeasured, and `--today` would let an expired relaxation pass.
+      # tests/test_quality_ratchet.py asserts this step passes neither.
+      - name: Fetch ratchet baseline
+        run: git fetch --depth=1 origin main:refs/remotes/origin/main
+
+      - name: Quality ratchet (blocking — floors, ceilings, expiring relaxations)
+        run: |
+          python scripts/check_quality_ratchet.py \
+            --coverage-json coverage.json \
+            --baseline-ref origin/main
 
   # Safety Portal (Cloudflare Worker + React SPA) — TypeScript typecheck + Worker
   # tests. BLOCKING, like `test`. The Python `test` job does NOT cover safety_portal/
