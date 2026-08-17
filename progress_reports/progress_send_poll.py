@@ -73,7 +73,14 @@ CFG_SCHEDULED_SEND_LOCAL = "progress_reports.progress_send.scheduled_send_local"
 DEFAULT_SCHEDULED_SEND_LOCAL = "MON 07:00"
 SEND_TZ = "America/Los_Angeles"
 
-DEFAULT_POLLING_ENABLED = True
+# HOUSE_REFLEXES §5 (dark-ship default-False) — the PROGRESS twin of the same flip applied
+# to weekly_send_poll above, and to po/rfq/subcontract at CO-1: a MISSING/malformed
+# `progress_reports.progress_send.polling_enabled` row must fail SAFE (send daemon
+# disabled), never fail-open to SENDING. See weekly_send_poll for the full rationale — the
+# short version is that `send_poll_core._read_str_setting` falls back on three branches, the
+# NotFound one silently, so a True default let a deleted config row RE-ARM a paused send
+# daemon with no signal. A send gate never fails open.
+DEFAULT_POLLING_ENABLED = False
 DEFAULT_POLL_INTERVAL = 900  # 15 minutes
 
 # State paths. The heartbeat-row-id cache is the SHARED cross-daemon file (ARCH-2);

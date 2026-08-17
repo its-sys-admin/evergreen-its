@@ -17,8 +17,8 @@ Pick the workflow you are blocked at, then the step, then the symptom that match
 - **Safety report — portal submission to sent weekly packet** — A field submission enters at the send-free portal, is pulled + filed on the Mac, compiled into a weekly packet, human-approved, and sent. The generation and send halves are separate processes (External Send Gate).
 - **Progress report — intake, routing, compile, send** — The Safety-Reports twin for weekly progress packets, on its own Active-Jobs sheet.
 - **Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet** — The portal is the writer of record for jobs and field capture; fieldops-sync mirrors dirty portal-origin records UP into the two Active-Jobs sheets and the standing trackers.
-- **Purchase order — build, config, pull/render/file, send** — The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
-- **Subcontract — build, legal gate, pull/render, send** — The deterministic subcontract-package pipeline (no AI), PO-mirror. Ships dark.
+- **Purchase order — build, config, pull/render/file, send** — The deterministic PO pipeline (no AI). Every stage is independently gated by its own po_materials.* ITS_Config row, and generation is gated separately from SEND — read ITS_Config (or the dashboard config editor) for the live state of any of them, never this page. Pausing a gate is always available; turning one on is a high-class action.
+- **Subcontract — build, legal gate, pull/render, send** — The deterministic subcontract-package pipeline (no AI), PO-mirror. Every stage is independently gated by its own subcontracts.* ITS_Config row, and generation is gated separately from SEND — read ITS_Config (or the dashboard config editor) for the live state of any of them, never this page. Pausing a gate is always available; turning one on is a high-class action.
 - **Email intake — the superseded safety path (portal PULL is canonical)** — Safety email intake was RETIRED; the Safety Portal PULL model supersedes it. The shared Graph plumbing is preserved for a future Email-Triage workstream.
 - **Config change — the §50 privileged actuation rail** — The cloud can only ENQUEUE a config request (send-free); the config-actuator commits it on the Mac (validate → PR → CI → merge → deploy → stamp live).
 - **Operator dashboard — auth tiers and Class A/B/C actions** — The localhost-only console; read-only panels plus PIN-gated actions over Tailscale.
@@ -804,7 +804,7 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 ## Purchase order — build, config, pull/render/file, send
 
-The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
+The deterministic PO pipeline (no AI). Every stage is independently gated by its own po_materials.* ITS_Config row, and generation is gated separately from SEND — read ITS_Config (or the dashboard config editor) for the live state of any of them, never this page. Pausing a gate is always available; turning one on is a high-class action.
 
 ### A PO is built + signed in the portal
 
@@ -907,7 +907,7 @@ The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
 **Signals:** estimate-poll gate off, designed-dark, no marker written
 
 **Checks (in order):**
-- Is estimate-poll loaded AND po_materials.estimate_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design (ships dark until the E2 go-live).
+- Is estimate-poll loaded AND po_materials.estimate_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design — a stale marker on a gated-off daemon is an intentional pause, not a fault. Read ITS_Config for the gate's live value.
 
 **Resolutions (in order):**
 - If estimate import is intended, load the plist and flip the gate (go-live is done with Seth); otherwise it is dark by design (not a fault).
@@ -947,7 +947,7 @@ The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
 **Signals:** rfq-poll gate off, designed-dark, no marker written
 
 **Checks (in order):**
-- Is rfq-poll loaded AND po_materials.rfq_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design (ships dark until the R2 go-live).
+- Is rfq-poll loaded AND po_materials.rfq_poll.polling_enabled flipped? A loaded-but-dark daemon writes no marker by design — a stale marker on a gated-off daemon is an intentional pause, not a fault. Read ITS_Config for the gate's live value.
 
 **Resolutions (in order):**
 - If RFQ generation is intended, build the two RFQ sheets, load the plist, and flip the gate (go-live is done with Seth); otherwise it is dark by design (not a fault).
@@ -1022,7 +1022,7 @@ The deterministic PO pipeline (no AI). Ships dark until its gates are flipped.
 
 ## Subcontract — build, legal gate, pull/render, send
 
-The deterministic subcontract-package pipeline (no AI), PO-mirror. Ships dark.
+The deterministic subcontract-package pipeline (no AI), PO-mirror. Every stage is independently gated by its own subcontracts.* ITS_Config row, and generation is gated separately from SEND — read ITS_Config (or the dashboard config editor) for the live state of any of them, never this page. Pausing a gate is always available; turning one on is a high-class action.
 
 ### A subcontract is built (with Exhibit A / SoV) in the portal
 

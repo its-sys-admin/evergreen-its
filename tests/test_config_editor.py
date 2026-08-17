@@ -453,6 +453,39 @@ def test_no_registry_note_asserts_a_live_gate_state() -> None:
     )
 
 
+def test_no_generated_purpose_asserts_a_live_gate_state() -> None:
+    """The same ban, extended to the GENERATED purpose text the editor also renders.
+
+    The sibling test above guards `registry.REGISTRY` notes — but the editor draws a
+    SECOND body of static prose from `config_defaults.json`
+    (`config_write._CONFIG_DEFAULTS_PATH`, rendered at config_write.py:81), and that file
+    was ungated. So the identical defect quietly survived there: four
+    `po_materials.po_poll.*` / `subcontracts.*` purposes still read "Ships dark." while
+    every one of those gates read 'true' live. Reading the exact path the editor reads is
+    the point — a guard on a different copy proves nothing.
+
+    Purposes are generator-maintained, so a failure here is fixed in
+    `scripts/generate_config_dictionary.py` (then regenerate + re-record the
+    its_config_dictionary sha256 in docs/enablement/manifest.yaml), never by hand-editing
+    the generated JSON.
+    """
+    import json
+
+    defaults = json.loads(config_write._CONFIG_DEFAULTS_PATH.read_text())
+    banned = ("currently dark", "ships dark", "currently on", "currently off", "currently live")
+    offenders = [
+        f"{key.get('setting')} [{key.get('workstream')}]: {phrase!r}"
+        for key in defaults["keys"]
+        for phrase in banned
+        if phrase in (key.get("purpose") or "").lower()
+    ]
+    assert not offenders, (
+        "generated config purposes assert a live gate state, which goes stale: "
+        f"{offenders} — fix the prose in scripts/generate_config_dictionary.py, regenerate, "
+        "and re-record the its_config_dictionary sha256 in docs/enablement/manifest.yaml"
+    )
+
+
 # ------------------------------------------------ curated ordering / layout ----
 def test_group_order_names_every_registry_group_exactly_once() -> None:
     """GROUP_ORDER is the page's curated section order — a new display group must
