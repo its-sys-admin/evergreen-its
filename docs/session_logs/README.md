@@ -105,6 +105,7 @@ outside the sentinel block.
 | 2026-07-10 | session_log | active | _–_ | [Cutover readiness gap — CL-01…CL-33 disposition + verify_cutover baseline (2026-07-10)](2026-07-10_cutover-gap.md) | _–_ |
 | 2026-07-10 | session_log | active | _–_ | [Overnight (autonomous): §50 config-editor Features 1 & 2 + Aug-7 cutover readiness](2026-07-10_overnight-config-editor-features-and-cutover-readiness.md) | #524, #525, #526 |
 | 2026-06-10 | session_log | active | safety_portal | [Session — Agent Optimization (Brief 2) + Safety Portal Hardening (Brief 1)](2026-06-10_agent-optimization-and-portal-hardening.md) | #260, #261, #263, #264, #265, #266 |
+| 2026-08-17 | session_log | closed | ci | [Session log — 2026-08-17 · Executing the 2026-08-16 forensic audit's exec-side brief: fail-closed guards, an armed dead-man's switch, and the quality ratchet](2026-08-17_audit-remediation-and-quality-ratchet.md) | #154, #155, #156, #157, #158, #160, #161 |
 | 2026-08-15 | session_log | closed | _–_ | [Session log — 2026-08-15 · Change orders as full generated documents (Track D2)](2026-08-15_change-orders-as-documents.md) | #148, #149 |
 | 2026-08-15 | session_log | closed | _–_ | [Session log — 2026-08-15 · Design-completion pass, operator decisions Q1–Q5, dashboard wiring](2026-08-15_design-completion-and-operator-decisions.md) | #151 |
 | 2026-08-13 | session_log | closed | _–_ | [Session log — 2026-08-13 · A tech-debt sweep, dashboard wiring for the new lanes, and finishing the repo-identity migration](2026-08-13_debt-sweep-and-dashboard-wiring.md) | #122 |
