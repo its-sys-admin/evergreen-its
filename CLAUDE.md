@@ -333,12 +333,29 @@ Ship in Phase 0:
 - **Resend** — out-of-band CRITICAL alert path. Covers M365 outage suppressing its own
   outage alert.
 - **GitHub Actions** — `.github/workflows/ci.yml`, **three jobs** on every push + PR-to-main:
-  **`test`** (ruff, mypy [blocking], pytest+coverage, doc-conventions lint + doc-index freshness
-  [both warn-only], `check_doctrine_drift --strict` [blocking]); **`portal`** (tsc typecheck,
-  vitest against real workerd+D1, SPA render-smoke); **`secrets`** (gitleaks, full history).
+  **`test`** (ruff · mypy [blocking] · pytest + coverage over all **eight** production packages
+  with `--cov-fail-under` [blocking; the floor is READ FROM `.quality-ratchet.json`, never
+  duplicated in the workflow] · `pip-audit` [informational — the blocking supply-chain tier is
+  the portal job's production-runtime `npm audit`] · doc-conventions lint + doc-index freshness
+  [both warn-only] · `check_doctrine_drift --strict` [blocking] · **`check_quality_ratchet.py`
+  [blocking]**); **`portal`** (`npm audit --omit=dev --audit-level=high` [blocking] + full-tree
+  audit [informational], tsc typecheck, vitest against real workerd+D1, SPA render-smoke);
+  **`secrets`** (gitleaks, full history). `.github/dependabot.yml` opens monthly grouped
+  dependency PRs; majors arrive individually as §41 version-bump events.
   **CodeQL** ran via GitHub default setup on the pre-cutover repo; it is **not yet re-enabled**
   on `its-sys-admin/evergreen-its` (operator GitHub-settings action — the `codeql-fp-triager`
   agent is dormant until then).
+- **`.quality-ratchet.json` + `scripts/check_quality_ratchet.py`** — the slope control (audit
+  2026-08-16). Every numeric quality floor in the repo lives in that ONE file: coverage,
+  structural erosion, verbosity, the CC>30 roster size, doc-convention warnings, mypy errors,
+  and the count of `verify_cutover` checks the watchdog runner skips. Each bound may be
+  TIGHTENED by any PR with no ceremony; loosening one requires the entry to carry
+  `regression_reason` + `tech_debt_ref` + `expires`, and CI fails once that date passes — so a
+  relaxation re-arms itself instead of becoming permanent. The checker also diffs the file
+  against `origin/main` and fails a wrong-way move that carries no declaration. Measurement is
+  `scripts/check_code_quality_metrics.py` (radon complexity mass + a normalized-AST duplicate
+  scan); the CC>30 rule it backs is `docs/operations/complexity_budget.md`. Every other CI gate
+  answers "is it broken now"; this one answers "is it getting worse".
 
 Deferred to Customer 2+: Better Stack (log aggregation), 1Password CLI (multi-customer
 secrets), Helicone (LLM observability). Permanent skip: HashiCorp Vault, Snowflake,

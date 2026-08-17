@@ -16,6 +16,65 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## Quality-ratchet baselines that are capped but not yet reduced [OPEN 2026-08-17, medium]
+
+`.quality-ratchet.json` now pins every numeric quality floor and CI blocks on it, so none of the
+numbers below can get worse without an expiring, justified declaration. That is the whole point of
+landing it at measured reality rather than at a target. What it does NOT do is improve them — a
+ceiling holds a line, it does not move one. These are the three worth moving, recorded here so
+"capped" is never mistaken for "resolved".
+
+- **`doc_convention_warnings` capped at 89, lint still warn-only.** The retrofit window in
+  `docs/operations/doc_conventions.md` targeted 2026-07-24 to flip `lint_doc_conventions` to
+  `--strict`; it is now well past that with 89 violations standing. The ratchet stops the count
+  rising, which is strictly better than the previous state (nothing watched it at all), but the
+  audit's M-2 observation still holds and is sharper than the count suggests: **the largest
+  violation cluster is session logs missing the four-part verify marker** — i.e. the warn-only
+  lint is suppressing evidence that the verification discipline is inconsistently *recorded*. In
+  six months there will be no way to distinguish "verified, not written down" from "not verified".
+  Clearing the 89 and flipping to `--strict` is improvement-register item 13 (~1 day).
+- **`excluded_verify_checks` capped at 8 of 10.** Only VC-03 (watchdog Check Y) and VC-09
+  (Check Z) run in the daily runner. The audit reported "6 of 10 excluded"; the mechanical count
+  is 8, and the difference is not a disagreement — the audit counted the six checks carrying an
+  explicitly written exclusion rationale, while the mechanical count is simply
+  `len(verify_cutover.CHECKS) - len(watchdog.VERIFY_RUNNER_ENROLLED)`, which also picks up VC-04 /
+  VC-05 (deemed duplicates of Checks C and A) and VC-06. It was 9 before Check Z landed.
+  **VC-02 (launchd) and VC-07 (git) are the named next candidates** — both are green today, which
+  is the bar Check Y's governing principle sets for entering this runner, and both were left out
+  as a scope decision rather than a defect. Enrolling either lowers this ceiling for free.
+- **`structural_erosion` capped at 0.389 against a human-panel baseline of 0.31.** Mildly
+  elevated, concentrated in 19 CC>30 functions, 17 of them poll/dispatch handlers.
+  `docs/operations/complexity_budget.md` is the mechanism that shrinks it — extraction at the
+  touch point, never a sweep. Expect this to fall slowly and only as those handlers are edited
+  for other reasons. **Do not schedule a refactor to move it**: §14 preservation-over-refactor is
+  what produced the 0.066 verbosity result, and trading that for a better erosion number is a bad
+  trade.
+
+**Trigger:** any session touching doc conventions, the verify runner, or a CC>30 handler.
+**Tag:** `quality-ratchet`, `ci`, `measurement`.
+
+## Ratchet coverage gaps — three metrics the audit named that are NOT in the file [OPEN 2026-08-17, low]
+
+Recorded so their absence is a decision rather than an oversight. Each was considered and left
+out for a stated reason:
+
+- **`check_untyped_defs` (audit M-1).** mypy runs at defaults, so 3,487 of 5,199 test-function
+  bodies are unchecked (production is 99.2% annotated — the gate is genuinely meaningful there).
+  A ratchet metric would need a per-file allowlist to burn down against; the honest unit of work
+  is improvement-register item 12 (~1 day), not a number to hold.
+- **Dependency CVE counts.** Deliberately excluded. A CVE count changes when an advisory is
+  *published*, not when this repo changes, so a ceiling on it would red-line main on someone
+  else's disclosure schedule — a spontaneously-failing metric, which is the alarm-fatigue shape
+  §57 warns about. The blocking supply-chain tier stays `npm audit --omit=dev --audit-level=high`
+  on production-runtime deps.
+- **Worker/SPA TypeScript metrics.** `check_code_quality_metrics.py` measures Python only. The
+  Worker is 27K LOC of TypeScript behind `strict: true` with its own vitest suite, and it has no
+  erosion or verbosity number at all. Closing this needs a TS complexity tool in the `portal`
+  job; nothing about the Python ratchet blocks it.
+
+**Trigger:** before the `its-portal-template` extraction — all three are platform-layer and are
+inherited per-customer. **Tag:** `quality-ratchet`, `measurement`, `fork-propagation`.
+
 ## [OPEN 2026-08-13, high] Public-window exposure remediation OUTSTANDING — repo was RE-PUBLICIZED 2026-08-15 without the rewrite; the exposure surface is LIVE
 
 > **UPDATE 2026-08-15 — the "stay private" mitigation was REVERSED.** The operator made the repo
