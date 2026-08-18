@@ -396,3 +396,81 @@ def test_a_deliberately_regressed_bound_fails_the_run(tmp_path, monkeypatch) -> 
 
     rc = qr.main(["--skip", "coverage_percent", "--today", TODAY.isoformat()])
     assert rc == 1
+
+
+# ---- environment-sensitivity of the measurements -------------------------------
+#
+# Both fixes below came from running the ratchet on the long-lived `~/its` tree
+# and comparing to CI on the IDENTICAL commit (2026-08-18): CI said
+# mypy 0 / doc-warnings 89, the local tree said mypy 2 / doc-warnings 88. A
+# metric whose value depends on WHERE it is measured is a bad ratchet metric —
+# the gate is only as trustworthy as the comparability of its numbers.
+
+
+def test_mypy_walk_excludes_the_gitignored_scratchpad() -> None:
+    """`scratchpad/` is gitignored throwaway that CI never checks out.
+
+    Without the exclude, `mypy .` reports whatever half-finished scripts happen
+    to sit there, so the same commit types clean in CI and dirty locally. Two
+    stale 2026-07 scratch files made the local ratchet FAIL a bound CI held at 0.
+    """
+    import tomllib
+
+    cfg = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    excludes = cfg["tool"]["mypy"].get("exclude", [])
+    assert any("scratchpad" in e for e in excludes), (
+        "mypy must not walk the gitignored scratchpad/ — it makes `mypy .` mean "
+        f"different things locally and in CI. exclude={excludes}"
+    )
+
+
+def test_mypy_gate_depth_is_unchanged_by_that_exclude() -> None:
+    """Scoping the walk must not quietly deepen (or weaken) the gate.
+
+    `check_untyped_defs` is audit finding M-1 and a separate ~1-day burn-down;
+    turning it on as a side effect of an exclude would be a scope change hiding
+    inside a bug fix.
+    """
+    import tomllib
+
+    cfg = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "check_untyped_defs" not in cfg["tool"]["mypy"]
+
+
+def test_doc_convention_warnings_is_marked_ci_authoritative() -> None:
+    """`lint_doc_conventions` grandfathers evergreen docs by FILESYSTEM MTIME.
+
+    A CI checkout stamps every file with the checkout time, so nothing is
+    grandfathered and the count is higher AND deterministic; a long-lived
+    developer tree keeps real mtimes and reads LOW (CI 89 vs local 88, same
+    commit). Harmless for the gate, which runs in CI — dangerous for --suggest.
+    """
+    assert qr.SPECS_BY_KEY["doc_convention_warnings"].ci_authoritative is True
+
+
+def test_suggest_refuses_to_tighten_a_ci_authoritative_metric() -> None:
+    """THE trap this closes.
+
+    A local run reads doc-warnings BETTER than CI does, so an unguarded
+    --suggest would hand someone a ceiling that red-lines main on the next push
+    — the ratchet actively causing the failure it exists to prevent.
+    """
+    data = {"doc_convention_warnings": {"ceiling": 89, "direction": "lower-only"}}
+    measured = {"doc_convention_warnings": qr.Measured(80.0, detail="local")}
+
+    lines = qr.suggest(data, measured)
+
+    assert len(lines) == 1
+    assert "CI-AUTHORITATIVE" in lines[0]
+    assert '"ceiling": 80' not in lines[0], "it recommended the unsafe local number"
+
+
+def test_suggest_still_recommends_for_a_normal_metric() -> None:
+    """The guard must not disable --suggest wholesale."""
+    data = {"functions_over_cc30": {"ceiling": 19, "direction": "lower-only"}}
+    measured = {"functions_over_cc30": qr.Measured(12.0)}
+
+    lines = qr.suggest(data, measured)
+
+    assert len(lines) == 1
+    assert '"ceiling": 12' in lines[0] and "was 19" in lines[0]

@@ -170,6 +170,21 @@ markers = [
 ]
 
 # ---- mypy ---------------------------------------------------------------
+# `scratchpad/` is gitignored throwaway (see .gitignore) and exists ONLY on a
+# developer machine — CI never checks it out. Without this exclude, `mypy .`
+# reports whatever half-finished scripts happen to be sitting there, so the same
+# commit types clean in CI and dirty locally. That divergence became consequential
+# when scripts/check_quality_ratchet.py started reading the mypy error COUNT as a
+# ratchet metric: two stale 2026-07 scratch files made the local run FAIL a bound
+# that CI held at 0. Excluding it makes `mypy .` mean the same thing in both places.
+#
+# Deliberately NOT setting check_untyped_defs here — that is audit finding M-1 and a
+# separate ~1-day burn-down (3,487 unchecked test bodies). This section exists only
+# to scope the walk.
+[tool.mypy]
+exclude = ["^scratchpad/"]
+
+
 # Vendor SDKs without published type stubs or py.typed markers — silenced
 # at the module boundary so mypy stays at zero baseline. types-requests
 # (the proper fix for `requests`) is in dev deps above; the others have
