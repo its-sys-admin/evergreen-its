@@ -88,6 +88,11 @@ class MetricSpec:
     kind: str  # "floor" (raise-only) | "ceiling" (lower-only)
     unit: str
     what: str
+    # True when a LOCAL measurement is not comparable to the CI one, so the bound
+    # may only be re-set from a CI run. --suggest refuses to recommend tightening
+    # these, because a local number that reads BETTER than CI's would hand someone
+    # a bound that red-lines main on the next push.
+    ci_authoritative: bool = False
 
     @property
     def direction(self) -> str:
@@ -142,7 +147,11 @@ def _measure_doc_warnings() -> Measured:
     if proc.returncode not in (0, 1):
         return Measured(None, error=f"lint_doc_conventions exited {proc.returncode}")
     count = len(re.findall(r"^\s*\[warn\]", proc.stdout, re.MULTILINE))
-    return Measured(float(count), detail="lint_doc_conventions [warn] lines")
+    return Measured(
+        float(count),
+        detail="lint_doc_conventions [warn] lines (CI-authoritative: mtime "
+               "grandfathering makes a local count read LOW)",
+    )
 
 
 def _measure_mypy_errors() -> Measured:
@@ -197,7 +206,16 @@ SPECS: tuple[MetricSpec, ...] = (
     MetricSpec("structural_erosion", "ceiling", "", "complexity mass in CC>10 functions / total"),
     MetricSpec("verbosity", "ceiling", "", "statements in a duplicated 6-statement block / total"),
     MetricSpec("functions_over_cc30", "ceiling", " functions", "the extraction roster"),
-    MetricSpec("doc_convention_warnings", "ceiling", " warnings", "lint_doc_conventions violations"),
+    # CI-AUTHORITATIVE. `lint_doc_conventions` grandfathers an evergreen doc whose
+    # FILESYSTEM MTIME predates 2026-05-24 (its own `_doc_likely_grandfathered`,
+    # which the function's docstring already calls "slightly imperfect"). A CI
+    # checkout stamps every file with the checkout time, so nothing is grandfathered
+    # there and the count is both HIGHER and deterministic; a developer tree keeps
+    # real mtimes and reads LOW. Measured 2026-08-18 on one commit: CI 89, local 88.
+    # Harmless for the GATE, which runs in CI — dangerous for --suggest, which would
+    # otherwise recommend tightening the ceiling to a number CI cannot meet.
+    MetricSpec("doc_convention_warnings", "ceiling", " warnings",
+               "lint_doc_conventions violations", ci_authoritative=True),
     MetricSpec("mypy_errors", "ceiling", " errors", "mypy . error count"),
     MetricSpec("excluded_verify_checks", "ceiling", " checks", "verify_cutover checks the watchdog skips"),
 )
@@ -457,9 +475,17 @@ def suggest(data: dict[str, Any], measured: dict[str, Measured]) -> list[str]:
         if bound is None:
             continue
         tighter = m.value > bound if spec.kind == "floor" else m.value < bound
-        if tighter:
-            new = int(m.value) if spec.unit.strip() else round(m.value, 4)
-            out.append(f'  "{spec.key}": {{ "{spec.kind}": {new}, ... }}   (was {bound:g})')
+        if not tighter:
+            continue
+        if spec.ci_authoritative:
+            out.append(
+                f'  # {spec.key}: measured {m.value:g} here, but this metric is '
+                f'CI-AUTHORITATIVE — a local run reads better than CI does. '
+                f'Re-set it from a CI log, never from this output.'
+            )
+            continue
+        new = int(m.value) if spec.unit.strip() else round(m.value, 4)
+        out.append(f'  "{spec.key}": {{ "{spec.kind}": {new}, ... }}   (was {bound:g})')
     return out
 
 
