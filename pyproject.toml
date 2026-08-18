@@ -104,7 +104,7 @@ dependencies = [
     # ocr_pages, and a missing/broken import degrades to [] (no text recovered →
     # Tier-3 review), never an error. Floor pins per this file's convention.
     "ocrmac>=1.0; sys_platform == 'darwin'",
-    "pyobjc-framework-Vision>=10.0,<13.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Vision>=12.2.2,<13.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]
