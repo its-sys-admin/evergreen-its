@@ -353,9 +353,16 @@ def _validate_definition(definition: Any) -> None:
 def _apply_to_worktree(manifest: dict, files: dict[str, Any]) -> None:
     """Write the new catalog.json + each new form file to the repo worktree (append-only:
     never deletes a prior form file; design C1)."""
-    _CATALOG_PATH.write_text(json.dumps(manifest, indent=2) + "\n")
+    # ensure_ascii=False: the committed catalog/form files hold literal UTF-8 (em-dashes,
+    # curly quotes), so the default ensure_ascii=True re-escapes them on every daemon write
+    # and each publish diff carries dozens of \uXXXX churn lines that hide the real change —
+    # and it ping-pongs, because human-authored edits put the literal characters back. With
+    # this, a daemon write of an unchanged manifest is byte-identical to what is on disk.
+    _CATALOG_PATH.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
     for form_code, definition in files.items():
-        (_FORMS_DIR / f"{form_code}.json").write_text(json.dumps(definition, indent=2) + "\n")
+        (_FORMS_DIR / f"{form_code}.json").write_text(
+            json.dumps(definition, indent=2, ensure_ascii=False) + "\n"
+        )
 
 
 def _git(*args: str) -> str:
@@ -406,6 +413,56 @@ _LOG_SIGNAL_RE = re.compile(
     r"(AssertionError|Error:|FAILED|expected .+ to be|✗|×|##\[error\])", re.IGNORECASE
 )
 
+# A check-run that is still running (Actions uses `status`, legacy commit statuses `state`).
+_LIVE_CHECK_STATUSES = {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"}
+
+
+def _check_name(check: dict) -> str:
+    """A check's stable name — Actions check-runs carry `name`, legacy statuses `context`."""
+    return str(check.get("name") or check.get("context") or "check")
+
+
+def _conclusion(check: dict) -> str:
+    """A finished check's outcome, upper-cased ("" while it is still running)."""
+    return str(check.get("conclusion") or "").upper()
+
+
+def _check_status(check: dict) -> str:
+    """A check's run state, upper-cased (Actions uses `status`, legacy statuses `state`)."""
+    return str(check.get("status") or check.get("state") or "").upper()
+
+
+def _supersedes_a_cancellation(other: dict) -> bool:
+    """True for a run that makes an older same-named CANCELLED entry irrelevant — it is
+    either still going or has already come back green."""
+    return _check_status(other) in _LIVE_CHECK_STATUSES or _conclusion(other) == "SUCCESS"
+
+
+def _is_superseded_cancellation(check: dict, rollup: list[dict]) -> bool:
+    """True for a CANCELLED check-run that a LIVE (or already-SUCCEEDED) run of the SAME
+    name supersedes — i.e. GitHub's concurrency cancel, not a real CI failure.
+
+    `.github/workflows/ci.yml` sets `concurrency: ci-${{ github.ref }}` with
+    `cancel-in-progress: true`, and this daemon's own push-then-`pr create` sequence
+    routinely lands two runs on one ref, so GitHub cancels the older one and its jobs sit in
+    the PR's rollup as CANCELLED beside the live ones. Counting those as failure aborts a
+    HEALTHY publish on the first poll (CI_POLL_S) while the real run still has minutes to
+    run, and reports bare job names with no detail — a cancelled job has no failing step for
+    `_check_failure_detail` to quote, so the reason degrades to e.g. "test; portal; secrets"
+    and points the operator at three jobs that never actually failed.
+
+    A cancellation with NO successor still fails CLOSED: an operator cancelling a run, or a
+    whole workflow cancelled outright, must not read as green.
+    """
+    if _conclusion(check) != "CANCELLED":
+        return False
+    name = _check_name(check)
+    return any(
+        _supersedes_a_cancellation(other)
+        for other in rollup
+        if other is not check and _check_name(other) == name
+    )
+
 
 def _dedupe_checks(checks: list[dict]) -> list[dict]:
     """One entry per check NAME. CI double-fires on push + pull_request, so a single failing
@@ -413,7 +470,7 @@ def _dedupe_checks(checks: list[dict]) -> list[dict]:
     seen: set[str] = set()
     out: list[dict] = []
     for c in checks:
-        name = str(c.get("name") or c.get("context") or "check")
+        name = _check_name(c)
         if name not in seen:
             seen.add(name)
             out.append(c)
@@ -426,7 +483,7 @@ def _check_failure_detail(check: dict) -> str:
     the editor's 'Edit & re-publish') shows the REAL reason, not a bare job name. Best-
     effort: any error falls back to the bare name so a detail-fetch failure never masks the
     CI-failure signal."""
-    name = str(check.get("name") or check.get("context") or "check")
+    name = _check_name(check)
     m = re.search(r"/job/(\d+)", str(check.get("detailsUrl") or ""))
     if not m:
         return name
@@ -460,7 +517,11 @@ def _wait_for_ci(branch: str) -> None:
         if data.get("mergeStateStatus") == "CLEAN":
             return
         rollup = data.get("statusCheckRollup") or []
-        bad = [c for c in rollup if str(c.get("conclusion") or "").upper() in _CI_FAIL_CONCLUSIONS]
+        bad = [
+            c for c in rollup
+            if _conclusion(c) in _CI_FAIL_CONCLUSIONS
+            and not _is_superseded_cancellation(c, rollup)
+        ]
         if bad:
             raise RuntimeError(f"CI failed for {branch}: {_ci_failure_reason(bad)}")
         if data.get("mergeStateStatus") == "BEHIND":
