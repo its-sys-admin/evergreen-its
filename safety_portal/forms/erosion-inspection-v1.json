@@ -1,0 +1,448 @@
+{
+  "form_code": "erosion-inspection-v1",
+  "parent_form_code": "erosion-inspection",
+  "form_name": "Erosion & Sediment Control Inspection",
+  "variant_label": null,
+  "version": 1,
+  "archetype": "grouped_checklist",
+  "source_pdf": "",
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "content",
+      "blocks": [
+        {
+          "body": "This form is to document erosion and sediment control operations and should be completed by the appropriate personel "
+        }
+      ],
+      "title": "Erosion & Sediment Control Inspection"
+    },
+    {
+      "type": "header",
+      "fields": [
+        {
+          "key": "field_1",
+          "label": "Job Name",
+          "input": "text",
+          "required": true
+        },
+        {
+          "key": "field_2",
+          "label": "Inspection Date",
+          "input": "date",
+          "required": true
+        },
+        {
+          "key": "field_3",
+          "label": "Engineer & Designee",
+          "input": "text"
+        },
+        {
+          "key": "field_4",
+          "label": "Days Since Last Inspection",
+          "input": "number",
+          "required": true
+        },
+        {
+          "key": "field_5",
+          "label": "Arrival Time",
+          "input": "time"
+        },
+        {
+          "key": "field_6",
+          "label": "Rainfall ( Last 24 Hours)",
+          "input": "select",
+          "options": [
+            "Yes",
+            "No"
+          ]
+        },
+        {
+          "key": "field_7",
+          "label": "Amount of Rainfall Since Last Inspection",
+          "input": "text"
+        }
+      ]
+    },
+    {
+      "type": "repeating_table",
+      "key": "table1",
+      "columns": [
+        {
+          "key": "col_1",
+          "label": "Current Weather",
+          "input": "text"
+        },
+        {
+          "key": "col_2",
+          "label": "Temperature",
+          "input": "text"
+        },
+        {
+          "key": "col_3",
+          "label": "Type of Inspection",
+          "input": "text"
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": true,
+      "title": "Onsite Conditions"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist1",
+      "groups": [
+        {
+          "key": "site",
+          "label": "Site Checklist",
+          "scale": [
+            "Yes",
+            "No"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Site Active"
+            },
+            {
+              "key": "_item_2",
+              "label": "Active Stormwater Runoff"
+            },
+            {
+              "key": "site_item_3",
+              "label": "All Discharge Points Inspected?"
+            },
+            {
+              "key": "site_item_4",
+              "label": "Turbidity, Discoloration or Oil Sheen Observed?"
+            },
+            {
+              "key": "site_item_5",
+              "label": "Turbidity Samples Taken?"
+            }
+          ]
+        },
+        {
+          "key": "group_2",
+          "label": "Phase of Active Construction",
+          "scale": [
+            "Yes",
+            "N/A"
+          ],
+          "items": [
+            {
+              "key": "group_2_item",
+              "label": "Pre-Con Erosion Controls"
+            },
+            {
+              "key": "group_2_item_2",
+              "label": "Clearing/Demo/Grading"
+            },
+            {
+              "key": "group_2_item_3",
+              "label": "Infrastructure/Storm/Roads"
+            },
+            {
+              "key": "group_2_item_4",
+              "label": "Hauling"
+            },
+            {
+              "key": "group_2_item_5",
+              "label": "Concrete/CTB"
+            },
+            {
+              "key": "group_2_item_6",
+              "label": "Offsite Improvements"
+            },
+            {
+              "key": "group_2_item_7",
+              "label": "Utilities"
+            },
+            {
+              "key": "group_2_item_8",
+              "label": "Temporary Stabilization"
+            },
+            {
+              "key": "group_2_item_9",
+              "label": "Vertical Construction/Buildings"
+            },
+            {
+              "key": "group_2_item_10",
+              "label": "Final Stabilization"
+            }
+          ]
+        }
+      ],
+      "title": "Inspection Checklist"
+    },
+    {
+      "type": "repeating_table",
+      "key": "tablebmp",
+      "columns": [
+        {
+          "key": "col_1",
+          "label": "BMP",
+          "input": "text"
+        },
+        {
+          "key": "col_2",
+          "label": "Status",
+          "input": "text"
+        },
+        {
+          "key": "col_3",
+          "label": "Location",
+          "input": "text"
+        },
+        {
+          "key": "col_4",
+          "label": "Effectiveness",
+          "input": "text"
+        },
+        {
+          "key": "col_5",
+          "label": "Action Required",
+          "input": "text"
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": true,
+      "title": "Erosion & Sediment Control BMPs"
+    },
+    {
+      "type": "repeating_table",
+      "key": "table2",
+      "columns": [
+        {
+          "key": "col_1",
+          "label": "Location",
+          "input": "text"
+        },
+        {
+          "key": "col_2",
+          "label": "Flow Rate",
+          "input": "text"
+        },
+        {
+          "key": "col_3",
+          "label": "Sample Result",
+          "input": "text"
+        },
+        {
+          "key": "col_4",
+          "label": "Date",
+          "input": "date"
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": true,
+      "title": "Sampling Results"
+    },
+    {
+      "type": "checklist",
+      "key": "checklistdischarge",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Discharge Present?",
+          "scale": [
+            "Yes",
+            "No"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Upstream"
+            },
+            {
+              "key": "group_1_item_2",
+              "label": "Downstream"
+            }
+          ]
+        }
+      ],
+      "title": "Unauthorized Discharge"
+    },
+    {
+      "type": "checklist",
+      "key": "observations",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "If yes describe",
+          "scale": [
+            "Yes",
+            "No",
+            "N/A"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Inactive for 14 days?"
+            },
+            {
+              "key": "group_1_item_2",
+              "label": "Active CTB (contrete treated base)?"
+            }
+          ],
+          "comment_per_item": true
+        },
+        {
+          "key": "group_2",
+          "label": "Observation of Areas",
+          "scale": [
+            "OK",
+            "NOT OK",
+            "N/A"
+          ],
+          "items": [
+            {
+              "key": "group_2_item",
+              "label": "Good Condition",
+              "kind": "text"
+            },
+            {
+              "key": "group_2_item_2",
+              "label": "At risk of causing non-compliance",
+              "kind": "text"
+            },
+            {
+              "key": "group_2_item_3",
+              "label": "Poor condition causing non-compliance",
+              "kind": "text"
+            }
+          ]
+        }
+      ],
+      "title": "Observations"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist3",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Check All That Apply",
+          "scale": [
+            "Yes",
+            "N/A"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "All in place BMPs"
+            },
+            {
+              "key": "group_1_item_2",
+              "label": "All Disturbed Soils"
+            },
+            {
+              "key": "group_1_item_3",
+              "label": "All Contcrete Washouts"
+            },
+            {
+              "key": "group_1_item_4",
+              "label": "Material Storage Areas"
+            },
+            {
+              "key": "group_1_item_5",
+              "label": "All Discharge Locations"
+            },
+            {
+              "key": "group_1_item_6",
+              "label": "Pollution Control"
+            },
+            {
+              "key": "group_1_item_7",
+              "label": "All Equipment Storage"
+            },
+            {
+              "key": "group_1_item_8",
+              "label": "Solid Waste"
+            },
+            {
+              "key": "group_1_item_9",
+              "label": "Construction Enterance & Exit"
+            }
+          ]
+        }
+      ],
+      "title": "Areas of Inspection"
+    },
+    {
+      "type": "repeating_table",
+      "key": "table3",
+      "columns": [
+        {
+          "key": "col_1",
+          "label": "Item Identified",
+          "input": "text"
+        },
+        {
+          "key": "col_2",
+          "label": "Date Identified",
+          "input": "date"
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": true,
+      "title": "Maintenance Actions Needed"
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "columns": [
+        {
+          "key": "name",
+          "label": "Inspected By",
+          "input": "text",
+          "required": true
+        },
+        {
+          "key": "signature",
+          "label": "Phone #",
+          "input": "text"
+        },
+        {
+          "key": "col_3",
+          "label": "Email",
+          "input": "text"
+        },
+        {
+          "key": "col_4",
+          "label": "CESCL / CPESC #",
+          "input": "text"
+        },
+        {
+          "key": "col_5",
+          "label": "Date",
+          "input": "date"
+        },
+        {
+          "key": "col_6",
+          "label": "Signature",
+          "input": "signature",
+          "required": true
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": false,
+      "title": "Inspector Signature"
+    },
+    {
+      "type": "header",
+      "fields": [
+        {
+          "key": "field11",
+          "label": "Inspection Photos",
+          "input": "photo"
+        }
+      ]
+    },
+    {
+      "type": "static_text",
+      "text": "\"I certify that this report is true, accurate, and complete to the best of my knowledge, abilities, and belief\"",
+      "emphasis": "legal"
+    }
+  ]
+}
