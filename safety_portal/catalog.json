@@ -824,6 +824,28 @@
           "display_order": 1
         }
       ]
+    },
+    {
+      "parent_form_code": "erosion-inspection",
+      "name": "Erosion & Sediment Control Inspection",
+      "display_order": 13,
+      "category": "safety",
+      "forms": [
+        {
+          "identity": "erosion-inspection",
+          "variant_label": null,
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "erosion-inspection-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "erosion-inspection-v1"
+            }
+          ],
+          "display_order": 1
+        }
+      ]
     }
   ]
 }
