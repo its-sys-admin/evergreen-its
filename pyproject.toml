@@ -47,7 +47,7 @@ dependencies = [
     # Deterministic render-parity PDF renderer for Safety Portal submissions
     # (safety_reports/form_pdf.py, Option B — intake renders on arrival, Phase 5).
     # No AI; embeds SVG-path signatures + the definition's mandatory/legal text.
-    "reportlab>=4.0",
+    "reportlab>=5.0.0",
     # Merges the per-submission PDFs into the Sat→Fri weekly packet
     # (safety_reports/form_pdf.merge_pdfs, consumed by weekly_generate in Phase 5);
     # also extracts text in tests/test_form_pdf.py for render-parity assertions.
