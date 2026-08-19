@@ -72,23 +72,57 @@ def test_row_tables_emit_exactly_min_rows(path: Path) -> None:
     """For each repeating/signature table, the count of text-field WIDGETS for a given
     column equals min_rows. We pick a TEXT column (text/textarea/date/time/number) —
     signature columns render as a hand-sign LINE (not a field), so they're excluded.
+
+    Counted PER SECTION, by rendering each table on its own. A whole-document count keyed
+    on the field-name suffix CANNOT work: `_FieldNamer` names every field `f{n}_{key}` off
+    a per-DOCUMENT counter (form_pdf.py `_FieldNamer.next`), so the suffix carries no
+    section identity, and a column key reused across sections silently over-counts every
+    table that shares it. Reuse is legal by contract — the Worker validates column keys
+    with `localUnique(colKeys, "column")` (worker/publishValidation.ts), reserving
+    cross-section uniqueness for top-level value keys alone — and the admin editor emits
+    exactly that shape: every new table is seeded `col_1` (editorModel.blankSection) with
+    the numbering restarting per section (FormEditor's `${keyHint}_${fields.length + 1}`).
+    So any editor-authored form with two or more tables tripped the old document-wide
+    count. Isolating the section also keeps the assertion from being satisfied by an
+    offsetting distribution that merely sums to the right total.
     """
     definition = _load(path)
-    fields = _fields(render_blank_fillable(definition))
-    # Field names are "f{n}_{sanitized-key}" (see form_pdf._FieldNamer). The key is
-    # already underscore-safe in the definitions, so the suffix after the first "_"
-    # equals the column key — count rows by that exact suffix.
     for section in _row_table_sections(definition):
+        solo = _fields(render_blank_fillable({**definition, "sections": [section]}))
         expect = section.get("min_rows", 1)
         for col in section["columns"]:
             if col["input"] == "signature":
                 continue  # sign-by-hand line, not an AcroForm field
             key = col["key"]
-            count = sum(1 for name in fields if name.split("_", 1)[-1] == key)
+            count = sum(1 for name in solo if name.split("_", 1)[-1] == key)
             assert count == expect, (
                 f"{path.stem} {section['key']}.{key}: got {count} field rows, "
                 f"expected min_rows={expect}"
             )
+
+
+@pytest.mark.parametrize("path", DEF_PATHS, ids=lambda p: p.stem)
+def test_full_document_row_field_totals(path: Path) -> None:
+    """The REAL rendered document carries every table's rows.
+
+    The per-section test above renders each table in ISOLATION, so it is structurally
+    blind to a section dropped (or duplicated) when the whole form is assembled. This
+    asserts the shipped artifact's totals. Counts are summed per column KEY because one
+    key may legally appear in several sections (see the docstring above).
+    """
+    definition = _load(path)
+    expected: dict[str, int] = {}
+    for section in _row_table_sections(definition):
+        for col in section["columns"]:
+            if col["input"] == "signature":
+                continue
+            expected[col["key"]] = expected.get(col["key"], 0) + section.get("min_rows", 1)
+    fields = _fields(render_blank_fillable(definition))
+    for key, want in expected.items():
+        count = sum(1 for name in fields if name.split("_", 1)[-1] == key)
+        assert count == want, (
+            f"{path.stem} column {key!r} across all row tables: got {count}, expected {want}"
+        )
 
 
 def test_jha_row_counts() -> None:

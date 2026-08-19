@@ -619,3 +619,50 @@ def test_a_stage0_git_failure_does_not_borrow_the_bad_edit_data_code(stub):
     )
     # …and the portal still receives the stage name its enum knows.
     assert stub["stamp"].call_args.kwargs["failed_stage"] == "validated"
+
+
+def test_wait_for_ci_ignores_a_superseded_cancellation(mocker):
+    """The req-6 shape (2026-08-19): `ci.yml`'s `concurrency: cancel-in-progress` cancels the
+    older of two runs sharing a ref, and its jobs sit in the rollup as CANCELLED beside the
+    live ones. Treating that as failure aborted a healthy publish ~20s in and reported bare
+    job names ("test; portal; secrets") with no detail, because a cancelled job has no
+    failing step to quote. The daemon must keep waiting for the live run instead."""
+    views = [
+        json.dumps({"mergeStateStatus": "BLOCKED", "statusCheckRollup": [
+            {"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "test", "status": "IN_PROGRESS", "conclusion": ""},
+            {"name": "portal", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "portal", "status": "IN_PROGRESS", "conclusion": ""},
+            {"name": "secrets", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "secrets", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        ]}),
+        json.dumps({"mergeStateStatus": "CLEAN", "statusCheckRollup": []}),
+    ]
+    mocker.patch.object(ca, "_gh", side_effect=lambda *a: views.pop(0) if a[:2] == ("pr", "view") else "")
+    mocker.patch.object(ca.time, "sleep")
+    ca._wait_for_ci("config/req-6-po_materials-tax")  # returns without raising
+
+
+def test_wait_for_ci_still_raises_on_a_cancellation_with_no_successor(mocker):
+    """Fail CLOSED: an operator cancelling the run (or a whole workflow cancelled outright)
+    has no live or succeeding run of the same name, and must NOT read as green."""
+    mocker.patch.object(ca, "_gh", return_value=json.dumps({
+        "mergeStateStatus": "BLOCKED",
+        "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"}],
+    }))
+    with pytest.raises(RuntimeError, match="CI failed"):
+        ca._wait_for_ci("config/req-1-po_materials-tax")
+
+
+def test_wait_for_ci_raises_on_a_real_failure_beside_a_superseded_cancellation(mocker):
+    """The guard is narrow: neutralising a superseded CANCELLED must not mask a genuine
+    FAILURE reported by the live run of that same job."""
+    mocker.patch.object(ca, "_gh", return_value=json.dumps({
+        "mergeStateStatus": "BLOCKED",
+        "statusCheckRollup": [
+            {"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"},
+        ],
+    }))
+    with pytest.raises(RuntimeError, match="CI failed"):
+        ca._wait_for_ci("config/req-1-po_materials-tax")

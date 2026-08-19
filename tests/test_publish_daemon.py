@@ -788,6 +788,53 @@ def test_wait_for_ci_dedupes_and_surfaces_detail(mocker):
     assert "expected 11 to be 10" in msg  # the real reason, not a bare job name
 
 
+def test_wait_for_ci_ignores_a_superseded_cancellation(mocker):
+    """The req-6 shape (2026-08-19): `ci.yml`'s `concurrency: cancel-in-progress` cancels the
+    older of two runs sharing a ref, and its jobs sit in the rollup as CANCELLED beside the
+    live ones. Treating that as failure aborted a healthy publish ~20s in and reported bare
+    job names ("test; portal; secrets") with no detail, because a cancelled job has no
+    failing step to quote. The daemon must keep waiting for the live run instead."""
+    views = [
+        json.dumps({"mergeStateStatus": "BLOCKED", "statusCheckRollup": [
+            {"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "test", "status": "IN_PROGRESS", "conclusion": ""},
+            {"name": "portal", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "portal", "status": "IN_PROGRESS", "conclusion": ""},
+            {"name": "secrets", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "secrets", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        ]}),
+        json.dumps({"mergeStateStatus": "CLEAN", "statusCheckRollup": []}),
+    ]
+    mocker.patch.object(pd, "_gh", side_effect=lambda *a: views.pop(0) if a[:2] == ("pr", "view") else "")
+    mocker.patch.object(pd.time, "sleep")
+    pd._wait_for_ci("publish/req-6-erosion-inspection")  # returns without raising
+
+
+def test_wait_for_ci_still_raises_on_a_cancellation_with_no_successor(mocker):
+    """Fail CLOSED: an operator cancelling the run (or a whole workflow cancelled outright)
+    has no live or succeeding run of the same name, and must NOT read as green."""
+    mocker.patch.object(pd, "_gh", return_value=json.dumps({
+        "mergeStateStatus": "BLOCKED",
+        "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"}],
+    }))
+    with pytest.raises(RuntimeError, match="CI failed"):
+        pd._wait_for_ci("publish/req-1-jha")
+
+
+def test_wait_for_ci_raises_on_a_real_failure_beside_a_superseded_cancellation(mocker):
+    """The guard is narrow: neutralising a superseded CANCELLED must not mask a genuine
+    FAILURE reported by the live run of that same job."""
+    mocker.patch.object(pd, "_gh", return_value=json.dumps({
+        "mergeStateStatus": "BLOCKED",
+        "statusCheckRollup": [
+            {"name": "test", "status": "COMPLETED", "conclusion": "CANCELLED"},
+            {"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"},
+        ],
+    }))
+    with pytest.raises(RuntimeError, match="CI failed"):
+        pd._wait_for_ci("publish/req-1-jha")
+
+
 def test_wait_for_ci_updates_a_behind_branch_then_merges(mocker):
     views = [
         json.dumps({"mergeStateStatus": "BEHIND", "statusCheckRollup": []}),
@@ -797,3 +844,41 @@ def test_wait_for_ci_updates_a_behind_branch_then_merges(mocker):
     mocker.patch.object(pd.time, "sleep")
     pd._wait_for_ci("publish/req-1-jha")
     assert any(c.args[:2] == ("pr", "update-branch") for c in gh.call_args_list)
+
+
+# ── _apply_to_worktree serialisation (diff-churn guard) ──────────────────────────
+
+
+def test_apply_to_worktree_writes_literal_utf8_not_escapes(mocker, tmp_path):
+    """The committed catalog/form files hold literal UTF-8 (em-dashes, curly quotes). A
+    daemon write must not re-escape them: ensure_ascii=True turned every publish diff into
+    dozens of \\uXXXX churn lines that buried the real change, and it ping-ponged because
+    human edits put the literal characters back."""
+    catalog = tmp_path / "catalog.json"
+    forms = tmp_path / "forms"
+    forms.mkdir()
+    mocker.patch.object(pd, "_CATALOG_PATH", catalog)
+    mocker.patch.object(pd, "_FORMS_DIR", forms)
+
+    pd._apply_to_worktree(
+        {"manifest_version": 1, "parents": [{"label": "Erosion \u2014 Inspection"}]},
+        {"erosion-inspection-v1": {"form_name": "Erosion \u2014 Inspection", "quote": "\u201cok\u201d"}},
+    )
+
+    for written in (catalog, forms / "erosion-inspection-v1.json"):
+        raw = written.read_text(encoding="utf-8")
+        assert "\\u" not in raw, f"{written.name} re-escaped non-ASCII"
+        assert "\u2014" in raw, f"{written.name} lost the literal em-dash"
+
+
+def test_apply_to_worktree_write_is_idempotent_against_the_committed_catalog():
+    """A daemon write of the LIVE manifest, unchanged, must reproduce the file on disk
+    byte-for-byte — otherwise every publish carries a reformat the operator has to read
+    past. Asserts round-trip equality, never the catalog's CONTENT (which the publish
+    pipeline edits; pinning it would strand the next publish PR)."""
+    import json as _json
+    from pathlib import Path as _Path
+    path = _Path(__file__).resolve().parents[1] / "safety_portal" / "catalog.json"
+    on_disk = path.read_text(encoding="utf-8")
+    rewritten = _json.dumps(_json.loads(on_disk), indent=2, ensure_ascii=False) + "\n"
+    assert rewritten == on_disk, "a no-op daemon write would reformat catalog.json"
