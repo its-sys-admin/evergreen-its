@@ -231,7 +231,7 @@
         },
         {
           "identity": "toolbox-talk-fire-ext-selection",
-          "variant_label": "Portable Fire Extinguishers — Proper Selection",
+          "variant_label": "Portable Fire Extinguishers \u2014 Proper Selection",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-fire-ext-selection-v1",
@@ -245,7 +245,7 @@
         },
         {
           "identity": "toolbox-talk-fire-ext-how-they-work",
-          "variant_label": "Portable Fire Extinguishers — How They Extinguish Fires",
+          "variant_label": "Portable Fire Extinguishers \u2014 How They Extinguish Fires",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-fire-ext-how-they-work-v1",
@@ -259,7 +259,7 @@
         },
         {
           "identity": "toolbox-talk-fire-ext-pass",
-          "variant_label": "Portable Fire Extinguishers — Just Remember “PASS”",
+          "variant_label": "Portable Fire Extinguishers \u2014 Just Remember \u201cPASS\u201d",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-fire-ext-pass-v1",
@@ -273,7 +273,7 @@
         },
         {
           "identity": "toolbox-talk-fire-ext-dos-donts",
-          "variant_label": "Portable Fire Extinguishers — Do's and Don'ts",
+          "variant_label": "Portable Fire Extinguishers \u2014 Do's and Don'ts",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-fire-ext-dos-donts-v1",
@@ -287,7 +287,7 @@
         },
         {
           "identity": "toolbox-talk-fire-ext-readiness",
-          "variant_label": "Portable Fire Extinguishers — Making Sure They Are Ready",
+          "variant_label": "Portable Fire Extinguishers \u2014 Making Sure They Are Ready",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-fire-ext-readiness-v1",
@@ -301,7 +301,7 @@
         },
         {
           "identity": "toolbox-talk-flammable-liquid-categories",
-          "variant_label": "Fire Prevention — OSHA's Categories of Flammable Liquids",
+          "variant_label": "Fire Prevention \u2014 OSHA's Categories of Flammable Liquids",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-flammable-liquid-categories-v1",
@@ -315,7 +315,7 @@
         },
         {
           "identity": "toolbox-talk-fire-prevention-tips",
-          "variant_label": "Fire Prevention — Avoiding Accidental Fires",
+          "variant_label": "Fire Prevention \u2014 Avoiding Accidental Fires",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-fire-prevention-tips-v1",
@@ -329,7 +329,7 @@
         },
         {
           "identity": "toolbox-talk-cold-wind-chill",
-          "variant_label": "Cold Stress — Understanding the Effects of Wind Chill",
+          "variant_label": "Cold Stress \u2014 Understanding the Effects of Wind Chill",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-cold-wind-chill-v1",
@@ -343,7 +343,7 @@
         },
         {
           "identity": "toolbox-talk-cold-dressing",
-          "variant_label": "Cold Stress — Dressing for Cold Weather",
+          "variant_label": "Cold Stress \u2014 Dressing for Cold Weather",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-cold-dressing-v1",
@@ -357,7 +357,7 @@
         },
         {
           "identity": "toolbox-talk-heat-what-is",
-          "variant_label": "Heat Illness Prevention — What is Heat Illness?",
+          "variant_label": "Heat Illness Prevention \u2014 What is Heat Illness?",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-what-is-v1",
@@ -371,7 +371,7 @@
         },
         {
           "identity": "toolbox-talk-heat-body-defends",
-          "variant_label": "Heat Illness Prevention — How Your Body Defends Against Overheating",
+          "variant_label": "Heat Illness Prevention \u2014 How Your Body Defends Against Overheating",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-body-defends-v1",
@@ -385,7 +385,7 @@
         },
         {
           "identity": "toolbox-talk-heat-humidity",
-          "variant_label": "Heat Illness Prevention — Why Humidity Makes Heat More Dangerous",
+          "variant_label": "Heat Illness Prevention \u2014 Why Humidity Makes Heat More Dangerous",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-humidity-v1",
@@ -399,7 +399,7 @@
         },
         {
           "identity": "toolbox-talk-heat-risk-factors",
-          "variant_label": "Heat Illness Prevention — Workplace & Personal Risk Factors",
+          "variant_label": "Heat Illness Prevention \u2014 Workplace & Personal Risk Factors",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-risk-factors-v1",
@@ -413,7 +413,7 @@
         },
         {
           "identity": "toolbox-talk-heat-recognize-respond",
-          "variant_label": "Heat Illness Prevention — Recognizing & Responding to Heat Illnesses",
+          "variant_label": "Heat Illness Prevention \u2014 Recognizing & Responding to Heat Illnesses",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-recognize-respond-v1",
@@ -427,7 +427,7 @@
         },
         {
           "identity": "toolbox-talk-heat-hydration",
-          "variant_label": "Heat Illness Prevention — The Critical Role of Proper Hydration",
+          "variant_label": "Heat Illness Prevention \u2014 The Critical Role of Proper Hydration",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-hydration-v1",
@@ -441,7 +441,7 @@
         },
         {
           "identity": "toolbox-talk-heat-rest-shade",
-          "variant_label": "Heat Illness Prevention — The Critical Roles of Rest & Shade",
+          "variant_label": "Heat Illness Prevention \u2014 The Critical Roles of Rest & Shade",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-rest-shade-v1",
@@ -455,7 +455,7 @@
         },
         {
           "identity": "toolbox-talk-heat-clothing-ppe",
-          "variant_label": "Heat Illness Prevention — Clothing and PPE Considerations",
+          "variant_label": "Heat Illness Prevention \u2014 Clothing and PPE Considerations",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-heat-clothing-ppe-v1",
@@ -483,7 +483,7 @@
         },
         {
           "identity": "toolbox-talk-excavation-standards",
-          "variant_label": "Excavation Safety — Two Key Definitions in the OSHA Excavation Standards",
+          "variant_label": "Excavation Safety \u2014 Two Key Definitions in the OSHA Excavation Standards",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-excavation-standards-v1",
@@ -497,7 +497,7 @@
         },
         {
           "identity": "toolbox-talk-excavation-crossing",
-          "variant_label": "Excavation Safety — OSHA Rules About Walking or Driving Over Excavations",
+          "variant_label": "Excavation Safety \u2014 OSHA Rules About Walking or Driving Over Excavations",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-excavation-crossing-v1",
@@ -511,7 +511,7 @@
         },
         {
           "identity": "toolbox-talk-excavation-distressed-soil",
-          "variant_label": "Excavation Safety — Signs of Distress in Soil Around Excavations",
+          "variant_label": "Excavation Safety \u2014 Signs of Distress in Soil Around Excavations",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-excavation-distressed-soil-v1",
@@ -525,7 +525,7 @@
         },
         {
           "identity": "toolbox-talk-excavation-ladders",
-          "variant_label": "Excavation Safety — Using a Portable Ladder to Get In and Out of Excavations",
+          "variant_label": "Excavation Safety \u2014 Using a Portable Ladder to Get In and Out of Excavations",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-excavation-ladders-v1",
@@ -539,7 +539,7 @@
         },
         {
           "identity": "toolbox-talk-forklifts-pits",
-          "variant_label": "Material Handling — Working Safely Around Forklifts / PITs",
+          "variant_label": "Material Handling \u2014 Working Safely Around Forklifts / PITs",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-forklifts-pits-v1",
@@ -553,7 +553,7 @@
         },
         {
           "identity": "toolbox-talk-palletized-materials",
-          "variant_label": "Material Handling — Safety for Palletized Materials",
+          "variant_label": "Material Handling \u2014 Safety for Palletized Materials",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-palletized-materials-v1",
@@ -567,7 +567,7 @@
         },
         {
           "identity": "toolbox-talk-safe-lifting",
-          "variant_label": "Material Handling — Safe Lifting Techniques",
+          "variant_label": "Material Handling \u2014 Safe Lifting Techniques",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-safe-lifting-v1",
@@ -581,7 +581,7 @@
         },
         {
           "identity": "toolbox-talk-mobile-cranes",
-          "variant_label": "Material Handling — Working Safely Around Mobile Cranes",
+          "variant_label": "Material Handling \u2014 Working Safely Around Mobile Cranes",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-mobile-cranes-v1",
@@ -595,7 +595,7 @@
         },
         {
           "identity": "toolbox-talk-storage-racks",
-          "variant_label": "Material Handling — Storage Racks and Shelving Safety",
+          "variant_label": "Material Handling \u2014 Storage Racks and Shelving Safety",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-storage-racks-v1",
@@ -609,7 +609,7 @@
         },
         {
           "identity": "toolbox-talk-severe-weather",
-          "variant_label": "Severe Weather — Tornadoes, High Winds, Lightning and Flooding",
+          "variant_label": "Severe Weather \u2014 Tornadoes, High Winds, Lightning and Flooding",
           "status": "active",
           "current_version": 1,
           "current_form_code": "toolbox-talk-severe-weather-v1",
@@ -819,6 +819,28 @@
             {
               "version": 1,
               "form_code": "checklist-completion-v1"
+            }
+          ],
+          "display_order": 1
+        }
+      ]
+    },
+    {
+      "parent_form_code": "erosion-inspection",
+      "name": "Erosion & Sediment Control Inspection",
+      "display_order": 13,
+      "category": "safety",
+      "forms": [
+        {
+          "identity": "erosion-inspection",
+          "variant_label": null,
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "erosion-inspection-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "erosion-inspection-v1"
             }
           ],
           "display_order": 1
