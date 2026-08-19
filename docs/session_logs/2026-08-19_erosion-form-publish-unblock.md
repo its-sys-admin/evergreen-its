@@ -30,6 +30,13 @@ form live in the portal from the dev host.
 | PR #181 (req-7) | test / portal / secrets — SUCCESS |
 | main on `8dd2326` | SUCCESS (run 32280885323) |
 
+Four-part verify on #180:
+
+- pytest: 5711 passed / 4 skipped / 58 deselected
+- mypy: 0 errors / 511 source files
+- ruff: clean
+- main-branch CI on merge commit: SUCCESS
+
 ## The two faults
 
 **1. `test_row_tables_emit_exactly_min_rows` counted across the whole document.** Field names are
