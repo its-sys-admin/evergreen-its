@@ -182,6 +182,44 @@ threshold rather than immediately.**
 **Escalate to Seth (Tier 3).** Smartsheet is healthy in the browser but this daemon alone
 keeps failing; or any 401/403 appears in the same window (auth — a FIXED high-class action).
 
+## A failed publish left a branch / PR behind on GitHub (usually self-clears)
+
+**What it means.** A publish that fails at the commit/CI/merge stage used to leave its
+`publish/req-<id>-<form>` branch — and often an open PR — sitting on GitHub forever. Nothing
+removed them and nothing mentioned them, so they accumulated silently: requests 5 and 6 for
+`erosion-inspection-v1` each stranded one, and a config-lane branch sat for 40 days.
+
+**This is now automatic.** The daemon closes the PR (posting the failure reason first) and
+deletes the branch immediately after the failure is recorded, and it sweeps any older orphan at
+the start of each cycle. You should normally see nothing at all.
+
+**Why it mattered.** A stranded PR keeps a *superseded* form definition mergeable. Both stranded
+PRs above conflicted with the definition that actually shipped, and the conflicting hunk was the
+form's legal attestation line — resolving that conflict the obvious way would have silently
+dropped a legal certification from a live safety form. Leftover publish branches are therefore
+never "just untidy"; treat one as a real finding.
+
+**Low-class repair (Successor-Operator can do).** Normally none — the sweep clears it within a
+cycle or two. Confirm by looking at the repository's branch list for anything starting
+`publish/req-`; an empty list is the healthy state. Two things are worth knowing:
+
+- The sweep deliberately **waits** before touching a branch (about half an hour) and **skips any
+  request still in flight**, so a branch belonging to a publish happening right now is never
+  removed. A branch that is only minutes old is expected, not a fault.
+- If `publish_daemon.orphan_delete_failed` appears in ITS_Errors, the daemon tried and the branch
+  is still there. That is a GitHub permission or network problem, not a form problem — escalate.
+
+**Escalate to Seth (Tier 3) when:**
+
+- `publish_daemon.orphan_delete_failed` or `publish_daemon.orphan_sweep_*` appears in ITS_Errors
+  (git/GitHub auth — a FIXED high-capability class);
+- `publish_daemon.orphan_refused_merged` appears — the daemon found a **merged** PR where it
+  expected debris and refused to delete anything. That means the branch bookkeeping disagrees
+  with reality; nothing was destroyed, but it needs a developer;
+- a `publish/req-*` branch persists across several cycles with no error code at all;
+- **never delete a publish branch by hand to "help"** — if the request is still in flight you
+  would destroy a live publish. Report it instead.
+
 ## Escalate to Seth (Tier 3) when
 
 - Authoring or editing any `safety_portal/forms/*.json` (code).

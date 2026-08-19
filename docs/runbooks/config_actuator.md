@@ -116,12 +116,47 @@ moves are the three low-class ones in Symptom A/B/C below.
 
 ---
 
+## Symptom D — a `config/req-*` branch is sitting on GitHub (usually self-clears)
+
+**What it means.** A config actuation that fails at the commit/CI/merge stage used to leave its
+`config/req-<id>-<workstream>-<artifact>` branch on GitHub forever. Nothing removed it and
+nothing mentioned it: `config/req-1-po_materials-purchaser` sat on the remote for **40 days**
+carrying **no PR at all** — the push had landed, `gh pr create` never did — so it appeared on no
+surface, in no runbook, and in no alert.
+
+**This is now automatic.** The actuator closes the PR (posting the failure reason first) and
+deletes the branch immediately after the failure is recorded, and it sweeps any older orphan at
+the start of each cycle. You should normally see nothing.
+
+**Low-class repair (Successor-Operator can do).** Normally none — the sweep clears it within a
+cycle or two. Confirm by looking at the repository's branch list for anything starting
+`config/req-`; an empty list is the healthy state. Two things are worth knowing:
+
+- The sweep deliberately **waits** before touching a branch (about half an hour) and **skips any
+  request still in flight**, so a branch belonging to an actuation happening right now is never
+  removed. A branch that is only minutes old is expected, not a fault.
+- A branch with no PR is the *known* shape here, not an anomaly — the sweep handles it.
+
+**Escalate to Seth (Tier 3) when:**
+
+- `config_actuator.orphan_delete_failed` or `config_actuator.orphan_sweep_*` appears in
+  ITS_Errors (git/GitHub auth — a FIXED high-capability class);
+- `config_actuator.orphan_refused_merged` appears — the actuator found a **merged** PR where it
+  expected debris and refused to delete anything. Nothing was destroyed, but the bookkeeping
+  disagrees with reality and needs a developer;
+- a `config/req-*` branch persists across several cycles with no error code at all;
+- **never delete a config branch by hand to "help"** — if the request is still in flight you
+  would destroy a live actuation. Report it instead.
+
+---
+
 ## Fast reference
 
 | Signal (ITS_Errors `error_code` / Daemon_Health) | Meaning | Who |
 |---|---|---|
 | daemon dark, `polling_enabled=false` | ships dark by design | Tier-2 flip **iff** activation already approved, else Seth |
 | `config_actuator.creds_unresolved` | base URL / `ITS_PORTAL_CONFIG_TOKEN` genuinely **absent or blank** | Seth (secrets — high-class) |
+| `config_actuator.orphan_delete_failed` / `orphan_sweep_*` | a stranded `config/req-*` branch could not be removed (GitHub auth/network) | Seth (git/auth — high-class) |
 | `config_actuator.keychain_read_failed` | the bearer may well EXIST but could not be **read** (locked/denied Keychain). Do NOT re-provision the secret — unlock the Keychain and re-run | Seth (secrets — high-class) |
 | `config_actuator.deploy_blocked_pending_migrations` | unapplied D1 migrations; edits stay queued | Seth (apply migrations) |
 | `config_actuator.migration_check_failed` | can't verify D1 (fail-closed) | Seth (Cloudflare auth) |
