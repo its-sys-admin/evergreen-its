@@ -32,6 +32,11 @@ const qs = (over: Record<string, string> = {}): string => {
 
 type PhotoPick = { pool_id: number; box_file_id: string; caption: string; work_date: string };
 type PhotoOffered = PhotoPick & { has_thumb: boolean };
+type DeliveryRow = {
+  event_date: string; kind: string; item: string; part_number: string;
+  qty: string; unit: string; vendor: string; bol_number: string; carrier: string;
+};
+type IncidentRow = { work_date: string; material: string; issue: string; details: string };
 type ReportBody = {
   job_id: string;
   week: { start: string; end: string; from: number; to: number };
@@ -46,8 +51,12 @@ type ReportBody = {
   crew_progress: { work_date: string; crew: string; manpower: string; progress: string }[];
   daily_notes: { work_date: string; tomorrows_goals: string; comments: string; prepared_by: string }[];
   hazard_form_codes: string[];
-  deliveries: { event_date: string; item: string; vendor: string; qty: string }[];
-  material_incidents: { material: string; issue: string }[];
+  deliveries: DeliveryRow[];
+  material_incidents: IncidentRow[];
+  deliveries_import_count: number;
+  material_incidents_import_count: number;
+  deliveries_truncated: boolean;
+  material_incidents_truncated: boolean;
   photos: { available: PhotoOffered[]; selected: PhotoPick[]; auto_selected: boolean };
   // Mirrors worker/wire-types.ts ProductionReportResponse["schedule"] — null until a schedule
   // is committed, then the grouped sections plus the behind-schedule set.
@@ -66,6 +75,8 @@ type ReportBody = {
     narrative: { critical_items: string | null; upcoming_activities: string | null; hazard_topics: string[] };
     pending: { rfis: string; submittals: string; ifc_review: string; change_orders: string };
     photos: PhotoPick[] | null;
+    deliveries: DeliveryRow[] | null;
+    material_incidents: IncidentRow[] | null;
     saved: boolean;
     carried_from: string | null;
   };
@@ -584,6 +595,8 @@ describe("weekly report — office inputs", () => {
     expect(r.office.header.ess_management).toBe("");
     expect(r.office.safety.lost_time).toEqual({ month: 0, to_date: 0 });
     expect(r.office.photos).toBeNull();
+    expect(r.office.deliveries).toBeNull();
+    expect(r.office.material_incidents).toBeNull();
   });
 
   it("saves and reads back, marked saved", async () => {
@@ -746,6 +759,258 @@ describe("weekly report — office inputs", () => {
     expect(r.office.safety.lost_time).toEqual({ month: 0, to_date: 12 });
     // Non-dates dropped, duplicates collapsed.
     expect(r.office.weather.inclement_dates).toEqual(["2026-08-09"]);
+  });
+});
+
+// ── curated material lists: the photos three-state contract, per table (0078) ─
+describe("weekly report — curated material lists (0078)", () => {
+  const save = async (cookie: string, payload: Record<string, unknown>): Promise<Response> =>
+    call("/api/fieldops/weekly-report", {
+      method: "PUT", cookie, body: JSON.stringify({ job_id: JOB, week_start: WEEK_START, ...payload }),
+    });
+  const adminCookie = (): Promise<string> => accountCookie("adm.two", "admin");
+
+  // One catalog line + one delivered mark inside the week — the derivation the curation
+  // overlays. Same seed shape as "returns deliveries with the catalog manufacturer as vendor".
+  async function seedDelivery(): Promise<void> {
+    await env.DB.prepare(
+      "INSERT INTO material_catalog (id, model_id, manufacturer, category) VALUES (1,'TT-1P','TerraSmart','tracker')",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO job_expected_materials (id, job_id, material_id, description, qty, unit, status, seq) VALUES (1,?,1,'Torque tube',100,'ea','received',1)",
+    ).bind(JOB).run();
+    await env.DB.prepare(
+      "INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, qty, event_date, actor) VALUES ('e1',1,?,'delivered',40,'2026-08-11','pm.one')",
+    ).bind(JOB).run();
+  }
+  const seedIncident = (): Promise<string> =>
+    seedOtherForm("material-incident-v1", "2026-08-12", {
+      material_description: "Torque tube", issue: "Short", details: "28 of 40 delivered.",
+    });
+
+  const CURATED_DELIVERY: DeliveryRow = {
+    event_date: "2026-08-11", kind: "partial", item: "Torque tube (reworded)", part_number: "TT-1P",
+    qty: "40", unit: "ea", vendor: "TerraSmart", bol_number: "BOL-77", carrier: "XPO",
+  };
+
+  it("leaves the live derivation in force while the keys are absent (auto)", async () => {
+    await seedDelivery();
+    await seedIncident();
+    const cookie = await adminCookie();
+    await save(cookie, { header: { ess_management: "X" } });
+    const r = await body(await internal());
+    expect(r.office.deliveries).toBeNull();
+    expect(r.office.material_incidents).toBeNull();
+    expect(r.deliveries).toHaveLength(1);
+    expect(r.deliveries[0]).toMatchObject({ item: "Torque tube", vendor: "TerraSmart" });
+    expect(r.material_incidents).toHaveLength(1);
+    expect(r.deliveries_import_count).toBe(1);
+    expect(r.material_incidents_import_count).toBe(1);
+    // A one-row week is nowhere near the caps — the no-silent-caps flags stay down.
+    expect(r.deliveries_truncated).toBe(false);
+    expect(r.material_incidents_truncated).toBe(false);
+  });
+
+  it("an explicit empty list prints nothing and does not re-populate", async () => {
+    await seedDelivery();
+    await seedIncident();
+    const cookie = await adminCookie();
+    await save(cookie, { deliveries: [], material_incidents: [] });
+    let r = await body(await internal());
+    expect(r.deliveries).toEqual([]);
+    expect(r.material_incidents).toEqual([]);
+    expect(r.office.deliveries).toEqual([]);
+    expect(r.office.material_incidents).toEqual([]);
+    // The derivation did not vanish — the counts still tell the office what auto would show.
+    expect(r.deliveries_import_count).toBe(1);
+    expect(r.material_incidents_import_count).toBe(1);
+    // A second read must not resurrect the lists (the NULL/'[]' collapse the contract forbids).
+    r = await body(await internal());
+    expect(r.deliveries).toEqual([]);
+    expect(r.material_incidents).toEqual([]);
+  });
+
+  it("a curated snapshot outranks the derivation, round-trips verbatim, and leaves an added row UNMARKED", async () => {
+    await seedDelivery();
+    const cookie = await adminCookie();
+    await save(cookie, {
+      deliveries: [
+        CURATED_DELIVERY,
+        // An office-added row with no kind (and none of the ledger's join fields).
+        { event_date: "2026-08-13", item: "Grounding lugs", qty: "200", unit: "ea", vendor: "Site supply" },
+      ],
+      material_incidents: [
+        { work_date: "2026-08-12", material: "Module pallets", issue: "Damaged", details: "Forklift strike." },
+      ],
+    });
+    const r = await body(await internal());
+    expect(r.deliveries).toHaveLength(2);
+    expect(r.deliveries[0]).toEqual(CURATED_DELIVERY);
+    // kind "" — an authored row has no gate mark; coercing it to "delivered" would present an
+    // invented ledger claim with a real mark's visual authority.
+    expect(r.deliveries[1]).toMatchObject({
+      event_date: "2026-08-13", kind: "", item: "Grounding lugs", part_number: "",
+      bol_number: "", carrier: "",
+    });
+    expect(r.material_incidents).toEqual([
+      { work_date: "2026-08-12", material: "Module pallets", issue: "Damaged", details: "Forklift strike." },
+    ]);
+    // The echo matches the effective list, and the counts still report the live import.
+    expect(r.office.deliveries).toEqual(r.deliveries);
+    expect(r.deliveries_import_count).toBe(1);
+    // Report-scoped means REPORT-scoped: the curated save touched neither the receipt ledger
+    // nor the incident filings — the one "never a write-back" claim now pinned directly.
+    const ledger = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM material_receipt_events WHERE job_id = ?",
+    ).bind(JOB).first<{ n: number }>();
+    expect(ledger!.n).toBe(1);
+    const ev = await env.DB.prepare(
+      "SELECT kind, qty, event_date FROM material_receipt_events WHERE event_uuid = 'e1'",
+    ).first<{ kind: string; qty: number; event_date: string }>();
+    expect(ev).toEqual({ kind: "delivered", qty: 40, event_date: "2026-08-11" });
+    const subs = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM submissions WHERE form_code LIKE 'material-incident%'",
+    ).first<{ n: number }>();
+    expect(subs!.n).toBe(0);
+  });
+
+  it("a save OMITTING the keys resets curation to the live import — the photos contract, and what a stale pre-0078 tab's save does", async () => {
+    await seedDelivery();
+    const cookie = await adminCookie();
+    await save(cookie, { deliveries: [CURATED_DELIVERY], material_incidents: [] });
+    await save(cookie, { header: { ess_management: "a stale tab that never knew the keys" } });
+    const r = await body(await internal());
+    expect(r.office.deliveries).toBeNull();
+    expect(r.office.material_incidents).toBeNull();
+    expect(r.deliveries).toHaveLength(1);
+    expect(r.deliveries[0]).toMatchObject({ item: "Torque tube" }); // the ledger's row, not the curated one
+  });
+
+  it("rejects present-but-malformed values rather than degrading them to auto", async () => {
+    await seedDelivery();
+    const cookie = await adminCookie();
+    expect((await save(cookie, { deliveries: [], material_incidents: [] })).status).toBe(200);
+    const badDeliveries = await save(cookie, { deliveries: "junk" });
+    expect(badDeliveries.status).toBe(400);
+    expect(await err(badDeliveries)).toEqual({ error: "invalid_deliveries" });
+    const badIncidents = await save(cookie, { material_incidents: 42 });
+    expect(badIncidents.status).toBe(400);
+    expect(await err(badIncidents)).toEqual({ error: "invalid_material_incidents" });
+    // The explicit-empty state the office chose survived both rejections.
+    const r = await body(await internal());
+    expect(r.deliveries).toEqual([]);
+    expect(r.material_incidents).toEqual([]);
+  });
+
+  it("degrades bare-string ELEMENTS to dropped rows, never a 500 (the labor guard class)", async () => {
+    const cookie = await adminCookie();
+    const res = await save(cookie, { deliveries: ["boom", 7, null], material_incidents: ["also boom"] });
+    expect(res.status).toBe(200);
+    const r = await body(await internal());
+    // Every element normalized to an identity-less row and was filtered: curated-empty, not junk.
+    expect(r.deliveries).toEqual([]);
+    expect(r.material_incidents).toEqual([]);
+    expect(r.office.deliveries).toEqual([]);
+  });
+
+  it("NEVER carries curated material lists forward — the narrative rule, not the photos one", async () => {
+    await seedDelivery(); // THIS week's own derivation
+    const cookie = await adminCookie();
+    await call("/api/fieldops/weekly-report", {
+      method: "PUT", cookie,
+      body: JSON.stringify({
+        job_id: JOB, week_start: "2026-08-01",
+        header: { ess_management: "CARRIED" },
+        deliveries: [{ ...CURATED_DELIVERY, item: "LAST WEEK'S TRUCK" }],
+        material_incidents: [{ work_date: "2026-08-01", material: "Old", issue: "Stale", details: "" }],
+      }),
+    });
+    const r = await body(await internal());
+    expect(r.office.carried_from).toBe("2026-08-01");
+    expect(r.office.header.ess_management).toBe("CARRIED"); // header DOES carry
+    expect(r.office.deliveries).toBeNull();                 // the material lists do NOT
+    expect(r.office.material_incidents).toBeNull();
+    expect(r.deliveries).toHaveLength(1);
+    expect(r.deliveries[0]).toMatchObject({ item: "Torque tube" }); // this week's own ledger
+    expect(r.material_incidents).toEqual([]);
+  });
+
+  it("clamps curated input to the documented caps and slices", async () => {
+    const cookie = await adminCookie();
+    await save(cookie, {
+      deliveries: Array.from({ length: 305 }, (_, i) => ({
+        event_date: i === 0 ? "not-a-date" : "2026-08-11",
+        kind: i === 0 ? "stolen" : "delivered",
+        item: i === 0 ? "y".repeat(900) : `Item ${i}`,
+        qty: i === 0 ? "123456789012345678" : "1",
+      })),
+      material_incidents: Array.from({ length: 105 }, (_, i) => ({
+        work_date: "2026-08-12", material: `M${i}`, issue: "Short",
+        details: i === 0 ? "z".repeat(5000) : "ok",
+      })),
+    });
+    const r = await body(await internal());
+    expect(r.deliveries).toHaveLength(300);
+    expect(r.material_incidents).toHaveLength(100);
+    expect(r.deliveries[0].event_date).toBe("");          // malformed date dropped, never faked
+    expect(r.deliveries[0].kind).toBe("");                // outside the ledger vocabulary → unmarked, never a claim
+    expect(r.deliveries[0].item).toHaveLength(300);
+    expect(r.deliveries[0].qty).toHaveLength(12);
+    expect(r.material_incidents[0].details).toHaveLength(1000);
+  });
+
+  it("flags a derivation that hit its cap as truncated — no silent caps", async () => {
+    await env.DB.prepare(
+      "INSERT INTO job_expected_materials (id, job_id, description, qty, unit, status, seq) VALUES (1,?,'Torque tube',1000,'ea','received',1)",
+    ).bind(JOB).run();
+    // Exactly DELIVERY_CAP delivered marks inside the week — the boundary where the flag fires.
+    const stmts = [];
+    for (let i = 0; i < 300; i += 1) {
+      stmts.push(
+        env.DB.prepare(
+          "INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, qty, event_date, actor) VALUES (?1,1,?2,'delivered',1,'2026-08-11','pm.one')",
+        ).bind(`ev-${i}`, JOB),
+      );
+    }
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    const r = await body(await internal());
+    expect(r.deliveries).toHaveLength(300);
+    expect(r.deliveries_truncated).toBe(true);
+    expect(r.material_incidents_truncated).toBe(false);
+  });
+
+  it("413s an oversized body BEFORE parsing rather than paying for the parse", async () => {
+    const cookie = await adminCookie();
+    const res = await call("/api/fieldops/weekly-report", {
+      method: "PUT", cookie,
+      body: JSON.stringify({
+        job_id: JOB, week_start: WEEK_START,
+        header: { ess_management: "x".repeat(1_600_000) },
+      }),
+    });
+    expect(res.status).toBe(413);
+    expect(await err(res)).toEqual({ error: "too_large" });
+    // Nothing was stored for the week.
+    const n = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM job_weekly_report_inputs WHERE job_id = ?",
+    ).bind(JOB).first<{ n: number }>();
+    expect(n!.n).toBe(0);
+  });
+
+  it("records each list's curation mode in the audit detail, still one row per save", async () => {
+    const cookie = await adminCookie();
+    await save(cookie, { deliveries: [CURATED_DELIVERY, { ...CURATED_DELIVERY, bol_number: "BOL-78" }] });
+    const row = await env.DB.prepare(
+      "SELECT detail FROM audit_log WHERE action = 'weekly_report_inputs_save' ORDER BY id DESC LIMIT 1",
+    ).first<{ detail: string }>();
+    const detail = JSON.parse(row!.detail) as Record<string, unknown>;
+    expect(detail.deliveries).toBe(2);
+    expect(detail.material_incidents).toBe("auto");
+    expect(detail.photos).toBe("auto");
+    const n = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_log WHERE action = 'weekly_report_inputs_save'",
+    ).first<{ n: number }>();
+    expect(n!.n).toBe(1);
   });
 });
 

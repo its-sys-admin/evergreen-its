@@ -1,8 +1,9 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { FieldopsApp } from "./fieldops_gates";
 import type { Env, Vars } from "./types";
-import type { ProductionReportResponse } from "./wire-types";
+import type { ProductionReportResponse, WeeklyReportDelivery, WeeklyReportIncident } from "./wire-types";
 import { auditStmt } from "./audit";
+import { RECEIPT_KINDS } from "./fieldops_expected_materials";
 import { pacificDateString } from "./fieldops_recurrence";
 
 // Weekly Production Report — the SEND-FREE, READ-ONLY D1 aggregation behind the client-facing
@@ -60,6 +61,10 @@ export const AUTO_SELECT_MAX = 8;
 const MAX_TEXT = 4000;
 /** Bound on office list fields (subcontractors, hazard topics, labor rows, photo picks). */
 const MAX_LIST = 60;
+/** Raw-body ceiling on the office save (the /api/submit PAYLOAD_MAX pattern). The per-field
+ *  caps bound what is STORED, but JSON.parse of an oversized body is paid before any cap
+ *  bites — 1.5MB is ~4× the worst-case post-clamp row and far above any real save. */
+const WEEKLY_REPORT_BODY_MAX = 1_500_000;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -244,10 +249,65 @@ function normalizePhotos(v: unknown): { pool_id: number; box_file_id: string; ca
   }).filter((p) => p.box_file_id !== "");
 }
 
+/** The ledger's vocabulary, imported from its ONE runtime copy (fieldops_expected_materials).
+ *  A curated row keeps its imported mark; anything else — an office-ADDED row, or junk —
+ *  normalizes to "" = UNMARKED, which the screen's chip prints as an em dash. Coercing an
+ *  authored row to "delivered" would present an invented gate claim with a real mark's visual
+ *  authority (§4); `kind` never reaches the PDF either way (the Mac's 4-key narrowing drops it). */
+const DELIVERY_KINDS = new Set<string>(RECEIPT_KINDS);
+
+/** deliveries_json is THREE-STATE (migration 0078), the photos_json contract exactly: null =
+ *  not curated (the live ledger derivation stands), [] = explicitly none, [...] = the office's
+ *  snapshot for this week. Returns `null` for the auto case so the caller persists SQL NULL.
+ *
+ *  Caps and slices: the list cap is DELIVERY_CAP — the curated list is a snapshot of a
+ *  derivation that can legitimately reach the derived cap, so MAX_LIST (60) would silently
+ *  truncate a big week the moment the office edited one cell. Per-field slices mirror the
+ *  house conventions (labor's 12-char numerics, the photo caption's 300). Rows without an item
+ *  or part number are dropped — the labor blank-company rule; a delivery naming nothing is
+ *  meaningless on the page-5 log, and bare-string elements degrade to exactly that. */
+function normalizeDeliveries(v: unknown): WeeklyReportDelivery[] | null {
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) return null;
+  return v.slice(0, DELIVERY_CAP).map((r) => {
+    const o = (r ?? {}) as Record<string, unknown>;
+    return {
+      event_date: parseIsoDate(typeof o.event_date === "string" ? o.event_date : undefined) ?? "",
+      kind: typeof o.kind === "string" && DELIVERY_KINDS.has(o.kind) ? o.kind : "",
+      item: cleanText(o.item).slice(0, 300),
+      part_number: cleanText(o.part_number).slice(0, 100),
+      qty: typeof o.qty === "number" || typeof o.qty === "string" ? cleanText(String(o.qty)).slice(0, 12) : "",
+      unit: cleanText(o.unit).slice(0, 30),
+      vendor: cleanText(o.vendor).slice(0, 300),
+      bol_number: cleanText(o.bol_number).slice(0, 100),
+      carrier: cleanText(o.carrier).slice(0, 100),
+    };
+  }).filter((r) => r.item !== "" || r.part_number !== "");
+}
+
+/** incidents_json — the deliveries contract for the Material Problems list. `details` gets 1000
+ *  chars: it becomes one Critical-Items seed line, already bounded again Mac-side, so MAX_TEXT's
+ *  4000 buys nothing. A row needs a material or an issue — the Mac seed itself skips rows with
+ *  neither (`wpr_data._assemble_critical_items`), so storing one would be dead weight. */
+function normalizeIncidents(v: unknown): WeeklyReportIncident[] | null {
+  if (v === undefined || v === null) return null;
+  if (!Array.isArray(v)) return null;
+  return v.slice(0, INCIDENT_CAP).map((r) => {
+    const o = (r ?? {}) as Record<string, unknown>;
+    return {
+      work_date: parseIsoDate(typeof o.work_date === "string" ? o.work_date : undefined) ?? "",
+      material: cleanText(o.material).slice(0, 300),
+      issue: cleanText(o.issue).slice(0, 300),
+      details: cleanText(o.details).slice(0, 1000),
+    };
+  }).filter((r) => r.material !== "" || r.issue !== "");
+}
+
 type OfficeRow = {
   header_json: string; safety_json: string; weather_json: string;
   labor_json: string; narrative_json: string; pending_json: string;
-  photos_json: string | null; week_start: string;
+  photos_json: string | null; deliveries_json: string | null;
+  incidents_json: string | null; week_start: string;
   updated_by: string | null; updated_at: number | null;
 };
 
@@ -278,6 +338,14 @@ function shapeOffice(row: OfficeRow | null, carriedFrom: string | null) {
       : { critical_items: null, upcoming_activities: null, hazard_topics: [] },
     pending: normalizePending(parseBlob(row?.pending_json)),
     photos: row ? normalizePhotos(parseBlob(row.photos_json ?? null)) : null,
+    // Curated material lists are ONE week's snapshot — the NARRATIVE rule, deliberately NOT the
+    // photos read one line up: a carried week returns null here so the live derivation wins, and
+    // last week's trucks never print on this week's report. (`parseBlob(null)` → {} → the
+    // normalizer's non-array branch → null, exactly how an un-curated own row resolves too.)
+    deliveries: row && carriedFrom === null
+      ? normalizeDeliveries(parseBlob(row.deliveries_json ?? null)) : null,
+    material_incidents: row && carriedFrom === null
+      ? normalizeIncidents(parseBlob(row.incidents_json ?? null)) : null,
     // `saved` distinguishes "the office reviewed this week" from "these values were inherited".
     // The screen shows provenance; the compile uses it to decide whether an untouched week is
     // worth flagging. A write-on-read seed would have destroyed this distinction.
@@ -541,13 +609,13 @@ async function buildReportData(
   // choosing between them is pure logic below, which keeps the round-trip count fixed.
   const officeSql = `
     SELECT week_start, header_json, safety_json, weather_json, labor_json, narrative_json,
-           pending_json, photos_json, updated_by, updated_at
+           pending_json, photos_json, deliveries_json, incidents_json, updated_by, updated_at
       FROM job_weekly_report_inputs
      WHERE job_id = ?1 AND week_start = ?2
   `;
   const priorOfficeSql = `
     SELECT week_start, header_json, safety_json, weather_json, labor_json, narrative_json,
-           pending_json, photos_json, updated_by, updated_at
+           pending_json, photos_json, deliveries_json, incidents_json, updated_by, updated_at
       FROM job_weekly_report_inputs
      WHERE job_id = ?1 AND week_start < ?2
      ORDER BY week_start DESC
@@ -612,6 +680,27 @@ async function buildReportData(
     inclement: inclement.has(String(d.work_date ?? "")),
   }));
 
+  // The LIVE material derivations, shaped for the wire. Kept as consts (not inlined in the
+  // return) because the top-level keys below are EFFECTIVE — curated-wins — while the
+  // `*_import_count` keys must always report the live derivation, curated or not.
+  const derivedDeliveries = deliveries.map((r) => ({
+    event_date: String(r.event_date ?? ""),
+    kind: String(r.kind ?? ""),
+    item: r.item === null || r.item === undefined ? "" : String(r.item),
+    part_number: r.part_number === null || r.part_number === undefined ? "" : String(r.part_number),
+    qty: r.qty === null || r.qty === undefined ? "" : String(r.qty),
+    unit: r.unit === null || r.unit === undefined ? "" : String(r.unit),
+    vendor: r.vendor === null || r.vendor === undefined ? "" : String(r.vendor),
+    bol_number: r.bol_number === null || r.bol_number === undefined ? "" : String(r.bol_number),
+    carrier: r.carrier === null || r.carrier === undefined ? "" : String(r.carrier),
+  }));
+  const derivedIncidents = incidents.map((r) => ({
+    work_date: String(r.work_date ?? ""),
+    material: r.material === null || r.material === undefined ? "" : String(r.material),
+    issue: r.issue === null || r.issue === undefined ? "" : String(r.issue),
+    details: r.details === null || r.details === undefined ? "" : String(r.details),
+  }));
+
   return {
     job_id: w.jobId,
     week: { start: w.weekStart, end: w.weekEnd, from: w.from, to: w.to },
@@ -658,23 +747,20 @@ async function buildReportData(
       prepared_by: String(d.prepared_by_display ?? ""),
     })),
     hazard_form_codes: hazardCodes,
-    deliveries: deliveries.map((r) => ({
-      event_date: String(r.event_date ?? ""),
-      kind: String(r.kind ?? ""),
-      item: r.item === null || r.item === undefined ? "" : String(r.item),
-      part_number: r.part_number === null || r.part_number === undefined ? "" : String(r.part_number),
-      qty: r.qty === null || r.qty === undefined ? "" : String(r.qty),
-      unit: r.unit === null || r.unit === undefined ? "" : String(r.unit),
-      vendor: r.vendor === null || r.vendor === undefined ? "" : String(r.vendor),
-      bol_number: r.bol_number === null || r.bol_number === undefined ? "" : String(r.bol_number),
-      carrier: r.carrier === null || r.carrier === undefined ? "" : String(r.carrier),
-    })),
-    material_incidents: incidents.map((r) => ({
-      work_date: String(r.work_date ?? ""),
-      material: r.material === null || r.material === undefined ? "" : String(r.material),
-      issue: r.issue === null || r.issue === undefined ? "" : String(r.issue),
-      details: r.details === null || r.details === undefined ? "" : String(r.details),
-    })),
+    // EFFECTIVE lists (curated-wins, the photos.selected precedence): resolving them HERE, in
+    // the one shared builder, is what lets the office screen, the Mac PDF's page-5 log, and the
+    // Critical-Items seed (both the SPA's seedNarrative and wpr_data._assemble_critical_items
+    // read these top-level keys) consume curation with zero downstream changes — and never
+    // disagree. `office.deliveries === null` IS the "auto" flag; no separate boolean.
+    deliveries: office.deliveries ?? derivedDeliveries,
+    material_incidents: office.material_incidents ?? derivedIncidents,
+    deliveries_import_count: derivedDeliveries.length,
+    material_incidents_import_count: derivedIncidents.length,
+    // No-silent-caps (the photos.truncated / schedule.truncated convention): a derivation that
+    // hit its LIMIT may be a partial list, and both the screen and the compile must be able to
+    // say so rather than presenting the subset as the whole week.
+    deliveries_truncated: derivedDeliveries.length >= DELIVERY_CAP,
+    material_incidents_truncated: derivedIncidents.length >= INCIDENT_CAP,
     photos: {
       available: photosAvailable,
       // The office's explicit picks win outright — including the empty list, which means "no
@@ -914,7 +1000,9 @@ export function registerWeeklyReportRoutes(
     // Minting an `invalid_body` synonym would have grown the operator vocabulary for nothing.
     let body: Record<string, unknown>;
     try {
-      const parsed = await c.req.json();
+      const raw = await c.req.text();
+      if (raw.length > WEEKLY_REPORT_BODY_MAX) return c.json({ error: "too_large" }, 413);
+      const parsed: unknown = JSON.parse(raw);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
         return c.json({ error: "bad_request" }, 400);
       }
@@ -957,6 +1045,25 @@ export function registerWeeklyReportRoutes(
     const photosNorm = "photos" in body ? normalizePhotos(body.photos) : null;
     const photos = photosNorm === null ? null : JSON.stringify(photosNorm);
 
+    // The material lists carry the SAME present-key three-state contract as photos, including
+    // the reject-don't-degrade rule: junk degraded to null would mean "back to the live import",
+    // a state the office may have deliberately left. And the same accepted hazard: an ABSENT key
+    // resets curation to auto, so a stale pre-0078 tab's save returns both lists to the live
+    // derivation — visible in the audit detail below, recoverable by re-saving, and the ledger
+    // record itself is never at risk. Diverging from the photos contract here (sticky-on-absent)
+    // would make the row's three-state semantics unlearnable field by field.
+    if ("deliveries" in body && body.deliveries !== null && !Array.isArray(body.deliveries)) {
+      return c.json({ error: "invalid_deliveries" }, 400);
+    }
+    const deliveriesNorm = "deliveries" in body ? normalizeDeliveries(body.deliveries) : null;
+    const deliveriesJson = deliveriesNorm === null ? null : JSON.stringify(deliveriesNorm);
+
+    if ("material_incidents" in body && body.material_incidents !== null && !Array.isArray(body.material_incidents)) {
+      return c.json({ error: "invalid_material_incidents" }, 400);
+    }
+    const incidentsNorm = "material_incidents" in body ? normalizeIncidents(body.material_incidents) : null;
+    const incidentsJson = incidentsNorm === null ? null : JSON.stringify(incidentsNorm);
+
     const actor = c.get("session").username;
     const now = Math.floor(Date.now() / 1000);
 
@@ -964,19 +1071,24 @@ export function registerWeeklyReportRoutes(
       c.env.DB.prepare(
         `INSERT INTO job_weekly_report_inputs
            (job_id, week_start, header_json, safety_json, weather_json, labor_json,
-            narrative_json, pending_json, photos_json, updated_by, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            narrative_json, pending_json, photos_json, deliveries_json, incidents_json,
+            updated_by, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
          ON CONFLICT(job_id, week_start) DO UPDATE SET
            header_json=excluded.header_json, safety_json=excluded.safety_json,
            weather_json=excluded.weather_json, labor_json=excluded.labor_json,
            narrative_json=excluded.narrative_json, pending_json=excluded.pending_json,
-           photos_json=excluded.photos_json, updated_by=excluded.updated_by,
+           photos_json=excluded.photos_json, deliveries_json=excluded.deliveries_json,
+           incidents_json=excluded.incidents_json, updated_by=excluded.updated_by,
            updated_at=excluded.updated_at`,
-      ).bind(jobId, weekStart, header, safety, weather, labor, narrative, pending, photos, actor, now),
+      ).bind(jobId, weekStart, header, safety, weather, labor, narrative, pending, photos,
+             deliveriesJson, incidentsJson, actor, now),
       auditStmt(c, actor, "weekly_report_inputs_save", jobId, {
         job_id: jobId,
         week_start: weekStart,
         photos: photosNorm === null ? "auto" : photosNorm.length,
+        deliveries: deliveriesNorm === null ? "auto" : deliveriesNorm.length,
+        material_incidents: incidentsNorm === null ? "auto" : incidentsNorm.length,
       }),
     ]);
 

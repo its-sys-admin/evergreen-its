@@ -14,6 +14,8 @@ import type {
 export type {
   ProductionReportResponse,
   WeeklyReportCrew,
+  WeeklyReportDelivery,
+  WeeklyReportIncident,
   WeeklyReportLaborRow,
   WeeklyReportOffice,
   WeeklyReportPhoto,

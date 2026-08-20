@@ -8,7 +8,7 @@
  *   3. the three-state photo contract survives the round trip — no curation omits `photos`
  *      entirely (auto-select stays in force), "use no photos" sends [].
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/fieldops_report", async (importOriginal) => {
@@ -49,6 +49,10 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
     material_incidents: [
       { work_date: "2026-08-12", material: "Torque tube", issue: "Short", details: "28 of 40." },
     ],
+    deliveries_import_count: 0,
+    material_incidents_import_count: 1,
+    deliveries_truncated: false,
+    material_incidents_truncated: false,
     photos: {
       available: [
         { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles", has_thumb: false },
@@ -65,7 +69,8 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
       labor: { rows: [] },
       narrative: { critical_items: null, upcoming_activities: null, hazard_topics: [] },
       pending: { rfis: "", submittals: "", ifc_review: "", change_orders: "" },
-      photos: null, saved: false, carried_from: null, updated_by: null, updated_at: null,
+      photos: null, deliveries: null, material_incidents: null,
+      saved: false, carried_from: null, updated_by: null, updated_at: null,
     },
     generated_at: 1,
   };
@@ -340,6 +345,94 @@ describe("WeeklyReportPage — the office fields D1 cannot derive", () => {
     fireEvent.click(screen.getByText(/Save weekly report inputs/));
     await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
     expect(vi.mocked(saveWeeklyReport).mock.calls[0][0].weather?.inclement_dates).toEqual(["2026-08-12"]);
+  });
+});
+
+describe("WeeklyReportPage — curated material lists (0078)", () => {
+  const DELIVERY = {
+    event_date: "2026-08-11", kind: "partial", item: "Torque tube", part_number: "TT-9",
+    qty: "40", unit: "ea", vendor: "TerraSmart", bol_number: "BOL-7", carrier: "XPO",
+  };
+  const materials = () => within(document.getElementById("wpr-materials")!);
+
+  it("OMITS both material keys from an untouched save — the live import stays in force", async () => {
+    await renderPage(payload({ deliveries: [DELIVERY] }));
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const body = vi.mocked(saveWeeklyReport).mock.calls[0][0];
+    expect("deliveries" in body).toBe(false);
+    expect("material_incidents" in body).toBe(false);
+    // Untouched = the field's truth: both tables tagged as such.
+    expect(materials().getAllByText("From the field")).toHaveLength(2);
+  });
+
+  it("materializes the delivery list on first edit and saves it with the edit, kind preserved", async () => {
+    await renderPage(payload({ deliveries: [DELIVERY] }));
+    fireEvent.change(screen.getByLabelText("Delivery 1 item"), { target: { value: "Torque tube (rev B)" } });
+    expect(materials().getByText("Curated for this report")).toBeTruthy();
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const sent = vi.mocked(saveWeeklyReport).mock.calls[0][0].deliveries;
+    expect(sent).toEqual([{ ...DELIVERY, item: "Torque tube (rev B)" }]);
+    // The incidents table was never touched — its key must still be absent.
+    expect("material_incidents" in vi.mocked(saveWeeklyReport).mock.calls[0][0]).toBe(false);
+  });
+
+  it("removing the last delivery saves an explicit [] and renders the curated-empty copy", async () => {
+    await renderPage(payload({ deliveries: [DELIVERY] }));
+    fireEvent.click(screen.getByLabelText("Remove delivery row 1"));
+    expect(materials().getByText(/No deliveries will appear on this report \(curated empty\)/)).toBeTruthy();
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    expect(vi.mocked(saveWeeklyReport).mock.calls[0][0].deliveries).toEqual([]);
+  });
+
+  it("adds a delivery as UNMARKED (kind '') and filters identity-less rows from the save", async () => {
+    await renderPage(payload());
+    fireEvent.click(materials().getByText("Add delivery"));
+    fireEvent.change(screen.getByLabelText("Delivery 1 item"), { target: { value: "Grounding lugs" } });
+    fireEvent.click(materials().getByText("Add delivery")); // second row left entirely blank
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const sent = vi.mocked(saveWeeklyReport).mock.calls[0][0].deliveries;
+    expect(sent).toHaveLength(1);
+    // kind "" — an authored row carries no gate mark (the chip prints an em dash), so a
+    // hand-added line can never masquerade as a ledger "Delivered" record on screen.
+    expect(sent![0]).toMatchObject({ item: "Grounding lugs", kind: "" });
+  });
+
+  it("Reset to imported drops the key from the save and shows the honest import count", async () => {
+    const p = payload({ deliveries: [DELIVERY], deliveries_import_count: 3 });
+    p.office.deliveries = [DELIVERY]; // this week is already curated
+    await renderPage(p);
+    expect(materials().getByText("Curated for this report")).toBeTruthy();
+    expect(materials().getByText(/the live import has 3 row\(s\)/)).toBeTruthy();
+    fireEvent.click(materials().getByText("Reset to imported"));
+    // The server still returns the curated list as effective, so the table is swapped for a
+    // notice — rendering the cached curated rows would make Reset look like a no-op.
+    expect(materials().getByText(/live import \(3 row\(s\)\) returns when you save/)).toBeTruthy();
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    expect("deliveries" in vi.mocked(saveWeeklyReport).mock.calls[0][0]).toBe(false);
+  });
+
+  it("warns when the live import hit its cap — the list may be partial (no silent caps)", async () => {
+    await renderPage(payload({
+      deliveries: [DELIVERY], deliveries_import_count: 300, deliveries_truncated: true,
+    }));
+    expect(materials().getByText(/shows the first 300 deliveries/)).toBeTruthy();
+  });
+
+  it("incidents mirror the contract: an edit materializes and saves under material_incidents", async () => {
+    await renderPage(payload());
+    fireEvent.change(screen.getByLabelText("Material problem 1 material"), { target: { value: "Torque tube (NE bay)" } });
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const body = vi.mocked(saveWeeklyReport).mock.calls[0][0];
+    expect(body.material_incidents).toEqual([
+      { work_date: "2026-08-12", material: "Torque tube (NE bay)", issue: "Short", details: "28 of 40." },
+    ]);
+    expect("deliveries" in body).toBe(false);
   });
 });
 

@@ -1151,6 +1151,29 @@ export interface WeeklyReportLaborRow {
   man_hours: string;
 }
 
+/** One page-5 delivery-log row — the ledger derivation's wire shape, all strings. Curated rows
+ *  (0078) store this exact shape so the screen and the Mac's 4-key narrowing render curated and
+ *  derived rows identically. `kind` is screen-only provenance (the PDF drops it). */
+export interface WeeklyReportDelivery {
+  event_date: string;
+  kind: string;
+  item: string;
+  part_number: string;
+  qty: string;
+  unit: string;
+  vendor: string;
+  bol_number: string;
+  carrier: string;
+}
+
+/** One Material Problems row — the material-incident submission derivation's wire shape. */
+export interface WeeklyReportIncident {
+  work_date: string;
+  material: string;
+  issue: string;
+  details: string;
+}
+
 /** The office-entered record — the three sections D1 structurally cannot derive, plus the two
  *  judgment calls (weather days, photo curation). */
 export interface WeeklyReportOffice {
@@ -1174,6 +1197,13 @@ export interface WeeklyReportOffice {
   pending: { rfis: string; submittals: string; ifc_review: string; change_orders: string };
   /** null = auto-select; [] = explicitly no photos; list = the office's ordered picks. */
   photos: WeeklyReportPhoto[] | null;
+  /** THREE-STATE curation snapshot (0078): null = not curated (the live ledger derivation is
+   *  what the top-level `deliveries` carries), [] = explicitly none, list = the office's list
+   *  for THIS week. NEVER carried forward — a material list describes one week's trucks. */
+  deliveries: WeeklyReportDelivery[] | null;
+  /** Same contract as `deliveries`, for the Material Problems list (wire name kept from the
+   *  derived payload key; the D1 column is `incidents_json`). */
+  material_incidents: WeeklyReportIncident[] | null;
   /** true only when THIS week's row was saved. A carried-forward week is NOT saved, which is why
    *  its narrative still re-derives from this week's field text. */
   saved: boolean;
@@ -1210,11 +1240,21 @@ export interface ProductionReportResponse {
     safety_observations: string; manpower_total: string; prepared_by: string;
   }[];
   hazard_form_codes: string[];
-  deliveries: {
-    event_date: string; kind: string; item: string; part_number: string;
-    qty: string; unit: string; vendor: string; bol_number: string; carrier: string;
-  }[];
-  material_incidents: { work_date: string; material: string; issue: string; details: string }[];
+  /** The EFFECTIVE page-5 delivery log: the office's curated snapshot when one is saved for this
+   *  week, else the live ledger derivation (curated-wins, resolved in the ONE builder so the
+   *  screen, the Mac PDF, and the Critical-Items seed can never disagree). */
+  deliveries: WeeklyReportDelivery[];
+  /** The EFFECTIVE Material Problems list — same curated-wins resolution as `deliveries`. */
+  material_incidents: WeeklyReportIncident[];
+  /** Always the LIVE derivation's row counts (capped at the derivation caps), regardless of
+   *  curation — so the screen can say "the live import has N rows" while a curated list shows,
+   *  and Reset-to-imported has an honest number before the post-save reload. */
+  deliveries_import_count: number;
+  material_incidents_import_count: number;
+  /** True when the live derivation hit its row cap — the imported list may be PARTIAL and the
+   *  screen must say so (the photos.truncated / schedule.truncated no-silent-caps convention). */
+  deliveries_truncated: boolean;
+  material_incidents_truncated: boolean;
   photos: { available: WeeklyReportPhotoOffered[]; selected: WeeklyReportPhoto[]; auto_selected: boolean;
     /** True when the offered list hit the pool cap — more clean photos exist than were offered. */
     truncated: boolean };
@@ -1238,7 +1278,8 @@ export interface ProductionReportResponse {
   generated_at: number;
 }
 
-/** PUT /api/fieldops/weekly-report — omit `photos` entirely to leave curation on auto-select. */
+/** PUT /api/fieldops/weekly-report — omit each of `photos` / `deliveries` / `material_incidents`
+ *  entirely to leave that field on its live derivation (auto). */
 export interface WeeklyReportSaveBody {
   job_id: string;
   week_start: string;
@@ -1249,6 +1290,8 @@ export interface WeeklyReportSaveBody {
   narrative?: Partial<WeeklyReportOffice["narrative"]>;
   pending?: Partial<WeeklyReportOffice["pending"]>;
   photos?: WeeklyReportPhoto[];
+  deliveries?: WeeklyReportDelivery[];
+  material_incidents?: WeeklyReportIncident[];
 }
 
 // ── Job payments (ADR-0006 decision 10, PR-7 — migration 0073) ──────────────────────────────
