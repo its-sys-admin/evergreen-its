@@ -39,6 +39,72 @@ itself: the live venv no longer matches `pyproject.toml`'s dev extras, and nothi
 to have `verify_cutover` / the watchdog assert that the live venv satisfies the declared dev
 extras. Low priority precisely because the correct workflow does not use the live venv for tests.
 
+## `safety_reports/publish_daemon.py` — eight defects found by a 33-agent-equivalent adversarial workflow, none fixed [OPEN 2026-08-19/20, several high]
+
+A dedicated adversarial pass over the `§50` publish actuator — run alongside the erosion-form
+publish-unblock session (PRs #180/#181) but scoped separately — found eight real defects. Nothing
+in this entry landed in either #180/#181 or the later orphan-branch-cleanup PR #183 (#183 fixed a
+different defect class: stranded branches/PRs, now `shared/actuator_branches.py` — see the
+Recently-landed entry and memory-archive §G90). All line numbers below are current against
+`safety_reports/publish_daemon.py` as of #183 (`f7cc5f2`).
+
+- **No post-deploy health check exists, though the module's own docstring promises one.**
+  `publish_daemon.py:16` states the pipeline runs a "post-deploy health check (GET the live
+  form)"; `_deploy_land_health`'s only post-deploy action is
+  `portal_client.get_publish_pending(..., limit=1)` — a bare liveness ping against the internal
+  publish-queue endpoint, not a GET of the form that was just published. The function's own
+  `current_form_code` parameter is used exactly once, in its own signature — never read in the
+  body. `tests/test_publish_daemon.py:58` mocks `_deploy_land_health` wholesale, so no test can
+  catch the gap. This is an Op Stds §52 narrated-not-enforced instance: the doc claims a control
+  the code does not implement.
+- **`_pending_migrations` (`:627`) is fail-open via a substring match against human-formatted
+  `wrangler` table output.** `[name for name in disk if name in out]` checks whether each on-disk
+  migration filename appears anywhere in `wrangler d1 migrations list --remote`'s stdout. A
+  filename `wrangler` wraps or truncates in its table rendering (the longest of the 77 current
+  migration filenames is 42 chars) makes the gate report "none pending" while a real migration
+  sits unapplied — deploying the Worker ahead of it is **forensic class #2**, the exact incident
+  `_pending_migrations` exists to prevent, reintroduced by its own detection logic.
+- **Zero subprocess timeouts on the entire deploy path.** None of the eight `subprocess.run` call
+  sites in this module (`_pending_migrations`, `_deploy_land_health`'s `npm run deploy`,
+  `_regenerate_archive`, both branch-cleanup calls in `_commit_test_merge`, plus `_git`/`_gh`) pass
+  a `timeout=`. A hung `wrangler`/`npm`/`git`/`gh` process wedges the daemon indefinitely with no
+  self-recovery — Tier-1 self-heal (launchd re-invocation) never triggers because the process
+  never exits.
+- **`_reset_to_main`'s cleanup (`:387`) only removes UNTRACKED files.** `git clean -fd
+  safety_portal/forms` clears stray files from an interrupted cycle, but a **modified TRACKED**
+  `forms/*.json` left over from a prior failed run survives it — and `_commit_test_merge`'s
+  `git add safety_portal/catalog.json safety_portal/forms` (`:612`) then sweeps that leftover
+  modification into the NEXT publish's commit, unreviewed.
+- **The branch-cleanup subprocess calls in `_commit_test_merge` (`:606-607`) are unconditional,
+  `capture_output=True`, with no returncode check.** `git branch -D` and `git push origin --delete`
+  both run best-effort with their output silently discarded either way — correct for the
+  "clear a stale branch from a prior failed run" intent, but indistinguishable in the code from a
+  masked real failure; nothing would surface if the delete failed for an unexpected reason.
+- **`_check_failure_detail` drifted between the two `§50` actuators.** `publish_daemon.py:497`
+  falls back to a bare job name (`return name`) when the failing-step log can't be fetched;
+  `po_materials/config_actuator.py:421` was fixed to return `f"{name} (log detail unavailable)"`
+  with an explicit comment that a bare name "reads like a diagnosis" — the exact ambiguity a prior
+  incident was about. `publish_daemon.py` retains it; the fix was never ported to its sibling.
+- **The cancellation-guard docstring (`_is_superseded_cancellation`, `:449`) misstates its own
+  trigger.** It claims "this daemon's own push-then-`pr create` sequence **routinely** lands two
+  runs on one ref" — but `.github/workflows/ci.yml`'s concurrency group is
+  `ci-${{ github.ref }}`, and a `pull_request` run's ref (`refs/pull/N/merge`) differs from the
+  `push` run's ref (`refs/heads/<branch>`), so a `pull_request` run structurally **cannot** cancel
+  the `push` run in that group — they're in different concurrency groups. The real observed event
+  (req-6, PR #178/#179 arc) was **push-vs-push**, and "routinely" is false on the evidence: req-5
+  and req-7 each had exactly one push run; only req-6 had two.
+- **UNDIAGNOSED — two push events landed on the SAME sha (`0872223a`) one second apart during
+  req-6, though `_commit_test_merge` issues exactly one `git push`.** The 2026-08-19 session log
+  (`docs/session_logs/2026-08-19_erosion-form-publish-unblock.md`) confirms req-7 produced no
+  duplicate push, so req-6's double-push was a one-off, not deterministic — the fix that shipped
+  (per-section `min_rows` counting, PR #180) suppressed the *symptom* CI hit, not this generating
+  condition, which remains live at unknown recurrence.
+
+**Trigger:** next `safety_reports/publish_daemon.py`-touching session; the post-deploy health
+check and the `_pending_migrations` fail-open are the two worth prioritizing (§52 narrated gap and
+a live repeat of forensic class #2, respectively). **Tag:** `safety_portal`, `publish_daemon`,
+`op-stds-50`, `op-stds-52`, `adversarial-review`.
+
 ## Quality-ratchet baselines that are capped but not yet reduced [OPEN 2026-08-17, medium]
 
 `.quality-ratchet.json` now pins every numeric quality floor and CI blocks on it, so none of the
@@ -446,6 +512,19 @@ The items below are what stand-up left open.
   and acceptance-evidence capture. Nothing runs on the production host yet except the repo/venv/
   Keychain/Box scaffolding. **Trigger:** next production-host session, before relying on it while
   Seth is unreachable. **Tag:** `host-migration`, `cutover-adjacent`.
+  **CORRECTED 2026-08-19/20 — this entry was stale; Stages 10-13 are DONE, just never marked
+  here.** A read-only reconnaissance pass found all 22 shipped plists already loaded on the
+  production host, including all five send dispatchers, and `scripts/verify_cutover.py` VC-02
+  passes because `DARK_UNLOADED_LABELS` is deliberately `frozenset()` post-activation. The
+  operator confirmed live: the repo state is current and this entry's premise (nothing runs yet)
+  is what was stale, not the host. **New, higher-severity facts this correction surfaces** — see
+  PM-10 through PM-14 below for the full detail, in particular that the send gates were flipped
+  **false ~2026-08-17 08:47 PDT** after being loaded AND enabled 2026-08-07→17, and that exactly
+  **one real external send occurred** in that window (a WSR row, Sent At 2026-08-07, Approved By
+  `daniels@evergreenrenewables.com`). Dashboard Tailscale-origin config is likewise already
+  applied (see PM-13). What genuinely remains open from the original Stage 10-13 scope is
+  narrower than this entry implied: acceptance-evidence capture, and the three genuine
+  `verify_cutover` failures (PM-12). **Tag:** `host-migration`, `docs-currency`, `correction`.
 - **PM-2 — RESOLVED 2026-08-17 (audit C-2). External dead-man's switch ARMED.**
   `system.heartbeat_url` held the literal `PLACEHOLDER_uptimerobot_heartbeat_url` from
   2026-05-28 to 2026-08-17, so the watchdog skipped its ping on every run of every host and the
@@ -571,9 +650,79 @@ The items below are what stand-up left open.
   implying the call is live-exercised, which it is not. **Trigger:** next CLAUDE.md docs-currency
   pass (out of scope for this file's maintainer to edit directly). **Tag:** `docs`,
   `safety_reports`, `intake`.
+- **PM-10 (MEDIUM, Seth-owned) — three calendar-driven launchd jobs hold a stale Eastern-time
+  reckoning after the production host's timezone changed to Pacific.** The system TZ moved to
+  `America/Los_Angeles` on 2026-08-06, but `weekly-generate`, `progress-generate`, and
+  `picklist-audit` were installed 2026-07-26 while the host was still Eastern and have `runs=3` —
+  none has been reloaded since, so launchd is still evaluating their `StartCalendarInterval`
+  against the Eastern clock it had at load time. They currently fire at 14:02 / 14:34 / 15:00
+  **Eastern** (11:02 / 11:34 / 12:00 Pacific, not the intended afternoon Pacific slots); a plist
+  reload would shift all three ~3h later (18:00Z→21:00Z). These three also have `RunAtLoad=false`,
+  which contradicts a prior blanket "every plist has RunAtLoad=true" assumption elsewhere in the
+  docs — worth a docs-currency check next time that claim is repeated. Watchdog and
+  `picklist-sync` are `StartInterval`-driven, not calendar-driven, so they are unaffected.
+  **Operator decision this session: do NOT reload** (avoid disturbing a working schedule without a
+  concrete need). **Trigger:** next production-host session that touches these three plists, or
+  before relying on their fire time for anything Pacific-sensitive. **Tag:** `host-migration`,
+  `launchd`, `seth-owned`.
+- **PM-11 (HIGH, awareness) — all 22 shipped plists were ALREADY loaded on the production host,
+  including all five send dispatchers; the gates were live+enabled 2026-08-07→17 and one real
+  external send occurred.** `scripts/verify_cutover.py` VC-02 passes trivially because
+  `DARK_UNLOADED_LABELS` is deliberately `frozenset()` — every send lane was activated by the
+  operator 2026-08-10. All five send-module `ITS_Config` polling gates currently read `false`
+  again, and every module still declares `DEFAULT_POLLING_ENABLED = False` (fail-closed on any
+  config-read failure); `send_poll_core.py:458` short-circuits before the lock/heartbeat/marker
+  writes when the gate is off, which is why their `ITS_Daemon_Health` markers are frozen rather
+  than absent. Correlating the frozen-marker timestamps against `runs=1138` (still climbing) puts
+  the **false** flip at **~2026-08-17 08:47 PDT** — meaning the five gates were **true and the
+  daemons live** from 2026-08-07 through 2026-08-17. **Exactly one send occurred in that window:**
+  a WSR (safety weekly-report) row, `Sent At` 2026-08-07, `Approved By`
+  `daniels@evergreenrenewables.com`. This is recorded here as a finding, not a fault — a real,
+  approved, in-doctrine external send is exactly what the pipeline exists to do — but it means the
+  production activation window (dates, gate history, the one send it produced) had no session-log
+  or living-doc record until this reconnaissance pass. **Trigger:** Seth confirms this activation
+  history matches intent before the gates are next flipped either direction. **Tag:**
+  `host-migration`, `external-send-gate`, `awareness`.
+- **PM-12 (HIGH, cutover-adjacent) — `verify_cutover.py` on the production host: 7 passed / 3
+  failed.** **VC-03** fails on two independent causes: three `worker_base_url` config rows still
+  point at the sandbox (`safety.evergreenmirror.com`) instead of the production custom domain, and
+  `weekly_send`/`progress_send` `polling_enabled` is expected `true` but reads `false` (consistent
+  with PM-11's flip). **VC-04** fails on stale heartbeats for the same five send daemons — also
+  consistent with PM-11: a gate-off daemon writes no heartbeat, so its marker only looks stale
+  relative to a check that expects it live. **VC-10** fails on **16 missing approver Smartsheet
+  USER shares across 4 workspaces** — `ezraj`, `jacobs`, `jechiahs`, `tiffanym`
+  (`@evergreenrenewables.com`) are absent from the workspaces their approval role needs. **VC-09
+  PASSES** — the external heartbeat is genuinely armed with a real Healthchecks.io URL (confirms
+  PM-2/HB-1 above are holding). **Trigger:** before the next go-live decision on any of the five
+  send lanes — VC-03's `worker_base_url` rows and VC-10's approver shares are both FIXED
+  high-capability-class items (send-gate config and access grants), Seth-owned. **Tag:**
+  `host-migration`, `verify_cutover`, `cutover-adjacent`.
+- **PM-13 (LOW, awareness) — the operator dashboard's Tailscale origin patch is already applied,
+  but the dashboard is NOT currently exposed off `localhost`, and a stock `install.sh` reload
+  would ERASE the applied value.** `ITS_DASH_ALLOWED_ORIGINS` already carries
+  `https://itss-macbook-pro.tail30bc62.ts.net` on the production host — but `tailscale serve` has
+  **no serve configuration**, so nothing actually forwards Tailscale traffic to the dashboard's
+  127.0.0.1:8484 listener; it remains reachable only from the host itself. The repo's shipped
+  template ships this value **blank**, so any future `install.sh load` of the dashboard plist
+  would silently overwrite the live value back to blank. **Not applied this session** (a
+  `tailscale serve` config is an exposure-surface change, operator-owned). **Trigger:** before any
+  future `install.sh` re-run that touches the dashboard plist, back up the live
+  `ITS_DASH_ALLOWED_ORIGINS` value first; and before deciding whether to actually expose the
+  dashboard over Tailscale, confirm the origin value is intended (not just present). **Tag:**
+  `host-migration`, `operator_dashboard`, `install.sh`.
+- **PM-14 (LOW, rehearsal-pending) — `field_ops.fieldops_sync.archive_enabled` reads `true` and
+  `fieldops-sync` is already running, but the Box archive path has never fired live.** The archive
+  queue is empty, so `job_archive.py`'s relocation logic (Track 6) has zero live exercise on the
+  production host despite the gate being on. **Operator decision this session: leave the gate
+  `true`, rehearse on a disposable test job rather than flip it off.** Best rehearsal target is
+  **`JOB-000030` ("Production test", `Active=Archived`, contacts are Seth's own addresses)**, NOT
+  `JOB-000031` (which carries real ADR-0006 E2E residue per the schedule-lane entry in info-gap
+  doc §8 — archiving it would disturb a deliberately-preserved fixture). **Trigger:** next
+  production-host session; run the rehearsal on JOB-000030 before the archive path's first real
+  job-closure. **Tag:** `host-migration`, `field_ops`, `job_archive`, `rehearsal`.
 
-See memory-archive §G79 for the full decision record and info-gap doc §5/§6/§8 for the
-companion trap/topology/queue entries.
+See memory-archive §G90 (and §G79 for the original host-migration decision record) and info-gap
+doc §5/§6/§8 for the companion trap/topology/queue entries.
 
 ## PO attachments (Feature B) — conscious deferrals [OPEN 2026-07-13]
 
@@ -2158,6 +2307,17 @@ do); recorded here rather than repointing `system.operator_email`, which was off
 `DEFAULT_FROM` — the original scope, and the correct fix; or (b) interim, repoint
 `system.operator_email` to `seths@evergreenmirror.com`, the one address Resend will currently
 deliver to. **Trigger: raised to next session — do not wait for the CL-10 cutover slot.**
+
+**2026-08-19/20 — still live on the production host, re-confirmed during unrelated
+reconnaissance.** `verify_cutover.py` VC-06 continues to pass shape-only (key present + valid,
+never a deliverability check) while a live send attempt still 403s with the same
+`ResendAuthError` quoted above. Also newly noted: neither of the two addresses ITS could plausibly
+fall back to is deliverable — `system.operator_email` (`its@evergreenrenewables.com`) and the
+code's own hardcoded fallback (`seth@solutionsmith.org`) both differ from the one address Resend's
+test-mode account will actually accept (`seths@evergreenmirror.com`), so option (b) above needs
+the config row changed, not assumed. No new fix attempted this pass — recorded as continued
+evidence, not a new finding. See PM-12 in the "Production-host migration" entry above (VC-03/
+VC-04/VC-10, a related but distinct set of production-host `verify_cutover` failures).
 
 ## Portal has no user↔job access model — every authenticated role can read every job's data [OPEN 2026-08-13]
 
