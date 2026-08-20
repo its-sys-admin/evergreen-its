@@ -16,6 +16,29 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## The live daemon venv (`~/its/.venv`) cannot run the repo's own test suite [OPEN 2026-08-19, low]
+
+`~/its/.venv` is missing `radon`, a `[dev]` extra. The consequence is larger than one skipped
+module: `tests/test_code_quality_metrics.py` fails to IMPORT, which aborts pytest **collection**
+for the entire suite (exit 2, zero tests run), and `tests/test_quality_ratchet.py` contributes 3
+more failures because the ratchet shells out to `check_code_quality_metrics`. So four problems,
+one cause — and the failure mode is a hard abort rather than a partial result, which reads as
+"the suite is broken" rather than "this venv is short a package".
+
+Found 2026-08-19 while establishing a full-suite baseline for the orphan-branch cleanup PR. It
+had stayed invisible because targeted runs (`pytest tests/test_publish_daemon.py`) never collect
+the offending module — only a whole-suite run does.
+
+**Deliberately NOT fixed in place.** `pip install radon` into `~/its/.venv` mutates the venv the
+launchd daemons execute from, which is exactly what `docs/operations/worktree_discipline.md`
+forbids; a per-task worktree with its own `pip install -e '.[dev]'` has the package and runs the
+suite clean. So the workaround is already the documented practice, and the debt is the drift
+itself: the live venv no longer matches `pyproject.toml`'s dev extras, and nothing detects that.
+
+**Trigger to revisit:** any work that needs the full suite run from the live tree, or a decision
+to have `verify_cutover` / the watchdog assert that the live venv satisfies the declared dev
+extras. Low priority precisely because the correct workflow does not use the live venv for tests.
+
 ## Quality-ratchet baselines that are capped but not yet reduced [OPEN 2026-08-17, medium]
 
 `.quality-ratchet.json` now pins every numeric quality floor and CI blocks on it, so none of the

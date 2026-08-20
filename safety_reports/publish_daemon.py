@@ -60,7 +60,8 @@ import jsonschema
 
 from safety_reports.publish_manifest import PublishApplyError, apply_publish
 from shared import (
-    circuit_breaker,
+    actuator_branches,
+circuit_breaker,
     creds_resolution,
     error_log,
     form_category,
@@ -196,6 +197,7 @@ class PublishStats:
     failed: int = 0
     skipped_unclaimed: int = 0
     reclaimed: int = 0
+    orphans_cleaned: int = 0
     halted: str | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -530,11 +532,78 @@ def _wait_for_ci(branch: str) -> None:
     raise RuntimeError(f"CI did not pass for {branch} within {int(CI_TIMEOUT_S)}s")
 
 
+# ---- Orphan actuator-branch cleanup (a failed publish used to leave debris) ----
+# The logic lives in shared/actuator_branches.py — see that module for WHY it is shared rather
+# than hand-copied into both actuators. These wrappers are deliberately thin: they are the
+# canonical seams the tests mock, and they bind this daemon's own `_gh`/`_git` at CALL time so a
+# patched seam is honoured.
+_BRANCH_CLEANUP = actuator_branches.BranchCleanup(
+    script_name=SCRIPT_NAME,
+    prefix="publish",
+    root=_ROOT,
+    runbook="docs/runbooks/safety_portal_forms.md",
+    min_age_s=actuator_branches.DEFAULT_MIN_AGE_MULTIPLIER * CI_TIMEOUT_S,
+)
+#: Re-exported so the age floor is readable (and assertable) from this module.
+ORPHAN_MIN_AGE_S = _BRANCH_CLEANUP.min_age_s
+
+
+def _branch_name(request_id: int, identity: str) -> str:
+    """The per-request branch name — ONE definition, so the code that CREATES the branch and the
+    code that DELETES it can never disagree about which ref is meant."""
+    return f"publish/req-{request_id}-{identity}"
+
+
+def _branch_request_id(branch: str) -> int | None:
+    return actuator_branches.request_id_from_branch(branch, _BRANCH_CLEANUP)
+
+
+def _branch_tip_epoch(branch: str) -> float | None:
+    return actuator_branches.branch_tip_epoch(branch, _gh)
+
+
+def _delete_branch_refs(branch: str) -> None:
+    actuator_branches.delete_branch_refs(branch, _ROOT)
+
+
+def _close_and_delete_branch(branch: str, reason: str) -> bool:
+    return actuator_branches.close_and_delete_branch(
+        branch, reason, cfg=_BRANCH_CLEANUP, gh=_gh, git=_git,
+        delete_refs=_delete_branch_refs,
+    )
+
+
+def _sweep_orphaned_branches(creds: _Creds, stats: PublishStats) -> None:
+    """Remove branches stranded by terminally-failed publishes (see actuator_branches)."""
+    def in_flight() -> set[Any]:
+        # `older_than=0` returns EVERY non-terminal row, `queued` included, so this single read is
+        # the whole in-flight set. It also must not consume the pending read — the cycle's own
+        # pull is asserted to happen exactly once.
+        return {
+            row.get("id")
+            for row in portal_client.get_publish_stuck(creds.base_url, creds.bearer, older_than=0)
+        }
+
+    def describe(request_id: int, hours: int) -> str:
+        return (
+            f"Auto-closed by the ITS publish daemon: publish request {request_id} is terminal "
+            f"(no longer in flight) and this branch has been orphaned for ~{hours}h. Its form "
+            f"definition is superseded by whatever later publish did land — re-publish from the "
+            f"portal admin if this change is still wanted."
+        )
+
+    stats.orphans_cleaned += actuator_branches.sweep_orphaned_branches(
+        cfg=_BRANCH_CLEANUP, git=_git, in_flight=in_flight,
+        tip_epoch=_branch_tip_epoch, close_and_delete=_close_and_delete_branch,
+        describe=describe,
+    )
+
+
 def _commit_test_merge(request_id: int, identity: str, note: str) -> None:
     """Commit the worktree change on a per-request branch, open a PR, WAIT for CI (the
     3-renderer render-smoke gate, C12), then MERGE on green — branch-protection-respecting,
     no repo auto-merge needed. Raises if CI red / merge blocked (the form does NOT go live)."""
-    branch = f"publish/req-{request_id}-{identity}"
+    branch = _branch_name(request_id, identity)
     # Idempotent: clear a stale local/remote branch from a prior failed run of this request.
     subprocess.run(["git", "-C", str(_ROOT), "branch", "-D", branch], capture_output=True, text=True)
     subprocess.run(["git", "-C", str(_ROOT), "push", "origin", "--delete", branch],
@@ -700,7 +769,17 @@ def _actuate(creds: _Creds, request: dict[str, Any], stats: PublishStats) -> Non
         _commit_test_merge(request_id, identity, note)
         _stamp(creds, request_id, "tested")
     except Exception as exc:  # noqa: BLE001 — any actuation failure is terminal+alerted
-        _fail(creds, request_id, "tested", _exc_reason(exc))
+        reason = _exc_reason(exc)
+        _fail(creds, request_id, "tested", reason)
+        # Cleanup runs AFTER _fail has stamped the row and raised the CRITICAL, never before:
+        # the audit trail must survive even if this cleanup itself dies. Stage 2 is the only
+        # stage that can strand a ref — stage 1 precedes the branch, and stages 3-4 run after
+        # `gh pr merge --delete-branch` has already removed it.
+        _close_and_delete_branch(
+            _branch_name(request_id, identity),
+            f"Auto-closed by the ITS publish daemon: publish request {request_id} failed at "
+            f"stage 'tested', so this branch will never merge. Reason: {reason}",
+        )
         stats.failed += 1
         return
 
@@ -890,6 +969,10 @@ def publish_once() -> PublishStats:
     # PR-2: reclaim stale non-terminal rows (crashed/stalled publishes) BEFORE pulling new work,
     # so a wedged parent is freed this cycle. Best-effort; never blocks the pull.
     _sweep_stale_rows(creds, stats)
+    # Same cycle position and the same best-effort contract, but a different kind of debris:
+    # _sweep_stale_rows reclaims stuck ROWS, this removes the BRANCHES a terminal failure
+    # leaves on GitHub. Before any claim, so this cycle's own branch cannot exist yet.
+    _sweep_orphaned_branches(creds, stats)
 
     rows = portal_client.get_publish_pending(creds.base_url, creds.bearer)
     stats.polled = len(rows)

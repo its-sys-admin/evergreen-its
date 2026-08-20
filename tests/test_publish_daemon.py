@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -882,3 +884,249 @@ def test_apply_to_worktree_write_is_idempotent_against_the_committed_catalog():
     on_disk = path.read_text(encoding="utf-8")
     rewritten = _json.dumps(_json.loads(on_disk), indent=2, ensure_ascii=False) + "\n"
     assert rewritten == on_disk, "a no-op daemon write would reformat catalog.json"
+
+
+# ---------------------------------------------------------------------------
+# Orphan actuator-branch cleanup (failed publishes used to strand a branch + PR)
+# ---------------------------------------------------------------------------
+
+
+def _ls_remote(*branches: str) -> str:
+    """A `git ls-remote --heads` stdout block for the given branches."""
+    return "\n".join(f"0000000000000000000000000000000000000000\trefs/heads/{b}" for b in branches)
+
+
+@pytest.mark.parametrize(
+    "branch,expected",
+    [
+        ("publish/req-5-erosion-inspection", 5),
+        ("publish/req-12-a-b-c", 12),
+        # Everything below must be UNMATCHED: this predicate gates a DELETE, so anything that is
+        # not exactly `publish/req-<digits>-` has to be left alone rather than guessed at.
+        ("publish/req-x-thing", None),          # non-numeric id
+        ("publish/reqs-5-thing", None),         # near-miss prefix
+        ("publish/req-5", None),                # no trailing separator
+        ("feat/publish/req-5-thing", None),     # not anchored at the start
+        ("publish/hotfix-by-hand", None),       # operator branch under our own prefix
+        ("config/req-1-po_materials-purchaser", None),  # the OTHER daemon's branch
+        ("main", None),
+    ],
+)
+def test_branch_request_id_is_strict(branch, expected):
+    assert pd._branch_request_id(branch) == expected
+
+
+def test_close_and_delete_refuses_a_merged_pr(mocker):
+    """A merged PR's branch belongs to the success path. Deleting on a mistaken premise is the
+    destructive error worth refusing loudly, so nothing is removed and the answer is False."""
+    mocker.patch.object(
+        pd, "_gh",
+        return_value=json.dumps([{"number": 181, "state": "MERGED",
+                                  "mergedAt": "2026-08-19T17:18:51Z"}]),
+    )
+    refs = mocker.patch.object(pd, "_delete_branch_refs")
+    assert pd._close_and_delete_branch("publish/req-7-erosion", "why") is False
+    refs.assert_not_called()
+
+
+def test_close_and_delete_comments_before_closing(mocker):
+    """The reason must land on the PR BEFORE it closes — a bare closure is exactly what #178/#179
+    left behind, and a closed PR has nowhere else to carry the explanation."""
+    calls: list[tuple] = []
+
+    def fake_gh(*args):
+        calls.append(args)
+        if args[:2] == ("pr", "list"):
+            return json.dumps([{"number": 178, "state": "OPEN", "mergedAt": None}])
+        return ""
+
+    mocker.patch.object(pd, "_gh", side_effect=fake_gh)
+    mocker.patch.object(pd, "_delete_branch_refs")
+    mocker.patch.object(pd, "_git", return_value="")  # ls-remote: ref is gone
+    assert pd._close_and_delete_branch("publish/req-5-erosion", "because X") is True
+    verbs = [c[:2] for c in calls]
+    assert verbs.index(("pr", "comment")) < verbs.index(("pr", "close"))
+
+
+def test_close_and_delete_reports_failure_when_ref_survives(mocker):
+    """Truth comes from re-reading the REMOTE, never from a delete command's exit status."""
+    mocker.patch.object(pd, "_gh", return_value="[]")
+    mocker.patch.object(pd, "_delete_branch_refs")
+    mocker.patch.object(pd, "_git", return_value=_ls_remote("publish/req-5-erosion"))
+    assert pd._close_and_delete_branch("publish/req-5-erosion", "r") is False
+
+
+def test_close_and_delete_handles_a_branch_with_no_pr(mocker):
+    """The 40-day-old `config/req-1` orphan had NO PR at all (the push landed, `pr create` never
+    did). The publish lane must handle that same shape: delete the ref, no PR ops."""
+    mocker.patch.object(pd, "_gh", return_value="[]")
+    refs = mocker.patch.object(pd, "_delete_branch_refs")
+    mocker.patch.object(pd, "_git", return_value="")
+    assert pd._close_and_delete_branch("publish/req-9-orphan", "r") is True
+    refs.assert_called_once_with("publish/req-9-orphan")
+
+
+@pytest.fixture
+def sweep_env(mocker):
+    """A sweep with one candidate branch, old enough and not in flight — i.e. a true orphan."""
+    creds = pd._Creds("https://portal.test", "tok")
+    mocker.patch.object(pd.portal_client, "get_publish_pending", return_value=[])
+    mocker.patch.object(pd.portal_client, "get_publish_stuck", return_value=[])
+    mocker.patch.object(pd, "_git", return_value=_ls_remote("publish/req-5-erosion"))
+    mocker.patch.object(pd, "_branch_tip_epoch",
+                        return_value=time.time() - (pd.ORPHAN_MIN_AGE_S * 10))
+    close = mocker.patch.object(pd, "_close_and_delete_branch", return_value=True)
+    return {"creds": creds, "close": close}
+
+
+def test_sweep_deletes_a_true_orphan(sweep_env):
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_called_once()
+    assert sweep_env["close"].call_args[0][0] == "publish/req-5-erosion"
+    assert stats.orphans_cleaned == 1
+
+
+def test_sweep_skips_a_request_still_in_flight(sweep_env, mocker):
+    """The authoritative guard: an id the Worker still reports as non-terminal is live work."""
+    mocker.patch.object(pd.portal_client, "get_publish_stuck", return_value=[{"id": 5}])
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+    assert stats.orphans_cleaned == 0
+
+
+def test_sweep_skips_a_branch_younger_than_the_floor(sweep_env, mocker):
+    """Second belt: even with the in-flight read saying 'terminal', a fresh branch is not debris."""
+    mocker.patch.object(pd, "_branch_tip_epoch", return_value=time.time() - 5)
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_skips_a_branch_of_unknown_age(sweep_env, mocker):
+    """Unknown age is fail-CLOSED: under-clean rather than over-delete."""
+    mocker.patch.object(pd, "_branch_tip_epoch", return_value=None)
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_deletes_nothing_when_the_in_flight_read_fails(sweep_env, mocker):
+    """If we cannot establish what is live, we must delete NOTHING — not fall back to 'probably
+    terminal'. This is the difference between a housekeeping bug and destroying live work."""
+    mocker.patch.object(pd.portal_client, "get_publish_stuck",
+                        side_effect=RuntimeError("worker down"))
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_ignores_branches_that_are_not_ours(sweep_env, mocker):
+    mocker.patch.object(
+        pd, "_git",
+        return_value=_ls_remote("publish/hand-made", "feat/publish/req-1-x", "main"),
+    )
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+
+
+def test_stage2_records_the_failure_before_cleaning_up(stub, mocker):
+    """Ordering is the whole contract: `_fail` stamps the row and raises the CRITICAL, and only
+    then is the branch removed. Reversed, a cleanup crash would erase the evidence of why the
+    publish failed and leave no audit trail at all."""
+    order: list[str] = []
+    stub["commit"].side_effect = RuntimeError("CI failed for publish/req-5-erosion")
+    mocker.patch.object(pd, "_fail", side_effect=lambda *a, **k: order.append("fail"))
+    mocker.patch.object(pd, "_close_and_delete_branch",
+                        side_effect=lambda *a, **k: order.append("cleanup"))
+    stats = pd.PublishStats()
+    pd._actuate(
+        pd._Creds("https://portal.test", "tok"),
+        _row("create", "incident", "incident", definition=_create_def(), rid=5),
+        stats,
+    )
+    assert order == ["fail", "cleanup"]
+    assert stats.failed == 1
+
+
+def test_stage2_cleanup_targets_the_same_branch_commit_created(stub, mocker):
+    """The delete must aim at the branch `_commit_test_merge` actually made — one `_branch_name`
+    definition is what guarantees it, so assert the name the cleanup receives."""
+    stub["commit"].side_effect = RuntimeError("CI red")
+    mocker.patch.object(pd, "_fail")
+    close = mocker.patch.object(pd, "_close_and_delete_branch")
+    pd._actuate(
+        pd._Creds("https://portal.test", "tok"),
+        _row("create", "incident", "incident", definition=_create_def(), rid=42),
+        pd.PublishStats(),
+    )
+    assert close.call_args[0][0] == pd._branch_name(42, "incident")
+
+
+def test_sweep_leaves_a_default_visible_record_of_what_it_deleted(sweep_env, mocker):
+    """A ref delete is DESTRUCTIVE and INFO rows are env-gated (default off), so a successful
+    sweep must still land a WARN naming what went. The real production orphan had NO PR, so the
+    GitHub comment could not be the audit trail for it."""
+    logged = mocker.patch.object(pd.actuator_branches.error_log, "log")
+    pd._sweep_orphaned_branches(sweep_env["creds"], pd.PublishStats())
+    codes = [c.kwargs.get("error_code") for c in logged.call_args_list]
+    assert "publish_daemon.orphan_sweep_removed" in codes
+    said = [c for c in logged.call_args_list
+            if c.kwargs.get("error_code") == "publish_daemon.orphan_sweep_removed"]
+    assert "publish/req-5-erosion" in said[0].args[2]
+    assert said[0].args[0] is pd.Severity.WARN
+
+
+def test_sweep_stays_quiet_when_there_is_nothing_to_clean(sweep_env, mocker):
+    """The normal case is an empty branch list; it must not emit a per-cycle line."""
+    mocker.patch.object(pd, "_git", return_value="")
+    logged = mocker.patch.object(pd.actuator_branches.error_log, "log")
+    pd._sweep_orphaned_branches(sweep_env["creds"], pd.PublishStats())
+    codes = [c.kwargs.get("error_code") for c in logged.call_args_list]
+    assert "publish_daemon.orphan_sweep_removed" not in codes
+
+
+# `branch_tip_epoch` is what the age floor RESTS on, and every sweep test above mocks it — so
+# without these it would ship untested (the "mocked the layer under test" trap). Each bad-input
+# case must yield None, because None is what makes the caller SKIP rather than delete.
+def test_branch_tip_epoch_parses_a_real_github_timestamp(mocker):
+    """branch_tip_epoch parses GitHub's ISO-8601 Z form to a UTC epoch."""
+    mocker.patch.object(pd, "_gh", return_value="2026-07-10T16:16:18Z\n")
+    got = pd._branch_tip_epoch("publish/req-5-x")
+    assert got == datetime(2026, 7, 10, 16, 16, 18, tzinfo=UTC).timestamp()
+
+
+@pytest.mark.parametrize(
+    "gh_behaviour",
+    [
+        pytest.param({"side_effect": RuntimeError("gh exploded")}, id="gh-raises"),
+        pytest.param({"return_value": ""}, id="empty-output"),
+        pytest.param({"return_value": "   "}, id="whitespace-only"),
+        pytest.param({"return_value": "not-a-date"}, id="unparseable"),
+        pytest.param({"return_value": "2026-13-45T99:99:99Z"}, id="out-of-range"),
+    ],
+)
+def test_branch_tip_epoch_is_fail_closed_on_bad_input(mocker, gh_behaviour):
+    """Unknown age must be None — the caller then SKIPS the branch instead of deleting it."""
+    mocker.patch.object(pd, "_gh", **gh_behaviour)
+    assert pd._branch_tip_epoch("publish/req-5-x") is None
+
+
+def test_sweep_survives_a_failure_to_list_remote_branches(sweep_env, mocker):
+    """Housekeeping must never wedge the cycle, and must not delete on a blind read."""
+    mocker.patch.object(pd, "_git", side_effect=RuntimeError("network"))
+    stats = pd.PublishStats()
+    pd._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+    assert stats.orphans_cleaned == 0
+
+
+def test_close_and_delete_still_removes_the_ref_when_pr_lookup_fails(mocker):
+    """A `gh pr list` failure must not strand the branch — fall through to a ref-only delete."""
+    mocker.patch.object(pd, "_gh", side_effect=RuntimeError("gh down"))
+    refs = mocker.patch.object(pd, "_delete_branch_refs")
+    mocker.patch.object(pd, "_git", return_value="")
+    assert pd._close_and_delete_branch("publish/req-5-x", "r") is True
+    refs.assert_called_once_with("publish/req-5-x")

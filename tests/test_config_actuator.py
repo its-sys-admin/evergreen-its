@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -666,3 +667,138 @@ def test_wait_for_ci_raises_on_a_real_failure_beside_a_superseded_cancellation(m
     }))
     with pytest.raises(RuntimeError, match="CI failed"):
         ca._wait_for_ci("config/req-1-po_materials-tax")
+
+
+# ---------------------------------------------------------------------------
+# Orphan actuator-branch cleanup — mirrors tests/test_publish_daemon.py's block.
+# `config/req-1-po_materials-purchaser` sat on the remote for 40 days carrying NO PR at all,
+# which is the shape these cover.
+# ---------------------------------------------------------------------------
+
+
+def _ls_remote(*branches: str) -> str:
+    return "\n".join(f"0000000000000000000000000000000000000000\trefs/heads/{b}" for b in branches)
+
+
+@pytest.mark.parametrize(
+    "branch,expected",
+    [
+        ("config/req-1-po_materials-purchaser", 1),
+        ("config/req-12-po_materials-tax", 12),
+        # Everything below gates a DELETE and must stay unmatched.
+        ("config/req-x-thing", None),
+        ("config/reqs-1-thing", None),
+        ("config/req-1", None),
+        ("feat/config/req-1-thing", None),
+        ("config/hand-edited", None),
+        ("publish/req-5-erosion-inspection", None),  # the OTHER daemon's branch
+        ("main", None),
+    ],
+)
+def test_branch_request_id_is_strict(branch, expected):
+    assert ca._branch_request_id(branch) == expected
+
+
+def test_close_and_delete_refuses_a_merged_pr(mocker):
+    mocker.patch.object(
+        ca, "_gh",
+        return_value=json.dumps([{"number": 99, "state": "MERGED",
+                                  "mergedAt": "2026-07-10T16:16:18Z"}]),
+    )
+    refs = mocker.patch.object(ca, "_delete_branch_refs")
+    assert ca._close_and_delete_branch("config/req-1-po_materials-purchaser", "why") is False
+    refs.assert_not_called()
+
+
+def test_close_and_delete_handles_a_branch_with_no_pr(mocker):
+    """The real 40-day orphan's exact shape: a pushed branch that never got a PR."""
+    mocker.patch.object(ca, "_gh", return_value="[]")
+    refs = mocker.patch.object(ca, "_delete_branch_refs")
+    mocker.patch.object(ca, "_git", return_value="")
+    assert ca._close_and_delete_branch("config/req-1-po_materials-purchaser", "r") is True
+    refs.assert_called_once_with("config/req-1-po_materials-purchaser")
+
+
+def test_close_and_delete_reports_failure_when_ref_survives(mocker):
+    mocker.patch.object(ca, "_gh", return_value="[]")
+    mocker.patch.object(ca, "_delete_branch_refs")
+    mocker.patch.object(ca, "_git",
+                        return_value=_ls_remote("config/req-1-po_materials-purchaser"))
+    assert ca._close_and_delete_branch("config/req-1-po_materials-purchaser", "r") is False
+
+
+@pytest.fixture
+def sweep_env(mocker):
+    creds = ca._Creds("https://portal.test", "tok")
+    mocker.patch.object(ca.portal_client, "get_config_pending", return_value=[])
+    mocker.patch.object(ca.portal_client, "get_config_stuck", return_value=[])
+    mocker.patch.object(ca, "_git",
+                        return_value=_ls_remote("config/req-1-po_materials-purchaser"))
+    mocker.patch.object(ca, "_branch_tip_epoch",
+                        return_value=time.time() - (ca.ORPHAN_MIN_AGE_S * 10))
+    close = mocker.patch.object(ca, "_close_and_delete_branch", return_value=True)
+    return {"creds": creds, "close": close}
+
+
+def test_sweep_deletes_a_true_orphan(sweep_env):
+    stats = ca.ConfigStats()
+    ca._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_called_once()
+    assert sweep_env["close"].call_args[0][0] == "config/req-1-po_materials-purchaser"
+    assert stats.orphans_cleaned == 1
+
+
+def test_sweep_skips_a_request_still_in_flight(sweep_env, mocker):
+    mocker.patch.object(ca.portal_client, "get_config_stuck", return_value=[{"id": 1}])
+    stats = ca.ConfigStats()
+    ca._sweep_orphaned_branches(sweep_env["creds"], stats)
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_skips_a_branch_younger_than_the_floor(sweep_env, mocker):
+    mocker.patch.object(ca, "_branch_tip_epoch", return_value=time.time() - 5)
+    ca._sweep_orphaned_branches(sweep_env["creds"], ca.ConfigStats())
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_skips_a_branch_of_unknown_age(sweep_env, mocker):
+    mocker.patch.object(ca, "_branch_tip_epoch", return_value=None)
+    ca._sweep_orphaned_branches(sweep_env["creds"], ca.ConfigStats())
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_deletes_nothing_when_the_in_flight_read_fails(sweep_env, mocker):
+    mocker.patch.object(ca.portal_client, "get_config_stuck",
+                        side_effect=RuntimeError("worker down"))
+    ca._sweep_orphaned_branches(sweep_env["creds"], ca.ConfigStats())
+    sweep_env["close"].assert_not_called()
+
+
+def test_sweep_ignores_branches_that_are_not_ours(sweep_env, mocker):
+    mocker.patch.object(
+        ca, "_git",
+        return_value=_ls_remote("config/hand-edited", "publish/req-5-erosion", "main"),
+    )
+    ca._sweep_orphaned_branches(sweep_env["creds"], ca.ConfigStats())
+    sweep_env["close"].assert_not_called()
+
+
+def test_stage2_records_the_failure_before_cleaning_up(stub, mocker):
+    """Ordering is the contract: stamp + CRITICAL first, remove the branch second."""
+    order: list[str] = []
+    stub["commit"].side_effect = RuntimeError("CI red")
+    mocker.patch.object(ca, "_fail", side_effect=lambda *a, **k: order.append("fail"))
+    mocker.patch.object(ca, "_close_and_delete_branch",
+                        side_effect=lambda *a, **k: order.append("cleanup"))
+    stats = ca.ConfigStats()
+    ca._actuate(ca._Creds("https://portal.test", "tok"), _row(rid=7), stats)
+    assert order == ["fail", "cleanup"]
+    assert stats.failed == 1
+
+
+def test_stage2_cleanup_targets_the_same_branch_commit_created(stub, mocker):
+    stub["commit"].side_effect = RuntimeError("CI red")
+    mocker.patch.object(ca, "_fail")
+    close = mocker.patch.object(ca, "_close_and_delete_branch")
+    ca._actuate(ca._Creds("https://portal.test", "tok"), _row(rid=7), ca.ConfigStats())
+    assert close.call_args[0][0] == ca._branch_name(7, "po_materials", "tax")

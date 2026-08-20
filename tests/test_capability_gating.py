@@ -692,6 +692,15 @@ NETWORK_LIB_ALLOWLIST: frozenset[str] = frozenset({
     # Its Worker HTTP egress goes through the audited shared.portal_client (above), not
     # `requests`, and it stays in GATED_SCRIPTS (no customer send, no LLM).
     "po_materials/config_actuator.py",
+    # actuator_branches is the shared orphan-branch cleanup BOTH privileged actuators above
+    # delegate to (publish_daemon + config_actuator). `subprocess` is its whole purpose: it
+    # removes the remote and local refs that a terminally-failed actuation stranded, and reads
+    # `gh` for PR state + the branch tip date. It is deliberately MORE constrained than either
+    # caller — no wrangler, no npm, no deploy — and it can only ever remove a ref whose name
+    # matches `<prefix>/req-<digits>-` for a request the Worker reports as no longer in flight,
+    # never one that is merged. No customer send, no Graph, no LLM; both callers stay in
+    # GATED_SCRIPTS, and gating is orthogonal to this list (cf. publish_daemon).
+    "shared/actuator_branches.py",
     # photo_screen's §34 Layer-3 lazily imports `pyclamd` (a needle below) to scan
     # uploaded portal photos against the LOCAL clamd daemon. config-gated OFF by default;
     # the scan is local-only AV, not customer egress. It stays in GATED_SCRIPTS (no send,
