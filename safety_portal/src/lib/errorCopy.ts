@@ -253,6 +253,12 @@ export const ERROR_COPY: Record<string, string> = {
   // second sentence protects the office from assuming their cleared photo page silently refilled.
   invalid_photos:
     "Your photo selection couldn't be read — reload the page and choose the photos again; nothing was saved, so your previous selection is unchanged.",
+  // Same reject-don't-degrade contract as invalid_photos (0078): the save is refused whole, so
+  // the previously saved curation — including a deliberately emptied list — is untouched.
+  invalid_deliveries:
+    "The delivery list couldn't be read — reload the page and make your edits again; nothing was saved, so the report's delivery list is unchanged.",
+  invalid_material_incidents:
+    "The material-problems list couldn't be read — reload the page and make your edits again; nothing was saved, so the report's list is unchanged.",
 
   // ── purchase orders (worker/po.ts vocabulary — S6) ─────────────────────────────────────────────
   invalid_vendor_key: "That vendor reference isn't valid — refresh and pick again.",

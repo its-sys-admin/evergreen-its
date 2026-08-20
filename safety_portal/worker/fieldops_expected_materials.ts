@@ -55,7 +55,9 @@ const MAX_PART_NUMBER = 64;
 const MAX_CATEGORY = 64;
 const MAX_BOL = 64;
 const MAX_CARRIER = 64;
-const RECEIPT_KINDS: readonly MaterialReceiptKind[] = ["delivered", "partial", "not_delivered"];
+/** Exported as the ONE runtime copy of the ledger vocabulary — fieldops_report's curated-list
+ *  normalizer validates against this same array, so a fourth kind added here flows there too. */
+export const RECEIPT_KINDS: readonly MaterialReceiptKind[] = ["delivered", "partial", "not_delivered"];
 
 /** The derived receipt rollup, as a SQL fragment over an aliased `jem` row.
  *

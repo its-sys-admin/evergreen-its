@@ -1193,12 +1193,9 @@ button.sched-task__prog:hover {
   scroll-margin-top: 72px; /* the rail is sticky; don't land under it */
 }
 
-/* Machine-derived sections recede: the page ground instead of a white card, so
-   "nothing for you to do here" is legible before a word is read. */
-.wpr-sec--derived {
-  background: var(--c-surface-2);
-  box-shadow: none;
-}
+/* (.wpr-sec--derived — the receding "machine-derived section" ground — was deleted when its
+   last consumer, the materials section, became an editing surface (0078). Per-TABLE provenance
+   now rides the .wpr-sec__tag--derived/--yours chips instead.) */
 
 .wpr-sec__head {
   display: flex;

@@ -1,0 +1,52 @@
+-- 0078 — operator curation of the WPR's material lists (operator ask, 2026-08-20).
+--
+-- CONTEXT: the Weekly Production Report's Material Deliveries table derives from the
+-- `material_receipt_events` ledger and its Material Problems list from `material-incident%`
+-- submissions — the one section of the weekly-report screen the office could not touch. The
+-- operator needs to reword, drop, or add rows for the CLIENT DOCUMENT without corrupting the
+-- field record: a delivery the client doesn't care about, a foreman's phrasing that needs
+-- cleaning up, an item the ledger missed.
+--
+-- These two columns are REPORT-SCOPED CURATION SNAPSHOTS, the photos_json model exactly:
+--   NULL  → not curated; the route returns the live ledger/submissions derivation.
+--   '[]'  → the office explicitly chose an EMPTY list; the report prints none, and it must not
+--           re-populate on the next compile.
+--   [...] → the office's curated snapshot for THIS week, verbatim.
+-- A NULL/'[]' collapse would make "leave these off the report" silently re-populate — the same
+-- load-bearing distinction 0067 documents for photos_json.
+--
+-- REPORT-SCOPED, NEVER A WRITE-BACK: rows here are copies of VALUES (plain strings), not
+-- references. Editing them never touches `material_receipt_events`, `material_shipments`, or
+-- `submissions`, and a curated row survives any later change to the ledger. The ledger remains
+-- the record; this is the document.
+--
+-- NO CARRY-FORWARD — the narrative_json rule, NOT the photos one. A curated material list
+-- describes ONE week's deliveries and problems; inheriting it would print last week's trucks on
+-- next week's report. `shapeOffice` nulls both fields on a carried week (photos_json, by
+-- contrast, DOES carry — a curated photo selection is only reachable through this week's own
+-- row, so copying its read line here would be wrong).
+--
+-- COLUMN ↔ WIRE NAMES: `deliveries_json` ↔ payload key `deliveries`; `incidents_json` ↔ payload
+-- key `material_incidents` (the wire keeps the payload's existing name; the column stays short).
+-- The top-level payload lists become EFFECTIVE (curated-wins) in `buildReportData`, so the Mac
+-- compile (`wpr_data.build` → `form_pdf._pr_page_materials`) and the Critical-Items seed consume
+-- curation with ZERO Python changes.
+--
+-- PRUNE/PURGE: nothing to do. prune.ts's SELECTED_POOL_IDS exemption is photo-pool-specific;
+-- these blobs hold no foreign keys into any prunable table, so nothing can dangle. The row still
+-- dies with its job via the purge-job cascade.
+--
+-- Writers: worker/fieldops_report.ts (session PUT, gated cap.jobtracker.manage).
+-- Readers: worker/fieldops_report.ts (both GET tiers, via shapeOffice/buildReportData).
+--
+-- DEPLOY ORDER (lockout class #2): apply this migration --remote BEFORE deploying the Worker —
+-- the updated officeSql SELECTs these columns, so a Worker-first deploy 500s both weekly-report
+-- routes. Always `git -C ~/its pull` to latest main BEFORE `wrangler d1 migrations apply`.
+
+-- [{event_date, kind, item, part_number, qty, unit, vendor, bol_number, carrier}] — the page-5
+-- delivery log rows, all strings (the derived wire shape, so the SPA table and the Mac's 4-key
+-- narrowing render curated and derived rows identically).
+ALTER TABLE job_weekly_report_inputs ADD COLUMN deliveries_json TEXT;
+-- [{work_date, material, issue, details}] — the screen's Material Problems list, which also
+-- feeds the Critical-Items narrative seed when the office hasn't overridden that text.
+ALTER TABLE job_weekly_report_inputs ADD COLUMN incidents_json TEXT;

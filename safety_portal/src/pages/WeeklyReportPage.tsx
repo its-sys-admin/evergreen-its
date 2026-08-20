@@ -8,7 +8,10 @@
 //
 // Everything else on the page is READ-ONLY context, shown because the office is reviewing a
 // document, not filling a form in the dark: the week's weather as the field reported it, the
-// crews that actually worked, the delivery ledger, the material problems, the schedule state.
+// crews that actually worked, the schedule state. The material lists (deliveries + problems)
+// graduated from read-only context to CURATED lists (0078): they render the live import until
+// the office touches them, then become a report-scoped snapshot — the ledger and the field's
+// filings are never written from this page.
 //
 // TWO RULES THE LAYOUT ENCODES:
 //
@@ -43,6 +46,8 @@
 // Materials integration (2026-08): the payload already carried nine delivery fields and a
 // material-incidents array. The page rendered four delivery fields and no incidents at all, so
 // both are widened here — no Worker change, no wire change; the data was already arriving.
+// Materials curation (2026-08-20, migration 0078): both material tables became editable
+// three-state curation snapshots — the photos contract, with its own Reset-to-imported.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -52,6 +57,8 @@ import {
   weekEndFor,
   weekStartFor,
   type ProductionReportResponse,
+  type WeeklyReportDelivery,
+  type WeeklyReportIncident,
   type WeeklyReportLaborRow,
   type WeeklyReportPhoto,
 } from "../lib/fieldops_report";
@@ -87,6 +94,10 @@ type Draft = {
   ifc_review: string;
   change_orders: string;
   photos: WeeklyReportPhoto[] | null;
+  // THREE-STATE curation snapshots (0078), the photos model: null = not curated (the live
+  // import renders and the save omits the key), [] = explicitly none, list = this week's list.
+  deliveries: WeeklyReportDelivery[] | null;
+  material_incidents: WeeklyReportIncident[] | null;
 };
 
 /** The section index. Order here IS the order on the page and in the rail, and it follows the
@@ -164,6 +175,8 @@ function toDraft(d: ProductionReportResponse): Draft {
     ifc_review: o.pending.ifc_review,
     change_orders: o.pending.change_orders,
     photos: o.photos,
+    deliveries: o.deliveries,
+    material_incidents: o.material_incidents,
   };
 }
 
@@ -292,6 +305,44 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
     set("photos", next);
   };
 
+  // Materialize-on-first-touch, the photo-caption pattern: the tables render the EFFECTIVE list
+  // (`draft ?? data`), and the first edit/remove/add copies it into the draft as this week's
+  // curated snapshot. Until then the draft key stays null and the save omits it (auto).
+  const editDelivery = (i: number, patch: Partial<WeeklyReportDelivery>) => {
+    const base = draft.deliveries ?? data.deliveries;
+    set("deliveries", base.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  };
+  const removeDelivery = (i: number) => {
+    const base = draft.deliveries ?? data.deliveries;
+    set("deliveries", base.filter((_, j) => j !== i));
+  };
+  const addDelivery = () => {
+    const base = draft.deliveries ?? data.deliveries;
+    // kind stays "" — an office-added row has NO gate mark, and the chip prints an em dash.
+    // Defaulting it to "delivered" would dress an authored row up as a ledger record.
+    set("deliveries", [...base, {
+      event_date: "", kind: "", item: "", part_number: "",
+      qty: "", unit: "", vendor: "", bol_number: "", carrier: "",
+    }]);
+  };
+  const editIncident = (i: number, patch: Partial<WeeklyReportIncident>) => {
+    const base = draft.material_incidents ?? data.material_incidents;
+    set("material_incidents", base.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  };
+  const removeIncident = (i: number) => {
+    const base = draft.material_incidents ?? data.material_incidents;
+    set("material_incidents", base.filter((_, j) => j !== i));
+  };
+  const addIncident = () => {
+    const base = draft.material_incidents ?? data.material_incidents;
+    set("material_incidents", [...base, { work_date: "", material: "", issue: "", details: "" }]);
+  };
+  // "Reset just clicked, not yet saved": the draft says auto but the server still returns the
+  // curated list as the effective one, so rendering `data.deliveries` would make Reset look
+  // like a no-op. These flags swap the table for an honest notice until the save lands.
+  const deliveriesResetPending = draft.deliveries === null && data.office.deliveries !== null;
+  const incidentsResetPending = draft.material_incidents === null && data.office.material_incidents !== null;
+
   const save = async () => {
     setBusy(true); setErr(""); setSaved("");
     try {
@@ -333,6 +384,15 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
         // Omit `photos` entirely while the office has not curated — that preserves auto-select.
         // Sending [] would mean "no photos this week", a different and deliberate state.
         ...(draft.photos === null ? {} : { photos: draft.photos }),
+        // The material lists ride the same omit-preserves-auto contract. Identity-less rows are
+        // filtered at save (the labor blank-company rule); an all-blank curated list therefore
+        // saves as [] — "nothing on the report", which is what an emptied table means.
+        ...(draft.deliveries === null ? {} : {
+          deliveries: draft.deliveries.filter((r) => r.item.trim() || r.part_number.trim()),
+        }),
+        ...(draft.material_incidents === null ? {} : {
+          material_incidents: draft.material_incidents.filter((r) => r.material.trim() || r.issue.trim()),
+        }),
       });
       setSaved("Saved. Tick Compile Now on the job's week sheet to rebuild the PDF.");
       await load(weekStart);
@@ -738,71 +798,224 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
           </section>
 
           {/* ── page 5: materials + pending ─────────────────────────────────────── */}
-          <section className="wpr-sec wpr-sec--derived" id="wpr-materials">
+          {/* Curation, not correction (0078): both tables render the EFFECTIVE list and edit as
+              a report-scoped snapshot — the ledger and the field's incident filings are never
+              written from here. Each table curates independently; its tag says which truth the
+              report currently prints. */}
+          <section className="wpr-sec" id="wpr-materials">
             <header className="wpr-sec__head">
               <h2 className="wpr-sec__title">Material deliveries</h2>
-              <span className="wpr-sec__tag wpr-sec__tag--derived">From the field</span>
+              {draft.deliveries === null ? (
+                <span className="wpr-sec__tag wpr-sec__tag--derived">From the field</span>
+              ) : (
+                <span className="wpr-sec__tag wpr-sec__tag--yours">Curated for this report</span>
+              )}
             </header>
             <p className="wpr-sec__hint">
-              Every delivery mark the field recorded against this job&apos;s material lines this
-              week. Read-only — the record is the delivery ledger, and it is corrected there.
+              {draft.deliveries === null
+                ? "Every delivery mark the field recorded against this job's material lines this " +
+                  "week. Edit a cell, remove a row, or add one to curate the list for this " +
+                  "report only — the delivery ledger is never changed from here."
+                : `Curated for this report — the live import has ${data.deliveries_import_count} ` +
+                  "row(s). The ledger is unchanged; Reset to imported discards this list on save."}
             </p>
-            <table className="wpr-table">
-              <thead>
-                <tr>
-                  <th>Date</th><th>Item</th><th>Part no.</th><th>Qty</th>
-                  <th>Vendor</th><th>BOL</th><th>Carrier</th><th>Mark</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.deliveries.length === 0 && (
-                  <tr><td colSpan={8}>No deliveries recorded this week.</td></tr>
-                )}
-                {data.deliveries.map((d, i) => {
-                  const chip = deliveryKindChip(d.kind);
-                  return (
-                    <tr key={i}>
-                      <td data-cell="Date"><strong>{d.event_date}</strong></td>
-                      <td data-cell="Item">{d.item || d.part_number || "—"}</td>
-                      <td data-cell="Part no.">{d.part_number || "—"}</td>
-                      <td data-cell="Qty">{[d.qty, d.unit].filter(Boolean).join(" ") || "—"}</td>
-                      <td data-cell="Vendor">{d.vendor || "—"}</td>
-                      <td data-cell="BOL">{d.bol_number || "—"}</td>
-                      <td data-cell="Carrier">{d.carrier || "—"}</td>
-                      <td data-cell="Mark"><span className={chip.className}>{chip.label}</span></td>
+            {data.deliveries_truncated && (
+              <p className="wpr-banner wpr-banner--warn">
+                The live import shows the first {data.deliveries_import_count} deliveries — more
+                were recorded this week than the import carries.
+              </p>
+            )}
+            {deliveriesResetPending ? (
+              <p className="wpr-sec__hint">
+                Reset — the live import ({data.deliveries_import_count} row(s)) returns when you
+                save.
+              </p>
+            ) : (
+              <>
+                <table className="wpr-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th><th>Item</th><th>Part no.</th><th>Qty</th><th>Unit</th>
+                      <th>Vendor</th><th>BOL</th><th>Carrier</th><th>Mark</th><th />
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {(draft.deliveries ?? data.deliveries).length === 0 && (
+                      <tr>
+                        <td colSpan={10}>
+                          {draft.deliveries === null
+                            ? "No deliveries recorded this week."
+                            : "No deliveries will appear on this report (curated empty)."}
+                        </td>
+                      </tr>
+                    )}
+                    {(draft.deliveries ?? data.deliveries).map((d, i) => {
+                      const chip = deliveryKindChip(d.kind);
+                      return (
+                        <tr key={i}>
+                          <td data-cell="Date">
+                            <input type="date" className="wpr-field__input" value={d.event_date}
+                                   aria-label={`Delivery ${i + 1} date`}
+                                   onChange={(e) => editDelivery(i, { event_date: e.target.value })} />
+                          </td>
+                          <td data-cell="Item">
+                            <input className="wpr-field__input" value={d.item}
+                                   aria-label={`Delivery ${i + 1} item`}
+                                   onChange={(e) => editDelivery(i, { item: e.target.value })} />
+                          </td>
+                          <td data-cell="Part no.">
+                            <input className="wpr-field__input" value={d.part_number}
+                                   aria-label={`Delivery ${i + 1} part number`}
+                                   onChange={(e) => editDelivery(i, { part_number: e.target.value })} />
+                          </td>
+                          <td data-cell="Qty">
+                            <input className="wpr-num" inputMode="decimal" value={d.qty}
+                                   aria-label={`Delivery ${i + 1} quantity`}
+                                   onChange={(e) => editDelivery(i, { qty: e.target.value })} />
+                          </td>
+                          <td data-cell="Unit">
+                            <input className="wpr-num" value={d.unit}
+                                   aria-label={`Delivery ${i + 1} unit`}
+                                   onChange={(e) => editDelivery(i, { unit: e.target.value })} />
+                          </td>
+                          <td data-cell="Vendor">
+                            <input className="wpr-field__input" value={d.vendor}
+                                   aria-label={`Delivery ${i + 1} vendor`}
+                                   onChange={(e) => editDelivery(i, { vendor: e.target.value })} />
+                          </td>
+                          <td data-cell="BOL">
+                            <input className="wpr-field__input" value={d.bol_number}
+                                   aria-label={`Delivery ${i + 1} BOL number`}
+                                   onChange={(e) => editDelivery(i, { bol_number: e.target.value })} />
+                          </td>
+                          <td data-cell="Carrier">
+                            <input className="wpr-field__input" value={d.carrier}
+                                   aria-label={`Delivery ${i + 1} carrier`}
+                                   onChange={(e) => editDelivery(i, { carrier: e.target.value })} />
+                          </td>
+                          {/* The mark stays a chip: it is the ledger's own claim about what
+                              happened at the gate, kept for context and dropped by the PDF —
+                              not a thing the office should re-assert from a report screen. */}
+                          <td data-cell="Mark"><span className={chip.className}>{chip.label}</span></td>
+                          <td>
+                            <button type="button" className="btn btn--danger"
+                                    aria-label={`Remove delivery row ${i + 1}`}
+                                    onClick={() => removeDelivery(i)}>
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div className="dash-row" style={{ marginTop: "var(--space-3)" }}>
+                  <button type="button" className="btn btn--secondary" onClick={addDelivery}>
+                    Add delivery
+                  </button>
+                  {draft.deliveries !== null && (
+                    <button type="button" className="btn btn--secondary"
+                            onClick={() => set("deliveries", null)}>
+                      Reset to imported
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
 
-            {/* The payload has always carried these; the page only ever folded them into the
-                narrative seed, so a reader of the screen could not see the week's material
-                problems as a list. */}
-            <h3 className="wpr-sec__title" style={{ fontSize: "var(--fs-base)", marginTop: "var(--space-6)" }}>
-              Material problems this week
-            </h3>
-            <table className="wpr-table">
-              <thead>
-                <tr><th>Date</th><th>Material</th><th>Issue</th><th>Detail</th></tr>
-              </thead>
-              <tbody>
-                {data.material_incidents.length === 0 && (
-                  <tr><td colSpan={4}>No material problems reported this week.</td></tr>
-                )}
-                {data.material_incidents.map((m, i) => (
-                  <tr key={i}>
-                    <td data-cell="Date"><strong>{m.work_date}</strong></td>
-                    <td data-cell="Material">{m.material || "—"}</td>
-                    <td data-cell="Issue">{m.issue || "—"}</td>
-                    <td data-cell="Detail">{m.details || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <header className="wpr-sec__head" style={{ marginTop: "var(--space-6)" }}>
+              <h3 className="wpr-sec__title" style={{ fontSize: "var(--fs-base)" }}>
+                Material problems this week
+              </h3>
+              {draft.material_incidents === null ? (
+                <span className="wpr-sec__tag wpr-sec__tag--derived">From the field</span>
+              ) : (
+                <span className="wpr-sec__tag wpr-sec__tag--yours">Curated for this report</span>
+              )}
+            </header>
+            {draft.material_incidents !== null && (
+              <p className="wpr-sec__hint">
+                Curated for this report — the live import has{" "}
+                {data.material_incidents_import_count} row(s). The field&apos;s filings are
+                unchanged; Reset to imported discards this list on save.
+              </p>
+            )}
+            {data.material_incidents_truncated && (
+              <p className="wpr-banner wpr-banner--warn">
+                The live import shows the first {data.material_incidents_import_count} problems —
+                more were filed this week than the import carries.
+              </p>
+            )}
+            {incidentsResetPending ? (
+              <p className="wpr-sec__hint">
+                Reset — the live import ({data.material_incidents_import_count} row(s)) returns
+                when you save.
+              </p>
+            ) : (
+              <>
+                <table className="wpr-table">
+                  <thead>
+                    <tr><th>Date</th><th>Material</th><th>Issue</th><th>Detail</th><th /></tr>
+                  </thead>
+                  <tbody>
+                    {(draft.material_incidents ?? data.material_incidents).length === 0 && (
+                      <tr>
+                        <td colSpan={5}>
+                          {draft.material_incidents === null
+                            ? "No material problems reported this week."
+                            : "No material problems will appear on this report (curated empty)."}
+                        </td>
+                      </tr>
+                    )}
+                    {(draft.material_incidents ?? data.material_incidents).map((m, i) => (
+                      <tr key={i}>
+                        <td data-cell="Date">
+                          <input type="date" className="wpr-field__input" value={m.work_date}
+                                 aria-label={`Material problem ${i + 1} date`}
+                                 onChange={(e) => editIncident(i, { work_date: e.target.value })} />
+                        </td>
+                        <td data-cell="Material">
+                          <input className="wpr-field__input" value={m.material}
+                                 aria-label={`Material problem ${i + 1} material`}
+                                 onChange={(e) => editIncident(i, { material: e.target.value })} />
+                        </td>
+                        <td data-cell="Issue">
+                          <input className="wpr-field__input" value={m.issue}
+                                 aria-label={`Material problem ${i + 1} issue`}
+                                 onChange={(e) => editIncident(i, { issue: e.target.value })} />
+                        </td>
+                        <td data-cell="Detail">
+                          <input className="wpr-field__input" value={m.details}
+                                 aria-label={`Material problem ${i + 1} detail`}
+                                 onChange={(e) => editIncident(i, { details: e.target.value })} />
+                        </td>
+                        <td>
+                          <button type="button" className="btn btn--danger"
+                                  aria-label={`Remove material problem row ${i + 1}`}
+                                  onClick={() => removeIncident(i)}>
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="dash-row" style={{ marginTop: "var(--space-3)" }}>
+                  <button type="button" className="btn btn--secondary" onClick={addIncident}>
+                    Add problem
+                  </button>
+                  {draft.material_incidents !== null && (
+                    <button type="button" className="btn btn--secondary"
+                            onClick={() => set("material_incidents", null)}>
+                      Reset to imported
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
             <p className="wpr-sec__hint" style={{ marginTop: "var(--space-3)" }}>
-              These also seed the Critical items box above. Editing that text does not change this
-              table — it is what the field filed.
+              This list seeds the Critical items box above, so curating it changes that seed —
+              unless you have edited the Critical items text yourself, which always wins.
             </p>
           </section>
 
