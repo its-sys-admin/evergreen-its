@@ -8,6 +8,7 @@ import type {
   ManifestResolvedLine,
 } from "../lib/fieldops_manifests";
 import { errorText } from "../lib/errorCopy";
+import { GridViewport } from "../components/GridViewport";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Manifest validate screen (PR3b) — the human half of "the parser proposes, the human disposes".
@@ -486,18 +487,11 @@ export function ManifestValidatePage({
       {/* The editing surface exists ONLY for a manifest that can actually be imported. A refused
           or discarded one has no grid (the daemon never posted rows) and no action available, so
           rendering a disabled editor over an empty table would be noise pretending to be a choice.
-          Wide branch uses minmax(0, …) + min-width:0 per pane — a bare fr pane will not shrink
-          and overflows the page. */}
+          The split geometry lives in schedule-report.css's shared check-screen rule
+          (.manifest-validate__split) — one column on a phone, two from 1024px with a sticky
+          source pane. Must not be re-inlined: an inline grid here defeats the media query. */}
       {committable ? (
-      <div
-        className="manifest-validate__split"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.6fr)",
-          gap: "1rem",
-          alignItems: "start",
-        }}
-      >
+      <div className="manifest-validate__split">
         {/* ── LEFT: the source, so what is being confirmed is visible ─────────────────── */}
         <section className="card dash-section" style={{ minWidth: 0 }} aria-label="Source document">
           <h4>Source</h4>
@@ -709,7 +703,7 @@ export function ManifestValidatePage({
                 ) : null}
               </div>
             ) : null}
-            <div style={{ overflowX: "auto", maxHeight: "28rem" }}>
+            <GridViewport storageKey="manifest-rows" label="Manifest rows">
               <table className="dash-table">
                 <thead>
                   <tr>
@@ -758,7 +752,7 @@ export function ManifestValidatePage({
                   })}
                 </tbody>
               </table>
-            </div>
+            </GridViewport>
           </section>
 
           <section className="card dash-section" aria-label="Add a missing line">

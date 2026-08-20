@@ -104,10 +104,31 @@ function mount(overrides: ManifestOverride = {}, onClose = vi.fn()) {
   return { ...r, onClose };
 }
 
+// The SPA jsdom env doesn't reliably provide localStorage (Node's experimental global
+// shadows jsdom's — the draftCache.test.ts note). GridViewport persists its height there,
+// so install a fresh in-memory Storage per case to keep them isolated.
+function memoryStorage(): Storage {
+  const m = new Map<string, string>();
+  return {
+    get length() {
+      return m.size;
+    },
+    clear: () => m.clear(),
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    key: (i: number) => Array.from(m.keys())[i] ?? null,
+    removeItem: (k: string) => void m.delete(k),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("localStorage", memoryStorage());
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("ManifestValidatePage", () => {
   it("shows the parser's evidence for its proposed quantity column", async () => {
@@ -352,6 +373,30 @@ describe("ManifestValidatePage", () => {
     fireEvent.click(importBtn);
     await waitFor(() => expect(container.textContent ?? "").toContain("500 material lines"));
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("renders the rows grid inside a GridViewport at the compact default", async () => {
+    const { container, getByLabelText } = mount();
+    await waitFor(() => getByLabelText("Import source row 2"));
+    const table = container.querySelector(".gridvp .dash-table");
+    expect(table, "the rows grid must sit inside the resizable sticky-header viewport").toBeTruthy();
+    // The rows grid, not the Columns mapping table: its header row carries the document's
+    // own labels (cell values live in <input>s, so textContent only sees the headers).
+    expect(table?.textContent ?? "").toContain("PART NUMBER");
+    expect(table?.querySelector('input[aria-label="Import source row 2"]')).toBeTruthy();
+    const scroll = container.querySelector(".gridvp__scroll") as HTMLDivElement;
+    expect(scroll.style.maxHeight).toBe("448px"); // the old inline 28rem, now the compact preset
+  });
+
+  it("REGRESSION (#114): the split carries NO inline grid — the stylesheet owns the geometry", async () => {
+    // The inline gridTemplateColumns this pins against was defeating schedule-report.css's
+    // shared check-screen rule: no phone one-column collapse, no sticky source pane.
+    const { container, getByLabelText } = mount();
+    await waitFor(() => getByLabelText("Import source row 2"));
+    const split = container.querySelector(".manifest-validate__split") as HTMLDivElement;
+    expect(split).toBeTruthy();
+    expect(split.style.gridTemplateColumns).toBe("");
+    expect(split.style.display).toBe("");
   });
 
   it("discards without committing", async () => {
