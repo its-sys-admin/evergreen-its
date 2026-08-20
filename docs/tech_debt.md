@@ -2984,3 +2984,20 @@ item). If the repo ever goes private again, land cost controls FIRST:
 **Revisit when:** the repo's visibility changes again, or the next CI-workflow-touching PR.
 
 Surfaced: 2026-08-15 design-completion session (billing outage + operator public-flip).
+
+## [OPEN 2026-08-20, low] CSS classname guard is blind to template-literal-EMBEDDED classNames
+
+`tests/test_portal_css_classes.py`'s regex captures only the LEADING literal segment of a
+template className, so a class that appears solely inside the template's expression — like
+GridViewport's `gridvp__scroll--max` in `` `gridvp__scroll ${isMax ? "gridvp__scroll--max" : ""}` ``
+— is never checked against the stylesheets. A future rename of that CSS rule (or any peer
+authored the same way) would ship the page silently unstyled, exactly the class of defect the
+guard exists to catch. Fix candidates: also scan quoted string literals inside className
+template expressions, or an allowlist-of-known-embedded-names parity check.
+
+**Tag:** `tests`, `safety-portal`, `guard-blind-spot`.
+
+**Revisit when:** the next change to `test_portal_css_classes.py`, or any rename touching a
+`--` modifier class that only appears inside a template expression.
+
+Surfaced: 2026-08-20 grid-viewport ops-stds review.

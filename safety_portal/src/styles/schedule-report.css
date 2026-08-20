@@ -2500,6 +2500,76 @@ form.dash-row select {
   -webkit-overflow-scrolling: touch;
 }
 
+/* ── GridViewport — a sticky-header scroll box whose height the OPERATOR sets ──
+   One container scrolls BOTH axes: sticky top only survives against the nearest
+   scrolling ancestor, so splitting x/y into nested divs would break it. The old
+   inline wrapper (overflow-x:auto + max-height) already computed overflow-y:auto,
+   so this is behavior-identical at rest. */
+.gridvp {
+  min-width: 0; /* grid/flex child — must be allowed to shrink */
+}
+.gridvp__scroll {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* Max preset: fill the window minus page chrome; never below 320px on a phone.
+   vh line is the fallback for engines without dvh; dvh tracks the iOS URL bar. */
+.gridvp__scroll--max {
+  max-height: max(320px, calc(100vh - 240px));
+  max-height: max(320px, calc(100dvh - 240px));
+}
+/* Sticky header row. .dash-table keeps border-collapse:collapse, and collapsed
+   borders belong to the TABLE's grid, not the cell — they scroll away under a
+   sticky th. So: zero the th's own border and repaint the header rule as an
+   inset shadow, which travels with the stuck cell. Same 1px --c-line, so the
+   at-rest render is pixel-identical to every other .dash-table. Background must
+   be opaque and match the card (--c-white) or rows ghost through. z-index 2
+   mirrors .sched-tl__name — a local stacking slot inside a scroller, not a bid
+   against --z-sheet. */
+.gridvp__scroll .dash-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--c-white);
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--c-line);
+}
+/* The resize affordance: a full-width bar under the grid; the handle stretches,
+   the presets sit right. align-items:stretch inherits the buttons' --tap height
+   onto the handle, so the drag target is 48px without a magic number. */
+.gridvp__bar {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.gridvp__handle {
+  flex: 1;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none; /* the handle owns its pointer — no scroll fight */
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+}
+.gridvp__grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--c-muted);
+}
+.gridvp__presets {
+  display: flex;
+  gap: var(--space-2);
+}
+.gridvp__preset[aria-pressed="true"] {
+  background: var(--c-surface-2); /* quiet "current" state; the attribute is the signal */
+}
+
 /* A checkbox + its label on one line, the way every other confirm in the kit reads. The
    element carries .field too, whose display:block was stacking the box above the words. */
 .fr__req-confirm {

@@ -12,6 +12,7 @@ import {
   type Vendor,
 } from "../lib/po";
 import { fetchRfq, type RfqDetail } from "../lib/rfq";
+import { GridViewport } from "../components/GridViewport";
 
 // Vendor-estimate DISPOSITION screen (ADR-0004 E3) — the human fidelity control and the
 // first-class replacement for the estimator's highlight color-coding. Left: the rendered
@@ -448,7 +449,7 @@ export function EstimateDispositionPage({
                   The extraction's arithmetic did NOT cross-check — verify every line against the source.
                 </p>
               ) : null}
-              <div style={{ overflowX: "auto" }}>
+              <GridViewport storageKey="estimate-lines" label="Extracted lines">
                 <table className="dash-table">
                   <thead>
                     <tr>
@@ -498,7 +499,7 @@ export function EstimateDispositionPage({
                     })}
                   </tbody>
                 </table>
-              </div>
+              </GridViewport>
               {unimportable.length > 0 ? (
                 <p className="banner banner--err">
                   {unimportable.length} accepted line(s) carry no resolvable unit cost — uncheck them and
