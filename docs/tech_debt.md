@@ -3001,3 +3001,39 @@ template expressions, or an allowlist-of-known-embedded-names parity check.
 `--` modifier class that only appears inside a template expression.
 
 Surfaced: 2026-08-20 grid-viewport ops-stds review.
+
+## [OPEN 2026-08-20, low] 16 `safety_portal/worker/*.ts` JSON routes have no local body-size guard — the weekly-report fix is one route, not the pattern
+
+PR #185's adversarial review added a `WEEKLY_REPORT_BODY_MAX` (1,500,000-byte) guard to the
+`PUT /api/fieldops/weekly-report` route after noting it previously read `c.req.json()`/`c.req.text()`
+with no local cap, and flagged that other 0067-era JSON routes might share the gap. A follow-up grep
+across `safety_portal/worker/*.ts` at this session's close confirms the gap is wider than one route:
+26 files parse a JSON/text request body, and only 10 of them (`fieldops_daily_photos.ts`,
+`fieldops_checklist.ts`, `fieldops_manifests.ts`, `fieldops_schedules.ts`, `fieldops_report.ts`,
+`index.ts`, `po_estimates.ts`, `po_attachments.ts`, `po.ts`, `subcontract.ts`) carry any local
+`BODY_MAX`/413 marker. The other **16 have none**: `config.ts`, `fieldops_crew_assign.ts`,
+`fieldops_crew_write.ts`, `fieldops_daily_requirements.ts`, `fieldops_equipment_roster_write.ts`,
+`fieldops_equipment_write.ts`, `fieldops_expected_materials.ts`, `fieldops_job_write.ts`,
+`fieldops_material_write.ts`, `fieldops_payments.ts`, `fieldops_personnel_write.ts`,
+`fieldops_procurement.ts`, `fieldops_schedule_tasks.ts`, `fieldops_task_write.ts`,
+`fieldops_time_write.ts`, `rfq.ts`.
+
+Not independently confirmed exploitable this pass — Cloudflare Workers has its own platform-level
+request-body ceiling, so this is a defense-in-depth gap (an oversized authenticated payload burning
+CPU/memory on JSON parse before any application-level rejection), not a demonstrated open door.
+Severity kept low pending an actual audit: every session-scoped/capability-gated route already
+requires `requireSession`/`requireCapability` before the body read, so this is not an unauthenticated
+attack surface.
+
+**Fix shape:** a single shared `readJsonBody(c, maxBytes)` helper (read via `c.req.text()`, length
+check, then `JSON.parse`) that each of the 16 routes adopts, instead of copy-pasting the
+`WEEKLY_REPORT_BODY_MAX` pattern 16 more times — this is exactly the parameterize-not-clone shape
+Op Stds §14 prefers over 16 independent constants.
+
+**Tag:** `security`, `safety-portal`, `worker`, `route-audit`.
+
+**Revisit when:** the next `safety_portal/worker/` security-focused pass, or before any of these 16
+routes is asked to accept meaningfully larger payloads (e.g., an expanded manifest/schedule shape).
+
+Surfaced: 2026-08-20 session-close follow-up to the #185 adversarial review's weekly-report body-size
+finding. See `docs/session_logs/2026-08-20_wpr-materials-curation-and-grid-viewport.md`.
