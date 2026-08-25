@@ -100,6 +100,11 @@ afterEach(cleanup);
 
 /** Delivery marks are two-step (arm → confirm) so a mis-tap cannot file a permanent ledger event.
  *  Click the button, then click its ARMED label. */
+/** Delivered / Partially delivered will not even ARM without a quantity (2026-08-24) — every
+ *  mark test that is not ABOUT that rule fills the box first. */
+const setQty = (g: (t: string) => HTMLElement, title: string, v: string) =>
+  fireEvent.change(g(`Quantity received for ${title}`), { target: { value: v } });
+
 function markTwice(getByLabelText: (t: string) => HTMLElement, title: string, label: string) {
   fireEvent.click(getByLabelText(`Mark ${title} ${label}`));
   fireEvent.click(
@@ -190,6 +195,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
   it("can mark against a specific load", async () => {
     const { getByLabelText, container } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(container.textContent ?? "").toContain("1P driven pile"));
+    setQty(getByLabelText, "1P driven pile W8x10", "12");
     fireEvent.change(getByLabelText("Load for 1P driven pile W8x10"), { target: { value: "5" } });
     markTwice(getByLabelText, "1P driven pile W8x10", "partially delivered");
 
@@ -203,6 +209,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
     // tap must not be able to file one.
     const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    setQty(getByLabelText, "1P driven pile W8x10", "30");
     fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
     expect(api.markReceipt).not.toHaveBeenCalled();
     // …and it SAYS it is armed, in the label — colour alone is not a confirmation prompt.
@@ -214,6 +221,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
   it("the second click on the SAME button records the mark", async () => {
     const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    setQty(getByLabelText, "1P driven pile W8x10", "30");
     markTwice(getByLabelText, "1P driven pile W8x10", "delivered");
     await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.markReceipt).mock.calls[0][1]).toMatchObject({ kind: "delivered" });
@@ -223,6 +231,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
     // Changing your mind mid-decision must never file the kind you moved away from.
     const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
     await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    setQty(getByLabelText, "1P driven pile W8x10", "30");
     fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
     fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 not delivered"));
     expect(api.markReceipt).not.toHaveBeenCalled();
@@ -238,6 +247,7 @@ describe("JobMaterialsPage — marking a delivery", () => {
     try {
       const { getByLabelText } = mountAs("manager", RECEIVE_ONLY);
       await vi.waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+      setQty(getByLabelText, "1P driven pile W8x10", "30");
       fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
       expect(
         getByLabelText("Confirm delivered for 1P driven pile W8x10 — tap again to record"),
@@ -252,6 +262,73 @@ describe("JobMaterialsPage — marking a delivery", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // ── quantity is REQUIRED on delivered / partial (2026-08-24) ───────────────────────────
+  // A qty-less delivery flips the line green while `lineOwed` goes on counting the full amount
+  // outstanding, and the §51 Material List then reads "received" where this page reads
+  // "outstanding". Found live on JOB-000032 (37 lines) — forensic report 2026-08-24, defect D2.
+  it("Delivered with an EMPTY qty: says so in red, does not arm, and sends NOTHING", async () => {
+    const { getByLabelText, findByRole } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+
+    const alert = await findByRole("alert");
+    expect(alert.textContent ?? "").toContain("Enter the quantity received");
+    // No request left the browser — the whole point. A silent no-op here is what let a
+    // superintendent believe he had recorded 50 deliveries that never reached the server.
+    expect(api.markReceipt).not.toHaveBeenCalled();
+    // ...and it did NOT arm: an armed button promises the mark is ready to record.
+    expect(getByLabelText("Mark 1P driven pile W8x10 delivered")).toBeTruthy();
+    // The box itself is flagged, and points at the message.
+    const box = getByLabelText("Quantity received for 1P driven pile W8x10");
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    expect(box.getAttribute("aria-describedby")).toBe(alert.id);
+  });
+
+  it("Partially delivered is held to the same rule", async () => {
+    const { getByLabelText, findByRole } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 partially delivered"));
+    expect((await findByRole("alert")).textContent ?? "").toContain("Enter the quantity received");
+    expect(api.markReceipt).not.toHaveBeenCalled();
+  });
+
+  it("a qty that is not a positive number is refused BESIDE THE BOX, not in the page banner", async () => {
+    // The page renders a whole BOM flat, so a banner at the top is off-screen for any line
+    // below the fold — which is where this used to be reported.
+    const { getByLabelText, findByRole } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    setQty(getByLabelText, "1P driven pile W8x10", "0");
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+    const alert = await findByRole("alert");
+    expect(alert.textContent ?? "").toContain("greater than 0");
+    expect(alert.id).toContain("mark-qty-error");
+    expect(api.markReceipt).not.toHaveBeenCalled();
+  });
+
+  it("typing a quantity clears the message, and the mark then goes through", async () => {
+    const { getByLabelText, queryByRole, findByRole } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(getByLabelText("HARDWARE")).toBeTruthy());
+    fireEvent.click(getByLabelText("Mark 1P driven pile W8x10 delivered"));
+    await findByRole("alert");
+
+    setQty(getByLabelText, "1P driven pile W8x10", "30");
+    expect(queryByRole("alert")).toBeNull();
+    expect(getByLabelText("Quantity received for 1P driven pile W8x10").getAttribute("aria-invalid")).toBeNull();
+
+    markTwice(getByLabelText, "1P driven pile W8x10", "delivered");
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.markReceipt).mock.calls[0][1]).toMatchObject({ kind: "delivered", qty: 30 });
+  });
+
+  it("Not delivered stays exempt — nothing arrived, so there is no quantity to state", async () => {
+    const { getByLabelText, queryByRole, container } = mountAs("manager", RECEIVE_ONLY);
+    await waitFor(() => expect(container.textContent ?? "").toContain("1P driven pile"));
+    fireEvent.change(getByLabelText("Note for 1P driven pile W8x10"), { target: { value: "truck never came" } });
+    markTwice(getByLabelText, "1P driven pile W8x10", "not delivered");
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(queryByRole("alert")).toBeNull();
   });
 
   it("a refused mark is SAID, translated from the Worker's machine code (never silent)", async () => {

@@ -2581,3 +2581,25 @@ form.dash-row select {
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
+
+/* ── Delivery-mark quantity: required, and visibly so (2026-08-24) ──────────────────────────
+   A Delivered / Partially delivered mark must carry a quantity or it cannot move the line's
+   outstanding balance (see JobMaterialsPage's `onMark`). The refusal has to be visible AT THE
+   ROW: this page renders a whole BOM flat, so the page-level banner is far off-screen for any
+   line below the fold. Danger INK plus a danger BORDER on the box the message is about, so the
+   two read as one thing. Deliberately NOT the tinted-red ground (#fdf1f1): global.css reserves
+   that for life-safety and says so — "boldness spent once". A missing quantity is a data-entry
+   refusal, not a hazard, and borrowing the life-safety ground would spend it twice. */
+.mat-qty--error {
+  border: 2px solid var(--c-danger);
+}
+
+.mat-mark-error {
+  /* Own line beneath the mark row: the row is a flex line of inputs and buttons, and an inline
+     message would be squeezed between two of them at the width where it matters most. */
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  color: var(--c-danger);
+  font-weight: 600;
+  font-size: 0.85rem;
+}

@@ -400,10 +400,16 @@ export function ExpectedMaterialsSection({
         </div>
       )}
 
+      {/* Where receipts are actually recorded. This used to read "…from the daily report (My Tasks
+          → Daily → Expected materials)" — controls that f2e237c (#74) DELETED on 2026-08-11, when
+          the daily form became a read-only counts card plus the deep link above. The instruction
+          outlived them by a fortnight and went on sending receive-capable users to a screen with
+          no such buttons (forensic report 2026-08-24, defect D13). Point at the page that owns the
+          action, and only claim a route this component can actually offer. */}
       {!canManage && (
         <p className="dash-card__sub muted">
-          Read-only here — confirm receipt (or report a delivery problem) from the daily report
-          (My Tasks → Daily → Expected materials).
+          Read-only here — deliveries are recorded on the job&rsquo;s Materials tracking page
+          {onOpenMaterials ? " (button above)" : ""}.
         </p>
       )}
 

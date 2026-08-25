@@ -73,10 +73,21 @@ export const RECEIPT_ROLLUP_SQL = `
   (SELECT e.kind FROM material_receipt_events e WHERE e.line_id = jem.id ORDER BY e.id DESC LIMIT 1) AS receipt_status,
   (SELECT SUM(e.qty) FROM material_receipt_events e WHERE e.line_id = jem.id) AS qty_received_total`;
 
-// The two caps that bypass the per-job ownership scope (admins hold both; a manager/submitter
-// holds neither) — the same admin set the /daily-form/status scope recognizes, plus
-// cap.materials.manage (the office editor of this very list may naturally see any job's list).
-const SCOPE_BYPASS_CAPS = ["cap.jobtracker.manage", "cap.materials.manage"] as const;
+// The cap that bypasses the per-job ownership scope — the same admin set the /daily-form/status
+// scope recognizes.
+//
+// cap.materials.manage was REMOVED from this set on 2026-08-24, in the same change that granted it
+// to the `manager` role (migration 0079). Its original rationale — "the office editor of this very
+// list may naturally see any job's list" — held only while admins were the sole holders, and every
+// admin ALSO holds cap.jobtracker.manage, so dropping it here changes nothing for the office. For
+// the manager tier it changes everything: leaving it in would have silently converted a grant of
+// "may author the materials list" into "may read and mark materials on EVERY job", quietly undoing
+// the per-job placement scope for six accounts. Three tests in this module's own suite caught it —
+// the cross-job 403 assertions on the list read, /receive and /flag-incident all flipped to 200.
+//
+// The rule this leaves is the honest one: cap.materials.manage says WHAT you may do to a list,
+// cap.jobtracker.manage says WHOSE lists you may do it to.
+const SCOPE_BYPASS_CAPS = ["cap.jobtracker.manage"] as const;
 
 function badId(c: Ctx): number | null {
   const id = parseInt(c.req.param("id") ?? "", 10);
@@ -511,6 +522,23 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
     // A "nothing arrived" mark carrying a received quantity is incoherent — refuse it rather than
     // silently drop the number and let the ledger sum disagree with what was typed.
     if (kind === "not_delivered" && qty !== null) return "invalid_qty";
+    // ...and the converse: a delivery that does not say HOW MUCH arrived cannot move the
+    // outstanding balance. The page's "still owed" figure and the §51 Material List mirror both
+    // derive from SUM(events.qty), so a qty-NULL 'delivered' event flips the line's coarse status
+    // to 'received' while qty_received_total stays NULL and `lineOwed`'s `?? 0` keeps the FULL
+    // expected quantity outstanding. The line then shows a green "Delivered" pill beside an
+    // "N outstanding" chip, and Smartsheet reads "received" where the portal reads "outstanding".
+    // Not hypothetical: on JOB-000032 all 39 receipt events ever written are qty-NULL and 37 lines
+    // carry that contradiction today (forensic report 2026-08-24, defect D2). Requiring the number
+    // at the ONE ledger-write path is what keeps the two surfaces agreeing.
+    //
+    // Enforced HERE, not only in the SPA: the client-side guard is the usability half, but the
+    // route is the invariant. `/receive` (the legacy one-tap alias) funnels through this same
+    // function with forcedKind='delivered', so it cannot become a bypass.
+    //
+    // 'not_delivered' is deliberately exempt — nothing arrived, so there is no quantity to state,
+    // and the line correctly goes on owing its full amount.
+    if (kind !== "not_delivered" && qty === null) return "qty_required";
     const note = optText(body.note, MAX_NOTE);
     if (note === "invalid") return "invalid_note";
     // A negative report must say why — the same posture flag-incident already takes.
@@ -654,9 +682,11 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
   }
 
   // ── POST /api/fieldops/expected-material/:id/receipt — the three-way mark (manager/admin). ───────
-  // Delivered / Partially delivered / Not delivered, each with an optional note + qty and an
-  // optional shipment reference. Repeatable BY DESIGN: partial → partial → delivered is the
-  // normal path for a part number arriving across several loads.
+  // Delivered / Partially delivered / Not delivered, with an optional note and an optional
+  // shipment reference. `qty` is REQUIRED on delivered + partial and REFUSED on not_delivered
+  // (see readReceiptFields) — a delivery that does not say how much arrived cannot move the
+  // outstanding balance. Repeatable BY DESIGN: partial → partial → delivered is the normal path
+  // for a part number arriving across several loads.
   app.post(
     "/api/fieldops/expected-material/:id/receipt",
     gates.requireSession,

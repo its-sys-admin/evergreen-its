@@ -188,15 +188,29 @@ describe("migration 0023 — manager grant matrix", () => {
     // Schedule lane PR-5 (migration 0072): field mark-off of schedule tasks (%, milestone done,
     // delivered) — the crew lead marks progress on their own job (per-job scoped in-route).
     "cap.schedule.mark",
+    // Materials authoring (migration 0079, operator decision 2026-08-24): the crew lead may AUTHOR
+    // the expected-materials list they mark against — add / edit / reorder / deactivate lines and
+    // their scheduled loads — not just record receipts against a list only the office could write.
+    // Deliberate reversal of 0023's withholding, below. The cap was simultaneously REMOVED from
+    // expected-materials' SCOPE_BYPASS_CAPS so this stays a grant of authority over a list, not
+    // over every job's list: a manager still reaches only their own placement.
+    "cap.materials.manage",
   ];
   const WITHHELD = [
+    // cap.jobtracker.manage is the one that still gates WHOSE job — job create/lifecycle, and the
+    // sole remaining cross-job scope bypass on expected-materials. Withholding it is what keeps a
+    // manager inside their own placement now that they hold cap.materials.manage.
     "cap.jobtracker.manage",
     "cap.admin.accounts",
     "cap.admin.formbuilder",
     "cap.submit_as",
     "cap.equipment.manage",
-    "cap.materials.manage",
     "cap.checklist.manage",
+    "cap.po.manage",
+    "cap.payments.manage",
+    "cap.subcontracts.manage",
+    "cap.job.archive",
+    "cap.admin.equipment",
   ];
 
   async function managerCaps(): Promise<Set<string>> {
@@ -204,7 +218,7 @@ describe("migration 0023 — manager grant matrix", () => {
     return new Set(rows.map((r) => r.capability_key));
   }
 
-  it("manager's grant is EXACTLY the 13 expected capabilities", async () => {
+  it("manager's grant is EXACTLY the 14 expected capabilities", async () => {
     const caps = await managerCaps();
     expect([...caps].sort()).toEqual([...EXPECTED_MANAGER_CAPS].sort());
   });

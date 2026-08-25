@@ -216,6 +216,12 @@ export const ERROR_COPY: Record<string, string> = {
   // A DISTINCT code from the pre-existing `invalid_kind` (the daily-requirement vocabulary):
   // one shared code cannot carry two different "pick from this list" meanings.
   invalid_receipt_kind: "Pick Delivered, Partially delivered, or Not delivered.",
+  // Delivered + Partially delivered must say HOW MUCH arrived; Not delivered must not. Without a
+  // quantity the ledger sum stays null and the line goes on owing its full amount while showing a
+  // green "Delivered" pill, so the route refuses the mark rather than recording one that means
+  // nothing. JobMaterialsPage blocks this before the request is made, so a user should only ever
+  // meet this copy on a stale tab or a direct API call.
+  qty_required: "Enter the quantity received before recording this delivery.",
   invalid_event_date: "That isn't a valid delivery date.",
   invalid_shipment_id: "That load isn't on this material line — pick one of its own loads.",
   invalid_line_id: "That material line no longer exists — refresh and try again.",

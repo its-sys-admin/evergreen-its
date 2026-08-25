@@ -94,8 +94,12 @@ describe("ExpectedMaterialsSection — gating", () => {
     expect(container.textContent ?? "").toContain("by Mo Manager");
     expect(container.textContent ?? "").toContain("qty received 12");
     expect(container.textContent ?? "").toContain("damaged");
-    // The M2 note — their receive ACTION arrives through the daily form.
-    expect(container.textContent ?? "").toContain("from the daily report");
+    // The read-only note names the surface that actually owns the action. It used to say "from
+    // the daily report (My Tasks → Daily → Expected materials)" — controls #74 deleted on
+    // 2026-08-11, leaving the instruction pointing at a screen with no such buttons for a
+    // fortnight (forensic report 2026-08-24, defect D13). Pinned so it cannot rot back.
+    expect(container.textContent ?? "").toContain("Materials tracking");
+    expect(container.textContent ?? "").not.toContain("daily report");
     // No write affordances, and no catalog fetch for a read-only viewer.
     expect(container.textContent ?? "").not.toContain("+ Add expected material");
     expect(container.querySelector('[aria-label^="Edit expected material"]')).toBeNull();

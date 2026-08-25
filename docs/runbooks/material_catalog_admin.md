@@ -15,7 +15,8 @@ status: skeleton
 
 The **Materials Catalog** is the admin-editable list of material **types** (the datasheet-backed
 vocabulary the per-job Material List draws from). It is a portal surface (D1 only — no Smartsheet,
-no send): the **Materials Catalog** card on the home, gated by `cap.materials.manage` (admin-only).
+no send): the **Materials Catalog** card on the home, gated by `cap.materials.manage` (admin +
+manager since migration 0079, 2026-08-24).
 Reads are gated `cap.materials.receive` (field PMs can browse types when receiving). Retire is a
 **soft-delete** (`active=0`) — a type is never hard-deleted, so receipts/incidents that reference a
 `catalog_id` keep their target.
@@ -41,8 +42,10 @@ The **Expected materials** section on a job's detail (Job Tracker) is the per-jo
 that job is waiting on (`job_expected_materials`, migration 0031). The office
 (`cap.materials.manage`, admin) adds rows — picked from this catalog or typed free-text — with
 qty/unit/expected date, edits them while still *Expected*, reorders, and removes (a soft
-deactivate; history is kept). Managers and field PMs (`cap.materials.receive`) see the list
-**read-only** on their own job; their receive action lives in the **daily form** (below).
+deactivate; history is kept). Since migration 0079 (2026-08-24) **managers hold `cap.materials.manage`
+too**, so the same authoring controls are theirs. Field PMs (`cap.materials.receive` only) see the
+list **read-only**. Marking a delivery happens on the job's **Materials tracking** page — NOT in the
+daily form, whose per-line receipt controls were removed on 2026-08-11 (#74).
 
 ### Manager receipt flow — the daily form (Material receipts M2)
 
@@ -90,8 +93,8 @@ page refresh dropped the in-memory reference). This ships **dark** on the existi
 
 | Symptom | Check | Repair |
 |---|---|---|
-| "Expected materials" section missing from a job's detail | The account holds neither `cap.materials.manage` nor `cap.materials.receive` | Confirm the account's role in Accounts (all three roles hold `receive`; only admin holds `manage`) |
-| A manager sees "Failed to load expected materials" on a job (403 `forbidden_job` in the network tab) | Non-admins only read the job they are **placed on** (`personnel.current_job`) | Check the person's placement on the Personnel page / job crew — place them on the job (this is the designed scope, not a fault) |
+| "Expected materials" section missing from a job's detail | The account holds neither `cap.materials.manage` nor `cap.materials.receive` | Confirm the account's role in Accounts (all three roles hold `receive`; admin + manager hold `manage` since migration 0079) |
+| A field PM sees "Failed to load expected materials" on a job (403 `forbidden_job` in the network tab) | Holders of neither `cap.jobtracker.manage` nor `cap.materials.manage` only read the job they are **placed on** (`personnel.current_job`). Since migration 0079 managers hold `materials.manage` and so bypass this | Check the person's placement on the Personnel page / job crew — place them on the job (this is the designed scope, not a fault) |
 | "already_actioned" (409) when **flagging an incident** | The row was already flagged by someone else | No repair — the first flag won; the row shows who and when. Since 0059 this no longer applies to **confirming a receipt**: repeats are legal and append a second ledger event |
 | A manager confirms a receipt twice and BOTH are recorded | **Expected since 0059** — receipts are an append-only ledger so a partial delivery can be completed later | Not a fault. Open the job's **Materials tracking** page to see every event with its qty, note, date and who recorded it. An event cannot be deleted (append-only by design); record a correcting event, and escalate if the running total must be corrected at source |
 | A row can't be edited ("not_editable", 409) | Received/incident rows are receipt **records** — content edits are locked | Expected behavior. If the record itself is wrong, escalate |

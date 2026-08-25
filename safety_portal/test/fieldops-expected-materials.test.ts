@@ -94,11 +94,13 @@ beforeEach(async () => {
 });
 
 describe("POST /api/fieldops/expected-material (create)", () => {
-  it("gate: anon 401; submitter/manager (no manage cap) 403; admin 201 + row + ONE audit in the batch", async () => {
+  it("gate: anon 401; submitter (no manage cap) 403; manager + admin 201 + row + ONE audit in the batch", async () => {
     const body = JSON.stringify({ job_id: "JOB-A", description: "Rebar bundles" });
     expect((await call("/api/fieldops/expected-material", { method: "POST", body })).status).toBe(401);
     expect((await p(submitter, "/api/fieldops/expected-material", { job_id: "JOB-A", description: "x" })).status).toBe(403);
-    expect((await p(manager, "/api/fieldops/expected-material", { job_id: "JOB-A", description: "x" })).status).toBe(403);
+    // Migration 0079 granted `manager` cap.materials.manage, so a crew lead may author the list
+    // for the job they are placed on. `submitter` above is the remaining negative case.
+    expect((await p(manager, "/api/fieldops/expected-material", { job_id: "JOB-A", description: "x" })).status).toBe(201);
 
     const id = await createExp(admin, "JOB-A", { description: "Rebar bundles", qty: 12, unit: "pallets", expected_date: "2026-07-10", seq: 10 });
     const row = await expRow(id);
@@ -115,7 +117,7 @@ describe("POST /api/fieldops/expected-material (create)", () => {
     expect(typeof row.line_uuid).toBe("string");
     expect(row.line_uuid.length).toBeGreaterThan(0);
     expect(row.unplanned).toBe(0);
-    expect(await audits("expected_material_create")).toHaveLength(1); // W4: audit landed with the INSERT
+    expect(await audits("expected_material_create")).toHaveLength(2); // W4: audit landed with each INSERT — the manager's and the admin's
   });
 
   it("validates material_id against an ACTIVE catalog row (unknown → 400; retired → 400; valid → 201)", async () => {
@@ -146,7 +148,7 @@ describe("POST /api/fieldops/expected-material (create)", () => {
     const created = await p(admin, "/api/fieldops/expected-material", { job_id: "JOB-A", description: "bolts" });
     expect(created.status).toBe(201);
     const rowId = ((await created.json()) as { id: number }).id;
-    const big = await p(manager, `/api/fieldops/expected-material/${rowId}/receive`, { note: "n".repeat(501) });
+    const big = await p(manager, `/api/fieldops/expected-material/${rowId}/receive`, { qty_received: 1, note: "n".repeat(501) });
     expect(big.status).toBe(400);
     expect(((await big.json()) as { error: string }).error).toBe("invalid_note");
     expect((await p(admin, "/api/fieldops/expected-material", { job_id: "JOB-A", description: "x", seq: -1 })).status).toBe(400);
@@ -194,8 +196,8 @@ describe("GET /api/fieldops/expected-materials — display fields + per-job owne
   it("W9: received_by_name is the personnel DISPLAY name; an unmatched account → NULL, raw username never leaks", async () => {
     const withLink = await createExp(admin, "JOB-A", { description: "Linked receiver" });
     const noLink = await createExp(admin, "JOB-A", { description: "Unlinked receiver", seq: 20 });
-    await p(manager, `/api/fieldops/expected-material/${withLink}/receive`); // mgr.mo → "Mo Manager"
-    await p(admin, `/api/fieldops/expected-material/${noLink}/receive`); // admin.one has NO personnel row
+    await p(manager, `/api/fieldops/expected-material/${withLink}/receive`, { qty_received: 1 }); // mgr.mo → "Mo Manager"
+    await p(admin, `/api/fieldops/expected-material/${noLink}/receive`, { qty_received: 1 }); // admin.one has NO personnel row
 
     const res = await g(admin, "/api/fieldops/expected-materials?job_id=JOB-A");
     const body = await res.text();
@@ -208,22 +210,24 @@ describe("GET /api/fieldops/expected-materials — display fields + per-job owne
 });
 
 describe("POST /api/fieldops/expected-material/:id/update (edit — expected rows only)", () => {
-  it("admin edits content fields (200 + audit); received row → 409 not_editable; unknown → 404; manager → 403", async () => {
+  it("admin + manager edit content fields (200 + audit); received row → 409 not_editable; unknown → 404; submitter → 403", async () => {
     const id = await createExp(admin, "JOB-A", { description: "Old", qty: 1 });
-    expect((await p(manager, `/api/fieldops/expected-material/${id}/update`, { description: "New" })).status).toBe(403);
+    expect((await p(submitter, `/api/fieldops/expected-material/${id}/update`, { description: "New" })).status).toBe(403);
+    // manager holds cap.materials.manage since migration 0079 — and is placed on JOB-A.
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/update`, { description: "New" })).status).toBe(200);
     expect((await p(admin, `/api/fieldops/expected-material/${id}/update`, { description: "New text", qty: 5, unit: "ft" })).status).toBe(200);
     const row = await expRow(id);
     expect(row.description).toBe("New text");
     expect(row.qty).toBe(5);
     expect(row.unit).toBe("ft");
-    expect(await audits("expected_material_update")).toHaveLength(1);
+    expect(await audits("expected_material_update")).toHaveLength(2); // manager's edit + admin's edit — both hold cap.materials.manage
 
-    await p(manager, `/api/fieldops/expected-material/${id}/receive`);
+    await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 1 });
     const locked = await p(admin, `/api/fieldops/expected-material/${id}/update`, { description: "Rewrite history" });
     expect(locked.status).toBe(409);
     expect(((await locked.json()) as { error: string }).error).toBe("not_editable");
     expect((await expRow(id)).description).toBe("New text"); // untouched
-    expect(await audits("expected_material_update")).toHaveLength(1); // no second audit
+    expect(await audits("expected_material_update")).toHaveLength(2); // unchanged by the locked edit — no THIRD audit
 
     expect((await p(admin, "/api/fieldops/expected-material/999999/update", { description: "x" })).status).toBe(404);
     expect((await p(admin, `/api/fieldops/expected-material/${id}/update`, { material_id: 999999 })).status).toBe(400);
@@ -233,13 +237,15 @@ describe("POST /api/fieldops/expected-material/:id/update (edit — expected row
 describe("POST /api/fieldops/expected-material/:id/seq (reorder) + /:id/delete (deactivate)", () => {
   it("seq writes on any ACTIVE row incl. received (200 + audit); invalid seq → 400; unknown → 404", async () => {
     const id = await createExp(admin, "JOB-A", { description: "Movable" });
-    await p(manager, `/api/fieldops/expected-material/${id}/receive`); // received rows still reorder
+    await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 1 }); // received rows still reorder
     expect((await p(admin, `/api/fieldops/expected-material/${id}/seq`, { seq: 30 })).status).toBe(200);
     expect((await expRow(id)).seq).toBe(30);
     expect(await audits("expected_material_reorder")).toHaveLength(1);
     expect((await p(admin, `/api/fieldops/expected-material/${id}/seq`, { seq: -1 })).status).toBe(400);
     expect((await p(admin, "/api/fieldops/expected-material/999999/seq", { seq: 10 })).status).toBe(404);
-    expect((await p(manager, `/api/fieldops/expected-material/${id}/seq`, { seq: 10 })).status).toBe(403);
+    // manager holds cap.materials.manage since migration 0079; submitter is the negative case.
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/seq`, { seq: 10 })).status).toBe(200);
+    expect((await p(submitter, `/api/fieldops/expected-material/${id}/seq`, { seq: 10 })).status).toBe(403);
   });
 
   it("deactivate is a soft-delete: active=0, idempotent 200 already_inactive with ONE audit; unknown → 404", async () => {
@@ -336,6 +342,43 @@ describe("POST /api/fieldops/expected-material/:id/receive — guard-in-WHERE + 
     expect((await events(id))[0].kind).toBe("not_delivered");
   });
 
+  it("delivered + partial REQUIRE a qty, and the legacy /receive alias is not a side door", async () => {
+    // A mark that does not say HOW MUCH arrived cannot move the outstanding balance: the page's
+    // "still owed" figure and the §51 Material List both derive from SUM(events.qty), so a
+    // qty-NULL 'delivered' flips the line green while it goes on owing everything. Found live on
+    // JOB-000032 (37 lines) — forensic report 2026-08-24, defect D2.
+    const id = await createExp(admin, "JOB-A", { description: "Torque tube", qty: 27 });
+    const mark = (body: unknown) => p(manager, `/api/fieldops/expected-material/${id}/receipt`, body);
+    const err = async (body: unknown) => ((await (await mark(body)).json()) as { error: string }).error;
+
+    expect((await mark({ kind: "delivered" })).status).toBe(400);
+    expect(await err({ kind: "delivered" })).toBe("qty_required");
+    expect(await err({ kind: "partial" })).toBe("qty_required");
+    // An empty string is "not filled in", not a zero.
+    expect(await err({ kind: "delivered", qty: "" })).toBe("qty_required");
+    // A note is not a substitute for the number.
+    expect(await err({ kind: "delivered", note: "all of it turned up" })).toBe("qty_required");
+    // Zero / negative were already refused and still are — a DIFFERENT code, deliberately: one
+    // means "you left it blank", the other means "that is not a quantity".
+    expect(await err({ kind: "delivered", qty: 0 })).toBe("invalid_qty");
+
+    // Every refusal wrote NOTHING — no event, no audit row, no projection change.
+    expect(await events(id)).toHaveLength(0);
+    expect((await expRow(id)).status).toBe("expected");
+    expect(await audits("expected_material_receipt")).toHaveLength(0);
+
+    // The legacy one-tap alias funnels through the SAME validator with forcedKind='delivered',
+    // so it cannot be used to write the qty-less events the /receipt route now refuses.
+    const bare = await p(manager, `/api/fieldops/expected-material/${id}/receive`);
+    expect(bare.status).toBe(400);
+    expect(((await bare.json()) as { error: string }).error).toBe("qty_required");
+    expect(await events(id)).toHaveLength(0);
+
+    // ...and it still accepts the number under its own legacy field name.
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 27 })).status).toBe(200);
+    expect((await expRow(id)).qty_received).toBe(27);
+  });
+
   it("a shipment reference must belong to THIS line (400 invalid_shipment_id otherwise)", async () => {
     const idA = await createExp(admin, "JOB-A", { description: "Line A" });
     const idB = await createExp(admin, "JOB-A", { description: "Line B" });
@@ -345,18 +388,18 @@ describe("POST /api/fieldops/expected-material/:id/receive — guard-in-WHERE + 
 
     // Against its own line: fine. Against a sibling line: refused before any write.
     expect((await p(manager, `/api/fieldops/expected-material/${idA}/receipt`, { kind: "delivered", qty: 12, shipment_id: shipId })).status).toBe(200);
-    expect((await p(manager, `/api/fieldops/expected-material/${idB}/receipt`, { kind: "delivered", shipment_id: shipId })).status).toBe(400);
+    expect((await p(manager, `/api/fieldops/expected-material/${idB}/receipt`, { kind: "delivered", qty: 12, shipment_id: shipId })).status).toBe(400);
     expect(await events(idB)).toHaveLength(0);
     expect((await events(idA))[0].shipment_id).toBe(shipId);
   });
 
   it("scope: cross-job manager 403 forbidden_job; unplaced submitter 403; admin any job 200; empty body OK", async () => {
     const idB = await createExp(admin, "JOB-B", { description: "B delivery" });
-    const cross = await p(manager, `/api/fieldops/expected-material/${idB}/receive`);
+    const cross = await p(manager, `/api/fieldops/expected-material/${idB}/receive`, { qty_received: 1 });
     expect(cross.status).toBe(403);
     expect(((await cross.json()) as { error: string }).error).toBe("forbidden_job");
     expect((await p(submitter, `/api/fieldops/expected-material/${idB}/receive`)).status).toBe(403);
-    expect((await p(admin, `/api/fieldops/expected-material/${idB}/receive`)).status).toBe(200); // no body at all
+    expect((await p(admin, `/api/fieldops/expected-material/${idB}/receive`, { qty_received: 1 })).status).toBe(200);
 
     const idA = await createExp(admin, "JOB-A", { description: "A delivery" });
     expect((await p(manager, `/api/fieldops/expected-material/${idA}/receive`, { qty_received: -1 })).status).toBe(400);
@@ -366,7 +409,7 @@ describe("POST /api/fieldops/expected-material/:id/receive — guard-in-WHERE + 
   it("a deactivated row 404s (not 409) — it is gone from the flow, not already-actioned", async () => {
     const id = await createExp(admin, "JOB-A", { description: "Removed first" });
     await p(admin, `/api/fieldops/expected-material/${id}/delete`);
-    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`)).status).toBe(404);
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 1 })).status).toBe(404);
   });
 });
 

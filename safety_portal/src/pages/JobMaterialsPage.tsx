@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import * as api from "../lib/fieldops_expected_materials";
 import * as manifests from "../lib/fieldops_manifests";
@@ -151,6 +151,31 @@ export function JobMaterialsPage({
     return () => clearTimeout(t);
   }, [armed]);
 
+  // ── Quantity is REQUIRED on Delivered / Partially delivered (2026-08-24) ─────────────────────
+  // A mark that does not say HOW MUCH arrived cannot move the outstanding balance: `lineOwed`
+  // reads `qty_received_total ?? 0`, so a qty-less delivery leaves the line owing its full amount
+  // while the status pill turns green — and the §51 Material List then reads "received" where this
+  // page reads "outstanding". The Worker refuses it (`qty_required`); this is the usability half,
+  // and it is checked BEFORE the two-step arm so the first tap surfaces the prompt rather than
+  // arming a button whose second tap could only produce a 400.
+  //
+  // The message is per LINE, not the page banner: this page renders a 50-line BOM flat, so the
+  // banner at the top is thousands of pixels from the row being marked. `aria-describedby` ties it
+  // to the input, and focusing the input scrolls it into view.
+  //
+  // 'Not delivered' is exempt by design — nothing arrived, so there is no quantity to state.
+  const [qtyError, setQtyError] = useState<Record<number, string>>({});
+  const qtyInputs = useRef<Record<number, HTMLInputElement | null>>({});
+
+  function clearQtyError(lineId: number) {
+    setQtyError((m) => {
+      if (m[lineId] === undefined) return m;
+      const next = { ...m };
+      delete next[lineId];
+      return next;
+    });
+  }
+
   // Manifest import (PR3b). Deliberately NOT routed through `busyId` — that sentinel space is
   // shared with the add-line form (busyId = -1), so a manifest op reusing it would grey out an
   // unrelated form. Its own state, its own single-flight.
@@ -263,7 +288,34 @@ export function JobMaterialsPage({
     }, "Saved.");
   }
 
+  /** The quantity a mark of this kind carries, or the message to show beside the box. */
+  function readMarkQty(
+    kind: api.MaterialReceiptKind,
+    raw: string,
+  ): { qty: number | null } | string {
+    // not_delivered carries no quantity — the Worker refuses one rather than dropping it silently,
+    // so don't send one from here either.
+    if (kind === "not_delivered") return { qty: null };
+    const t = raw.trim();
+    if (t === "") return "Enter the quantity received before recording this delivery.";
+    const n = Number(t);
+    if (!Number.isFinite(n) || n <= 0) return "Quantity must be a number greater than 0.";
+    return { qty: n };
+  }
+
   function onMark(line: api.ExpectedMaterialRow, kind: api.MaterialReceiptKind) {
+    const d = marks[line.id] ?? emptyMark();
+    // Validated BEFORE the arm: an armed button says "Confirm delivered?", which promises the mark
+    // is ready to record. Arming an unrecordable mark would make that promise falsely and spend the
+    // user's second tap on a 400.
+    const parsed = readMarkQty(kind, d.qty);
+    if (typeof parsed === "string") {
+      setArmed(null);
+      setQtyError((m) => ({ ...m, [line.id]: parsed }));
+      qtyInputs.current[line.id]?.focus();
+      return;
+    }
+    clearQtyError(line.id);
     // First click on this (line, kind) only ARMS it — see the `armed` state above for why a
     // delivery mark is not a one-click action.
     if (!(armed && armed.lineId === line.id && armed.kind === kind)) {
@@ -271,23 +323,14 @@ export function JobMaterialsPage({
       return;
     }
     setArmed(null);
-    const d = marks[line.id] ?? emptyMark();
     const body: Parameters<typeof api.markReceipt>[1] = { kind, event_date: d.date || undefined };
     if (d.note.trim()) body.note = d.note.trim();
     if (d.shipmentId) body.shipment_id = Number(d.shipmentId);
-    // not_delivered carries no quantity — the Worker refuses one rather than dropping it silently,
-    // so don't send one from here either.
-    if (kind !== "not_delivered" && d.qty.trim() !== "") {
-      const n = Number(d.qty);
-      if (!Number.isFinite(n) || n <= 0) {
-        setMsg({ ok: false, text: "Quantity must be a number greater than 0." });
-        return;
-      }
-      body.qty = n;
-    }
+    if (parsed.qty !== null) body.qty = parsed.qty;
     void run(line.id, async () => {
       await api.markReceipt(line.id, body);
       setMarks((m) => ({ ...m, [line.id]: emptyMark() }));
+      clearQtyError(line.id);
     }, "Delivery recorded.");
   }
 
@@ -680,11 +723,23 @@ export function JobMaterialsPage({
 
                 {canMark && (
                   <div className="dash-row" aria-label={`Mark delivery for ${rowTitle(line)}`}>
+                    {/* Quantity is required for Delivered / Partially delivered — see `onMark`.
+                        The asterisk marks it required at a glance; the red prompt below the row
+                        says so in words the moment someone tries to record without it. */}
                     <input
+                      ref={(el) => {
+                        qtyInputs.current[line.id] = el;
+                      }}
                       aria-label={`Quantity received for ${rowTitle(line)}`}
+                      aria-invalid={qtyError[line.id] ? true : undefined}
+                      aria-describedby={qtyError[line.id] ? `mark-qty-error-${line.id}` : undefined}
+                      className={qtyError[line.id] ? "mat-qty mat-qty--error" : "mat-qty"}
                       value={draft.qty}
-                      onChange={(e) => setDraft({ qty: e.target.value })}
-                      placeholder="Qty"
+                      onChange={(e) => {
+                        setDraft({ qty: e.target.value });
+                        clearQtyError(line.id);
+                      }}
+                      placeholder="Qty *"
                       inputMode="decimal"
                       size={6}
                     />{" "}
@@ -780,6 +835,13 @@ export function JobMaterialsPage({
                         </button>
                       </>
                     ) : null}
+                    {/* role="alert" so a screen reader announces it the moment the tap is refused;
+                        the input's aria-describedby points here regardless of DOM order. */}
+                    {qtyError[line.id] && (
+                      <p className="mat-mark-error" id={`mark-qty-error-${line.id}`} role="alert">
+                        {qtyError[line.id]}
+                      </p>
+                    )}
                   </div>
                 )}
 
