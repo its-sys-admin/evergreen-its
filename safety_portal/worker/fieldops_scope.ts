@@ -9,9 +9,10 @@ import type { Env, Vars } from "./types";
 //
 // The BYPASS-CAP SETS stay in the calling modules on purpose (requireJobScope takes them as an
 // explicit parameter): they are intentionally divergent — checklist + daily-requirements bypass on
-// cap.jobtracker.manage / cap.checklist.manage, expected-materials on cap.jobtracker.manage /
-// cap.materials.manage — and hiding the divergence inside this module would invite the opposite
-// bug (one surface silently inheriting another's admin set).
+// cap.jobtracker.manage / cap.checklist.manage, expected-materials on cap.jobtracker.manage ALONE
+// (cap.materials.manage was removed from that set on 2026-08-25 when it was granted to the manager
+// tier — see migration 0079) — and hiding the divergence inside this module would invite the
+// opposite bug (one surface silently inheriting another's admin set).
 
 type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 

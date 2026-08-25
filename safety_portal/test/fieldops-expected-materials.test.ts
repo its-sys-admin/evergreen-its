@@ -4,13 +4,13 @@ import { call, provision, login, g, p, seedJob, seedPersonnel } from "./helpers"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Material receipts (M1) — job_expected_materials (migration 0031) + the expected-materials routes.
-//   • Expectation CRUD is cap.materials.manage (admin-only): add (catalog-pick validated against an
+//   • Expectation CRUD is cap.materials.manage (admin + manager since migration 0079): add (catalog-pick validated against an
 //     ACTIVE material_catalog row OR free-text with description REQUIRED) / edit (expected rows
 //     only) / seq reorder / soft deactivate — every mutation + its audit in ONE batch (W4).
 //   • The read + receive/flag-incident are cap.materials.receive with the PER-JOB ownership scope
 //     (the /daily-form/status pattern): a non-admin only touches their OWN placement
-//     (personnel.current_job === job_id, else 403 forbidden_job); cap.jobtracker.manage /
-//     cap.materials.manage holders query any job.
+//     (personnel.current_job === job_id, else 403 forbidden_job); cap.jobtracker.manage holders
+//     query any job — and only that cap, since 2026-08-25.
 //   • receive/flag-incident guard the transition IN-WHERE (status='expected'): repeat → 409
 //     already_actioned with exactly ONE stamp + ONE audit row ever written.
 //   • W9: received_by stores the account username but reads resolve DISPLAY NAME ONLY — an

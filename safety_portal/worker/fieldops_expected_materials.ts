@@ -25,8 +25,8 @@ import type {
 //     stays allowed on any active row so the list keeps a coherent order.
 //   • GET /api/fieldops/expected-materials?job_id — cap.materials.receive, PER-JOB ownership
 //     scope for non-admins (the /daily-form/status pattern: the actor's linked ACTIVE
-//     personnel.current_job must equal job_id, else 403 forbidden_job); cap.jobtracker.manage /
-//     cap.materials.manage holders (admins) may query any job. Returns active rows in seq order
+//     personnel.current_job must equal job_id, else 403 forbidden_job); cap.jobtracker.manage
+//     holders may query any job — and ONLY that cap, since 2026-08-25. Returns active rows in seq order
 //     with display fields: the resolved catalog name for catalog rows, and received_by resolved
 //     to the personnel DISPLAY NAME only (W9 — an unmatched account yields NULL, never the raw
 //     username; the stored username never leaves the Worker).
@@ -243,8 +243,8 @@ function readActionFields(body: Record<string, unknown>): ActionFields | string 
 
 export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: FieldopsGates): void {
   // ── GET /api/fieldops/expected-materials?job_id — the job's active expectation list. ─────────────
-  // cap.materials.receive + the per-job ownership scope (bypass: jobtracker.manage /
-  // materials.manage). Active rows, seq order. Display fields only: material_name is the resolved
+  // cap.materials.receive + the per-job ownership scope (bypass: jobtracker.manage only, since
+  // 2026-08-25). Active rows, seq order. Display fields only: material_name is the resolved
   // catalog model_id (NULL for free-text rows); received_by_name is DISPLAY-NAME-ONLY (W9 — the
   // stored account username is never returned; an unmatched account yields NULL).
   app.get(

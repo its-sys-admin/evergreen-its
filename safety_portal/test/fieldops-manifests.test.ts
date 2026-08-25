@@ -1001,6 +1001,56 @@ describe("manifest /commit — continuation rows are LOADS, not lines", () => {
     expect(await loadsFor(id)).toHaveLength(1);
   });
 
+  it("import_as='shipments': a NEW part plus its continuation lands, it does not 409", async () => {
+    // ManifestValidatePage auto-selects import_as='shipments' for every shipping-log profile,
+    // so this is the DEFAULT path for the documents that carry continuations. The
+    // shipment_new_line branch used to leave parentTarget null — its own continuation then
+    // had no parent and refused the whole page (audit 2026-08-25).
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "data");
+    await seedRowKind(id, 3, "continuation");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge",
+      import_as: "shipments",
+      lines: [
+        { ...line(2, "CONT-NEWPART", "Not on the list yet", 40), bol: "LD-A" },
+        { ...line(3, "CONT-NEWPART", "Not on the list yet", 40), bol: "LD-B" },
+      ],
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    // ONE line created for the part, and BOTH rows recorded as loads against it.
+    const lines = await linesByPart("JOB-A", "CONT-NEWPART");
+    expect(lines).toHaveLength(1);
+    const loads = await loadsFor(id);
+    expect(loads).toHaveLength(2);
+    expect(loads.every((l) => l.line_id === lines[0].id)).toBe(true);
+    expect(loads.map((l) => l.bol_number).sort()).toEqual(["LD-A", "LD-B"]);
+  });
+
+  it("a continuation whose part does not match the row above it is REFUSED, not re-parented", async () => {
+    // The validate screen lets a human untick any single row. Unticking a parent while keeping
+    // its continuation would otherwise hang that truckload off whatever part happened to
+    // precede it — silently, against the wrong line. The parser forward-fills the parent's
+    // part number into the continuation, so disagreement means "not this row's parent".
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "data");
+    await seedRowKind(id, 4, "continuation"); // row 3 (its real parent) was unticked
+    const before = await countLines("JOB-A");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge",
+      lines: [
+        line(2, "CONT-OTHER", "an unrelated part", 5),
+        { ...line(4, "CONT-ORPHANED", "the unticked parent's part", 99), bol: "LD-X" },
+      ],
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "orphan_continuation", rows: [4] });
+    expect(await countLines("JOB-A")).toBe(before); // all-or-nothing: even row 2 did not land
+    expect(await loadsFor(id)).toHaveLength(0);
+  });
+
   it("a plain repeated part number is STILL two lines — only a continuation is a load", async () => {
     // A manifest legitimately repeats a part across unrelated BOM groupings (0059's own
     // header says so). The rule keys on the parser's kind, not on part-number sameness.

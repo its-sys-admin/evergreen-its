@@ -100,8 +100,10 @@ export async function receiveExpectedMaterial(
 }
 
 /** The three-way delivery mark (PR2). Appends a receipt event; repeatable by design, because a
- *  part number routinely arrives across several loads. `qty` is forbidden on not_delivered and
- *  `note` is required there (the Worker 400s otherwise). */
+ *  part number routinely arrives across several loads. `qty` is REQUIRED on delivered and
+ *  partial (400 `qty_required` otherwise — a mark that does not say how much arrived cannot move
+ *  the outstanding balance), and forbidden on not_delivered, where `note` is required instead.
+ *  JobMaterialsPage blocks all three client-side before posting. */
 export async function markReceipt(
   id: number,
   body: {

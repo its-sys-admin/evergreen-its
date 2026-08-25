@@ -733,7 +733,7 @@ export function JobMaterialsPage({
                       aria-label={`Quantity received for ${rowTitle(line)}`}
                       aria-invalid={qtyError[line.id] ? true : undefined}
                       aria-describedby={qtyError[line.id] ? `mark-qty-error-${line.id}` : undefined}
-                      className={qtyError[line.id] ? "mat-qty mat-qty--error" : "mat-qty"}
+                      className={qtyError[line.id] ? "mat-qty-invalid" : undefined}
                       value={draft.qty}
                       onChange={(e) => {
                         setDraft({ qty: e.target.value });
