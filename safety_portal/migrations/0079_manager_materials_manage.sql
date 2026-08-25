@@ -1,0 +1,57 @@
+-- 0079 — grant the `manager` role `cap.materials.manage` (operator decision, 2026-08-24).
+--
+-- WHY. Managers (crew leads / superintendents) hold `cap.materials.receive`, which lets them MARK
+-- deliveries but not AUTHOR the list they are marking against. Every expected-materials surface
+-- therefore rendered them a "Read-only here" banner, and the 2026-08-24 forensic investigation
+-- into JOB-000029 (Kiwi) found that banner still directing them to per-line controls that had been
+-- deleted on 2026-08-11 — a superintendent standing in front of a delivery had no in-product route
+-- to correct the list in front of him. The operator's call is to give the manager tier the same
+-- materials authority the office has.
+--
+-- ── WHAT THIS ACTUALLY OPENS — read before applying ────────────────────────────────────────────
+-- `cap.materials.manage` is not scoped to the expected-materials list. Granting it to `manager`
+-- also grants, to all six manager accounts at once:
+--
+--   1. Expected-material CRUD — add / edit / reorder / deactivate lines
+--      (worker/fieldops_expected_materials.ts, four routes).
+--   2. Scheduled-SHIPMENT CRUD — add / edit / remove the loads attached to a line
+--      (same module, three routes).
+--   3. MANIFEST IMPORT — upload, parse and COMMIT a materials manifest against a job
+--      (worker/fieldops_manifests.ts `CAP_MANIFEST`). This is the highest-consequence item in the
+--      list: a commit writes the job's whole BOM, and the merge path currently has an open
+--      duplicate-line defect (forensic report 2026-08-24, defect D1).
+--   4. The global MATERIAL CATALOG editor — the cross-job material TYPE vocabulary
+--      (worker/fieldops_material_write.ts; SPA route `materials-catalog`, and a "Materials
+--      Catalog" card appears on Home under Office operations). NOT job-scoped: an edit here is
+--      visible on every job.
+--   5. CROSS-JOB SCOPE BYPASS on expected-materials. `cap.materials.manage` is a member of
+--      `SCOPE_BYPASS_CAPS` in fieldops_expected_materials.ts, so a holder skips the per-job
+--      ownership check (`requireJobScope`) on the list READ and on every receipt/flag WRITE.
+--      A manager placed on job A will be able to read and mark materials on job B.
+--      That bypass is asserted by test/fieldops-scope-gates.test.ts and is deliberate for the
+--      office; extending it to the manager tier is a consequence of this grant, not a separate
+--      decision, and it is the one item here worth revisiting if the intent was "managers manage
+--      THEIR OWN job's materials". Narrowing it later is a two-line change to SCOPE_BYPASS_CAPS
+--      and a no-op for admins, who also hold `cap.jobtracker.manage`.
+--
+-- What this does NOT grant: `cap.jobtracker.manage` (job/task creation), `cap.admin.*`,
+-- `cap.po.manage`, `cap.payments.manage`, `cap.submit_as`. The manager tier stays out of
+-- procurement, payments, account administration and impersonation.
+--
+-- NO ORDER DEPENDENCY. Unlike 0023/0013, this migration adds no column and no vocabulary the
+-- Worker must already parse — `cap.materials.manage` has been a live capability since 0013 and
+-- every gate that reads it already ships. Applying before or after a deploy is equally safe, and
+-- `resolveCapabilities` reads `role_capabilities` per request, so the grant takes effect on the
+-- next request each manager makes. No re-login, no session-epoch bump, no per-account backfill:
+-- capabilities are derived from the role, so every existing manager account picks this up whenever
+-- it was created.
+--
+-- TO REVERSE:
+--   DELETE FROM role_capabilities
+--    WHERE role_key = 'manager' AND capability_key = 'cap.materials.manage';
+--
+-- Enumerated explicitly (NOT `SELECT … FROM capabilities`) so the grant is exact and auditable —
+-- the 0023 posture. INSERT OR IGNORE so re-applying the seed portion is safe.
+
+INSERT OR IGNORE INTO role_capabilities (role_key, capability_key) VALUES
+  ('manager', 'cap.materials.manage');

@@ -174,7 +174,7 @@ describe("expected-material receipt actions — daily-form surfaces; the LIST re
 
   it("a placed manager still receives (200) — the daily form's receipt flow is intact", async () => {
     const id = await createExpectation(admin, "JOB-A");
-    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`)).status).toBe(200);
+    expect((await p(manager, `/api/fieldops/expected-material/${id}/receive`, { qty_received: 5 })).status).toBe(200);
   });
 
   it("the expected-materials LIST read stays open to a placed submitter (the Job Tracker section — a live consumer)", async () => {

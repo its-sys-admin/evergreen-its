@@ -125,17 +125,28 @@ describe("shared ownership scope — placed vs foreign vs unlinked (all three su
 });
 
 describe("divergent bypass-cap sets — preserved exactly through the extraction", () => {
-  it("cap.materials.manage bypasses ONLY expected-materials (403 forbidden_job on both daily-form reads)", async () => {
+  it("cap.materials.manage bypasses NOTHING — it says WHAT you may edit, not WHOSE job", async () => {
+    // Until 2026-08-24 this cap was a member of expected-materials' SCOPE_BYPASS_CAPS, on the
+    // rationale that the office editor of the list may naturally see any job's list. Migration
+    // 0079 granted the cap to the whole `manager` role, at which point that rationale stopped
+    // holding: leaving it in the bypass set would have silently opened EVERY job's materials to
+    // six crew leads. It was removed instead — a no-op for the office, who reach other jobs via
+    // cap.jobtracker.manage (asserted below).
     await provision("mgr.mat", "password123", "manager");
     const matOffice = await login("mgr.mat", "password123"); // unplaced — no personnel row, so ONLY a bypass cap can open a job
     await grantManagerCaps(["cap.materials.manage"]);
-    expect((await g(matOffice, materialsPath("JOB-B"))).status).toBe(200);
-    const status = await g(matOffice, statusPath("JOB-B"));
-    expect(status.status).toBe(403);
-    expect(await status.text()).toBe('{"error":"forbidden_job"}');
-    const reqs = await g(matOffice, requirementsPath("JOB-B"));
-    expect(reqs.status).toBe(403);
-    expect(await reqs.text()).toBe('{"error":"forbidden_job"}');
+    for (const path of [materialsPath, statusPath, requirementsPath]) {
+      const res = await g(matOffice, path("JOB-B"));
+      expect(res.status).toBe(403);
+      expect(await res.text()).toBe('{"error":"forbidden_job"}');
+    }
+  });
+
+  it("cap.jobtracker.manage is what opens another job's expected-materials", async () => {
+    await provision("mgr.jt", "password123", "manager");
+    const jtOffice = await login("mgr.jt", "password123"); // unplaced
+    await grantManagerCaps(["cap.jobtracker.manage"]);
+    expect((await g(jtOffice, materialsPath("JOB-B"))).status).toBe(200);
   });
 
   it("cap.checklist.manage bypasses ONLY the daily-form reads (403 forbidden_job on expected-materials)", async () => {
