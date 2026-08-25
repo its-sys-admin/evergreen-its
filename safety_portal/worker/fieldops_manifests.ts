@@ -944,19 +944,40 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
       const { existing, byPart } = await loadPartIndex(c, manifest.job_id);
       const statusById = new Map(existing.map((r) => [r.id, r.status]));
 
+      // The stored parse's ROW KIND, re-read server-side by row_index — NOT taken from the
+      // posted body, for exactly the reason the match index above is re-derived here: a
+      // client that could relabel a 'continuation' as 'data' could turn a truckload back
+      // into a duplicate expected-materials line, which is the defect this closes.
+      const kindByIndex = new Map<number, string>();
+      {
+        const kindRows = await c.env.DB
+          .prepare("SELECT row_index, kind FROM job_manifest_rows WHERE manifest_id = ?1")
+          .bind(id)
+          .all<{ row_index: number; kind: string }>();
+        for (const r of kindRows.results ?? []) kindByIndex.set(r.row_index, r.kind);
+      }
+
       // Classify every page line BEFORE any write: an insert, an update onto a resolved
       // target, or a refusal. Ambiguity is enforced SERVER-SIDE — a resolution must name
       // a line that is genuinely among that part's current matches (decision 6: the
       // difference between an import you can trust and one that quietly loses a line).
+      type LineTarget = { id: number } | { line_uuid: string };
       type Disposition =
-        | { kind: "insert"; line: ResolvedLine }
+        | { kind: "insert"; line: ResolvedLine; lineUuid: string }
         | { kind: "update"; line: ResolvedLine; targetId: number }
-        | { kind: "shipment"; line: ResolvedLine; targetId: number }
+        | { kind: "shipment"; line: ResolvedLine; target: LineTarget; qty: number | null }
         | { kind: "shipment_new_line"; line: ResolvedLine };
       const dispositions: Disposition[] = [];
       const unresolved: number[] = [];
+      const orphanContinuations: number[] = [];
       const skippedLocked: { source_row_index: number; line_id: number; status: string }[] = [];
       const wantsMatch = mode === "merge" || importAs === "shipments";
+      // The line the NEXT continuation row belongs to. A continuation is definitionally
+      // "another load of the row above" (manifest_parse.classify_rows forward-fills its
+      // identity from that parent), so the parent is the nearest preceding non-continuation
+      // row of this import — tracked here rather than re-matched by part number, because a
+      // part number legitimately repeats across unrelated BOM groupings.
+      let parentTarget: LineTarget | null = null;
       for (const line of page) {
         const part = line.fields.part_number;
         const hits = wantsMatch && part ? (byPart.get(part) ?? []) : [];
@@ -971,12 +992,48 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
           }
           targetId = chosen;
         }
+
+        // ── A CONTINUATION ROW IS A LOAD, NEVER A LINE ────────────────────────────────
+        // The shipping log records one part arriving across several truckloads, each with
+        // its own BOL: Deep Lake's log is 51 parts in 56 rows, the extra 5 being repeat
+        // loads. `classify_rows` already identifies them and forward-fills the parent's
+        // identity — INCLUDING the parent's ORDER quantity — so committing one as a line
+        // produced a byte-identical duplicate that doubled the BOM requirement (Kiwi line
+        // 9243: part 805271-SHIP counted 1006 against a real 503; Deep Lake, five more)
+        // and threw away the BOL. Forensic report 2026-08-24, defects D1 + D4.
+        //
+        // Mode-independent on purpose: there is no import mode under which "another load
+        // of the row above" is correctly a second expected-materials line.
+        if (kindByIndex.get(line.source_row_index) === "continuation") {
+          // Prefer the in-page parent; fall back to a unique existing match when a page
+          // boundary split the pair. Never guess: an unattachable continuation is refused
+          // with its row index, the same posture as an unresolved ambiguity.
+          const target: LineTarget | null =
+            parentTarget ?? (targetId !== null ? { id: targetId } : null);
+          if (target === null) {
+            orphanContinuations.push(line.source_row_index);
+            continue;
+          }
+          // qty is NULL, deliberately. `line.fields.qty` here is the parent's ORDER
+          // quantity, forward-filled by the parser — writing it as the load quantity would
+          // state that 503 arrived on a truck that carried 251. The document's own
+          // shipped-qty column is not on this route's wire (see the commit-body shape), so
+          // the honest value is "not recorded" until it is.
+          dispositions.push({ kind: "shipment", line, target, qty: null });
+          continue;
+        }
+
+        // The uuid is minted HERE, not at dispatch, so a following continuation row can
+        // name a parent that does not exist yet — the same in-batch join `insertShipment`
+        // already uses for shipment_new_line.
         if (importAs === "shipments") {
-          dispositions.push(
-            targetId !== null
-              ? { kind: "shipment", line, targetId }
-              : { kind: "shipment_new_line", line },
-          );
+          if (targetId !== null) {
+            dispositions.push({ kind: "shipment", line, target: { id: targetId }, qty: line.fields.qty });
+            parentTarget = { id: targetId };
+          } else {
+            dispositions.push({ kind: "shipment_new_line", line });
+            parentTarget = null;
+          }
         } else if (mode === "merge" && targetId !== null) {
           // A received/incident line's recorded facts are LOCKED (same rule as the
           // hand-edit route's in-WHERE guard) — report it, never silently rewrite it.
@@ -985,17 +1042,34 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
               source_row_index: line.source_row_index, line_id: targetId,
               status: statusById.get(targetId) ?? "unknown",
             });
+            // A locked line is still the right PARENT for a following load: the load is
+            // new information about a delivery, and the lock only protects the line's
+            // recorded content from being rewritten by the document.
+            parentTarget = { id: targetId };
           } else {
             dispositions.push({ kind: "update", line, targetId });
+            parentTarget = { id: targetId };
           }
         } else {
-          dispositions.push({ kind: "insert", line });
+          const lineUuid = crypto.randomUUID();
+          dispositions.push({ kind: "insert", line, lineUuid });
+          parentTarget = { line_uuid: lineUuid };
         }
       }
       if (unresolved.length > 0) {
         // Refused BEFORE any write — the page is all-or-nothing, so a half-resolved page
         // cannot land its resolved half and strand the rest.
         return c.json({ error: "ambiguous_unresolved", rows: unresolved.slice(0, 50) }, 409);
+      }
+      if (orphanContinuations.length > 0) {
+        // A continuation with nothing to attach to. Refused with its row indices rather
+        // than invented into a line — the same all-or-nothing posture as an unresolved
+        // ambiguity, and the same reason: an importer must never manufacture a line the
+        // document did not describe (§4).
+        return c.json(
+          { error: "orphan_continuation", rows: orphanContinuations.slice(0, 50) },
+          409,
+        );
       }
 
       // The job's line list has a hard read cap; blowing past it would silently truncate
@@ -1096,7 +1170,15 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
           }),
         );
       };
-      const insertShipment = (line: ResolvedLine, target: { id: number } | { line_uuid: string }) => {
+      // `qty` is passed EXPLICITLY rather than read off line.fields: for a continuation row
+      // the field carries the parent's forward-filled ORDER quantity, which is not this
+      // load's quantity. Making every call site name the number keeps that distinction
+      // visible instead of buried one indirection away.
+      const insertShipment = (
+        line: ResolvedLine,
+        target: { id: number } | { line_uuid: string },
+        qty: number | null,
+      ) => {
         const f = line.fields;
         // Deterministic uuid ⇒ a replayed page's shipment INSERT is a unique-violation,
         // not a silent duplicate — belt to the watermark's braces.
@@ -1126,19 +1208,19 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
             .bind(
               shipmentUuid,
               "id" in target ? target.id : target.line_uuid,
-              manifest.job_id, f.part_number, line.bol, f.qty, f.unit,
+              manifest.job_id, f.part_number, line.bol, qty, f.unit,
               f.expected_ship_date, f.expected_date, line.source_row_index, actor,
               id, watermark,
             ),
           auditStmtIfChanged(c, actor, "material_shipment_import", manifest.job_id, {
             job_id: manifest.job_id, manifest_id: id, source_row_index: line.source_row_index,
-            part_number: f.part_number, bol: line.bol, qty: f.qty,
+            part_number: f.part_number, bol: line.bol, qty,
           }),
         );
       };
       for (const d of dispositions) {
         if (d.kind === "insert") {
-          insertLine(d.line, crypto.randomUUID());
+          insertLine(d.line, d.lineUuid);
         } else if (d.kind === "update") {
           const f = d.line.fields;
           // Merge = the DOCUMENT's non-null fields win; a column the document does not
@@ -1173,14 +1255,14 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
             }),
           );
         } else if (d.kind === "shipment") {
-          insertShipment(d.line, { id: d.targetId });
+          insertShipment(d.line, d.target, d.qty);
         } else {
           // A load for a part the job does not expect yet: the line is real (the job
           // expects that part now), so create it and hang the load off it — both in this
           // batch, joined by the minted line_uuid rather than a cross-statement rowid.
           const lineUuid = crypto.randomUUID();
           insertLine(d.line, lineUuid);
-          insertShipment(d.line, { line_uuid: lineUuid });
+          insertShipment(d.line, { line_uuid: lineUuid }, d.line.fields.qty);
         }
       }
 

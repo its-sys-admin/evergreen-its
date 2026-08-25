@@ -184,6 +184,30 @@ was transient tooling and the document should retry, delete that manifest's id f
 flag file — the same remediation as Symptom 5, and NEVER for an integrity/malicious flag.
 A repeat on the same document escalates.
 
+## Symptom 10 — "Commit refused: a delivery row continues the row above it" (`orphan_continuation`)
+
+A shipping log records one part arriving across several truckloads. The parser marks the repeat
+loads `continuation` and inherits their identity from the row above — Deep Lake's log is 51 parts
+in 56 rows, Kiwi's 49 in 50. Since 2026-08-25 a continuation row is committed as a **load**
+(`material_shipments`) against its parent line, never as a second expected-materials line.
+
+`orphan_continuation` means a continuation row had no parent to attach to: the document begins
+with one, or the parent row was excluded from the import. The commit is refused **whole** — the
+response names the offending row indices, and nothing is written.
+
+**What the Successor-Operator does.** Open the validate screen and look at the named rows. Either
+include the parent row in the import, or (if the document genuinely starts mid-part) ask the office
+to confirm which line those loads belong to and add them on the Materials tracking page by hand.
+Do not "fix" it by re-committing as `add_new` — that is the behaviour this refusal exists to stop.
+
+**Escalate** if the parent row is plainly present in the document and the refusal persists: that
+means the parse mis-classified it, which is a code question, not a data one.
+
+> Before this change a continuation was committed as a duplicate LINE carrying the parent's ORDER
+> quantity, so a part needing 503 was counted twice as 1006 and the load's BOL was discarded. Kiwi
+> carries one such line (id 9243) and Deep Lake five; they predate the fix and are still there.
+> Removing them is not a Tier-2 action — escalate.
+
 ## The import itself (what the office's choices mean)
 
 - **Import rows as material lines vs scheduled loads.** A BOM's rows become

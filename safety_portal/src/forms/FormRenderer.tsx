@@ -393,12 +393,14 @@ function SectionView(p: SectionProps) {
         </section>
       );
     }
-    // Expected-materials receipt list (Material receipts M2): the M1 rows the HOST fetched
+    // Expected-materials DEEP-LINK CARD (Material receipts M2): the M1 rows the HOST fetched
     // (the `expectedMaterials` adapter). No adapter → NOTHING renders — the generic fill page
-    // and every other form are unaffected. The section files NO form values of its own:
-    // "Confirm receipt" flips the D1 row + appends a deliveries_received table row (both the
-    // host's duty); "Report a problem →" flags the row + deep-links the material-incident
-    // form, which files as its OWN submission.
+    // and every other form are unaffected. The section files NO form values of its own, and
+    // carries no per-line actions: "Confirm receipt" and "Report a problem →" were REMOVED
+    // here on 2026-08-11 (#74) and live on the Materials tracking page. (This comment used to
+    // describe those buttons as current, two weeks after they were deleted — forensic report
+    // 2026-08-24, defect D13. If the actions ever move again, this is one of the places that
+    // has to move with them.)
     case "expected_materials": {
       const em = p.expectedMaterials;
       if (!em) return null;
@@ -431,7 +433,15 @@ function SectionView(p: SectionProps) {
                 Materials tracking →
               </button>{" "}
               <span className="dash-card__sub muted">
-                Mark deliveries and report problems there.
+                {/* The daily report also carries a free-text "Deliveries Received" table,
+                    which files with the submission and prints on the report but never
+                    reaches the receipt ledger, the material list, or the client weekly
+                    report (forensic report 2026-08-24, defect D3). Deliberately worded
+                    without naming that table: the sentence stays true if it is renamed or
+                    dropped, which is how the instruction this replaces went stale. */}
+                Mark deliveries and report problems there — it is the only place that updates
+                the material list. Anything typed into this form is a written note for the
+                report.
               </span>
             </p>
           ) : null}

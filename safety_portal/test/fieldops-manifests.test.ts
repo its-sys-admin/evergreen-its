@@ -864,3 +864,156 @@ describe("manifest /commit — merge, resolutions, shipments", () => {
     expect(body.projected_total).toBe(3); // the bare field keeps the CONSERVATIVE number
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTINUATION ROWS — a repeat truckload of the part above, never a second line.
+//
+// A shipping log records one part arriving across several loads: Deep Lake's is 51 parts
+// in 56 rows, Kiwi's 49 in 50. `manifest_parse.classify_rows` marks the extras
+// `kind='continuation'` and forward-fills the parent's identity INCLUDING its ORDER
+// quantity. Committing one as a line produced a byte-identical duplicate that doubled the
+// BOM requirement and discarded the BOL (Kiwi line 9243: part 805271-SHIP counted 1006
+// against a real 503; Deep Lake, five more). Forensic report 2026-08-24, defects D1 + D4.
+//
+// The kind is read from `job_manifest_rows` SERVER-SIDE, never from the posted body — a
+// client that could relabel a continuation could re-create the duplicate at will.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("manifest /commit — continuation rows are LOADS, not lines", () => {
+  /** Seed the stored parse for a row so the commit route can read its kind. */
+  async function seedRowKind(manifestId: number, rowIndex: number, kind: string) {
+    await env.DB
+      .prepare(
+        "INSERT INTO job_manifest_rows (manifest_id, row_index, source_page, kind, cells_json, flags) " +
+          "VALUES (?1, ?2, 1, ?3, '[]', '[]')",
+      )
+      .bind(manifestId, rowIndex, kind)
+      .run();
+  }
+  // Local copies: the /commit describe's own helpers are scoped to that block.
+  async function linesByPart(jobId: string, part: string) {
+    const { results } = await env.DB
+      .prepare(
+        "SELECT id, description, qty, status, active FROM job_expected_materials " +
+          "WHERE job_id = ?1 AND part_number = ?2 ORDER BY id ASC",
+      )
+      .bind(jobId, part)
+      .all<{ id: number; description: string; qty: number | null; status: string; active: number }>();
+    return results ?? [];
+  }
+  async function countLines(jobId: string): Promise<number> {
+    const r = await env.DB
+      .prepare("SELECT COUNT(*) n FROM job_expected_materials WHERE job_id = ?1 AND active = 1")
+      .bind(jobId)
+      .first<{ n: number }>();
+    return r?.n ?? 0;
+  }
+  /** Loads created BY THIS MANIFEST — the suite shares one DB, and shipment_uuid is
+   *  deterministically `mf<manifest_id>-r<row>`, so this scopes exactly. */
+  async function loadsFor(manifestId: number) {
+    const { results } = await env.DB
+      .prepare(
+        "SELECT s.id, s.line_id, s.part_number, s.bol_number, s.qty FROM material_shipments s " +
+          "WHERE s.shipment_uuid LIKE ?1 ORDER BY s.id ASC",
+      )
+      .bind(`mf${manifestId}-%`)
+      .all<{ id: number; line_id: number; part_number: string; bol_number: string | null; qty: number | null }>();
+    return results ?? [];
+  }
+
+  it("the Kiwi shape: a data row + its continuation make ONE line and ONE load", async () => {
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "data");
+    await seedRowKind(id, 3, "continuation");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge",
+      lines: [
+        { ...line(2, "CONT-805271", "1P DRIVEN PILE W8X10 BEAM HS (HDG) - 150IN", 503), bol: "LD0872247" },
+        // The parser forward-filled 503 into the continuation — the parent's ORDER qty.
+        { ...line(3, "CONT-805271", "1P DRIVEN PILE W8X10 BEAM HS (HDG) - 150IN", 503), bol: "LD0872244" },
+      ],
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toMatchObject({ inserted: 1, shipments: 1 });
+
+    // ONE line, carrying the real requirement — not two carrying 1006 between them.
+    const lines = await linesByPart("JOB-A", "CONT-805271");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].qty).toBe(503);
+
+    // The continuation became a LOAD on that line, keeping its own BOL.
+    const loads = await loadsFor(id);
+    expect(loads).toHaveLength(1);
+    expect(loads[0].line_id).toBe(lines[0].id);
+    expect(loads[0].bol_number).toBe("LD0872244");
+    // qty is NULL, not 503: the forward-filled number is the ORDER quantity, and claiming
+    // 503 arrived on a truck that carried 251 would be worse than recording nothing.
+    expect(loads[0].qty).toBeNull();
+  });
+
+  it("attaches to an EXISTING line when a page boundary split it from its parent", async () => {
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "continuation");
+    await seedLine("JOB-A", "CONT-805271", "already on the list");
+    const before = await countLines("JOB-A");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge",
+      lines: [{ ...line(2, "CONT-805271", "1P DRIVEN PILE", 503), bol: "LD0872244" }],
+    });
+    expect(res.status).toBe(200);
+    expect(await countLines("JOB-A")).toBe(before); // no new line
+    const loads = await loadsFor(id);
+    expect(loads).toHaveLength(1);
+    expect(loads[0].bol_number).toBe("LD0872244");
+  });
+
+  it("an ORPHAN continuation is refused BEFORE any write, naming its row", async () => {
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "continuation"); // nothing above it, nothing on the list
+    const before = await countLines("JOB-A");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "merge",
+      lines: [{ ...line(2, "CONT-805271", "1P DRIVEN PILE", 503), bol: "LD0872244" }],
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "orphan_continuation", rows: [2] });
+    // All-or-nothing: nothing landed, not even a line for the orphan.
+    expect(await countLines("JOB-A")).toBe(before);
+    expect(await loadsFor(id)).toHaveLength(0);
+  });
+
+  it("add_new is held to the same rule — no mode makes a load into a line", async () => {
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "data");
+    await seedRowKind(id, 3, "continuation");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "add_new",
+      lines: [
+        { ...line(2, "CONT-805275", "Beam", 1255), bol: "LD1" },
+        { ...line(3, "CONT-805275", "Beam", 1255), bol: "LD2" },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(await linesByPart("JOB-A", "CONT-805275")).toHaveLength(1);
+    expect(await loadsFor(id)).toHaveLength(1);
+  });
+
+  it("a plain repeated part number is STILL two lines — only a continuation is a load", async () => {
+    // A manifest legitimately repeats a part across unrelated BOM groupings (0059's own
+    // header says so). The rule keys on the parser's kind, not on part-number sameness.
+    const id = await parsedManifest();
+    await seedRowKind(id, 2, "data");
+    await seedRowKind(id, 3, "data");
+
+    const res = await p(admin, `/api/fieldops/manifests/${id}/commit`, {
+      mode: "add_new",
+      lines: [line(2, "CONT-REPEAT", "under HARDWARE", 10), line(3, "CONT-REPEAT", "under CONTROLS", 4)],
+    });
+    expect(res.status).toBe(200);
+    expect(await linesByPart("JOB-A", "CONT-REPEAT")).toHaveLength(2);
+    expect(await loadsFor(id)).toHaveLength(0);
+  });
+});

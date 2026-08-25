@@ -434,6 +434,12 @@ export const ERROR_COPY: Record<string, string> = {
   // reconcile deliberately has NO picker (no fuzzy matching, ADR-0006 decision 9) —
   // its review screen names the duplicates so the human can fix them at the source.
   ambiguous_unresolved: "Some rows match more than one existing entry — open the preview, see which ones, and resolve the duplicates before importing.",
+  // A shipping-log row that continues the row above (another truckload of the same part)
+  // but has no parent to attach to — the page began with one, or its parent was refused.
+  // Never invented into a line: an importer must not manufacture what the document did
+  // not describe (§4).
+  orphan_continuation:
+    "A delivery row continues the row above it, but there is no row above it to attach to. Re-check the document's first rows.",
   invalid_bol: "A BOL / load number is too long — shorten it to 120 characters or less.",
   // Resolve-problem (the expected-materials incident flag's explicit counterpart).
   not_flagged: "This line has no problem flag to resolve — someone may have already cleared it.",
