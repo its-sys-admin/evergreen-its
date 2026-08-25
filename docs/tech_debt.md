@@ -3037,3 +3037,144 @@ routes is asked to accept meaningfully larger payloads (e.g., an expanded manife
 
 Surfaced: 2026-08-20 session-close follow-up to the #185 adversarial review's weekly-report body-size
 finding. See `docs/session_logs/2026-08-20_wpr-materials-curation-and-grid-viewport.md`.
+
+## [OPEN 2026-08-25, high] Migration 0079 (`manager`→`cap.materials.manage`) is merged + deployed but deliberately left UNAPPLIED, pending a write-scope decision
+
+Migration 0079 grants the `manager` role `cap.materials.manage` so a crew lead can author the
+materials list they mark deliveries against, and narrows `cap.materials.manage`'s existing
+membership in expected-materials' `SCOPE_BYPASS_CAPS` in the same commit (without the narrowing,
+the grant would have converted "may author a materials list" into "may read and mark materials on
+EVERY job" for six manager accounts — caught pre-merge by three cross-job `403 forbidden_job`
+assertions in the module's own test suite). The Worker code shipped (PR #188, `4d156b3`, merged
+2026-08-25) and is live, but the migration itself was deliberately **left unapplied** to production
+D1, inverting the usual deploy-then-migrate order: applying it first, before the write-scope
+question below is resolved, would give six managers cross-job material access for however long a
+follow-up deploy took.
+
+**The write-scope asymmetry, found by PR #190's audit of #188/#189:** `requireJobScope` guards only
+4 call sites in `safety_portal/worker/fieldops_expected_materials.ts` (list read, `/receive`,
+`/flag-incident`, `/resolve`) and **none** of the 7 material CRUD routes (`/update`, `/seq`,
+`/delete` all take a bare line id, never a job_id) or the 9 routes in
+`safety_portal/worker/fieldops_manifests.ts`, commit included. That asymmetry predates migration
+0079; its grantee set does not — applying 0079 as written gives the six newly-granted managers
+cross-job **WRITE** on those ungated routes with no matching cross-job **READ** path.
+
+**Decide before applying 0079:** either scope those routes with `requireJobScope` (a no-op for
+admins, who already reach other jobs via `cap.jobtracker.manage`), or record a dated exception
+accepting the asymmetry. Either way the fix wants a cross-job WRITE test — today's JOB-B assertions
+in the suite are all read/receipt/flag, none cover `/update`/`/seq`/`/delete` or any manifest route.
+
+**Tag:** `security`, `field-ops`, `migration`, `capability-gating`.
+
+**Revisit when:** Seth makes the scope-vs-exception call above; migration 0079 should not be applied
+to production D1 before this is resolved.
+
+Surfaced: 2026-08-25 six-lens standards audit of PRs #188/#189, landed in PR #190. See
+`docs/session_logs/2026-08-25_materials-receipt-forensics-and-continuation-rows.md` and blueprint
+memory-archive §G92.
+
+## [OPEN 2026-08-25, medium] Known-bad production manifest data: 1 duplicate line on Kiwi, 5 on Deep Lake, predating the continuation fix
+
+PR #189 fixed the manifest-commit path so a `continuation` row (a repeat truckload of the same part)
+is recorded as a load on its parent instead of a second expected-materials line. Lines already
+duplicated by the pre-fix bug were not touched — removing them is a production D1 write, and
+`docs/runbooks/material_manifest_import.md` Symptom 10 directs escalation rather than self-serve
+repair.
+
+Confirmed live instances: **Kiwi** (JOB-000029) manifest 10 — id 9243, part `805271-SHIP`, counted
+**1006** against a real **503** (parent id 9242). **Deep Lake** (JOB-000032) manifest 9 — five more
+duplicate lines from its 5 continuation rows.
+
+**Tag:** `field-ops`, `data-integrity`, `production-repair`.
+
+**Revisit when:** Seth runs a repair pass on either job, or the next time a manifest audit touches
+Kiwi or Deep Lake.
+
+Surfaced: 2026-08-24/25 Kiwi forensic investigation + PR #189. See memory-archive §G92.
+
+## [OPEN 2026-08-25, medium] Deep Lake: 37 material lines show `Delivered` against a full outstanding balance, from qty-NULL events predating the required-qty fix
+
+PR #188 made `qty` required on `delivered`/`partial` receipt marks, closing the gap where a
+qty-NULL event flipped a line's coarse status to `received` while the full expected quantity stayed
+outstanding. The fix binds new marks only — it does not touch existing events.
+
+**Deep Lake (JOB-000032):** all 39 receipt events ever written before the fix are qty-NULL, and 37
+lines carry the contradiction (a green "Delivered" pill beside a full outstanding-quantity chip).
+The ledger is append-only, so repair is a corrective event per line — and the real quantities have
+to come from the office, not be inferred from context.
+
+**Tag:** `field-ops`, `data-integrity`, `production-repair`.
+
+**Revisit when:** the office supplies real per-line delivered quantities for Deep Lake's 37 affected
+lines.
+
+Surfaced: 2026-08-24/25 Kiwi forensic investigation, confirmed live during PR #188. See
+memory-archive §G92.
+
+## [OPEN 2026-08-25, low] D3's other half — renaming the daily report's `deliveries_received` table needs a `daily-report-v8` §50 publish
+
+PR #189 fixed the code-side half of D3 (the card above the daily report's free-text "Deliveries
+Received" table now says plainly that the Materials page is the only place that updates the
+material list, deliberately without naming the table itself, so the copy can't go stale the way the
+instruction it replaces did — see the now-closed PR #74/#188 "confirm receipt from the daily report"
+staleness). The table's own misleading name — it files with the submission and prints on the report
+but reaches no ledger, no material list, and no client weekly report — is not fixed, because
+`deliveries_received` is a `required_field_keys` legal-floor entry in `required-content.json`
+(operator-confirmed doctrine) and form definitions are append-only through the §50 publish lane.
+Renaming it means minting `daily-report-v8` and publishing — a doctrine-class action.
+
+**Tag:** `field-ops`, `forms`, `publish-lane`, `doctrine`.
+
+**Revisit when:** Seth approves a `daily-report-v8` definition + publish request for the table
+rename.
+
+Surfaced: 2026-08-25, PR #189. See memory-archive §G92.
+
+## [OPEN 2026-08-25, low] D4's other half — the manifest document's own shipped-quantity column is not on the commit wire
+
+PR #189 fixed continuation rows from becoming duplicate lines, but a fixed continuation's
+`material_shipments` load writes `qty=NULL` rather than a real per-load figure, because the
+document's own shipped-quantity column (as distinct from the forward-filled order quantity) is not
+yet carried onto the manifest commit wire. Writing the forward-filled order qty instead would be
+worse than NULL — claiming the full order arrived on one truck when it didn't.
+
+**Tag:** `field-ops`, `manifest-import`.
+
+**Revisit when:** the next materials-lane change that needs true per-load quantities rather than
+NULL placeholders for continuation-sourced loads.
+
+Surfaced: 2026-08-25, PR #189. See memory-archive §G92.
+
+## [OPEN 2026-08-25, low] `tests/test_portal_css_classes.py`'s classname guard is blind to expression-form `className={…}` repo-wide (~53 sites) — broader than the tracked template-literal finding
+
+The 2026-08-20 entry above ("CSS classname guard is blind to template-literal-EMBEDDED classNames")
+covers one narrow case — a class name that appears only inside a template-literal expression. PR
+#190's audit found the guard's blind spot is wider: its regex cannot read expression-form
+`className={…}` at all (not just the template-literal sub-case), confirmed live when the `mat-qty`
+class shipped with zero matching CSS rule and the guard stayed green. `mat-qty` itself was fixed
+(collapsed to one class with one rule) in PR #190, but the guard's blind spot — roughly 53 sites
+repo-wide — was deliberately not fixed in the same pass.
+
+**Tag:** `tests`, `safety-portal`, `guard-blind-spot`.
+
+**Revisit when:** the next `test_portal_css_classes.py`-touching session — wants its own pass,
+including proving the strengthened guard RED-lights on an injected violation before anyone trusts it
+again.
+
+Surfaced: 2026-08-25, PR #190 standards audit. See memory-archive §G92.
+
+## [OPEN 2026-08-25, low] Account-hygiene audit findings — reported, not remediated
+
+A side finding of the 2026-08-24/25 Kiwi forensic investigation, not a code change: of 20 portal
+accounts, 13 are `admin` (5 of whom have never taken an action), 4 admin accounts have no linked
+`personnel` row, 2 managers (`moore.jason`, `diaz.yvan`) have no job placement and will 403 on every
+job-scoped screen, and 3 `test.*` accounts are live in production — `test.manager` is placed on
+Kiwi (JOB-000029). No code fix is implicated; this is an operator account-cleanup pass. (The
+standards-audit workflow that surfaced this also lost 2 of its agents to mid-run API errors,
+including the skeptic lens, so this list is not independently confirmed complete.)
+
+**Tag:** `field-ops`, `accounts`, `operator-cleanup`.
+
+**Revisit when:** Seth's next account-hygiene sweep.
+
+Surfaced: 2026-08-24/25 Kiwi forensic investigation. See memory-archive §G92.
