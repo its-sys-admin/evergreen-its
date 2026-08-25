@@ -120,6 +120,19 @@ describe("expected_materials — the deep-link card", () => {
     expect(queryByText("Materials tracking →")).toBeNull();
   });
 
+  it("says plainly that only the Materials page moves the numbers (the decoy guard)", () => {
+    // The daily report carries a free-text "Deliveries Received" table that files with the
+    // submission and prints, but never reaches the receipt ledger, the material list or the
+    // client weekly report — a superintendent filling it in reasonably believes he has
+    // recorded a delivery (forensic report 2026-08-24, defect D3). The card above it has to
+    // say which one counts. Pinned so the sentence cannot quietly drop out again.
+    const { getByText, container } = mount({ onOpenMaterials: vi.fn() });
+    expect(getByText("Materials tracking →")).toBeTruthy();
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain("it is the only place that updates the material list");
+    expect(text).toContain("a written note for the report");
+  });
+
   it("the live material-incident Filed ✓ indicator rides FormLinkAdapter.filedLabel", () => {
     expect(DAILY_STATUS_FAMILIES).toContain("material-incident");
     const values = initialValues(DEF);
