@@ -2590,7 +2590,7 @@ form.dash-row select {
    two read as one thing. Deliberately NOT the tinted-red ground (#fdf1f1): global.css reserves
    that for life-safety and says so — "boldness spent once". A missing quantity is a data-entry
    refusal, not a hazard, and borrowing the life-safety ground would spend it twice. */
-.mat-qty--error {
+.mat-qty-invalid {
   border: 2px solid var(--c-danger);
 }
 

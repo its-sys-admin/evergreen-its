@@ -17,22 +17,36 @@
 --   2. Scheduled-SHIPMENT CRUD — add / edit / remove the loads attached to a line
 --      (same module, three routes).
 --   3. MANIFEST IMPORT — upload, parse and COMMIT a materials manifest against a job
---      (worker/fieldops_manifests.ts `CAP_MANIFEST`). This is the highest-consequence item in the
---      list: a commit writes the job's whole BOM, and the merge path currently has an open
---      duplicate-line defect (forensic report 2026-08-24, defect D1).
+--      (worker/fieldops_manifests.ts `CAP_MANIFEST`). This is the highest-consequence item in
+--      the list: a commit writes the job's whole BOM. (The merge path's duplicate-line defect,
+--      D1, was open when this file was first written and was closed by PR #189 the same day.)
+--      NOTE none of the nine manifest routes runs `requireJobScope` — see item 5.
 --   4. The global MATERIAL CATALOG editor — the cross-job material TYPE vocabulary
 --      (worker/fieldops_material_write.ts; SPA route `materials-catalog`, and a "Materials
 --      Catalog" card appears on Home under Office operations). NOT job-scoped: an edit here is
 --      visible on every job.
---   5. CROSS-JOB SCOPE BYPASS on expected-materials. `cap.materials.manage` is a member of
---      `SCOPE_BYPASS_CAPS` in fieldops_expected_materials.ts, so a holder skips the per-job
---      ownership check (`requireJobScope`) on the list READ and on every receipt/flag WRITE.
---      A manager placed on job A will be able to read and mark materials on job B.
---      That bypass is asserted by test/fieldops-scope-gates.test.ts and is deliberate for the
---      office; extending it to the manager tier is a consequence of this grant, not a separate
---      decision, and it is the one item here worth revisiting if the intent was "managers manage
---      THEIR OWN job's materials". Narrowing it later is a two-line change to SCOPE_BYPASS_CAPS
---      and a no-op for admins, who also hold `cap.jobtracker.manage`.
+--   5. CROSS-JOB WRITE WITHOUT CROSS-JOB READ — the item to decide before applying this.
+--
+--      An EARLIER draft of this header said the grant carried a cross-job scope BYPASS on
+--      expected-materials. That is no longer true and was corrected here on 2026-08-25 (audit
+--      finding): the same commit that wrote this file also REMOVED `cap.materials.manage` from
+--      `SCOPE_BYPASS_CAPS` (fieldops_expected_materials.ts), and rewrote the test that asserted
+--      the bypass into one named "cap.materials.manage bypasses NOTHING". A manager will NOT be
+--      able to READ or MARK another job's materials list — that still 403s `forbidden_job`.
+--
+--      What remains, and what the applying operator is actually signing off on, is an ASYMMETRY
+--      that predates this migration but whose grantee set it widens. `requireJobScope` guards
+--      only FOUR sites in fieldops_expected_materials.ts (the list read, receipt, flag-incident,
+--      resolve-incident). It guards NONE of the seven CRUD routes — `/update`, `/seq` and
+--      `/delete` take a bare line id and never see a job_id at all — and NONE of the nine routes
+--      in fieldops_manifests.ts, including manifest COMMIT, which writes a job's whole BOM.
+--
+--      So on apply, the six manager accounts get cross-job WRITE with no cross-job READ. That is
+--      not a new hole — it is the shape the capability has always had, and admins have always
+--      held it — but it is the reason to decide deliberately rather than by default. The two
+--      honest options: extend `requireJobScope` to those routes (a no-op for admins, who bypass
+--      via `cap.jobtracker.manage`), or record a dated exception naming the asymmetry. Either
+--      way it wants a cross-job WRITE test; today's JOB-B assertions are all read/receipt/flag.
 --
 -- What this does NOT grant: `cap.jobtracker.manage` (job/task creation), `cap.admin.*`,
 -- `cap.po.manage`, `cap.payments.manage`, `cap.submit_as`. The manager tier stays out of

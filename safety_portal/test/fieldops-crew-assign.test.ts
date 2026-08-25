@@ -193,7 +193,11 @@ describe("migration 0023 — manager grant matrix", () => {
     // their scheduled loads — not just record receipts against a list only the office could write.
     // Deliberate reversal of 0023's withholding, below. The cap was simultaneously REMOVED from
     // expected-materials' SCOPE_BYPASS_CAPS so this stays a grant of authority over a list, not
-    // over every job's list: a manager still reaches only their own placement.
+    // over every job's list: a manager still reaches only their own placement FOR READS, receipts
+    // and flags — the four sites that run requireJobScope. It does NOT scope the seven CRUD routes
+    // (/update, /seq and /delete take a bare line id) or any of the nine manifest routes, so the
+    // grant carries cross-job WRITE without cross-job READ. Disclosed in migration 0079 item 5,
+    // and the thing to decide before applying it (audit 2026-08-25).
     "cap.materials.manage",
   ];
   const WITHHELD = [

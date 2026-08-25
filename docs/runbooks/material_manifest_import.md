@@ -191,9 +191,13 @@ loads `continuation` and inherits their identity from the row above — Deep Lak
 in 56 rows, Kiwi's 49 in 50. Since 2026-08-25 a continuation row is committed as a **load**
 (`material_shipments`) against its parent line, never as a second expected-materials line.
 
-`orphan_continuation` means a continuation row had no parent to attach to: the document begins
-with one, or the parent row was excluded from the import. The commit is refused **whole** — the
-response names the offending row indices, and nothing is written.
+`orphan_continuation` means a continuation row had no parent to attach to: the document begins with
+one, or the parent row was **unticked on the validate screen** while its continuation was kept. The
+second case is caught by a part-number cross-check — the parser forward-fills the parent's part
+number into the continuation, so a continuation whose part disagrees with the row above it is not
+that row's continuation and is refused rather than hung off the wrong line (added 2026-08-25 after
+an audit found it silently re-parenting). The commit is refused **whole** — the response names the
+offending row indices, and nothing is written.
 
 **What the Successor-Operator does.** Open the validate screen and look at the named rows. Either
 include the parent row in the import, or (if the document genuinely starts mid-part) ask the office

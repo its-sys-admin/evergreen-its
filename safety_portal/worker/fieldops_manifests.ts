@@ -64,7 +64,9 @@ export type ManifestGates = {
 type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 
 // The office authors a job's material list, so the import rides the SAME capability the
-// hand-authored line create does (cap.materials.manage, itself a job-scope bypass cap).
+// hand-authored line create does (cap.materials.manage). NOTE that cap is NOT a job-scope bypass
+// — it stopped being one on 2026-08-25 — and no route in THIS file runs requireJobScope at all, so
+// a holder may commit against any job. Disclosed in migration 0079's header, item 5.
 const CAP_MANIFEST = "cap.materials.manage";
 export const MANIFEST_HMAC_DOMAIN = "manifest:v1";
 const SYSTEM_ACTOR = "system:manifest_poll";
@@ -966,7 +968,7 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
         | { kind: "insert"; line: ResolvedLine; lineUuid: string }
         | { kind: "update"; line: ResolvedLine; targetId: number }
         | { kind: "shipment"; line: ResolvedLine; target: LineTarget; qty: number | null }
-        | { kind: "shipment_new_line"; line: ResolvedLine };
+        | { kind: "shipment_new_line"; line: ResolvedLine; lineUuid: string };
       const dispositions: Disposition[] = [];
       const unresolved: number[] = [];
       const orphanContinuations: number[] = [];
@@ -978,6 +980,8 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
       // row of this import — tracked here rather than re-matched by part number, because a
       // part number legitimately repeats across unrelated BOM groupings.
       let parentTarget: LineTarget | null = null;
+      // The part number of the row `parentTarget` points at — the agreement check below.
+      let parentPart: string | null = null;
       for (const line of page) {
         const part = line.fields.part_number;
         const hits = wantsMatch && part ? (byPart.get(part) ?? []) : [];
@@ -1005,11 +1009,20 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
         // Mode-independent on purpose: there is no import mode under which "another load
         // of the row above" is correctly a second expected-materials line.
         if (kindByIndex.get(line.source_row_index) === "continuation") {
-          // Prefer the in-page parent; fall back to a unique existing match when a page
-          // boundary split the pair. Never guess: an unattachable continuation is refused
-          // with its row index, the same posture as an unresolved ambiguity.
+          // Prefer the in-page parent, but only when it is REALLY this row's parent. The
+          // validate screen lets a human untick any single row, so unticking a parent while
+          // keeping its continuation would otherwise hang that truckload's BOL off whatever
+          // part happened to precede it — silently, and against the wrong line. The parser
+          // forward-fills the parent's part number INTO the continuation, so the two must
+          // agree; when they do not, this is not that row's parent (audit 2026-08-25).
+          //
+          // Falling back to a unique existing match covers the honest case the agreement
+          // check cannot: a page boundary split the pair, so the parent is already a line.
+          // Never guess — an unattachable continuation is refused with its row index, the
+          // same posture as an unresolved ambiguity.
+          const parentAgrees = parentTarget !== null && (part === null || parentPart === part);
           const target: LineTarget | null =
-            parentTarget ?? (targetId !== null ? { id: targetId } : null);
+            (parentAgrees ? parentTarget : null) ?? (targetId !== null ? { id: targetId } : null);
           if (target === null) {
             orphanContinuations.push(line.source_row_index);
             continue;
@@ -1030,9 +1043,18 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
           if (targetId !== null) {
             dispositions.push({ kind: "shipment", line, target: { id: targetId }, qty: line.fields.qty });
             parentTarget = { id: targetId };
+            parentPart = part;
           } else {
-            dispositions.push({ kind: "shipment_new_line", line });
-            parentTarget = null;
+            // Mint HERE, not at dispatch: this branch creates a line and hangs a load off it,
+            // and a FOLLOWING continuation must be able to name that line before it exists.
+            // Leaving parentTarget null here was the sibling-branch gap the 2026-08-25 audit
+            // found — in `import_as='shipments'`, which ManifestValidatePage auto-selects for
+            // every shipping-log document, a part not already on the job's list would 409 the
+            // whole page on its own continuation.
+            const lineUuid = crypto.randomUUID();
+            dispositions.push({ kind: "shipment_new_line", line, lineUuid });
+            parentTarget = { line_uuid: lineUuid };
+            parentPart = part;
           }
         } else if (mode === "merge" && targetId !== null) {
           // A received/incident line's recorded facts are LOCKED (same rule as the
@@ -1046,14 +1068,17 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
             // new information about a delivery, and the lock only protects the line's
             // recorded content from being rewritten by the document.
             parentTarget = { id: targetId };
+            parentPart = part;
           } else {
             dispositions.push({ kind: "update", line, targetId });
             parentTarget = { id: targetId };
+            parentPart = part;
           }
         } else {
           const lineUuid = crypto.randomUUID();
           dispositions.push({ kind: "insert", line, lineUuid });
           parentTarget = { line_uuid: lineUuid };
+          parentPart = part;
         }
       }
       if (unresolved.length > 0) {
@@ -1260,9 +1285,8 @@ export function registerManifestRoutes(app: FieldopsApp, gates: ManifestGates): 
           // A load for a part the job does not expect yet: the line is real (the job
           // expects that part now), so create it and hang the load off it — both in this
           // batch, joined by the minted line_uuid rather than a cross-statement rowid.
-          const lineUuid = crypto.randomUUID();
-          insertLine(d.line, lineUuid);
-          insertShipment(d.line, { line_uuid: lineUuid }, d.line.fields.qty);
+          insertLine(d.line, d.lineUuid);
+          insertShipment(d.line, { line_uuid: d.lineUuid }, d.line.fields.qty);
         }
       }
 
