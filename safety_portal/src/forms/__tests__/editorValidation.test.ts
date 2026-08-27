@@ -128,6 +128,8 @@ function draftWithCollidingKey(section: Record<string, unknown>): FormDefinition
   };
 }
 
+// additional_photos became builder-COMPOSABLE on 2026-08-27 but its key still occupies the
+// value namespace exactly like the two read-only mounts — the collision case stays.
 const KEYED_READ_ONLY: Record<string, Record<string, unknown>> = {
   job_requirements: { type: "job_requirements", key: "clash", title: "R" },
   expected_materials: { type: "expected_materials", key: "clash", title: "M" },
@@ -155,5 +157,104 @@ describe("validateDraft — definition-managed section keys occupy the value nam
       if (keyless.has(t)) continue;
       expect(KEYED_READ_ONLY[t], `no collision fixture for keyed read-only type "${t}"`).toBeTruthy();
     }
+  });
+});
+
+// ── Additional-photos pool mirrors (Photos program, 2026-08-27) ──────────────────
+// Client mirrors of the four LIVE server rules in worker/publishValidation.ts (which this
+// PR deliberately does NOT touch): max_count shape (photo-only, integer 1..4), the pool's
+// fixed wire key, one mount per draft, and the wire-reserved top-level key.
+
+function poolDraft(sections: Record<string, unknown>[]): FormDefinition {
+  return {
+    form_code: "probe-v1",
+    parent_form_code: "probe",
+    form_name: "Probe",
+    variant_label: null,
+    version: 1,
+    archetype: "sectioned_assessment",
+    source_pdf: "",
+    sections: sections as unknown as FormDefinition["sections"],
+  };
+}
+
+const POOL_SECTION = { type: "additional_photos", key: "additional_photos", title: "P" };
+
+describe("validateDraft — max_count mirror (photo-only, integer 1..4)", () => {
+  function photoDraft(over: Record<string, unknown>): FormDefinition {
+    return poolDraft([
+      { type: "header", fields: [{ key: "photos", label: "Photos", input: "photo", ...over }] },
+    ]);
+  }
+
+  it.each([1, 2, 3, 4])("accepts max_count %i on a photo field", (n) => {
+    expect(validateDraft(photoDraft({ max_count: n }), CTX)).toEqual([]);
+  });
+
+  it("accepts an omitted max_count (the server default)", () => {
+    expect(validateDraft(photoDraft({}), CTX)).toEqual([]);
+  });
+
+  it.each([0, 5, 2.5, -1])("rejects max_count %s (outside 1..4 / non-integer)", (n) => {
+    const errors = validateDraft(photoDraft({ max_count: n }), CTX);
+    expect(errors.some((e) => /max photos must be a whole number from 1 to 4/i.test(e))).toBe(true);
+  });
+
+  it("rejects max_count on a NON-photo field with the photo-only message", () => {
+    const draft = poolDraft([
+      { type: "header", fields: [{ key: "notes", label: "Notes", input: "text", max_count: 2 }] },
+    ]);
+    expect(
+      validateDraft(draft, CTX).some((e) => /"Max photos" applies to photo fields only/i.test(e)),
+    ).toBe(true);
+  });
+});
+
+describe("validateDraft — pool fixed-key mirror", () => {
+  it("accepts the pool section under its fixed wire key", () => {
+    expect(validateDraft(poolDraft([POOL_SECTION]), CTX)).toEqual([]);
+  });
+
+  it("rejects a pool section under any other key", () => {
+    const errors = validateDraft(
+      poolDraft([{ type: "additional_photos", key: "extra_photos", title: "P" }]),
+      CTX,
+    );
+    expect(errors.some((e) => /must be "additional_photos"/i.test(e))).toBe(true);
+  });
+});
+
+describe("validateDraft — one-mount mirror", () => {
+  it("rejects a draft carrying TWO pool mounts", () => {
+    // Two mounts also collide on the fixed key; the one-mount error names the REAL rule.
+    const errors = validateDraft(poolDraft([POOL_SECTION, { ...POOL_SECTION }]), CTX);
+    expect(errors.some((e) => /Only one Additional photos \(pool\) section/i.test(e))).toBe(true);
+  });
+
+  it("accepts a single mount alongside ordinary sections", () => {
+    const errors = validateDraft(
+      poolDraft([{ type: "freeform", key: "notes", label: "Notes" }, POOL_SECTION]),
+      CTX,
+    );
+    expect(errors).toEqual([]);
+  });
+});
+
+describe("validateDraft — wire-reserved key mirror", () => {
+  it("rejects a top-level 'additional_photos' key that is NOT the pool mount", () => {
+    // /api/submit parses + claims values.additional_photos on EVERY form — a freeform
+    // section owning the key would 400 every submission of the published form.
+    const errors = validateDraft(
+      poolDraft([{ type: "freeform", key: "additional_photos", label: "Photos?" }]),
+      CTX,
+    );
+    expect(errors.some((e) => /reserved for the Additional photos \(pool\) section/i.test(e))).toBe(
+      true,
+    );
+  });
+
+  it("does not fire when the pool mount itself owns the key", () => {
+    const errors = validateDraft(poolDraft([POOL_SECTION]), CTX);
+    expect(errors.some((e) => /reserved/i.test(e))).toBe(false);
   });
 });

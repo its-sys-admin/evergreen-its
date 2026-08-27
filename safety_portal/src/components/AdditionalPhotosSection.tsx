@@ -200,9 +200,11 @@ export function AdditionalPhotosSection({ title, jobId, workDate, amendsUuid, re
   return (
     <section className="fr__section fr__additional-photos">
       <h2 className="fr__section-title">{title ?? "Additional site photos"}</h2>
+      {/* Form-agnostic copy (Photos program, 2026-08-27): the pool mounts on any form now,
+          so the helper no longer references the daily report's "four site photos above". */}
       <p className="fr__form-link-helper muted">
-        Need more than the four site photos above? Add as many as you need here — each photo
-        uploads right away and is screened before filing ({refs.length}/{POOL_CAP_PER_DAY}).
+        Add as many photos as you need here — each uploads right away and is screened before
+        filing ({refs.length}/{POOL_CAP_PER_DAY}).
       </p>
       {statusWarn ? (
         <p className="dash-unavail" role="status">

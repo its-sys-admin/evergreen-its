@@ -5,7 +5,7 @@ import type { AdditionalPhotoRef, DailyPhotoUploadResult, DailyPoolPhotoRow } fr
 import { auditStmtIfChanged } from "./audit";
 import { hmacHex } from "./hmac";
 import { b64DecodedLen, isPhotoItem, validateSinglePhoto } from "./photo_bounds";
-import { requireJob, requireJobScope } from "./fieldops_scope";
+import { requireJob } from "./fieldops_scope";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Daily-report photo POOL (DR-photo-pool Slice 1, operator directive 2026-07-03: "add more photo
@@ -23,24 +23,27 @@ import { requireJob, requireJobScope } from "./fieldops_scope";
 // renders STATUS ONLY (pending / clean / refused — the G1 chip vocabulary).
 //
 // GATES: session + the closed-vocabulary ROLE check (DAILY_PHOTO_ROLES below — manager/admin, the
-// same closed Role vocabulary the daily family gates on; coordinate-by-convention with the
-// parallel daily-family role-gate slice) + the per-job placement scope (requireJobScope, the
-// /daily-form/status pattern, with the daily family's own bypass-cap set).
+// same closed Role vocabulary the daily family gates on) + job EXISTENCE (requireJob). The
+// per-job PLACEMENT scope was deliberately REMOVED from the pool routes (operator decision
+// 2026-08-27): pool photos ride many form types (incident / erosion / material-incident), filed
+// across jobs by managers who are not placed on them — while every row stays UPLOADER-SELF-SCOPED
+// (upload stamps the session actor; list / delete / the /api/submit claim all filter
+// uploaded_by = actor), so relaxing placement never exposes another account's rows. Growth stays
+// bounded by the 40/day/(job, date, uploader) cap + the 200-row pending backstop.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 
-// The daily family's closed-vocabulary role check (worker/types.ts Role is the CLOSED
+// The pool's closed-vocabulary role check (worker/types.ts Role is the CLOSED
 // "submitter" | "manager" | "admin" — migration-seeded only, coerceRole admits nothing else).
-// The daily report is a crew-lead-manager surface; admins keep operator access. NOTE: a parallel
-// slice is adding the same manager/admin role gate to the daily-family routes — same convention,
-// same vocabulary, deliberately duplicated per-module like the divergent SCOPE_BYPASS_CAPS sets.
+// The pool is a crew-lead-manager surface; admins keep operator access. Deliberately
+// duplicated per-module (the daily-family routes carry their own requireDailyReportRole —
+// same convention, same vocabulary). Membership UNCHANGED by the 2026-08-27 placement-scope
+// relaxation (decision 9: submitters keep their 403).
 const DAILY_PHOTO_ROLES: ReadonlySet<string> = new Set(["manager", "admin"]);
 
-// The daily family's scope-bypass caps (the same set fieldops_daily_requirements.ts passes —
-// admins hold both; a manager/submitter holds neither). Kept module-local on purpose: bypass sets
-// are intentionally divergent per surface (see fieldops_scope.ts module header).
-const SCOPE_BYPASS_CAPS = ["cap.jobtracker.manage", "cap.checklist.manage"] as const;
+// (The former SCOPE_BYPASS_CAPS set left with the placement-scope check — operator decision
+// 2026-08-27; see the module GATES comment above.)
 
 // SINGLE CONSISTENT BODY BOUND (the A7 413-mismatch class; the exact ITEM_PHOTO_BODY_MAX
 // derivation): one photo per request — PHOTO_MAX_BYTES = 400_000 decoded → 533_336 base64 chars,
@@ -271,7 +274,8 @@ export function releaseAllPhotoClaimsStmt(c: Ctx, submissionUuid: string): D1Pre
 export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates): void {
   // ── POST /api/fieldops/daily-photo — upload ONE additional photo into the pool. ────────────────
   // Gates: session → closed-vocabulary role (manager/admin) → body bounds (raw-text-first) →
-  // job exists → placement scope → per-day cap + global pending backstop (both ATOMIC — folded
+  // job exists (NO placement scope — operator decision 2026-08-27, see the module header) →
+  // per-day cap + global pending backstop (both ATOMIC — folded
   // into the INSERT's own WHERE, not a pre-read; see the batch below). Bounds are the VERBATIM
   // per-photo /api/submit gate (photo_bounds.validateSinglePhoto). HMAC-signed like item photos
   // (dailyPhotoCanonical above). Queue INSERT + conditional audit in ONE batch (W4). Never log
@@ -326,8 +330,12 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
 
     const jobErr = await requireJob(c, jobId); // 400 bad shape / 404 unknown job
     if (jobErr) return jobErr;
-    const scopeErr = await requireJobScope(c, jobId, SCOPE_BYPASS_CAPS); // 403 outside own placement
-    if (scopeErr) return scopeErr;
+    // NO placement-scope check — operator decision 2026-08-27: pool photos ride many form
+    // types (incident / erosion / material-incident), filed across jobs, so a manager may
+    // pool-upload on ANY existing job. Rows remain uploader-self-scoped (this route stamps
+    // the session actor into photo_json + uploaded_by; list / delete / the /api/submit claim
+    // all filter uploaded_by = actor). DAILY_PHOTO_ROLES stays {manager, admin} (decision 9);
+    // the 40/day/(job, date, uploader) cap + the 200-row pending backstop bound growth.
 
     const actor = c.get("session").username;
 
@@ -486,8 +494,8 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
     if (!DATE_RE.test(workDate)) return c.json({ error: "invalid_work_date" }, 400);
     const jobErr = await requireJob(c, jobId);
     if (jobErr) return jobErr;
-    const scopeErr = await requireJobScope(c, jobId, SCOPE_BYPASS_CAPS);
-    if (scopeErr) return scopeErr;
+    // NO placement-scope check (operator decision 2026-08-27 — see the upload route): the
+    // read is already hard-scoped to the actor's OWN rows (uploaded_by = actor below).
     const actor = c.get("session").username;
     let amendsUuid: string | null = null;
     const amendsRaw = c.req.query("amends") ?? "";
