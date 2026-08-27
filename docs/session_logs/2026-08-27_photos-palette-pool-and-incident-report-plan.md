@@ -88,9 +88,12 @@ The three parallel exploration agents established, without inference from the op
    (test-proven 2×4=8). The pool (`additional_photos`, Option-D) is the designed unlimited path
    but rendered only on the Daily tab and was read-only in the builder before this session.
 4. **Pre-flight surfaced a stale-migration hazard unrelated to photos.** Migration 0079 (from the
-   2026-08-25 materials PRs #188–#190) is merged but **unapplied on remote D1** — production Worker
-   still runs pre-#188. Surfaced to the operator directly; Phase B below must apply it before
-   deploy proceeds, or the deploy would carry an unrelated regression forward.
+   2026-08-25 materials PRs #188–#190) is merged but **unapplied on remote D1**. The Worker itself
+   WAS deployed on 08-25 (`wrangler deployments list`: three deploys, latest 23:14Z — checked after
+   an initial "never deployed" misread of this signal), so the live state is #188 code running
+   WITHOUT its 0079 capability grant: the manager materials-manage feature is dark/fail-closed, not
+   broken. Phase B below must apply 0079 before its own deploy (the publish daemon's gate would
+   refuse anyway).
 
 ## Adversarial review
 
