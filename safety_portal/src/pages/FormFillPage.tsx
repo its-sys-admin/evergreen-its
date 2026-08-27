@@ -61,6 +61,10 @@ export function FormFillPage({
 }) {
   const { user, logout } = useAuth();
   const isAdmin = user?.role === "admin";
+  // Pool eligibility mirrors the Worker's DAILY_PHOTO_ROLES (manager/admin — decision 9,
+  // 2026-08-27: submitters keep their 403; the SPA half is the honest placeholder). The
+  // Worker is the boundary — this gate is UX, exactly like the Daily tab's canFileDaily.
+  const canPool = user?.role === "manager" || user?.role === "admin";
   const me = user?.username ?? "";
   const catalog = useMemo(() => formCatalog(), []);
 
@@ -158,6 +162,33 @@ export function FormFillPage({
     }
     setAmendsUuid(null);
   }, [formCode]);
+
+  // ── Pool-ref hygiene (Photos program, 2026-08-27) ─────────────────────────────
+  // Pool references (values.additional_photos) are bound to the (job, work date) they were
+  // uploaded under — carried across a scope change they would 4xx at submit
+  // (unknown_photo_ref: the claim checks job_id + work_date + uploader). Strip them whenever
+  // EITHER changes. The ref tracks the last-seen scope (not a first-run boolean: StrictMode
+  // double-invokes mount effects, and a boolean guard would strip a deep-link prefill's
+  // seeded refs on the second invoke); the first REAL scope is recorded without stripping.
+  // loadAmend changes neither jobId nor workDate, so an amend load never fires this — its
+  // refs legitimately belong to the loaded submission's scope.
+  const poolScope = useRef<string | null>(null);
+  useEffect(() => {
+    const scope = `${jobId}\n${workDate}`;
+    if (poolScope.current === scope) return; // StrictMode re-invoke / no-op re-run
+    const isFirst = poolScope.current === null;
+    poolScope.current = scope;
+    if (isFirst) return;
+    // Programmatic setValues (not editValues): a hygiene strip is not user input — it must
+    // not arm the dirty guard on its own.
+    setValues((v) => {
+      const refs = v.additional_photos;
+      if (!Array.isArray(refs) || refs.length === 0) return v;
+      const next = { ...v };
+      delete next.additional_photos;
+      return next;
+    });
+  }, [jobId, workDate]);
 
   // Amend prefill: when job + form + work-date are all set, look for a prior submission.
   useEffect(() => {
@@ -439,7 +470,13 @@ export function FormFillPage({
                   whose FIRST action is signing was invisible to BOTH guards above — no
                   beforeunload on tab close, no popstate confirm on hardware Back — and the
                   form was discarded silently. The first completed stroke arms them. */}
+              {/* Generic pool adapter (Photos program, 2026-08-27 — mirrors DailyReportTab):
+                  scope = the selected job + work date; supplied only for pool-eligible roles
+                  (manager/admin), so submitters see the honest placeholder instead of an
+                  uploader whose every request the Worker would 403. amendsUuid threads the
+                  load-&-amend target so the filed report's own claimed rows chip "on file". */}
               <FormRenderer def={def} values={values} setValues={editValues}
+                additionalPhotos={jobId && workDate && canPool ? { jobId, workDate, amendsUuid } : undefined}
                 onDraftDirty={() => setDirty(true)} />
             </section>
             {error ? <p className="login__error" role="alert">{error}</p> : null}

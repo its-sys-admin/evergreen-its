@@ -106,13 +106,31 @@ describe("daily-report-v6 — ONE cut carrying BOTH 2026-07-03 directives", () =
   });
 });
 
-describe("additional_photos mount — inert without the adapter", () => {
-  it("renders NOTHING on the generic fill page (no adapter) and never fetches", () => {
-    const { container } = render(
+describe("additional_photos mount — honest placeholder without the adapter (2026-08-27)", () => {
+  it("renders the titled PLACEHOLDER (not null, not the uploader) and never fetches", () => {
+    // Pre-Photos-program this rendered NOTHING — indistinguishable from a broken render in
+    // the editor preview and for submitters. Now: title + how-to-enable copy, no uploader.
+    const { container, getByText, queryByText } = render(
       <FormRenderer def={DEF} values={initialValues(DEF)} setValues={() => {}} />,
     );
-    expect(container.querySelector(".fr__additional-photos")).toBeNull();
+    expect(container.querySelector(".fr__additional-photos")).not.toBeNull();
+    expect(getByText("Additional site photos")).toBeTruthy(); // the mount's title
+    expect(getByText(/once a job and work\s+date are selected/)).toBeTruthy();
+    expect(getByText(/crew-lead manager or admin account/)).toBeTruthy();
+    expect(queryByText("+ Add more photos")).toBeNull(); // never the live uploader
+    expect(container.querySelector('[data-testid="additional-photos-input"]')).toBeNull();
     expect(listDailyPhotos).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the default placeholder title when the mount has none", () => {
+    const bare: FormDefinition = {
+      ...DEF,
+      sections: [{ type: "additional_photos", key: "additional_photos" }],
+    };
+    const { getByText } = render(
+      <FormRenderer def={bare} values={{}} setValues={() => {}} />,
+    );
+    expect(getByText("Additional site photos")).toBeTruthy();
   });
 
   it("renders the pool uploader when the host supplies the scope adapter", () => {

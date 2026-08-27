@@ -19,6 +19,16 @@ const SLUG_RE = /^[a-z0-9-]+$/;
 // so every photo field tripped "has an invalid input type." and blocked Publish client-side.
 // Deriving here kills that three-copies drift class; the parity test in __tests__ locks it.
 const INPUTS = new Set<string>(FIELD_INPUTS);
+// Mirror of worker/publishValidation.ts PHOTO_MAX_COUNT (the max_count bound: photo-only,
+// integer 1..4). Named + pointer-commented per the INPUTS-drift postmortem above — keep in
+// sync with the server constant; the FormEditor "Max photos" select derives its options
+// from the same 1..4 window.
+const PHOTO_MAX_COUNT = 4;
+// Mirror of worker/publishValidation.ts's additional_photos rules (fixed key / one mount /
+// wire-reserved): values.additional_photos is the exact top-level key /api/submit parses +
+// claims on EVERY form, so only the pool mount may own it, under exactly this key, at most
+// once per definition.
+const POOL_WIRE_KEY = "additional_photos";
 
 export interface ValidationContext {
   identity: string;
@@ -94,6 +104,23 @@ export function validateDraft(def: FormDefinition, ctx: ValidationContext): stri
   for (const k of topLevel) {
     if (seen.has(k)) errors.push(`Value key "${k}" is used in more than one section — keys must be unique.`);
     seen.add(k);
+  }
+
+  // ── Additional-photos pool, draft-level mirrors (worker/publishValidation.ts) ─────
+  // ONE-MOUNT: at most one pool section per form (two would double-render the same refs
+  // list). The AddSectionBar disable is the convenience; this is the inline backstop for
+  // drafts that arrive with two (e.g. a cloned definition).
+  const apMounts = def.sections.filter((s) => s.type === "additional_photos").length;
+  if (apMounts > 1) {
+    errors.push("Only one Additional photos (pool) section per form — remove the extra one.");
+  }
+  // WIRE-RESERVED: values.additional_photos is parsed + claimed by the server on EVERY
+  // form, so no other field/section may own that key — every submission would fail.
+  if (apMounts === 0 && topLevel.includes(POOL_WIRE_KEY)) {
+    errors.push(
+      `The key "${POOL_WIRE_KEY}" is reserved for the Additional photos (pool) section — ` +
+        "rename that field or section, or use the pool section instead.",
+    );
   }
   return errors;
 }
@@ -232,19 +259,26 @@ function validateSection(s: Section, idx: number, topLevel: string[], errors: st
     case "expected_materials":
       checkSectionKey(s.key, where, topLevel, errors);
       return;
-    // additional_photos (DR-photo-pool Slice 1): read-only in the builder, same as the two
-    // above. Its key is the FIXED wire key 'additional_photos' and the submission files pool
-    // REFERENCES under it, so it very much occupies the value namespace.
+    // additional_photos (DR-photo-pool; builder-composable since 2026-08-27): its key is the
+    // FIXED wire key 'additional_photos' — /api/submit claims exactly that top-level key, so
+    // the submission files pool REFERENCES under it and it occupies the value namespace. The
+    // builder sets the key by construction (blankSection) and never renders a key input, so
+    // the fixed-key error below only fires on a hand-imported / cloned draft.
     //
-    // This case was MISSING. `validateSection` returns void and the project does not set
-    // `noImplicitReturns`, so a section type with no case falls out of the switch silently and
-    // tsc cannot see the hole. The consequence was narrow but real: an additional_photos key
-    // colliding with another section's key passed the in-builder check and was caught only
-    // later by the Worker's publish validation — turning an inline editor error into a failed
-    // publish. `FormEditor.readonly.test.tsx` now carries an additional_photos fixture so the
-    // omission cannot recur unnoticed.
+    // (Historical: this case was once MISSING. `validateSection` returns void and the project
+    // does not set `noImplicitReturns`, so a section type with no case falls out of the switch
+    // silently and tsc cannot see the hole — a key collision then passed the in-builder check
+    // and failed only at the Worker's publish validation.)
     case "additional_photos":
       checkSectionKey(s.key, where, topLevel, errors);
+      // Mirror of worker/publishValidation.ts: "additional_photos key must be
+      // 'additional_photos' (the /api/submit claim key)".
+      if (s.key && s.key !== POOL_WIRE_KEY) {
+        errors.push(
+          `${where} (additional photos): the key must be "${POOL_WIRE_KEY}" — it is the ` +
+            "fixed key photo uploads are claimed under.",
+        );
+      }
       return;
   }
 }
@@ -262,7 +296,7 @@ function checkSectionKey(key: string, where: string, topLevel: string[], errors:
 }
 
 function checkField(
-  f: { key: string; label: string; input: string; options?: string[] },
+  f: { key: string; label: string; input: string; options?: string[]; max_count?: number },
   where: string,
   errors: string[],
 ): void {
@@ -279,6 +313,24 @@ function checkField(
     const opts = (f.options ?? []).filter((o) => o && o.trim());
     if (opts.length === 0) {
       errors.push(`${where}: select field "${f.key}" needs at least one non-empty option.`);
+    }
+  }
+  // Mirror of worker/publishValidation.ts's max_count rule: photo fields only, an integer
+  // 1..PHOTO_MAX_COUNT. The FormEditor "Max photos" select can't compose a bad value (it
+  // deletes max_count on a non-photo switch and omits the default), so this fires only on
+  // hand-imported / cloned drafts — friendlier here than the server's 400.
+  if (f.max_count !== undefined) {
+    if (f.input !== "photo") {
+      errors.push(`${where}: field "${f.key}" — "Max photos" applies to photo fields only.`);
+    } else if (
+      typeof f.max_count !== "number" ||
+      !Number.isInteger(f.max_count) ||
+      f.max_count < 1 ||
+      f.max_count > PHOTO_MAX_COUNT
+    ) {
+      errors.push(
+        `${where}: field "${f.key}" — max photos must be a whole number from 1 to ${PHOTO_MAX_COUNT}.`,
+      );
     }
   }
 }

@@ -897,15 +897,29 @@ shown).
 
 ### Daily-report photo pool — additional site photos (v6 — `0037`)
 
-**Migration 0037** adds `daily_photo_pool` — the pre-submit, §34-screened photo pool behind
-the daily report's **"Add more photos"** button (operator directive 2026-07-03: *"upload more
-than just four photos … add as many of those as you need"*). The inline 4-photo `site_photos`
-field is **untouched**; it is payload-budgeted (CS2: 280KB×4 ≈ 1.49MB < the 1.8MB submit cap),
-so additional photos structurally cannot ride the submission — each uploads **individually**
-(`POST /api/fieldops/daily-photo` — session + the manager/admin daily-report role gate +
-`requireJobScope`; the G1 item-photo bounds verbatim; a per-(job,date,uploader) 40-photo cap
-and a 200-pending global backstop, both **folded into the INSERT** so a concurrent burst can't
-blow the D1 ceiling; HMAC domain-separated `daily_photo:v1`) into the pool. The **Option D**
+**Migration 0037** adds `daily_photo_pool` — the pre-submit, §34-screened photo pool that
+began as the daily report's **"Add more photos"** button (operator directive 2026-07-03:
+*"upload more than just four photos … add as many of those as you need"*). **Form-agnostic
+since 2026-08-27 (the Photos program):** `additional_photos` is now a composable builder
+palette item — any form may carry **at most one** pool mount (server half:
+`worker/publishValidation.ts` enforces one-mount + the fixed wire key `additional_photos`;
+the editor sets the key by construction). `FormFillPage` supplies the generic adapter (the
+selected job + work date scope) for pool-eligible roles; with **no adapter** — the editor
+preview, or a role the pool doesn't serve — the section renders a read-only **placeholder**,
+never the live uploader and never silent blank. Inline photo fields are **untouched**; they
+are payload-budgeted (CS2: 280KB×4 ≈ 1.49MB < the 1.8MB submit cap), so additional photos
+structurally cannot ride the submission — each uploads **individually**
+(`POST /api/fieldops/daily-photo` — session + the closed-vocabulary **manager/admin** role
+gate + job **existence** (`requireJob`); the G1 item-photo bounds verbatim; a
+per-(job,date,uploader) 40-photo cap and a 200-pending global backstop, both **folded into
+the INSERT** so a concurrent burst can't blow the D1 ceiling; HMAC domain-separated
+`daily_photo:v1`) into the pool. **The per-job placement scope (`requireJobScope`) was
+deliberately REMOVED from the upload/list routes (operator decision 2026-08-27):** pool
+photos ride many form types (incident / erosion / material-incident), filed across jobs by
+managers who are not placed on them — while every row stays **uploader-self-scoped** (upload
+stamps the session actor; list / delete / the `/api/submit` claim all filter
+`uploaded_by = actor`), so relaxing placement never exposes another account's rows. The role
+gate is unchanged (decision 9: submitters keep their 403). The **Option D**
 posture is inherited from `item_photos`: screened on the Mac, filed to Box, **no serving route,
 delete-on-screen**. The submission carries only tiny **references**
 (`values.additional_photos = [{pool_id, caption?}]`); at submit the Worker validates each ref
@@ -926,7 +940,8 @@ stage deletes unclaimed pool rows (>7 d) + orphans; claimed rows follow delete-o
    and the v6 daily-report render 500. (Always `git pull` `~/its` to latest `main` FIRST — the
    stale-migrations-list lockout class.)
 2. **Redeploy** (`npm run deploy`).
-3. **Smoke** (live): as a placed manager, open the daily report → below the 4-photo field, use
+3. **Smoke** (live): as a manager (placement on the job is **not** required — the 2026-08-27
+   scope relaxation), open the daily report → below the 4-photo field, use
    **"Add more photos"** and attach one → it chips *"screening…"* then *"photo on file ✓"*
    within ~1-3 min; submit → the filed PDF shows the additional photo(s) after the inline grid;
    a **malicious** upload must red-light (CRITICAL + a security-flagged Review-Queue row,

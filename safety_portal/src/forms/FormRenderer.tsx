@@ -102,13 +102,16 @@ export interface ExpectedMaterialsAdapter {
   onOpenMaterials?: () => void;
 }
 
-/** Adapter for `additional_photos` sections (DR-photo-pool Slice 1). The HOST (the Daily tab)
- *  supplies only the SCOPE — the placed job + report date the pool uploads bind to; everything
- *  else (upload / status chips / removal) is self-contained in AdditionalPhotosSection, which
- *  reads its refs from values[<section key>] and writes them back through setValues (so the
- *  host's draft machinery persists the tiny [{pool_id, caption?}] references for free — never
- *  photo bytes). With NO adapter the section renders NOTHING — the generic fill page (and every
- *  non-daily form) is unaffected. */
+/** Adapter for `additional_photos` sections (DR-photo-pool Slice 1; generic since the
+ *  2026-08-27 Photos program). The HOST (the Daily tab, or FormFillPage for any form carrying
+ *  a pool mount) supplies only the SCOPE — the job + work date the pool uploads bind to;
+ *  everything else (upload / status chips / removal) is self-contained in
+ *  AdditionalPhotosSection, which reads its refs from values[<section key>] and writes them
+ *  back through setValues (so the host's draft machinery persists the tiny
+ *  [{pool_id, caption?}] references for free — never photo bytes). With NO adapter the section
+ *  renders a read-only PLACEHOLDER (title + how-to-enable copy) — never the live uploader, and
+ *  never silent nothing (the silent-blank made the editor preview and the submitter view
+ *  indistinguishable from a broken render). */
 export interface AdditionalPhotosAdapter {
   jobId: string;
   workDate: string;
@@ -132,8 +135,8 @@ interface Props {
   /** Optional M2 hook — see ExpectedMaterialsAdapter. Absent on the generic fill page
    *  (the `expected_materials` section renders NOTHING without it). */
   expectedMaterials?: ExpectedMaterialsAdapter;
-  /** Optional DR-photo-pool hook — see AdditionalPhotosAdapter. Absent on the generic fill
-   *  page (the `additional_photos` section renders NOTHING without it). */
+  /** Optional DR-photo-pool hook — see AdditionalPhotosAdapter. Absent → any
+   *  `additional_photos` section renders its read-only placeholder (never the uploader). */
   additionalPhotos?: AdditionalPhotosAdapter;
   /** Optional, PRESENTATIONAL ONLY — the daily SOP's chronological day-rail (design
    *  refinement, 2026-07). When set (the Daily tab), guidance sections render with a
@@ -451,14 +454,28 @@ function SectionView(p: SectionProps) {
         </section>
       );
     }
-    // Additional-photos pool mount (DR-photo-pool Slice 1): renders ONLY when the HOST supplies
-    // the AdditionalPhotosAdapter (the Daily tab's job + date scope) — the generic fill page and
-    // every non-daily form are unaffected. The section's value is the tiny pool-reference list
-    // (values[<key>] = [{pool_id, caption?}]); the bytes went to the pool via their own bounded
-    // uploads (the inline site_photos field above it is payload-budgeted and stays untouched).
+    // Additional-photos pool mount (DR-photo-pool Slice 1; any-form since 2026-08-27): the
+    // live uploader renders ONLY when the HOST supplies the AdditionalPhotosAdapter (job +
+    // date scope). The section's value is the tiny pool-reference list (values[<key>] =
+    // [{pool_id, caption?}]); the bytes went to the pool via their own bounded uploads (the
+    // inline photo fields are payload-budgeted and stay untouched). With NO adapter — the
+    // editor's live preview, or a fill by a role/scope the pool doesn't serve — a visible
+    // placeholder renders instead of silent nothing (the form_link no-adapter precedent:
+    // degrade honestly, never blank).
     case "additional_photos": {
       const ap = p.additionalPhotos;
-      if (!ap) return null;
+      if (!ap) {
+        return (
+          <section className="fr__section fr__additional-photos">
+            <h2 className="fr__section-title">{s.title ?? "Additional site photos"}</h2>
+            <p className="fr__form-link-helper muted">
+              Additional photos can be added here while filling this form once a job and work
+              date are selected. Uploads are screened before filing. Photo uploads require a
+              crew-lead manager or admin account.
+            </p>
+          </section>
+        );
+      }
       const refs = Array.isArray(p.values[s.key]) ? (p.values[s.key] as AdditionalPhotoRef[]) : [];
       return (
         <AdditionalPhotosSection
