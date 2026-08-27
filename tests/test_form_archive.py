@@ -46,15 +46,48 @@ def _row_table_sections(definition: dict) -> list[dict]:
             if s["type"] in ("repeating_table", "signature_table")]
 
 
+def _expects_acroform_fields(definition: dict) -> bool:
+    """True when the blank renderer should emit at least one AcroForm widget.
+
+    `photo` renders an honest bordered portal note (photos cannot ride a paper form)
+    and `signature` a sign-by-hand baseline — NEITHER consumes an AcroForm field, so
+    a definition whose only inputs are photo/signature legitimately renders a
+    widget-free blank (e.g. photo-test-v1). Everything else (text / textarea / date /
+    time / number / select, checklist items, freeform) emits widgets. Mirrors
+    tests/test_render_smoke.py's widget-aware predicate."""
+    widgetless = {"photo", "signature"}
+    for s in definition.get("sections", []):
+        typ = s.get("type")
+        if typ in ("checklist", "freeform"):
+            return True
+        if typ == "header" and any(
+            f.get("input", "text") not in widgetless for f in s.get("fields", [])
+        ):
+            return True
+        if typ in ("repeating_table", "signature_table") and any(
+            c.get("input", "text") not in widgetless for c in s.get("columns", [])
+        ):
+            return True
+    return False
+
+
 # ── every form renders to a valid, field-bearing fillable PDF ──────────────────
 @pytest.mark.parametrize("path", DEF_PATHS, ids=lambda p: p.stem)
 def test_blank_form_renders_valid_fillable_pdf(path: Path) -> None:
-    out = render_blank_fillable(_load(path))
+    definition = _load(path)
+    out = render_blank_fillable(definition)
     assert out[:5] == b"%PDF-", "not a PDF"
     reader = pypdf.PdfReader(io.BytesIO(out))
     assert len(reader.pages) >= 1
-    # AcroForm fields exist (the whole point — a blank fillable form).
-    assert reader.get_fields(), f"{path.stem} produced no AcroForm fields"
+    if _expects_acroform_fields(definition):
+        # AcroForm fields exist (the whole point — a blank fillable form).
+        assert reader.get_fields(), f"{path.stem} produced no AcroForm fields"
+    else:
+        # A photo/signature-only form must NOT sprout widgets — the photo note is
+        # deliberately non-interactive (a widget here would be the old fake text box).
+        assert not (reader.get_fields() or {}), (
+            f"{path.stem} has only widgetless inputs but produced AcroForm fields"
+        )
 
 
 def test_form_definitions_present() -> None:

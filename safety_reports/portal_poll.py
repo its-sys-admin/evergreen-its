@@ -161,9 +161,12 @@ FETCH_FAIL_CRITICAL_THRESHOLD = 5
 ITEM_PHOTO_FLAGGED_PATH = STATE_DIR / "portal_poll_item_photo_flagged.json"
 MAX_ITEM_PHOTO_FLAGS = 500  # cap the flag file (drained rows leave dead weight only)
 
-# DR-photo-pool Slice 2 — the daily-pool photo screening pass (_service_daily_photos),
-# the daily_photo_pool (migration 0037) twin of the item-photo pass above. Same page
-# size rationale; the Worker caps at 100.
+# DR-photo-pool Slice 2 — the additional-photo POOL screening pass
+# (_service_daily_photos), the daily_photo_pool (migration 0037) twin of the
+# item-photo pass above. The pool is per-(job, work_date) and mountable on ANY form
+# with an `additional_photos` section — the "daily" in these identifiers is a
+# load-bearing historical name (error codes / Box paths / state files keep it), not
+# a daily-report-only scope. Same page size rationale; the Worker caps at 100.
 DAILY_PHOTO_LIMIT = 25
 # Box filing target: <portal root>/ITS Photos/daily/<job_id>/<work_date>/photo_<id>.jpg.
 # job_id + work_date are HMAC-COVERED (the daily-photo canonical binds them — a signed
@@ -1580,12 +1583,16 @@ def _service_item_photos(base_url: str, bearer: str, secret: str) -> int:
     return serviced
 
 
-# ---- DR-photo-pool Slice 2: daily-pool photo screening pass ----------------
+# ---- DR-photo-pool Slice 2: additional-photo pool screening pass -----------
 #
-# The Mac half of the daily-report additional-photo POOL (migration 0037; Option D
-# inherited from G1: record-only — the photo's permanent home is Box; NO route ever
-# serves the bytes to a browser; DELETE-ON-SCREEN — D1 holds bytes only while
-# pending). Worker-side capture is fieldops_daily_photos.ts
+# The Mac half of the additional-photo POOL (migration 0037; Option D inherited
+# from G1: record-only — the photo's permanent home is Box; NO route ever serves
+# the bytes to a browser; DELETE-ON-SCREEN — D1 holds bytes only while pending).
+# The pool is keyed per-(job, work_date) and mountable on ANY form carrying an
+# `additional_photos` section (it shipped with the daily report, hence the
+# load-bearing "daily" names on the error codes, Box path, and state files —
+# deliberately KEPT; the scope is not daily-report-only). Worker-side capture is
+# fieldops_daily_photos.ts
 # POST /api/fieldops/daily-photo; the submission carries only CLAIMED references
 # (values.additional_photos). This pass is the item-photo pass CLONED onto the pool:
 #

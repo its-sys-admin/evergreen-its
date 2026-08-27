@@ -625,11 +625,12 @@ def _header_section(fields: list[dict], values: dict, st: dict) -> list[Flowable
         if f["key"] in _ENVELOPE_KEYS:
             continue
         if f.get("input") == "photo":
-            # Photos are rendered separately as a screened image grid (see
+            # Photos are rendered separately as per-field screened image grids (see
             # _photo_grid / render_submission_pdf). NEVER inline the raw value here —
             # it is a list of base64 PhotoValue objects, and the renderer must never
             # parse or dump untrusted upload bytes (form_pdf is deterministic; the
-            # §34-screened bytes arrive out-of-band via submission['screened_photos']).
+            # §34-screened bytes arrive out-of-band via submission['photo_groups'],
+            # legacy 'screened_photos' fallback included).
             continue
         val = values.get(f["key"], "")
         if f["input"] == "signature":
@@ -890,6 +891,13 @@ def _section_flowables(section: dict, values: dict, st: dict) -> list[Flowable]:
 
 
 # ── site photos ───────────────────────────────────────────────────────────────
+# One rendered photo group: (field label, [(caption, screened_jpeg_bytes), …]).
+# The label is operator-authored definition text — a photo FIELD's `label`, or the
+# `additional_photos` section title for pool photos — display-only, escaped through
+# the same `_p` path as every section title. Canonical here (the renderer consumes
+# it); intake imports it (intake already depends on form_pdf, never the reverse).
+PhotoGroup = tuple[str, list[tuple[str, bytes]]]
+
 _PHOTO_USABLE_W = 7.0 * inch   # letter minus the 0.6in side margins
 _PHOTO_COL_W = _PHOTO_USABLE_W / 2.0
 _PHOTO_BOX_W = _PHOTO_COL_W - 0.18 * inch
@@ -935,23 +943,36 @@ def _photo_cell(caption: str, jpeg: bytes, st: dict) -> list[Flowable] | None:
     return cell
 
 
-def _photo_grid(photos: list[tuple[str, bytes]], st: dict) -> list[Flowable]:
-    """A 'Site Photos' heading + a 2-up grid of screened photos with captions."""
-    cells = [c for c in (_photo_cell(cap, jpeg, st) for cap, jpeg in photos) if c is not None]
-    if not cells:
-        return []
-    grid: list[list[Any]] = [cells[i:i + 2] for i in range(0, len(cells), 2)]
-    if len(grid[-1]) == 1:
-        grid[-1].append("")  # pad the final row so the Table is rectangular
-    table = Table(grid, colWidths=[_PHOTO_COL_W, _PHOTO_COL_W])
-    table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-    ]))
-    return [_section_header("Site Photos", st), table]
+def _photo_grid(groups: list[PhotoGroup], st: dict) -> list[Flowable]:
+    """Per-field photo groups → one headed 2-up grid PER GROUP, in group order.
+
+    Each group renders `_section_header(label or "Site Photos")` followed by the
+    2-up grid of its renderable photos — so a form with several photo fields shows
+    each field's photos under that field's own label, and pool photos under their
+    section title. A group that is empty or whose EVERY photo is unrenderable emits
+    NO header (`_photo_cell` warn+skips per photo; a heading over nothing would
+    claim photos that are not there). Labels are operator-authored definition text
+    and escape through `_p` inside `_section_header`, exactly like section titles.
+    """
+    out: list[Flowable] = []
+    for label, photos in groups:
+        cells = [c for c in (_photo_cell(cap, jpeg, st) for cap, jpeg in photos) if c is not None]
+        if not cells:
+            continue
+        grid: list[list[Any]] = [cells[i:i + 2] for i in range(0, len(cells), 2)]
+        if len(grid[-1]) == 1:
+            grid[-1].append("")  # pad the final row so the Table is rectangular
+        table = Table(grid, colWidths=[_PHOTO_COL_W, _PHOTO_COL_W])
+        table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        out.append(_section_header(label or "Site Photos", st))
+        out.append(table)
+    return out
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -959,11 +980,16 @@ def render_submission_pdf(definition: dict, submission: dict) -> bytes:
     """Render one submission to PDF bytes.
 
     submission keys: job_name (resolved by intake), work_date, values (the portal
-    fill state), and optional screened_photos — a list of (caption, clean_jpeg_bytes)
-    tuples that have ALREADY passed §34 screening + re-encode (safety_reports.
-    photo_screen). The renderer embeds those out-of-band; it never decodes the raw
-    base64 photos in `values` (form_pdf is deterministic and must not parse untrusted
-    input). Deterministic; raises only on a totally malformed definition.
+    fill state), and optional photo_groups — a list of PhotoGroup tuples
+    (field_label, [(caption, clean_jpeg_bytes), …]) whose photo bytes have ALREADY
+    passed §34 screening + re-encode (safety_reports.photo_screen); each group
+    renders as its own headed grid. LEGACY fallback: a submission with no
+    photo_groups key but a flat screened_photos list renders it as one unlabeled
+    group (the historical single "Site Photos" grid) — kept so pre-grouping callers
+    and replays stay byte-compatible. The renderer embeds photos out-of-band; it
+    never decodes the raw base64 photos in `values` (form_pdf is deterministic and
+    must not parse untrusted input). Deterministic; raises only on a totally
+    malformed definition.
     """
     st = _styles()
     values = submission.get("values", {}) or {}
@@ -986,10 +1012,15 @@ def render_submission_pdf(definition: dict, submission: dict) -> bytes:
             logger.exception("form_pdf: section render failed (type=%s) — skipped",
                              section.get("type"))
 
-    screened_photos = submission.get("screened_photos") or []
-    if screened_photos:
+    photo_groups: list[PhotoGroup] = submission.get("photo_groups") or []
+    if not photo_groups:
+        # LEGACY fallback — a flat screened_photos list (pre-grouping callers /
+        # replays) renders as ONE unlabeled group: the historical "Site Photos" grid.
+        flat = submission.get("screened_photos") or []
+        photo_groups = [("", flat)] if flat else []
+    if photo_groups:
         try:
-            flow.extend(_photo_grid(screened_photos, st))
+            flow.extend(_photo_grid(photo_groups, st))
         except Exception:  # the photo grid must never abort the document of record
             logger.exception("form_pdf: site-photo grid render failed — skipped")
 
@@ -1856,11 +1887,12 @@ class _CheckboxFieldFlowable(Flowable):
             x += self._w(label, self._font, self._fs) + self._gap
 
 
-def _blank_field_cell(field: dict, namer: _FieldNamer, width: float) -> Flowable:
+def _blank_field_cell(field: dict, namer: _FieldNamer, width: float, st: dict) -> Flowable:
     """Map one Field (header col / table col) onto its fillable widget by `input`.
 
     text→text · textarea→multiline · date→labelled text · time→labelled text(HH:MM) ·
-    number→text · select→dropdown(choice w/ options) · signature→sign-by-hand LINE.
+    number→text · select→dropdown(choice w/ options) · signature→sign-by-hand LINE ·
+    photo→a bordered, NON-interactive note (photos cannot ride a paper form).
     The label hints (e.g. "(MM/DD/YYYY)") are placed BEFORE the field so the printed
     or on-screen form tells the filler the expected format.
     """
@@ -1870,6 +1902,23 @@ def _blank_field_cell(field: dict, namer: _FieldNamer, width: float) -> Flowable
         # No typed signature on a manual form — a sign-by-hand baseline (matches the
         # submission renderer's signature baseline) rather than an AcroForm field.
         return SignatureDrawing("", width=min(width, 200), height=28)
+    if inp == "photo":
+        # An honest note instead of a fake text box: a photo field has no paper
+        # equivalent, so the blank form says what to do rather than offering a
+        # widget that cannot hold a photo. Consumes NO AcroForm field name (the
+        # namer is untouched — no widget is ever derived from a photo field key).
+        # Bordered-box idiom mirrors _photo_cell's framed mat.
+        note = Table([[_p(
+            "Photos are attached through the Safety Portal. For a paper filing, "
+            "attach printed photos to this form.", st["photo_caption"])]],
+            colWidths=[width])
+        note.setStyle(TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.75, _LINE),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        note.hAlign = "LEFT"
+        return note
     if inp == "select":
         return _ChoiceFieldFlowable(namer, base, width, field.get("options", []) or [])
     if inp == "textarea":
@@ -1891,7 +1940,7 @@ def _blank_header_section(fields: list[dict], st: dict, namer: _FieldNamer) -> l
     rows: list[list[Any]] = []
     for f in fields:
         label = f.get("label", "") + _format_hint(f.get("input", "text"))
-        rows.append([_p(label, st["colhead"]), _blank_field_cell(f, namer, 4.0 * inch)])
+        rows.append([_p(label, st["colhead"]), _blank_field_cell(f, namer, 4.0 * inch, st)])
     if not rows:
         return []
     t = Table(rows, colWidths=[2.2 * inch, _CONTENT_W - 2.2 * inch])
@@ -1916,7 +1965,7 @@ def _blank_table_section(section: dict, st: dict, namer: _FieldNamer) -> list[Fl
     head = [_p(c["label"] + _format_hint(c.get("input", "text")), st["colhead"]) for c in cols]
     body: list[list[Any]] = [head]
     for _ in range(n_rows):
-        body.append([_blank_field_cell(c, namer, col_w - 8) for c in cols])
+        body.append([_blank_field_cell(c, namer, col_w - 8, st) for c in cols])
     t = Table(body, colWidths=[col_w] * len(cols), repeatRows=1)
     style = _grid_style(len(body), len(cols))
     style.add("VALIGN", (0, 1), (-1, -1), "MIDDLE")  # center the fillable widgets

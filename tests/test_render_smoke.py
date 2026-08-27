@@ -35,6 +35,7 @@ from typing import Any
 import pypdf
 import pytest
 
+from safety_reports import photo_screen
 from safety_reports.form_pdf import (
     _ENVELOPE_KEYS,
     load_definition,
@@ -90,6 +91,16 @@ def _fields(pdf_bytes: bytes) -> dict:
 
 
 # ── realistic submission fixture, synthesized from the definition ──────────────
+def _tiny_jpeg() -> bytes:
+    """A tiny runtime-generated JPEG standing in for a §34-screened photo (generated
+    with Pillow at test time — binaries are never committed)."""
+    from PIL import Image as _PILImage
+
+    buf = io.BytesIO()
+    _PILImage.new("RGB", (48, 36), (12, 100, 60)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 def _field_value(field: dict) -> Any:
     """A plausible value for ONE field, by its `input` type.
 
@@ -137,6 +148,11 @@ def _synthesize_submission(definition: dict) -> dict:
     Fills EVERY field / table (≥1 row) / checklist item / freeform with a plausible
     value so the submission renderer exercises every value-bearing branch — the point of
     a non-degraded smoke test. Static text / content blocks consume no values.
+
+    Photo fields additionally synthesize `photo_groups` — one (label, [(caption,
+    tiny_jpeg)]) group per header photo field, mirroring what intake's
+    `_screen_portal_photos` hands the renderer — so every photo field's label is
+    exercised as a rendered group heading (and asserted as a submission-mode needle).
     """
     values: dict[str, Any] = {}
     for section in definition.get("sections", []):
@@ -183,7 +199,16 @@ def _synthesize_submission(definition: dict) -> dict:
                  "response": "Synthesized requirement answer."},
             ]
         # static_text / content_blocks: nothing to fill.
-    return {"job_name": "Bradley 1", "work_date": "2026-06-03", "values": values}
+    sub: dict[str, Any] = {"job_name": "Bradley 1", "work_date": "2026-06-03", "values": values}
+    # One screened photo per header photo field, grouped per field — the shape intake's
+    # _screen_portal_photos produces. Renders each field's label as a group heading.
+    groups = [
+        (label, [(f"synth-{key}.jpg", _tiny_jpeg())])
+        for key, label, _max_count in photo_screen.iter_photo_fields(definition)
+    ]
+    if groups:
+        sub["photo_groups"] = groups
+    return sub
 
 
 # ── expected structural strings the rendered text MUST contain ─────────────────
@@ -204,11 +229,13 @@ def _expected_structural_strings(definition: dict, *, mode: str) -> list[str]:
       * The envelope-key field labels (work_date / job) are SKIPPED by the submission
         header builder (intake resolves those), but the BLANK builder DOES render them.
         So they're needles in blank mode, not in submission mode.
-      * A `photo` header field is SKIPPED by the submission header builder (`_header_section`
-        never inlines the untrusted base64 value; photos render out-of-band as the §34
-        screened-photos grid), but the BLANK builder DOES render its label as a fillable
-        row. So a photo label (e.g. daily-report-v3 "Site photos") is a needle in blank
-        mode, not in submission mode.
+      * A `photo` header field never renders as a labeled header row in submission mode
+        (`_header_section` never inlines the untrusted base64 value) — instead its label
+        renders as the HEADING of that field's §34 screened photo-group grid
+        (`_photo_grid`; the fixture synthesizes one tiny screened JPEG per photo field).
+        The BLANK builder renders its label beside a bordered, NON-interactive portal
+        note (no AcroForm widget — photos cannot ride a paper form). So a photo label
+        (e.g. daily-report "Site photos") is a needle in BOTH modes.
     """
     out: list[str] = []
 
@@ -231,12 +258,12 @@ def _expected_structural_strings(definition: dict, *, mode: str) -> list[str]:
             add(section.get("title"))
         if typ == "header":
             for f in section.get("fields", []):
-                # In submission mode the envelope-key labels are intentionally skipped,
-                # and photo fields render out-of-band (screened-photos grid), never as
-                # a labeled header row — see the renderer facts in the docstring.
-                if mode == "submission" and (
-                    f.get("key") in _ENVELOPE_KEYS or f.get("input") == "photo"
-                ):
+                # In submission mode the envelope-key labels are intentionally skipped.
+                # A photo field's label IS a needle in both modes: in submission mode it
+                # renders as the photo-group grid heading (the fixture synthesizes one
+                # screened JPEG per photo field), in blank mode as the labeled note row
+                # — see the renderer facts in the docstring.
+                if mode == "submission" and f.get("key") in _ENVELOPE_KEYS:
                     continue
                 add(f.get("label"))
         elif typ in ("repeating_table", "signature_table"):
@@ -346,13 +373,20 @@ def test_active_form_blank_renders_non_degraded(code: str) -> None:
     text = _norm(_pdf_text(out))
     _assert_non_degraded(text, definition, code, mode="blank")
 
-    # A blank fillable form MUST carry AcroForm widgets unless it is text-only (no
-    # header / table / checklist / freeform). Every active form here has at least one
-    # value-bearing section, so fields must exist — a dropped section that removed all
-    # fields would be a degraded blank render.
-    has_fillable_section = any(
-        s.get("type") in ("header", "repeating_table", "signature_table", "checklist", "freeform")
+    # A blank fillable form MUST carry AcroForm widgets when the definition has at
+    # least one WIDGET-BEARING input — a dropped section that removed all fields would
+    # be a degraded blank render. `photo` (bordered portal note) and `signature`
+    # (sign-by-hand line) deliberately consume NO AcroForm field, so a form whose only
+    # inputs are those two legitimately renders widget-free (matches
+    # tests/test_form_archive.py's predicate).
+    widgetless = {"photo", "signature"}
+    has_widget_bearing_input = any(
+        s.get("type") in ("checklist", "freeform")
+        or (s.get("type") == "header"
+            and any(f.get("input", "text") not in widgetless for f in s.get("fields", [])))
+        or (s.get("type") in ("repeating_table", "signature_table")
+            and any(c.get("input", "text") not in widgetless for c in s.get("columns", [])))
         for s in definition.get("sections", [])
     )
-    if has_fillable_section:
+    if has_widget_bearing_input:
         assert _fields(out), f"{code}: blank fillable produced no AcroForm fields (degraded)"
