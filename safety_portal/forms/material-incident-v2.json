@@ -1,0 +1,94 @@
+{
+  "form_code": "material-incident-v2",
+  "parent_form_code": "material-incident",
+  "form_name": "Material Incident Report",
+  "variant_label": null,
+  "version": 2,
+  "archetype": "sectioned_assessment",
+  "source_pdf": "",
+  "comment": [
+    "[SLICE M2 — 2026-07-02] Material receipts: the manager-side incident form for a delivery",
+    "problem (damaged / short / wrong item / other), per the SOP D.13 duty (inspect, photograph,",
+    "flag, notify the CM before signing). Deep-linked from the daily form's 'Expected materials'",
+    "section ('Report a problem →' prefills material_description + qty_expected through the R3/R5",
+    "openForm values mechanism) AND normally pickable from Submit-a-Form. Catalog category is",
+    "'progress' (commercial, not safety) — OPERATOR-VETOABLE, flagged per the M-series spec.",
+    "Net-new form (editor-authored posture): source_pdf is empty — no reference PDF exists (the",
+    "photo-test-v1 precedent). Photos ride the existing header-level photo pipeline (§34 Mac-side",
+    "screening, D3). Required-content floor (required-content.json parents['material-incident']):",
+    "material_description + issue + details — strict entry, OPERATOR-CONFIRMED 2026-07-03 per",
+    "protocol."
+  ],
+  "branding": {
+    "logo": true,
+    "title": "MATERIAL INCIDENT REPORT"
+  },
+  "sections": [
+    {
+      "type": "header",
+      "fields": [
+        {
+          "key": "material_description",
+          "label": "Material / Description",
+          "input": "text",
+          "required": true
+        },
+        {
+          "key": "delivery_ref",
+          "label": "Delivery / PO Reference",
+          "input": "text"
+        },
+        {
+          "key": "qty_expected",
+          "label": "Qty Expected",
+          "input": "number"
+        },
+        {
+          "key": "qty_received",
+          "label": "Qty Received",
+          "input": "number"
+        },
+        {
+          "key": "issue",
+          "label": "Issue",
+          "input": "select",
+          "options": [
+            "Damaged",
+            "Short",
+            "Wrong item",
+            "Other"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "type": "freeform",
+      "key": "details",
+      "label": "Details — what is wrong (condition, counts, packaging list vs received)",
+      "input": "textarea"
+    },
+    {
+      "type": "header",
+      "title": "Photos",
+      "fields": [
+        {
+          "key": "photos",
+          "label": "Photos of the issue",
+          "input": "photo"
+        }
+      ]
+    },
+    {
+      "type": "additional_photos",
+      "key": "additional_photos",
+      "title": "Additional photos"
+    },
+    {
+      "type": "freeform",
+      "key": "action_taken",
+      "label": "Action Taken (flagged on the delivery receipt, Construction Manager notified, etc.)",
+      "input": "textarea"
+    }
+  ]
+}
