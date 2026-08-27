@@ -159,6 +159,12 @@ function expectedCounts(def: FormDefinition): ExpectedCounts {
       case "form_link":
         sections += 1; // the "Create <form> →" button section — no value control
         break;
+      case "additional_photos":
+        // Since 2026-08-27 the adapterless render is a visible PLACEHOLDER section (title +
+        // how-to-enable copy) — no longer null. job_requirements / expected_materials still
+        // render null without their adapters (no case — falls through to zero).
+        sections += 1;
+        break;
     }
   }
   return { sections, fields, cells, items, signaturePads };
@@ -216,6 +222,11 @@ function expectedNeedles(def: FormDefinition): string[] {
         break;
       case "form_link":
         add(s.label);
+        break;
+      case "additional_photos":
+        // The adapterless placeholder renders the mount's title (default below mirrors
+        // FormRenderer's fallback).
+        add(s.title ?? "Additional site photos");
         break;
     }
   }

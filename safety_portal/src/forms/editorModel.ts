@@ -42,6 +42,10 @@ export type ItemKind = (typeof ITEM_KINDS)[number];
 // `form_link` (SOP daily form, slice D1) are deliberately NOT here: they are authored
 // in the form DEFINITION via the git publish pipeline, not composed in the builder —
 // the editor renders them read-only (see FormEditor SectionEditor's fallback pane).
+// `additional_photos` (the DR-photo-pool mount) IS composable (Photos program,
+// 2026-08-27): any form may carry AT MOST ONE pool mount — the fixed wire key is set
+// by construction in blankSection, and FormEditor disables the add button once a
+// mount exists (server half: worker/publishValidation.ts one-mount + fixed-key rules).
 export const SECTION_TYPES = [
   "header",
   "static_text",
@@ -50,6 +54,7 @@ export const SECTION_TYPES = [
   "checklist",
   "freeform",
   "content_blocks",
+  "additional_photos",
 ] as const;
 export type SectionType = (typeof SECTION_TYPES)[number];
 
@@ -58,13 +63,14 @@ export type SectionType = (typeof SECTION_TYPES)[number];
  *  R3-F3): the required-content floor now REJECTS a daily-report definition missing its
  *  job_requirements / expected_materials mounts, so the UI must not even offer the
  *  amputation the C3 gates would refuse. Complement of SECTION_TYPES by design — keep the
- *  two in sync when the meta-schema grows a definition-managed type. */
+ *  two in sync when the meta-schema grows a definition-managed type. (`additional_photos`
+ *  moved OUT of this set to SECTION_TYPES on 2026-08-27 — the pool became a builder
+ *  palette item; it is not part of any required-content floor.) */
 export const READ_ONLY_SECTION_TYPES: ReadonlySet<Section["type"]> = new Set([
   "guidance",
   "form_link",
   "job_requirements",
   "expected_materials",
-  "additional_photos",
 ]);
 
 /** Human labels for EVERY section type (the builder picker uses the SECTION_TYPES
@@ -81,7 +87,7 @@ export const SECTION_TYPE_LABELS: Record<Section["type"], string> = {
   form_link: "Form link (read-only)",
   job_requirements: "Per-job requirements (read-only)",
   expected_materials: "Expected materials (read-only)",
-  additional_photos: "Additional photos pool (read-only)",
+  additional_photos: "Additional photos (pool)",
 };
 
 // The validator's KEY_RE: every field/section/group/item key is snake_case lowercase.
@@ -178,7 +184,27 @@ export function blankSection(type: SectionType): Section {
       return { type: "freeform", key: "notes", label: "", input: "textarea" };
     case "content_blocks":
       return { type: "content_blocks", key: "content", blocks: [blankBlock()] };
+    case "additional_photos":
+      // The key is the FIXED wire key by construction — /api/submit validates + claims
+      // exactly values.additional_photos, and publishValidation rejects any other key.
+      // The editor never renders a key input for this section (FormEditor's pool case).
+      return { type: "additional_photos", key: "additional_photos", title: "Additional photos" };
   }
+}
+
+/**
+ * The "+ Photos" builder MACRO (Photos program, 2026-08-27): not a section type of its
+ * own — it composes a plain header section carrying ONE optional inline photo field
+ * (shape precedented by material-incident-v1), so it needs zero meta-schema / renderer
+ * ripple. No `required`, no `max_count` (default 4); the key is uniquified against the
+ * draft's existing top-level keys so a second insertion suffixes photos_2, photos_3, ….
+ */
+export function photosMacroSection(existingTopLevelKeys: Set<string>): Section {
+  return {
+    type: "header",
+    title: "Photos",
+    fields: [{ key: uniqueKey("photos", existingTopLevelKeys), label: "Photos", input: "photo" }],
+  };
 }
 
 /** A brand-new blank FormDefinition for the create flow. The identity / parent are set

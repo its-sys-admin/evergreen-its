@@ -12,7 +12,8 @@ afterEach(cleanup);
 // expected_materials) get NO Remove/Move controls, while ordinary sections keep them. The
 // server-side floor (required-content.json required_section_types, enforced in
 // worker/publishValidation.ts + safety_reports/publish_manifest.py) is the boundary; this
-// is the UI half.
+// is the UI half. (`additional_photos` left the read-only set on 2026-08-27 — the pool is a
+// builder palette item now, so it KEEPS its Remove/Move controls; see FormEditor.photos.)
 
 function makeDef(): FormDefinition {
   return {
@@ -52,9 +53,11 @@ function renderEditor(def: FormDefinition) {
 }
 
 describe("FormEditor — read-only sections have no Remove/Move controls (Slice 1, R3-F3)", () => {
-  it("covers all five definition-managed types (guard against list drift)", () => {
+  it("covers all four definition-managed types (guard against list drift)", () => {
+    // additional_photos is deliberately ABSENT: it became builder-composable on 2026-08-27
+    // (SECTION_TYPES' 8th member). A type re-added here without a matching read-only case
+    // fails the every-member loop below.
     expect([...READ_ONLY_SECTION_TYPES].sort()).toEqual([
-      "additional_photos",
       "expected_materials",
       "form_link",
       "guidance",
@@ -76,13 +79,18 @@ describe("FormEditor — read-only sections have no Remove/Move controls (Slice 
       expect(queryByLabelText(`Move section ${i} down`)).toBeNull();
       expect(queryByLabelText(`Remove section ${i}`)).toBeNull();
     }
-    expect(getAllByText("definition-managed")).toHaveLength(5);
+    expect(getAllByText("definition-managed")).toHaveLength(4);
+
+    // Section 6 (additional_photos) is COMPOSABLE since 2026-08-27 — it keeps its controls.
+    expect(getByLabelText("Move section 6 up")).toBeTruthy();
+    expect(getByLabelText("Remove section 6")).toBeTruthy();
   });
 
   // The teeth for the bug this file exists to prevent. `sectionEditor` returns undefined for an
   // unhandled type and the project does not set `noImplicitReturns`, so a missing case renders a
   // BLANK section body instead of failing the build — which is how `additional_photos` shipped
-  // unhandled in FormEditor.tsx and editorValidation.ts while editorModel.ts already knew it.
+  // unhandled in FormEditor.tsx and editorValidation.ts while editorModel.ts already knew it
+  // (it has since become a composable palette item with a real editor case).
   //
   // Driven off READ_ONLY_SECTION_TYPES rather than a hand-written list, so a type added to the
   // set without a matching case fails HERE.
@@ -92,7 +100,6 @@ describe("FormEditor — read-only sections have no Remove/Move controls (Slice 
       form_link: { type: "form_link", label: "Create a JHA", parent_form_code: "jha" },
       job_requirements: { type: "job_requirements", key: "job_requirements", title: "R" },
       expected_materials: { type: "expected_materials", key: "expected_materials_receipt", title: "M" },
-      additional_photos: { type: "additional_photos", key: "additional_photos", title: "P" },
     };
     for (const type of READ_ONLY_SECTION_TYPES) {
       const def = makeDef();

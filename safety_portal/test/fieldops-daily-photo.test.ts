@@ -12,7 +12,8 @@ import {
 //
 //   POST /api/fieldops/daily-photo               — upload ONE photo into the (job, date) pool
 //     • session + the closed-vocabulary role gate (manager/admin; submitter 403)
-//     • the per-job placement scope (requireJobScope; admin caps bypass)
+//     • job EXISTENCE only — NO placement scope (operator decision 2026-08-27: managers pool
+//       across jobs; rows stay uploader-self-scoped on every read/delete/claim)
 //     • the VERBATIM per-photo /api/submit bounds behind ONE derived body bound (413)
 //     • per-(job, date, uploader) cap POOL_CAP_PER_DAY (refused rows vacate their slot)
 //       + the pool-wide pending backstop POOL_PENDING_GLOBAL_MAX (503) — BOTH folded into the
@@ -153,22 +154,24 @@ beforeEach(async () => {
   await seedPersonnel("Sam Sub", "sub.sam", "JOB-A");
 });
 
-describe("pool upload — role + placement matrix (the closed Role vocabulary)", () => {
-  it("401 with no session; 403 for a submitter (even placed on the job)", async () => {
+describe("pool upload — role matrix (the closed Role vocabulary; placement scope RELAXED 2026-08-27)", () => {
+  it("401 with no session; 403 for a submitter (even placed on the job) — decision 9 keeps the role gate", async () => {
     expect((await call("/api/fieldops/daily-photo", { method: "POST", body: "{}" })).status).toBe(401);
     const res = await upload(sub);
     expect(res.status).toBe(403);
     expect(await poolRows()).toHaveLength(0);
   });
 
-  it("201 for a manager placed on the job; 403 forbidden_job outside their placement", async () => {
+  it("201 for a manager on their placement AND on any OTHER job (operator decision 2026-08-27)", async () => {
+    // Pre-decision this was 403 forbidden_job: the pool was placement-scoped. Pool photos now
+    // ride many form types filed across jobs, so a manager may pool-upload on ANY existing
+    // job; rows stay uploader-self-scoped (see the self-scoping tests below).
     await uploadOk(manager);
-    const other = await upload(manager, { job_id: "JOB-B" });
-    expect(other.status).toBe(403);
-    expect((await json<{ error: string }>(other)).error).toBe("forbidden_job");
+    const other = await uploadOk(manager, { job_id: "JOB-B" });
+    expect((await poolRow(other)).job_id).toBe("JOB-B");
   });
 
-  it("201 for an admin on ANY job (the daily family's scope-bypass caps)", async () => {
+  it("201 for an admin on ANY job", async () => {
     await uploadOk(admin, { job_id: "JOB-B" });
   });
 
@@ -286,9 +289,16 @@ describe("GET /api/fieldops/daily-photos — the actor's own unclaimed rows, STA
     }); // exact shape — no photo_json / hmac / bytes ever served (Option D)
   });
 
-  it("role + scope gates: submitter 403; manager off their placement 403", async () => {
+  it("role gate: submitter 403; a manager LISTS on any job — but only their OWN rows (self-scoped)", async () => {
     expect((await get(sub, `/api/fieldops/daily-photos?job_id=JOB-A&work_date=${DATE}`)).status).toBe(403);
-    expect((await get(manager, `/api/fieldops/daily-photos?job_id=JOB-B&work_date=${DATE}`)).status).toBe(403);
+    // Placement scope relaxed (operator decision 2026-08-27): off-placement list is 200 —
+    // and serves ONLY the actor's own uploads, so the relaxation exposes no foreign rows.
+    const mine = await uploadOk(manager, { job_id: "JOB-B" });
+    await seedPoolRow({ job_id: "JOB-B", uploaded_by: "mgr.max" }); // foreign uploader, same job
+    const res = await get(manager, `/api/fieldops/daily-photos?job_id=JOB-B&work_date=${DATE}`);
+    expect(res.status).toBe(200);
+    const { photos } = await json<{ photos: { id: number }[] }>(res);
+    expect(photos.map((p) => p.id)).toEqual([mine]);
   });
 
   it("amends=<own filed uuid> ALSO serves rows claimed by THAT submission (claimed:1); other claims stay hidden", async () => {
@@ -349,6 +359,36 @@ describe("POST /api/fieldops/daily-photo/:id/delete — pre-submit removal", () 
   it("role gate: a submitter gets 403 even for a row id that exists", async () => {
     const id = await uploadOk(manager);
     expect((await post(sub, `/api/fieldops/daily-photo/${id}/delete`)).status).toBe(403);
+  });
+
+  it("a manager deletes their OWN off-placement upload (decision 2026-08-27); foreign rows stay 404", async () => {
+    const mine = await uploadOk(manager, { job_id: "JOB-B" }); // off mgr.mo's JOB-A placement
+    expect((await post(manager, `/api/fieldops/daily-photo/${mine}/delete`)).status).toBe(200);
+    // Self-scoping survives the relaxation: another manager's row is untouchable (404).
+    const foreign = await uploadOk(mgr2, { job_id: "JOB-B" });
+    expect((await post(manager, `/api/fieldops/daily-photo/${foreign}/delete`)).status).toBe(404);
+  });
+});
+
+describe("/api/submit — the pool claim is FORM-AGNOSTIC (Photos program, 2026-08-27)", () => {
+  it("a NON-daily form_code claims pool refs — off-placement job included", async () => {
+    // The claim path (parseAdditionalPhotoRefs → claimAdditionalPhotos) carries no form-code
+    // conditional: any form whose definition mounts additional_photos files pool refs. Locked
+    // with an erosion-inspection code on a job OUTSIDE the manager's placement — the exact
+    // Phase-B shape (incident/erosion/material cuts + relaxed pool scope).
+    const p1 = await uploadOk(manager, { job_id: "JOB-B" });
+    const res = await submit(manager, "uuid-ni", {
+      job_id: "JOB-B",
+      form_code: "erosion-inspection-v2",
+      values: { additional_photos: [{ pool_id: p1, caption: "silt fence, east run" }] },
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect((await poolRow(p1)).claimed_by_submission).toBe("uuid-ni");
+    const row = await env.DB.prepare(
+      "SELECT payload_json FROM submissions WHERE submission_uuid='uuid-ni'",
+    ).first<{ payload_json: string }>();
+    expect((JSON.parse(row!.payload_json) as { additional_photos: unknown }).additional_photos)
+      .toEqual([{ pool_id: p1, caption: "silt fence, east run" }]);
   });
 });
 

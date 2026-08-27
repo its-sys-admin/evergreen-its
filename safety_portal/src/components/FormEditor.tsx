@@ -19,7 +19,9 @@ import {
   blankGroup,
   blankItem,
   blankSection,
+  photosMacroSection,
   slugifyKey,
+  topLevelKeys,
   type SectionType,
 } from "../forms/editorModel";
 import { WORKFLOWS_ORDERED } from "../forms/registry";
@@ -64,6 +66,13 @@ export function FormEditor(props: Props) {
   const updateSection = (idx: number, next: Section) =>
     setSections(def.sections.map((s, i) => (i === idx ? next : s)));
   const addSection = (type: SectionType) => setSections([...def.sections, blankSection(type)]);
+  // The "+ Photos" macro: a header section with one optional inline photo field, keyed
+  // uniquely against the draft's existing top-level value keys (photos, photos_2, …).
+  const addPhotosMacro = () =>
+    setSections([...def.sections, photosMacroSection(new Set(topLevelKeys(def)))]);
+  // Client half of the ONE-MOUNT rule (server half: worker/publishValidation.ts's
+  // "multiple additional_photos sections" check) — drives the pool button's disable.
+  const hasPoolMount = def.sections.some((s) => s.type === "additional_photos");
   const removeSection = (idx: number) => setSections(def.sections.filter((_, i) => i !== idx));
   const moveSection = (idx: number, dir: -1 | 1) => {
     const j = idx + dir;
@@ -126,7 +135,7 @@ export function FormEditor(props: Props) {
         ))}
       </ol>
 
-      <AddSectionBar onAdd={addSection} />
+      <AddSectionBar onAdd={addSection} onAddPhotosMacro={addPhotosMacro} hasPoolMount={hasPoolMount} />
     </div>
   );
 }
@@ -271,16 +280,48 @@ function slugifyKeyToSlug(text: string): string {
 
 // ── Add-section toolbar ───────────────────────────────────────────────────────
 
-function AddSectionBar({ onAdd }: { onAdd: (t: SectionType) => void }) {
+function AddSectionBar({
+  onAdd,
+  onAddPhotosMacro,
+  hasPoolMount,
+}: {
+  onAdd: (t: SectionType) => void;
+  onAddPhotosMacro: () => void;
+  hasPoolMount: boolean;
+}) {
+  const poolHint =
+    "This form already has an Additional photos (pool) section — at most one per form.";
   return (
     <div className="form-editor__add-bar">
       <span className="field__label">Add a section</span>
       <div className="form-editor__add-buttons">
-        {SECTION_TYPES.map((t) => (
-          <button key={t} type="button" className="btn btn--secondary" onClick={() => onAdd(t)}>
-            + {SECTION_TYPE_LABELS[t]}
-          </button>
-        ))}
+        {SECTION_TYPES.map((t) =>
+          t === "additional_photos" ? (
+            // Client half of the ONE-MOUNT rule: disabled (with the reason) once the draft
+            // carries a pool mount. Server half: worker/publishValidation.ts rejects a
+            // second additional_photos section at publish.
+            <button
+              key={t}
+              type="button"
+              className="btn btn--secondary"
+              disabled={hasPoolMount}
+              title={hasPoolMount ? poolHint : undefined}
+              aria-label={hasPoolMount ? `${SECTION_TYPE_LABELS[t]} — ${poolHint}` : undefined}
+              onClick={() => onAdd(t)}
+            >
+              + {SECTION_TYPE_LABELS[t]}
+            </button>
+          ) : (
+            <button key={t} type="button" className="btn btn--secondary" onClick={() => onAdd(t)}>
+              + {SECTION_TYPE_LABELS[t]}
+            </button>
+          ),
+        )}
+        {/* The "+ Photos" MACRO (grouped beside the pool button): inserts a titled header
+            section with ONE optional inline photo field — see editorModel.photosMacroSection. */}
+        <button type="button" className="btn btn--secondary" onClick={onAddPhotosMacro}>
+          + Photos
+        </button>
       </div>
     </div>
   );
@@ -303,21 +344,38 @@ function SectionEditor({ section, onChange }: { section: Section; onChange: (s: 
       return <FreeformEditor section={section} onChange={onChange} />;
     case "content_blocks":
       return <ContentBlocksEditor section={section} onChange={onChange} />;
+    // The pool mount became BUILDER-COMPOSABLE on 2026-08-27 (Photos program): a
+    // title-only editor. The key is the FIXED wire key by construction (blankSection) —
+    // no key input is ever rendered, so the fixed-key publish rule cannot be tripped
+    // from here; the one-mount rule is the AddSectionBar disable + editorValidation.
+    case "additional_photos":
+      return (
+        <div className="form-editor__section-body">
+          <TitleField value={section.title} onChange={(title) => onChange({ ...section, title })} />
+          <div className="field">
+            <span className="field__label">Section key (fixed)</span>
+            <output className="form-editor__derived">additional_photos</output>
+            <p className="muted form-editor__hint">
+              Fixed wire key — photo uploads are claimed under exactly this key. At most one
+              per form.
+            </p>
+          </div>
+        </div>
+      );
     // guidance / form_link (SOP daily form, slice D1) are authored in the form
     // DEFINITION via the git publish pipeline — the builder shows them read-only so an
     // Edit of a form that carries them (daily-report-v2) never crashes the section list.
     //
-    // `additional_photos` was MISSING here and in editorValidation.ts, while editorModel.ts
-    // already listed it in BOTH of its registries — so that section rendered with no body at
-    // all (the switch fell through to undefined) rather than saying why it cannot be edited.
-    // tsc cannot catch it: this function's return type admits undefined and the project does
-    // not set `noImplicitReturns`, so a missing case is silent. The readonly fixture test now
-    // covers EVERY member of READ_ONLY_SECTION_TYPES instead of a sample.
+    // THE SILENT SWITCH HOLE lives here: this function's return type admits undefined and
+    // the project does not set `noImplicitReturns`, so a section type with NO case renders
+    // a BLANK body instead of failing the build — which is how `additional_photos` shipped
+    // unhandled here and in editorValidation.ts while editorModel.ts already knew it (it
+    // has since become the composable case above). The readonly fixture test covers EVERY
+    // member of READ_ONLY_SECTION_TYPES so a new definition-managed type cannot recur it.
     case "guidance":
     case "form_link":
     case "job_requirements":
     case "expected_materials":
-    case "additional_photos":
       return (
         <p className="muted">
           This section is maintained in the form definition (publish pipeline) and is not
@@ -401,6 +459,15 @@ function FieldEditor({
     const next: Field = { ...field, input };
     if (input === "select" && (!next.options || next.options.length === 0)) next.options = [""];
     if (input !== "select") delete next.options;
+    // max_count is photo-only — worker/publishValidation.ts rejects it on any other input,
+    // so a leftover value from a photo→text switch would strand the publish.
+    if (input !== "photo") delete next.max_count;
+    onChange(next);
+  };
+  const setMaxCount = (n: number) => {
+    const next: Field = { ...field, max_count: n };
+    // 4 is the server default (publishValidation PHOTO_MAX_COUNT) — omit rather than pin it.
+    if (n === 4) delete next.max_count;
     onChange(next);
   };
   return (
@@ -441,6 +508,21 @@ function FieldEditor({
         <div className="form-editor__field-options">
           <OptionsEditor options={field.options ?? []} onChange={(options) => onChange({ ...field, options })} />
         </div>
+      ) : null}
+      {field.input === "photo" ? (
+        <label className="field form-editor__field-cell">
+          <span className="field__label">Max photos</span>
+          <select
+            className="field__input"
+            value={String(field.max_count ?? 4)}
+            onChange={(e) => setMaxCount(Number(e.target.value))}
+          >
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4 (default)</option>
+          </select>
+        </label>
       ) : null}
       {onRemove ? (
         <button type="button" className="btn btn--danger form-editor__icon-btn form-editor__field-remove" aria-label="Remove field" onClick={onRemove}>
