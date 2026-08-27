@@ -144,23 +144,42 @@ carried from standing convention:
     photo and a pool photo, run after Phase B's production republish — not a synthetic/local
     smoke.
 
-Host-topology decision (standing convention, reaffirmed): this session runs on the dev Mac and
-lands PRs only. Deploy, migration application, and the actual form-builder republish through the
-C12 pipeline are production-Mac operations and are handed off below as Phase B, not attempted
-here.
+Host-topology decision (REVISED mid-session by the operator): the dev Mac's wrangler IS
+authorized against production Cloudflare, so migration apply and Worker/SPA deploy ran from this
+session (operator-executed via `!`); only launchd daemon changes would require the production
+Mac, and this work adds none. See Phase B below for what ran and what remains.
 
-## Open items handed off — Phase B (production-Mac checklist)
+## Phase B — REVISED mid-session and PARTIALLY EXECUTED from the dev Mac
 
-Nothing in this list has run yet. Until it does, the live portal has none of this session's
-capability and the incident report still has no photos in production.
+The operator corrected the host constraint mid-session: Cloudflare (wrangler) is authorized on
+the dev Mac, so migration apply and Worker/SPA deploy do NOT require the production Mac — only
+launchd daemon changes would, and this work adds none. The production Mac's Python tree catches
+up via the C12 publish daemon's own fast-forward during the first form cut (and old intake code
+handles new-form photo submissions compatibly in the meantime — PR #194's legacy fallback).
 
-1. `git -C ~/its pull origin main` on the production Mac.
-2. Apply migration 0079 (found unapplied during pre-flight, unrelated to this session's own
-   changes — see finding 4 above) before deploying.
-3. `npm run deploy`.
+**Executed 2026-08-27 (operator-run via `!` after a permission-classifier block; dev Mac):**
+
+1. ~~Pull~~ — dev-Mac tree verified at origin/main tip pre-deploy (operator instruction: never
+   deploy behind the production Mac's state; `wrangler deployments list` confirmed live = 08-25,
+   an ancestor of what shipped).
+2. **Migration 0079 APPLIED** to remote D1 (`0079_manager_materials_manage.sql` ✅). **Dated
+   exception recorded (2026-08-27, operator sign-off):** per the migration header's own decision
+   block, the manager tier now holds cross-job WRITE (expected-materials CRUD, manifest COMMIT,
+   global material catalog) without cross-job READ — the shape admins always had, grantee set
+   deliberately widened. The header's alternative (extending `requireJobScope` over the 7
+   expected-materials CRUD routes + 9 manifest routes, with a cross-job WRITE test) is queued in
+   `docs/tech_debt.md`, not built here.
+3. **Worker + SPA DEPLOYED**: version `e8f71f84-ab30-450e-97ad-2da7dde8a620`, 9 changed assets
+   uploaded; post-deploy verify: root 200, live index serves the new `index-QDP4pLgM.js` hash,
+   `/api/session` 401s unauthenticated (fail-closed). The photos palette, Max-photos control,
+   composable pool, fill-page adapter, and manager any-job pool scope are LIVE.
+
+**Remaining (human, any browser + the field):**
+
 4. Author `incident-report-v4`, `erosion-inspection-v2`, and `material-incident-v2` **one at a
    time** in the live form editor, through the C12 auto-publish pipeline (not a bulk/manual
-   publish).
+   publish). The production Mac's publish daemon processes each cut; its deploy gate is now
+   satisfied (no unapplied migrations).
 5. Live proof: file one real `erosion-inspection-v2` submission carrying both an inline photo and
    a pool photo (decision 11).
 6. Verify the eager-window behavior once v4/v3 exist side-by-side with the prior versions
@@ -183,8 +202,9 @@ Accepted residual risks carried into Phase B, not treated as blockers:
   required-content change was needed on any of the three forms in scope.
 - The inline photo-count cap (still 1..4 via the Max-photos editor control; ADR-0001's R2 trigger
   not pulled — decision 4).
-- Any production-Mac action — deploy, migration apply, form republish, live proof — all of Phase B
-  above.
+- The production Mac itself — nothing was run there; its Python tree catches up via the publish
+  daemon's fast-forward during the first form cut. Form republish + live proof remain open
+  (Phase B items 4–7).
 
 ## Cross-references
 

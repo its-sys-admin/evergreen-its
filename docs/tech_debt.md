@@ -16,6 +16,27 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## Manager cross-job WRITE asymmetry (0079 dated exception) — extend `requireJobScope` over the materials CRUD + manifest routes [OPEN 2026-08-27, medium]
+
+Migration 0079 (applied to remote D1 on 2026-08-27, operator sign-off recorded in the
+2026-08-27 session log) grants the manager tier `cap.materials.manage`. Per the migration
+header's own decision block, that grant carries an ASYMMETRY the operator accepted as a dated
+exception rather than fixing first: managers now hold cross-job WRITE — the 7
+expected-materials CRUD routes (`fieldops_expected_materials.ts`; `/update`, `/seq` and
+`/delete` take a bare line id and never see a job_id), all 9 manifest routes including COMMIT
+(`fieldops_manifests.ts`, writes a job's whole BOM), and the global material catalog — while
+cross-job READ still 403s `forbidden_job`. The shape predates 0079 (admins always had it); 0079
+widened the grantee set from admins to admins+six managers.
+
+**The fix the header itself names:** extend `requireJobScope` over those routes (a no-op for
+admins, who bypass via `cap.jobtracker.manage`), and add a cross-job WRITE test — today's JOB-B
+assertions are all read/receipt/flag. The CRUD routes need a job_id resolved from the line id
+before the scope check can run.
+
+**Trigger to revisit:** before any seventh manager account is created, or on the first
+incident of a manager editing the wrong job's list; escalate to [CUTOVER-BLOCKING]-equivalent
+priority if manifest COMMIT misuse is ever observed.
+
 ## WPR site-photo registration captions carry no field-label prefix [OPEN 2026-08-27, low]
 
 The photos-pdf-grouping PR threads each photo FIELD's label through to the submission PDF
