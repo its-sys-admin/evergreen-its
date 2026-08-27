@@ -1,0 +1,152 @@
+{
+  "form_code": "incident-report-v4",
+  "parent_form_code": "incident-report",
+  "form_name": "Personnel Incident Report",
+  "variant_label": null,
+  "version": 4,
+  "archetype": "sectioned_assessment",
+  "source_pdf": "",
+  "sections": [
+    {
+      "type": "content_blocks",
+      "key": "content",
+      "blocks": [
+        {
+          "body": "1. Render aid if necessary\n2. Notify nearby personnel and stop work if necessary\n3. Alert emergency services if necessary",
+          "heading": "Immediate Action"
+        }
+      ],
+      "title": "Personnel Incident Report"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Action Taken",
+          "scale": [
+            "EMS",
+            "WORKER",
+            "N/A"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "First Aid Rendered By"
+            },
+            {
+              "key": "group_1_item_2",
+              "label": "Work Stopped By"
+            },
+            {
+              "key": "group_1_item_3",
+              "label": "Evergreen Notified By"
+            }
+          ],
+          "comment_per_item": true
+        }
+      ]
+    },
+    {
+      "type": "header",
+      "fields": [
+        {
+          "key": "location",
+          "label": "Location",
+          "input": "text",
+          "required": true
+        },
+        {
+          "key": "reported_by",
+          "label": "Reported By",
+          "input": "text",
+          "required": true
+        },
+        {
+          "key": "field_3",
+          "label": "Date of Incident",
+          "input": "date"
+        },
+        {
+          "key": "field_4",
+          "label": "Time of Incident",
+          "input": "time"
+        }
+      ]
+    },
+    {
+      "type": "freeform",
+      "key": "notes",
+      "label": "Individuals/Equipment Involved",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "description",
+      "label": "Description of Incident",
+      "input": "textarea"
+    },
+    {
+      "type": "header",
+      "title": "Photos",
+      "fields": [
+        {
+          "key": "photos",
+          "label": "Photos",
+          "input": "photo"
+        }
+      ]
+    },
+    {
+      "type": "additional_photos",
+      "key": "additional_photos",
+      "title": "Additional photos"
+    },
+    {
+      "type": "repeating_table",
+      "key": "table",
+      "columns": [
+        {
+          "key": "col_1",
+          "label": "Witness",
+          "input": "text"
+        },
+        {
+          "key": "col_2",
+          "label": "Statement",
+          "input": "textarea"
+        },
+        {
+          "key": "col_3",
+          "label": "Witness Signature",
+          "input": "signature"
+        }
+      ],
+      "min_rows": 2,
+      "allow_add": true,
+      "title": "Witness Statements"
+    },
+    {
+      "type": "signature_table",
+      "key": "reporter_signoff",
+      "columns": [
+        {
+          "key": "name",
+          "label": "Name",
+          "input": "text",
+          "required": true
+        },
+        {
+          "key": "signature",
+          "label": "Signature",
+          "input": "signature",
+          "required": true
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": false,
+      "title": "Reporter Sign-Off"
+    }
+  ]
+}

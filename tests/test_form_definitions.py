@@ -567,7 +567,12 @@ def test_material_incident_v1_structure_and_floor() -> None:
     parent = next(p for p in _CATALOG["parents"] if p["parent_form_code"] == "material-incident")
     assert parent["category"] == "progress"
     assert "launch" not in parent
-    assert parent["forms"][0]["current_form_code"] == "material-incident-v1"
+    # SHAPE, not the editable current pointer (a version cut moves it — the self-defeating
+    # pinned-current class, HOUSE_REFLEXES §5): v1 stays registered, and the pointer always
+    # matches identity-v{current_version}.
+    form = parent["forms"][0]
+    assert {"version": 1, "form_code": "material-incident-v1"} in form["versions"]
+    assert form["current_form_code"] == f"material-incident-v{form['current_version']}"
 
     # The required-content floor exists and names exactly the three floor fields; the
     # glob-parametrized test above proves the shipped definition satisfies it.

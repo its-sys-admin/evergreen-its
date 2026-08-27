@@ -662,15 +662,15 @@
     {
       "parent_form_code": "incident-report",
       "category": "safety",
-      "name": "Incident Report",
+      "name": "Personnel Incident Report",
       "display_order": 6,
       "forms": [
         {
           "identity": "incident-report",
           "variant_label": null,
           "status": "active",
-          "current_version": 3,
-          "current_form_code": "incident-report-v3",
+          "current_version": 4,
+          "current_form_code": "incident-report-v4",
           "versions": [
             {
               "version": 1,
@@ -683,6 +683,10 @@
             {
               "version": 3,
               "form_code": "incident-report-v3"
+            },
+            {
+              "version": 4,
+              "form_code": "incident-report-v4"
             }
           ],
           "display_order": 1
@@ -790,12 +794,16 @@
           "identity": "material-incident",
           "variant_label": null,
           "status": "active",
-          "current_version": 1,
-          "current_form_code": "material-incident-v1",
+          "current_version": 2,
+          "current_form_code": "material-incident-v2",
           "versions": [
             {
               "version": 1,
               "form_code": "material-incident-v1"
+            },
+            {
+              "version": 2,
+              "form_code": "material-incident-v2"
             }
           ],
           "display_order": 1
@@ -835,12 +843,16 @@
           "identity": "erosion-inspection",
           "variant_label": null,
           "status": "active",
-          "current_version": 1,
-          "current_form_code": "erosion-inspection-v1",
+          "current_version": 2,
+          "current_form_code": "erosion-inspection-v2",
           "versions": [
             {
               "version": 1,
               "form_code": "erosion-inspection-v1"
+            },
+            {
+              "version": 2,
+              "form_code": "erosion-inspection-v2"
             }
           ],
           "display_order": 1
