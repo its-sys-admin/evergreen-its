@@ -572,11 +572,14 @@ def test_clean_photo_files_embeds_and_uploads(stub, mocker):
     result = intake.process_portal_submission(sub)
 
     assert result.status == "processed"
-    # render received the SCREENED photos (a re-encoded JPEG + caption), not raw base64.
+    # render received the SCREENED photos (a re-encoded JPEG + caption) grouped per
+    # photo FIELD under the field's label, not raw base64.
     rendered = real_render.call_args.args[1]
-    screened = rendered["screened_photos"]
-    assert len(screened) == 1
-    caption, jpeg = screened[0]
+    groups = rendered["photo_groups"]
+    assert len(groups) == 1
+    label, photos = groups[0]
+    assert label == "Site Photos" and len(photos) == 1
+    caption, jpeg = photos[0]
     assert "front.jpg" in caption and jpeg.startswith(b"\xff\xd8\xff")
     # Box originals filed under ITS Photos/<uuid>/ via version-on-conflict.
     new_ver.assert_called_once()
@@ -704,10 +707,14 @@ def test_no_photos_yields_no_registrations(stub):
 
 
 def test_no_photo_field_files_normally(stub):
-    # The default DEFINITION has no photo field → screened_photos empty, no Box photo tree.
+    # The default DEFINITION has no photo field → photo_groups empty, no Box photo tree.
     result = intake.process_portal_submission(dict(BASE_SUB))
     assert result.status == "processed"
-    assert stub["render"].call_args.args[1]["screened_photos"] == []
+    render_sub = stub["render"].call_args.args[1]
+    assert render_sub["photo_groups"] == []
+    # The render dict carries GROUPS only — the flat screened_photos key is gone
+    # (form_pdf keeps a legacy fallback for old callers; intake no longer uses it).
+    assert "screened_photos" not in render_sub
 
 
 # ---- _screen_portal_photos refuses a submission past the per-submission cap ----
@@ -737,7 +744,8 @@ def test_screen_over_cap_refuses_whole_submission(mocker):
 
 
 def test_screen_at_cap_is_accepted(mocker):
-    # Exactly 8 photos (2 fields × 4) is allowed — no refusal.
+    # Exactly 8 photos (2 fields × 4) is allowed — no refusal. One group per field,
+    # in definition order, labels preserved.
     mocker.patch.object(intake, "_photo_clamav_enabled", return_value=False)
     img = _jpeg_b64()
     definition = {"sections": [{"type": "header", "fields": [
@@ -745,11 +753,77 @@ def test_screen_at_cap_is_accepted(mocker):
         {"key": "b", "input": "photo", "label": "B", "max_count": 4},
     ]}]}
     values = {k: [_photo_obj(img) for _ in range(4)] for k in ("a", "b")}
-    refusal, screened = intake._screen_portal_photos(
+    refusal, groups = intake._screen_portal_photos(
         definition, values, dict(BASE_SUB), correlation_id="t"
     )
     assert refusal is None
-    assert len(screened) == photo_screen.MAX_PHOTOS_PER_SUBMISSION
+    assert [label for label, _photos in groups] == ["A", "B"]
+    total = sum(len(photos) for _label, photos in groups)
+    assert total == photo_screen.MAX_PHOTOS_PER_SUBMISSION
+
+
+# ---- per-field grouping (photos-pdf-grouping): labels thread to the renderer ----
+TWO_FIELD_DEFINITION = {
+    "form_code": "jha-v1",
+    "parent_form_code": "jha",
+    "form_name": "Job Hazard Analysis",
+    "sections": [
+        {
+            "type": "header",
+            "fields": [
+                {"key": "before_photos", "input": "photo", "label": "Before Work",
+                 "max_count": 4},
+                {"key": "after_photos", "input": "photo", "label": "After Work",
+                 "max_count": 4},
+            ],
+        }
+    ],
+}
+
+
+def test_two_photo_fields_group_in_definition_order(stub, mocker):
+    """Two labeled photo fields → two render groups in DEFINITION order with the
+    labels preserved; Box 01..NN numbering runs CONTINUOUSLY across the groups
+    (the flattened order is byte-identical to the pre-grouping single list)."""
+    stub["load_def"].return_value = TWO_FIELD_DEFINITION
+    new_ver = mocker.patch.object(
+        intake.box_client, "upload_bytes_or_new_version", return_value={"id": "p1"}
+    )
+    payload = json.dumps({
+        "work_location": "Array A",
+        "before_photos": [_photo_obj(_jpeg_b64(), name=f"b{i}.jpg") for i in range(4)],
+        "after_photos": [_photo_obj(_jpeg_b64(), name=f"a{i}.jpg") for i in range(4)],
+    })
+    result = intake.process_portal_submission(dict(BASE_SUB, payload_json=payload))
+    assert result.status == "processed"
+    groups = stub["render"].call_args.args[1]["photo_groups"]
+    assert [label for label, _photos in groups] == ["Before Work", "After Work"]
+    assert [len(photos) for _label, photos in groups] == [4, 4]
+    # Field order within each group is upload order; captions carry the client names.
+    captions = [cap for _label, photos in groups for cap, _jpeg in photos]
+    assert "b0.jpg" in captions[0] and "a0.jpg" in captions[4]
+    # Box numbering spans the groups continuously: 01..08.jpg, one flat sequence.
+    filenames = [c.args[1] for c in new_ver.call_args_list]
+    assert filenames == [f"{i:02d}.jpg" for i in range(1, 9)]
+    assert "[photos:8]" in stub["write"].call_args.kwargs["notes"]
+
+
+def test_photo_field_with_no_photos_contributes_no_group(stub, mocker):
+    """A photo field whose value is an empty list contributes NO group (a heading
+    over nothing would claim photos that are not there) — the other field's group
+    still renders under its own label."""
+    stub["load_def"].return_value = TWO_FIELD_DEFINITION
+    mocker.patch.object(
+        intake.box_client, "upload_bytes_or_new_version", return_value={"id": "p1"}
+    )
+    payload = json.dumps({
+        "before_photos": [],
+        "after_photos": [_photo_obj(_jpeg_b64())],
+    })
+    result = intake.process_portal_submission(dict(BASE_SUB, payload_json=payload))
+    assert result.status == "processed"
+    groups = stub["render"].call_args.args[1]["photo_groups"]
+    assert [label for label, _photos in groups] == ["After Work"]
 
 
 # ── P3: workstream category routing (safety|progress) ──────────────────────
@@ -909,9 +983,12 @@ def test_pool_clean_refs_download_box_and_join_render_grid(daily_stub):
     # bytes left D1 at screen time; Box is the permanent record).
     daily_stub["download"].assert_called_once_with("bx11")
     render_sub = daily_stub["render"].call_args.args[1]
-    # The pool photo joins the SAME grid, captioned, AFTER the inline photos
-    # (this form has no inline photo fields, so it is the only entry).
-    assert render_sub["screened_photos"] == [("Trench shoring", POOL_JPEG)]
+    # The pool photos render as their OWN final group, headed by the section title
+    # (this form has no inline photo fields, so it is the only group).
+    assert render_sub["photo_groups"] == [
+        ("Additional site photos", [("Trench shoring", POOL_JPEG)]),
+    ]
+    assert "screened_photos" not in render_sub  # groups replaced the flat key
     assert render_sub["additional_photo_notes"] == {
         "pending": 0, "refused": 0, "unavailable": 0,
     }
@@ -948,7 +1025,9 @@ def test_pool_pending_ref_defer_bound_expired_files_without(daily_stub):
     assert result.status == "processed"  # bounded: filing is never blocked forever
     render_sub = daily_stub["render"].call_args.args[1]
     assert render_sub["additional_photo_notes"]["pending"] == 1
-    assert render_sub["screened_photos"] == [("Panel run", POOL_JPEG)]
+    assert render_sub["photo_groups"] == [
+        ("Additional site photos", [("Panel run", POOL_JPEG)]),
+    ]
     codes = [c.kwargs.get("error_code") for c in daily_stub["log"].call_args_list]
     assert "portal_daily_photo_defer_expired" in codes
     notes = daily_stub["write"].call_args.kwargs["notes"]
@@ -967,7 +1046,7 @@ def test_pool_refused_ref_files_with_refused_note(daily_stub):
     daily_stub["download"].assert_not_called()
     render_sub = daily_stub["render"].call_args.args[1]
     assert render_sub["additional_photo_notes"]["refused"] == 1
-    assert render_sub["screened_photos"] == []
+    assert render_sub["photo_groups"] == []  # no photos → no pool group at all
     daily_stub["review"].assert_not_called()
 
 
@@ -1022,7 +1101,7 @@ def test_pool_box_download_permanent_error_renders_without(daily_stub):
     assert result.status == "processed"
     render_sub = daily_stub["render"].call_args.args[1]
     assert render_sub["additional_photo_notes"]["unavailable"] == 1
-    assert render_sub["screened_photos"] == []
+    assert render_sub["photo_groups"] == []
     codes = [c.kwargs.get("error_code") for c in daily_stub["log"].call_args_list]
     assert "portal_daily_photo_box_download_failed" in codes
 
@@ -1039,7 +1118,7 @@ def test_pool_downloaded_bytes_are_validated_before_render(daily_stub):
     result = intake.process_portal_submission(sub)
     assert result.status == "processed"
     render_sub = daily_stub["render"].call_args.args[1]
-    assert render_sub["screened_photos"] == []
+    assert render_sub["photo_groups"] == []
     assert render_sub["additional_photo_notes"]["unavailable"] == 1
     codes = [c.kwargs.get("error_code") for c in daily_stub["log"].call_args_list]
     assert "portal_daily_photo_invalid_bytes" in codes
@@ -1057,11 +1136,11 @@ def test_pool_manifest_row_missing_for_ref_renders_without(daily_stub):
 
 
 def test_pool_photos_render_after_inline_photos(daily_stub, mocker):
-    # "AFTER the inline photos": the pool photos append to the SAME grid behind the
-    # inline §34-screened ones.
+    # "AFTER the inline photos": the pool photos render as their OWN final group,
+    # behind every inline per-field group, headed by the section title.
     mocker.patch.object(
         intake, "_screen_portal_photos",
-        return_value=(None, [("inline cap", b"\xff\xd8\xffINLINE")]),
+        return_value=(None, [("Inline Field", [("inline cap", b"\xff\xd8\xffINLINE")])]),
     )
     sub = _daily_sub(
         refs=[{"pool_id": 11, "caption": "pool cap"}],
@@ -1070,7 +1149,40 @@ def test_pool_photos_render_after_inline_photos(daily_stub, mocker):
     result = intake.process_portal_submission(sub)
     assert result.status == "processed"
     render_sub = daily_stub["render"].call_args.args[1]
-    assert render_sub["screened_photos"] == [
-        ("inline cap", b"\xff\xd8\xffINLINE"),
-        ("pool cap", POOL_JPEG),
+    assert render_sub["photo_groups"] == [
+        ("Inline Field", [("inline cap", b"\xff\xd8\xffINLINE")]),
+        ("Additional site photos", [("pool cap", POOL_JPEG)]),
     ]
+
+
+def test_pool_group_label_reads_the_section_title(daily_stub):
+    # The pool group's heading is the definition's additional_photos section TITLE.
+    daily_stub["load_def"].return_value = {
+        **DAILY_DEFINITION,
+        "sections": [{"type": "additional_photos", "key": "additional_photos",
+                      "title": "Extra inspection photos"}],
+    }
+    sub = _daily_sub(
+        refs=[{"pool_id": 11, "caption": "cap"}],
+        manifest=[{"id": 11, "status": "clean", "box_file_id": "bx11"}],
+    )
+    result = intake.process_portal_submission(sub)
+    assert result.status == "processed"
+    render_sub = daily_stub["render"].call_args.args[1]
+    assert render_sub["photo_groups"] == [("Extra inspection photos", [("cap", POOL_JPEG)])]
+
+
+def test_pool_group_label_defaults_when_section_untitled(daily_stub):
+    # No title on the additional_photos section → the default pool heading.
+    daily_stub["load_def"].return_value = {
+        **DAILY_DEFINITION,
+        "sections": [{"type": "additional_photos", "key": "additional_photos"}],
+    }
+    sub = _daily_sub(
+        refs=[{"pool_id": 11, "caption": "cap"}],
+        manifest=[{"id": 11, "status": "clean", "box_file_id": "bx11"}],
+    )
+    result = intake.process_portal_submission(sub)
+    assert result.status == "processed"
+    render_sub = daily_stub["render"].call_args.args[1]
+    assert render_sub["photo_groups"] == [("Additional site photos", [("cap", POOL_JPEG)])]

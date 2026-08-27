@@ -53,6 +53,35 @@ Definition files on disk are **append-only**: retiring or replacing a form flips
 manifest and never deletes a `.json`, so every historical `form_code` keeps resolving for
 submissions already filed against it.
 
+## Photos on a form (inline fields + the additional-photos pool)
+
+Two mechanisms, deliberately different:
+
+- **Inline photo fields** — the form builder's **"+ Photos"** palette item adds a
+  header-level photo field (any header field can also be switched to `input: photo`).
+  Each photo field carries a **Max photos** setting (`max_count`, 1–4; omitted means 4),
+  and a submission accepts at most **4 photos per field and 8 per submission**. Those
+  caps are a **payload budget, not UX**: inline photos ride base64 inside the
+  submission's D1 row (~2 MB practical ceiling → a 1.8 MB payload cap → 4 × ~280 KB
+  client-encoded photos ≈ 1.5 MB), so raising them is a code+capacity decision (Tier 3),
+  never a definition tweak. A submission arriving OVER the 8-photo cap can only have
+  bypassed the portal and is refused whole (security screening, `over_submission_cap`).
+- **The additional-photos pool** — the "as many as you need" mechanism (40/day per
+  job+date+uploader): each photo uploads individually OUTSIDE the payload, is
+  §34-screened on the Mac, and joins the same PDF. A form mounts it with **at most one
+  `additional_photos` section** (its key is FIXED to `additional_photos` by
+  construction; the publish validator rejects a second mount). The pool is
+  per-(job, work date) and mountable on any form — see
+  [`safety_photo_path.md`](safety_photo_path.md) for its failure modes.
+
+**How photos render.** The submission PDF groups inline photos **under their field's
+label** — one headed 2-up grid per photo field, in form order (a single unlabeled field
+renders under "Site Photos") — and pool photos follow as their own final group headed by
+the pool section's title (default "Additional site photos"). The **blank fillable PDF**
+(manual-fallback archive) renders a photo field as its label plus a bordered note —
+*"Photos are attached through the Safety Portal. For a paper filing, attach printed
+photos to this form."* — never a fake fillable box (photos cannot ride a paper form).
+
 ## Tasks (low-class — Successor-Operator can do)
 
 ### Retire a form or variant

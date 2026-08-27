@@ -1963,15 +1963,20 @@ def _screen_portal_photos(
     submission: dict[str, Any],
     *,
     correlation_id: str,
-) -> tuple[ProcessResult | None, list[tuple[str, bytes]]]:
+) -> tuple[ProcessResult | None, list[form_pdf.PhotoGroup]]:
     """§34-screen every header photo field BEFORE render/Box.
 
-    Returns (refusal, screened):
+    Returns (refusal, groups):
       * refusal is a drain-eligible review_queue ProcessResult IFF any photo screens
-        malicious or suspicious — the whole submission is refused (screened is []).
-      * otherwise refusal is None and screened is [(caption, clean_jpeg), …] for the
-        renderer + Box originals. No photo fields, or a photo field with no photos,
-        yields (None, []) — the submission files exactly as before this feature.
+        malicious or suspicious — the whole submission is refused (groups is []).
+      * otherwise refusal is None and groups is one PhotoGroup — (field_label,
+        [(caption, clean_jpeg), …]) — PER photo field that carried photos, in
+        definition field order (iter_photo_fields), for the renderer's per-field
+        grids; a field with zero photos contributes NO group. Flattening the groups
+        in order reproduces the pre-grouping flat list byte-identically (Box
+        originals + WPR registrations key off that flat order). No photo fields, or
+        no photos at all, yields (None, []) — the submission files exactly as
+        before this feature.
     """
     fields = photo_screen.iter_photo_fields(definition)
     if not fields:
@@ -1991,11 +1996,12 @@ def _screen_portal_photos(
             detail=f"over_submission_cap:{total}", correlation_id=correlation_id,
         ), []
     clamav_enabled = _photo_clamav_enabled()
-    screened: list[tuple[str, bytes]] = []
-    for key, _label, max_count in fields:
+    groups: list[form_pdf.PhotoGroup] = []
+    for key, label, max_count in fields:
         items = values.get(key)
         if not isinstance(items, list) or not items:
             continue
+        group_photos: list[tuple[str, bytes]] = []
         for raw_item in items[:max_count]:
             if not isinstance(raw_item, dict):
                 return _portal_photo_refusal(
@@ -2020,8 +2026,10 @@ def _screen_portal_photos(
                 str(raw_item.get("gps") or ""),
             )
             # clean ⇒ clean_jpeg is set (photo_screen contract).
-            screened.append((caption, result.clean_jpeg or b""))
-    return None, screened
+            group_photos.append((caption, result.clean_jpeg or b""))
+        if group_photos:
+            groups.append((label, group_photos))
+    return None, groups
 
 
 def _file_portal_photos(
@@ -2073,8 +2081,12 @@ def _file_portal_photos(
 
 
 # ---- DR-photo-pool Slice 2: additional-photo reference resolution ----------------
-# A daily report's ADDITIONAL photos never ride the submission payload (it is
-# payload-budgeted) — they uploaded individually into the Worker's daily_photo_pool,
+# The additional-photo POOL is per-(job, work_date) and mountable on ANY form whose
+# definition carries an `additional_photos` section — not just the daily report it
+# shipped with (which forms actually mount one is a property of the live catalog, not
+# this code; the "daily" in the identifiers below is a load-bearing historical name).
+# A submission's ADDITIONAL photos never ride the payload (it is payload-budgeted) —
+# they uploaded individually into the Worker's daily_photo_pool,
 # were §34-screened Mac-side by portal_poll._service_daily_photos (which files the
 # sanitized re-encode to Box: ITS Photos/daily/<job_id>/<work_date>/), and the
 # submission carries only CLAIMED references (values.additional_photos =
@@ -2086,6 +2098,18 @@ def _file_portal_photos(
 # pass runs BEFORE the /pending fetch each cycle, so a photo uploaded before submit
 # is usually already 'clean' (box_file_id set) in the manifest — see the
 # _poll_inside_lock block comment (the design's crux).
+
+
+def _additional_photos_title(definition: dict[str, Any]) -> str:
+    """The pool photos' PDF group heading: the definition's `additional_photos`
+    section title. publishValidation pins the section key and allows at most one
+    mount per form, so the first match wins; an absent or untitled section defaults
+    to "Additional site photos" (the section renderer's own default)."""
+    for section in definition.get("sections", []):
+        if isinstance(section, dict) and section.get("type") == "additional_photos":
+            title = str(section.get("title") or "").strip()
+            return title or "Additional site photos"
+    return "Additional site photos"
 
 
 def _referenced_pool_ids(
@@ -2147,8 +2171,8 @@ def _resolve_additional_photos(
         (REFUSED references render a "refused by screening" line — the CRITICAL/WARN
         already fired at screen time; nothing re-pages here).
 
-    No additional_photos section / no refs → (None, [], zeros) — every non-daily
-    form takes this path untouched.
+    No additional_photos section / no refs → (None, [], zeros) — every form
+    without a pool mount (or with an unused one) takes this path untouched.
     """
     counts = {"pending": 0, "refused": 0, "unavailable": 0}
     refs = _referenced_pool_ids(definition, values)
@@ -2516,8 +2540,9 @@ def _run_portal_pipeline(
     # §34 photo screening (Invariant 2 Layer 6) — decode + screen every header photo
     # field BEFORE the renderer or Box touches the bytes ("before any Box upload or
     # model call"). A malicious/suspicious photo refuses the whole submission (drain);
-    # clean photos return as re-encoded JPEGs for the PDF + Box originals.
-    photo_refusal, screened_photos = _screen_portal_photos(
+    # clean photos return as re-encoded JPEGs, grouped per photo FIELD (label kept
+    # for the PDF's per-field grid headings), for the PDF + Box originals.
+    photo_refusal, photo_groups = _screen_portal_photos(
         definition, values, submission, correlation_id=correlation_id
     )
     if photo_refusal is not None:
@@ -2533,15 +2558,26 @@ def _run_portal_pipeline(
     if pool_defer is not None:
         return pool_defer
 
+    # Flatten the per-field groups for Box filing + the notes count. Group order ==
+    # the definition's field order (iter_photo_fields), so this flat list is
+    # BYTE-IDENTICAL to the pre-grouping single list — `_file_portal_photos`'s Box
+    # 01..NN.jpg numbering and the WPR site-photo registrations are unchanged.
+    inline_flat = [p for _label, ps in photo_groups for p in ps]
+
     # Render (deterministic; no LLM, no network). Screened photos ride out-of-band so
-    # the renderer never parses the raw base64 in `values`. Pool photos join the SAME
-    # photo grid AFTER the inline ones (upload order preserved within each group);
-    # the status counts drive the grid-adjacent notes (never a silent omission).
+    # the renderer never parses the raw base64 in `values`. Each photo FIELD renders
+    # as its own labeled grid, in field order; pool photos follow as a FINAL group
+    # headed by the additional_photos section title (upload order preserved within
+    # each group); the status counts drive the grid-adjacent notes (never a silent
+    # omission).
+    render_photo_groups: list[form_pdf.PhotoGroup] = list(photo_groups)
+    if pool_photos:
+        render_photo_groups.append((_additional_photos_title(definition), pool_photos))
     render_submission = {
         "job_name": project_name,
         "work_date": work_date_raw,
         "values": values,
-        "screened_photos": screened_photos + pool_photos,
+        "photo_groups": render_photo_groups,
         "additional_photo_notes": pool_counts,
     }
     try:
@@ -2580,11 +2616,11 @@ def _run_portal_pipeline(
     # already exists (ITS Photos/daily/…, written by the screening pass at screen
     # time); re-uploading would duplicate the artifact.
     site_photo_registrations: list[dict[str, Any]] = []
-    if screened_photos:
+    if inline_flat:
         site_photo_registrations = _file_portal_photos(
-            folder_id, submission_uuid, screened_photos, correlation_id
+            folder_id, submission_uuid, inline_flat, correlation_id
         )
-        notes = (notes + f" [photos:{len(screened_photos)}]").strip()
+        notes = (notes + f" [photos:{len(inline_flat)}]").strip()
     if pool_photos or any(pool_counts.values()):
         notes = (
             notes

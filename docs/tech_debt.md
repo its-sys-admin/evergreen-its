@@ -16,6 +16,24 @@ entry names no action a person could take, it does not belong in this file.
 
 **Cutover triage:** every open entry below is **post-delivery** unless its header is prefixed **`[CUTOVER-BLOCKING]`** (must resolve before the Aug-7 production cutover). The authoritative cutover gate is `docs/operations/cutover_checklist.md` (CL-01…CL-39) + `scripts/verify_cutover.py`, not these tags — the tags are prioritization only.
 
+## WPR site-photo registration captions carry no field-label prefix [OPEN 2026-08-27, low]
+
+The photos-pdf-grouping PR threads each photo FIELD's label through to the submission PDF
+(per-field headed grids), but the WPR site-photo pool registrations (`_file_portal_photos` →
+the 0074 register post) still carry the bare photo caption — the office curation screen cannot
+tell a "Before Work" photo from an "After Work" one, or an incident-report photo from a daily
+site photo, without opening it. This matters because of operator decision 8 (2026-08-27 photos
+plan): non-daily pool/inline photos get NO special WPR handling — office curation is the
+control for keeping incident photos out of the client report, and an uncurated week
+auto-selects. Prefixing the registration caption with the field label (e.g. "Inspection
+Photos — front.jpg · …") would give the curator that context at a glance.
+
+**Why deferred:** the caption is display metadata capped at 300 chars and flows through the
+Worker's register post into D1 — a caption-shape change touches the register contract and the
+WPR screen, out of scope for the PDF-grouping PR. Accepted-risk companion to decision 8.
+**Trigger to revisit:** the first uncurated-week WPR that auto-selects a non-daily photo into a
+client report, or any rework of the WPR photo-curation screen.
+
 ## The live daemon venv (`~/its/.venv`) cannot run the repo's own test suite [OPEN 2026-08-19, low]
 
 `~/its/.venv` is missing `radon`, a `[dev]` extra. The consequence is larger than one skipped

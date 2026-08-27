@@ -27,9 +27,12 @@ and approves. The §42 code-reader rationale lives in the docstrings of
 ## Purpose
 
 The Safety Portal accepts **site photos** on a submission. Photos are screened
-on the Mac (§34, four-layer), embedded in the per-submission PDF, filed to Box,
-and merged into the Sat→Fri **weekly packet** that `weekly_send` emails. This
-runbook covers the three Tier-2-reachable failure modes that photos introduce:
+on the Mac (§34, four-layer), embedded in the per-submission PDF — **grouped
+under their photo field's label** (a form with several photo fields shows each
+field's photos under its own heading; pool photos follow under the pool
+section's title, default "Additional site photos") — filed to Box, and merged
+into the Sat→Fri **weekly packet** that `weekly_send` emails. This runbook
+covers the three Tier-2-reachable failure modes that photos introduce:
 
 1. **A photo was rejected** — a submission routed to review (never filed/sent).
 2. **clamd is down** — the optional ClamAV layer is enabled but unreachable, so
@@ -43,13 +46,20 @@ portal; it queues as "screening…" until the Mac clears it (Symptoms 5–6 belo
 The photo is never shown in the app — a cleared photo lives in Box
 (`ITS Photos/checklist/<item id>/`) and the item shows "photo on file ✓".
 
-**Daily-report ADDITIONAL photos (DR-photo-pool, 2026-07-03)** ride it too: a
-manager adds extra photos to the daily field report beyond the four inline
-slots; each uploads individually into a screening pool, shows "Screening…" until
-the Mac clears it, and the filed report's PDF embeds the cleared copies (Box:
-`ITS Photos/daily/<job id>/<date>/`). Symptoms 7–9 below cover the pool's
-Tier-2-reachable states (stuck pending / refused / a report filed with a
-"photos pending at render time" note).
+**ADDITIONAL photos — the pool (DR-photo-pool, 2026-07-03)** ride it too. The
+pool is **per-(job, work date)** and mountable on **ANY form** whose definition
+carries an `additional_photos` section — it shipped with the daily report and
+is coming to incident-report v4, erosion-inspection v2, and material-incident
+v2. A manager adds extra photos beyond the inline slots (4 per photo field, 8
+per submission — the payload budget); each uploads individually into the
+screening pool, shows "Screening…" until the Mac clears it, and the filed
+report's PDF embeds the cleared copies as their own headed group (Box:
+`ITS Photos/daily/<job id>/<date>/`). **The "daily" in the error codes, Box
+path, and state files is a load-bearing historical name, deliberately KEPT** —
+it does not mean daily-report-only; the same codes fire for any pool-mounted
+form. Symptoms 7–9 below cover the pool's Tier-2-reachable states (stuck
+pending / refused / a report filed with a "photos pending at render time"
+note) and apply to every pool-mounted form.
 
 Each block below follows the §43 four-part shape (Symptom → checks → Claude/UI
 action → escalate-to-Seth).
@@ -349,11 +359,12 @@ that fails verification means row tampering or a secret mismatch, which is
 
 ---
 
-## Symptom 7 — a daily-report additional photo is stuck at "Screening…" (DR-photo-pool)
+## Symptom 7 — an additional (pool) photo is stuck at "Screening…" (DR-photo-pool)
 
 ### Symptom
 
-- A manager added extra photos on the **Daily Field Report** tab and a photo chip
+- A manager added extra photos on the **Daily Field Report** tab — or on any
+  other form carrying an additional-photos section — and a photo chip
   still shows **"Screening…"** long after upload (normal is **1–3 minutes**).
 - If the manager already submitted the report, the submission itself may sit
   unfiled for up to **30 minutes** — that is the designed wait (the report defers
@@ -402,7 +413,7 @@ verdict is high-class → Tier 3.
 
 ---
 
-## Symptom 8 — a daily-report additional photo shows "refused" (DR-photo-pool)
+## Symptom 8 — an additional (pool) photo shows "refused" (DR-photo-pool)
 
 ### Symptom
 
@@ -417,10 +428,10 @@ verdict is high-class → Tier 3.
 
 ### What this means (and what it does NOT mean)
 
-- **The daily report itself STANDS.** A refused photo means *that photo's
-  evidence was refused*, not *the report is invalid* — a filed report that
-  referenced it simply prints a "refused by security screening" note (the count,
-  never the bytes).
+- **The report itself STANDS** (whichever form it was). A refused photo means
+  *that photo's evidence was refused*, not *the report is invalid* — a filed
+  report that referenced it simply prints a "refused by security screening"
+  note (the count, never the bytes).
 - The refused bytes were **deleted from the portal** (delete-on-screen) and were
   never filed to Box or shown to anyone. The Review-Queue row is the record.
 
@@ -439,14 +450,14 @@ that fails verification means row tampering or a secret mismatch, which is
 
 ---
 
-## Symptom 9 — a filed daily report says "photos pending screening at render time"
+## Symptom 9 — a filed report says "photos pending screening at render time"
 
 ### Symptom
 
-- A filed daily-report PDF carries the note *"N additional photo(s) were still
-  pending security screening at render time — filed without them…"*, and
-  **ITS_Errors** has a `portal_daily_photo_defer_expired` WARN for the
-  submission.
+- A filed report's PDF (any pool-mounted form) carries the note *"N additional
+  photo(s) were still pending security screening at render time — filed without
+  them…"*, and **ITS_Errors** has a `portal_daily_photo_defer_expired` WARN for
+  the submission.
 
 ### What this means
 
@@ -464,7 +475,7 @@ only the photo embeds are missing from the PDF.
    (`ITS Photos/daily/<job id>/<date>/`) — the evidence is preserved there even
    though the PDF predates it. Nothing to replay.
 3. If the packet-of-record must visually include those photos, the manager can
-   **amend** the daily report from the portal (the amendment re-renders with the
+   **amend** the report from the portal (the amendment re-renders with the
    now-clean photos and supersedes the original row; Box keeps both PDFs).
 
 ### Escalate-to-Seth condition

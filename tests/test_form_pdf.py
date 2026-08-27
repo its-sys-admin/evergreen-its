@@ -297,6 +297,9 @@ def test_additional_photo_notes_absent_render_nothing() -> None:
 
 
 def test_screened_photos_render_grid_with_caption() -> None:
+    """LEGACY-FALLBACK LOCK (photos-pdf-grouping): a flat `screened_photos` list with
+    no `photo_groups` key must keep rendering as the single historical "Site Photos"
+    grid — pre-grouping callers and replays stay byte-compatible."""
     out = render_submission_pdf(
         _PHOTO_DEF,
         {
@@ -310,6 +313,102 @@ def test_screened_photos_render_grid_with_caption() -> None:
     text = _norm(_pdf_text(out))
     assert "Site Photos" in text
     assert "front.jpg" in text
+
+
+# ── per-field photo groups (photos-pdf-grouping) ──────────────────────────────
+def test_photo_groups_render_per_label_headings() -> None:
+    """Each PhotoGroup renders its own heading (the field label) over its own grid,
+    in group order — the multi-photo-field form's PDF shape."""
+    out = render_submission_pdf(
+        _PHOTO_DEF,
+        {
+            "job_name": "Bradley 1",
+            "work_date": "2026-06-12",
+            "values": {},
+            "photo_groups": [
+                ("Before Work", [("b.jpg", _tiny_jpeg())]),
+                ("After Work", [("a.jpg", _tiny_jpeg())]),
+            ],
+        },
+    )
+    assert out[:5] == b"%PDF-"
+    text = _norm(_pdf_text(out))
+    assert "Before Work" in text and "After Work" in text
+    assert "b.jpg" in text and "a.jpg" in text
+    # Labeled groups never fall back to the default heading. (The _PHOTO_DEF field
+    # label "Site Photos" cannot leak here either — header photo rows don't render.)
+    assert "Site Photos" not in text
+
+
+def test_photo_groups_empty_label_defaults_to_site_photos() -> None:
+    """An empty-label group (the legacy-fallback wrap, or an unlabeled field) renders
+    under the historical default heading."""
+    out = render_submission_pdf(
+        _PHOTO_DEF,
+        {
+            "job_name": "Bradley 1",
+            "work_date": "2026-06-12",
+            "values": {},
+            "photo_groups": [("", [("front.jpg", _tiny_jpeg())])],
+        },
+    )
+    text = _norm(_pdf_text(out))
+    assert "Site Photos" in text and "front.jpg" in text
+
+
+def test_photo_group_label_with_markup_chars_renders_escaped() -> None:
+    """A label carrying & and < is operator-authored display text — it must escape
+    through the section-title path (never parsed as markup) and still render."""
+    out = render_submission_pdf(
+        _PHOTO_DEF,
+        {
+            "job_name": "Bradley 1",
+            "work_date": "2026-06-12",
+            "values": {},
+            "photo_groups": [("Trench & <Shoring> Photos", [("t.jpg", _tiny_jpeg())])],
+        },
+    )
+    assert out[:5] == b"%PDF-"  # the document did not break on the raw characters
+    text = _norm(_pdf_text(out))
+    assert "Trench & <Shoring> Photos" in text
+
+
+def test_fully_unrenderable_group_emits_no_heading() -> None:
+    """A group whose every photo is unrenderable emits NO heading (a heading over
+    nothing would claim photos that are not there); sibling groups still render."""
+    out = render_submission_pdf(
+        _PHOTO_DEF,
+        {
+            "job_name": "Bradley 1",
+            "work_date": "2026-06-12",
+            "values": {},
+            "photo_groups": [
+                ("Bad Group", [("bad", b"\xff\xd8\xffnotanimage")]),
+                ("Good Group", [("ok.jpg", _tiny_jpeg())]),
+            ],
+        },
+    )
+    assert out[:5] == b"%PDF-"
+    text = _norm(_pdf_text(out))
+    assert "Bad Group" not in text
+    assert "Good Group" in text and "ok.jpg" in text
+
+
+def test_blank_photo_field_renders_portal_note_not_widget() -> None:
+    """The blank fillable PDF renders a photo field as the labeled row + an honest
+    bordered portal note — and consumes NO AcroForm field for it (the old behavior
+    was a fake text box a filler could type into but never attach a photo to)."""
+    out = form_pdf.render_blank_fillable(_PHOTO_DEF)
+    assert out[:5] == b"%PDF-"
+    text = _norm(_pdf_text(out))
+    # The label row stays (it is a render-smoke needle) + the note copy.
+    assert "Site Photos" in text
+    assert "Photos are attached through the Safety Portal" in text
+    assert "attach printed photos to this form" in text
+    # No widget derives from the photo field key; the Job text field still exists.
+    field_names = list(pypdf.PdfReader(io.BytesIO(out)).get_fields() or {})
+    assert field_names, "the non-photo header fields should still produce widgets"
+    assert all("site_photos" not in name for name in field_names)
 
 
 def test_header_photo_field_never_dumps_base64() -> None:
