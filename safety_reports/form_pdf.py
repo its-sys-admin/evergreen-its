@@ -1013,9 +1013,12 @@ def render_submission_pdf(definition: dict, submission: dict) -> bytes:
                              section.get("type"))
 
     photo_groups: list[PhotoGroup] = submission.get("photo_groups") or []
-    if not photo_groups:
+    if "photo_groups" not in submission:
         # LEGACY fallback — a flat screened_photos list (pre-grouping callers /
         # replays) renders as ONE unlabeled group: the historical "Site Photos" grid.
+        # Gated on KEY ABSENCE, not falsiness: photo_groups=[] is intake's normal
+        # no-photos shape and must never fall through to screened_photos bytes that
+        # carry no grouping-era screening provenance (reviewer finding, PR fix pass).
         flat = submission.get("screened_photos") or []
         photo_groups = [("", flat)] if flat else []
     if photo_groups:
