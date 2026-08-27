@@ -2082,9 +2082,9 @@ def _file_portal_photos(
 
 # ---- DR-photo-pool Slice 2: additional-photo reference resolution ----------------
 # The additional-photo POOL is per-(job, work_date) and mountable on ANY form whose
-# definition carries an `additional_photos` section (incident-report v4 / erosion-
-# inspection v2 / material-incident v2 onward — not just the daily report it shipped
-# with; the "daily" in the identifiers below is a load-bearing historical name).
+# definition carries an `additional_photos` section — not just the daily report it
+# shipped with (which forms actually mount one is a property of the live catalog, not
+# this code; the "daily" in the identifiers below is a load-bearing historical name).
 # A submission's ADDITIONAL photos never ride the payload (it is payload-budgeted) —
 # they uploaded individually into the Worker's daily_photo_pool,
 # were §34-screened Mac-side by portal_poll._service_daily_photos (which files the
