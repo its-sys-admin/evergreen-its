@@ -1,0 +1,40 @@
+{
+  "form_code": "test2-v1",
+  "parent_form_code": "test2",
+  "form_name": "test photo",
+  "variant_label": null,
+  "version": 1,
+  "archetype": "sectioned_assessment",
+  "source_pdf": "",
+  "sections": [
+    {
+      "type": "header",
+      "title": "Photos",
+      "fields": [
+        {
+          "key": "photos",
+          "label": "Photos",
+          "input": "photo"
+        }
+      ]
+    },
+    {
+      "type": "additional_photos",
+      "key": "additional_photos",
+      "title": "Additional photos"
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "columns": [
+        {
+          "key": "signature",
+          "label": "test",
+          "input": "signature"
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": true
+    }
+  ]
+}
