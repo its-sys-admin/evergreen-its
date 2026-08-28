@@ -858,6 +858,28 @@
           "display_order": 1
         }
       ]
+    },
+    {
+      "parent_form_code": "test2",
+      "name": "test photo",
+      "display_order": 14,
+      "category": "safety",
+      "forms": [
+        {
+          "identity": "test2",
+          "variant_label": null,
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "test2-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "test2-v1"
+            }
+          ],
+          "display_order": 1
+        }
+      ]
     }
   ]
 }
