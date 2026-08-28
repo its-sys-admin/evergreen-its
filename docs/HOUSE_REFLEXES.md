@@ -224,6 +224,14 @@ that. Loaded via `@import` from `CLAUDE.md`'s START-HERE block.
 
 ## 7 — Known platform gotchas (the ones that have bitten us)
 
+- **A NEW form version is a TWO-host artifact — never deploy a Worker serving new form codes ahead of
+  the Mac tree holding their definition files.** The Worker serves/validates the new version, but
+  intake files a submission FROM the Mac tree's `safety_portal/forms/<form_code>.json`; a submission
+  arriving in the gap is routed to ITS_Review_Queue as `unknown_form` and mark-filed — it does NOT
+  self-retry when the tree catches up. Deploy order for a form-version cut: Mac tree current FIRST
+  (or the same motion — the C12 publish daemon does pull→apply→deploy in that order for exactly this
+  reason), then the Worker. (2026-08-27: incident-report-v4 deployed from the dev Mac while the
+  production tree was 6 commits behind; the first v4 submission landed in review, not Smartsheet.)
 - **Keychain `security … -w` TTY trap:** with a controlling `/dev/tty` present it reads the terminal and
   *ignores piped stdin* — corrupted the Box refresh token twice. Use `-w VALUE` / run headless. (`keychain.set_secret` now detects TTY and handles both.)
 - **Cloudflare `custom_domain: true` disables the `*.workers.dev` URL on deploy** (error 1042) unless

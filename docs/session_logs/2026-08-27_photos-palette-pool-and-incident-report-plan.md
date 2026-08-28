@@ -194,6 +194,37 @@ Accepted residual risks carried into Phase B, not treated as blockers:
   "Site Photos" grid is now a per-field heading plus an "Additional site photos" pool section.
   Deliberate, not flagged as a defect.
 
+## Aftermath — form cuts executed, one incident, all validated (post-log amendment)
+
+The operator redirected the remaining work mid-session: the three form cuts were hand-authored as
+**PR #196** (`9f8ca77`, four-part verify clean; `form-definition-reviewer` verdict CLEAN) instead of
+the live editor — incident-report-v4 additionally **renamed "Personnel Incident Report"** (operator
+instruction; the `incident-report` identity/wire key unchanged, zero code pins verified) — and the
+operator deployed Worker version `e3961c71` from the dev Mac, with the publish-pipeline UX validated
+separately via a throwaway form.
+
+**Incident during validation (root-caused, fixed, lesson recorded):** the first incident-report-v4
+submission (`2166c3d2`) was routed to ITS_Review_Queue as `unknown_form` instead of filing — the
+production Mac's tree was still pre-#196, so intake had no `incident-report-v4.json` on disk (the
+Worker serving a version the Mac tree lacks; see the new HOUSE_REFLEXES §7 entry). The operator's
+`test2` throwaway publish (request 9, PR #197) cured it structurally: the publish daemon's
+pull→apply→deploy order fast-forwarded the production tree as its first act, then completed the full
+C12 pipeline (`validated → tested → live → archived`) — which also performed the deferred Box
+blank-archive regeneration. Request 8 (`test`) failed validation correctly (variant-mixing collision
+with the retired photo-test parent). Today's `publish_daemon.migration_check_failed` CRITICAL proved
+transient (request 9's deploy gate passed). The re-submitted incident report (`00a0cf1d`) filed
+cleanly in 91 seconds. The refused `2166c3d2` review-queue row is the operator's to resolve
+(REJECTED, superseded by re-submission).
+
+**Watchdog surfaced during diagnosis (pre-existing, open):** 5 of 20 tracked jobs stale since
+~08-17 including `safety_weekly_send_poll` and `progress_send_poll`; 47 ITS_Review_Queue items past
+2× SLA. Neither is from this session's work; both deserve an operator pass.
+
+**Still open after this session:** the erosion-inspection live proof (decision 11 — one real v2
+submission with inline + pool photo); retire/clean up the `test2` throwaway parent; the
+daily-report-v8 deep-link rename fast-follow; the erosion-inspection legal-floor gap
+(doctrine-owned); the 0079 `requireJobScope` extension (tech_debt, medium).
+
 ## What was NOT touched
 
 - The daily-report photo pool's existing role/scope model — read and reused as the pattern for
