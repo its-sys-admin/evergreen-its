@@ -880,6 +880,28 @@
           "display_order": 1
         }
       ]
+    },
+    {
+      "parent_form_code": "weekly-weather-report",
+      "name": "Weather Report",
+      "display_order": 15,
+      "category": "safety",
+      "forms": [
+        {
+          "identity": "weather-report",
+          "variant_label": null,
+          "status": "active",
+          "current_version": 1,
+          "current_form_code": "weather-report-v1",
+          "versions": [
+            {
+              "version": 1,
+              "form_code": "weather-report-v1"
+            }
+          ],
+          "display_order": 1
+        }
+      ]
     }
   ]
 }

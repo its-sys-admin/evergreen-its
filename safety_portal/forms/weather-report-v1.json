@@ -1,0 +1,205 @@
+{
+  "form_code": "weather-report-v1",
+  "parent_form_code": "weekly-weather-report",
+  "form_name": "Weather Report",
+  "variant_label": null,
+  "version": 1,
+  "archetype": "sectioned_assessment",
+  "source_pdf": "",
+  "sections": [
+    {
+      "type": "static_text",
+      "text": "Weekly Weather Report",
+      "emphasis": "heading"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Weather Conditions",
+          "scale": [
+            "OK",
+            "Impact",
+            "Hazardous"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Choose One"
+            }
+          ]
+        }
+      ],
+      "title": "Monday"
+    },
+    {
+      "type": "freeform",
+      "key": "notes",
+      "label": "If Impact- Explain how weather impacted normal operation",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "notes1",
+      "label": "If Hazardous- Note what actions were taken. ",
+      "input": "textarea"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist1",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Weather Conditions",
+          "scale": [
+            "OK",
+            "Impact",
+            "Hazardous"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Choose One"
+            }
+          ]
+        }
+      ],
+      "title": "Tuesday"
+    },
+    {
+      "type": "freeform",
+      "key": "notes2",
+      "label": "If Impact- Explain how weather impacted normal operations",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "notes3",
+      "label": "If Hazardous- Note what actions were taken.",
+      "input": "textarea"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist2",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Weather Conditions",
+          "scale": [
+            "OK",
+            "Impact",
+            "Hazardous"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Choose One"
+            }
+          ]
+        }
+      ],
+      "title": "Wednesday"
+    },
+    {
+      "type": "freeform",
+      "key": "notes4",
+      "label": "If Impact- Explain how weather impacted normal operations",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "notes5",
+      "label": "If Hazardous- Note what actions were taken",
+      "input": "textarea"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist3",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Weather Conditions",
+          "scale": [
+            "OK",
+            "Impact",
+            "Hazardous"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Choose One"
+            }
+          ]
+        }
+      ],
+      "title": "Thursday"
+    },
+    {
+      "type": "freeform",
+      "key": "notes6",
+      "label": "If Impact- Explain how weather impacted normal operations",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "notes7",
+      "label": "If Hazardous- Note what actions were taken",
+      "input": "textarea"
+    },
+    {
+      "type": "checklist",
+      "key": "checklist4",
+      "groups": [
+        {
+          "key": "group_1",
+          "label": "Weather Conditions",
+          "scale": [
+            "OK",
+            "Impact",
+            "Hazardous"
+          ],
+          "items": [
+            {
+              "key": "group_1_item",
+              "label": "Choose One"
+            }
+          ]
+        }
+      ],
+      "title": "Friday"
+    },
+    {
+      "type": "freeform",
+      "key": "notes8",
+      "label": "If Impact- Explain how weather impacted normal operations",
+      "input": "textarea"
+    },
+    {
+      "type": "freeform",
+      "key": "notes9",
+      "label": "If Hazardous- Note what actions were taken",
+      "input": "textarea"
+    },
+    {
+      "type": "signature_table",
+      "key": "sign_in",
+      "columns": [
+        {
+          "key": "name",
+          "label": "Print Name",
+          "input": "text"
+        },
+        {
+          "key": "signature",
+          "label": "Sign",
+          "input": "signature"
+        }
+      ],
+      "min_rows": 1,
+      "allow_add": false,
+      "title": "Signature"
+    }
+  ]
+}
