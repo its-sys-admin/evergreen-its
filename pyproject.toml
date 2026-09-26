@@ -23,7 +23,7 @@ dependencies = [
     "boxsdk>=3.10.0,<4.0.0",
     "msal>=1.28.0",
     "requests>=2.32.0",
-    "python-docx>=1.1.0",
+    "python-docx>=1.2.0",
     # Renders the editable Annex C Schedule-of-Values workbook (subcontracts SC-S3b): the
     # operator wanted the SOV as an editable .xlsx (not a flat PDF) so line values can be
     # adjusted by hand. openpyxl writes .xlsx with no native toolchain. Output is made
