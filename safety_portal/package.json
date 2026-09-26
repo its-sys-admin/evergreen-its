@@ -29,7 +29,7 @@
     "@cloudflare/vite-plugin": "^1.40.0",
     "@cloudflare/vitest-pool-workers": "^0.16.13",
     "@cloudflare/workers-types": "^4.20260604.1",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
