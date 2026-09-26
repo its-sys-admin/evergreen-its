@@ -32,7 +32,7 @@ dependencies = [
     # changes 3.1.0→3.1.5 (minor/patch lineage) — floor pin, matching this file's convention.
     "openpyxl>=3.1.0",
     "python-dateutil>=2.9.0",
-    "holidays>=0.50",
+    "holidays>=0.102",
     "sentry-sdk>=2.0,<3.0",
     # Required by scripts/regen_doc_indexes.py + scripts/lint_doc_conventions.py
     # to parse YAML frontmatter in markdown docs. Transitively pulled in
