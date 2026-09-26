@@ -155,7 +155,7 @@ jobs:
         # this job's explicit `cache: npm`, so it is a no-op for us. (v5 bumped the
         # action runtime to node24; GitHub-hosted ubuntu runners are well past the
         # required runner version.)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
