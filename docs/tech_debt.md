@@ -37,6 +37,13 @@ before the scope check can run.
 incident of a manager editing the wrong job's list; escalate to [CUTOVER-BLOCKING]-equivalent
 priority if manifest COMMIT misuse is ever observed.
 
+**2026-10-21 addendum (receipt void, D11):** `/delete` now refuses a line whose marks still count
+with `409 line_has_deliveries`. Because the route still has no job scope, that refusal is also a
+small cross-job ORACLE: a manager placed elsewhere can learn that a foreign job's line carries
+counting marks (a bare foreign line is, as before, simply removed). The adversarial review of the
+void PR confirmed both by probe. Same fix as above — resolving the line's job_id and calling
+`requireJobScope` before the batch closes the oracle and the write together.
+
 ## WPR site-photo registration captions carry no field-label prefix [OPEN 2026-08-27, low]
 
 The photos-pdf-grouping PR threads each photo FIELD's label through to the submission PDF
@@ -3142,6 +3149,12 @@ lines carry the contradiction (a green "Delivered" pill beside a full outstandin
 The ledger is append-only, so repair is a corrective event per line — and the real quantities have
 to come from the office, not be inferred from context.
 
+**UPDATE 2026-10-21 — the repair is now an in-portal action (migration 0080).** A qty-NULL mark can be
+VOIDED and replaced with **Record the correct entry** carrying the real quantity; the correction takes
+the voided mark's ordering position, so a line's status does not flip. No production D1 write is
+needed any more, but the quantities still have to come from the office. Procedure:
+`docs/runbooks/job_materials.md` → "Voiding a mistaken delivery mark".
+
 **Tag:** `field-ops`, `data-integrity`, `production-repair`.
 
 **Revisit when:** the office supplies real per-line delivered quantities for Deep Lake's 37 affected
@@ -3234,3 +3247,129 @@ limit (errorCode 4003). Scope was held to the two material mirrors deliberately.
 the next change to one of them — thread a `RowIndex` through it the way the material mirrors do.
 
 Surfaced: 2026-10-21, D10 (production logs: ~330 full-sheet reads per 90 s cycle).
+
+## [OPEN 2026-10-21, low] WPR delivery rows curated before migration 0080 cannot be dropped by a later void
+
+Migration 0080 (receipt-event void) makes a curated Weekly Production Report delivery row drop at READ
+time when the ledger mark it was copied from is voided (operator decision D5). The match is by the
+`event_uuid` a curated row now carries. Rows curated BEFORE 0080 were saved without one, so a void of
+their mark can never find them: a voided delivery keeps printing on that week's client report until
+the office removes the row by hand and re-saves. Not back-filled on purpose — the only candidate key
+(date + kind + qty) is ambiguous for a repeated load, and a wrong match would silently drop a real
+delivery from a client document.
+
+**Tag:** `field-ops`, `weekly-production-report`, `data-integrity`.
+
+**Revisit when:** a voided delivery is reported still printing on a curated week, or the office asks
+for a bulk re-curate. The §43 repair (Remove → Save weekly report inputs → Compile Now) is in
+`docs/runbooks/job_materials.md` and `docs/runbooks/progress_weekly_report.md` Symptom 6b.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] Photo-to-delivery binding checks "not voided" in a pre-read, not in the INSERT's own WHERE
+
+`fieldops_daily_photos.ts` refuses to bind a new pool photo to a voided receipt event (0080) with a
+SELECT that runs before the photo INSERT. A void that lands between that read and the INSERT binds a
+photo as evidence for a mark the line no longer counts. The window is one request wide and the harm is
+display-only (the photo is still screened and filed; only its delivery link is stale), so the void
+build kept the pre-read rather than reshaping the pool INSERT. The module's own discipline elsewhere
+re-asserts such checks in-WHERE.
+
+**Tag:** `field-ops`, `safety-portal`, `race`.
+
+**Revisit when:** the next change to the daily-photo pool INSERT — fold `voided_at IS NULL` into its
+WHERE the way `/receipt` re-asserts its shipment and correction targets.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] Deliveries on lines removed before the remove-line guard still count until the office reviews them
+
+The receipt-void addendum (operator decision D11) refuses to remove a material line while any of its
+deliveries still counts (`409 line_has_deliveries`). Lines removed BEFORE that guard can still carry
+counting deliveries — observed 2026-10-21 in production: 3 marks, total qty 5, on 2 removed lines
+(an observation, not a live count). They keep counting on the Material Receipts sheet's
+`Line Qty Received` and on the weekly report's delivery log, and the Materials page now lists them
+under **Removed from the list**, where they can be voided. Not voided automatically on purpose:
+whether each is a real delivery is the office's call. Two consequences are accepted, not fixed: a
+removed line takes no new marks or corrections (void-only), and its Material List row
+(`On List = Removed`) is no longer refreshed, so a void there leaves that row's `Delivered Qty` as it
+was when the line was removed.
+
+**Tag:** `field-ops`, `data-integrity`, `production-repair`.
+
+**Revisit when:** after the receipt-void deploy — ask the office to review the **Removed from the
+list** group on the affected job(s) and void any delivery that is not real (§43:
+`docs/runbooks/job_materials.md` → "Removing a line, and the "Removed from the list" group"). Close
+this entry once that group holds no counting delivery the office has not confirmed, or reopen the
+Material List question if a frozen removed-line total is reported as misleading.
+
+Surfaced: 2026-10-21, receipt-event void addendum (D11).
+
+## [OPEN 2026-10-21, medium] Real-looking personal and job names in materials test fixtures, in a public repo
+
+The repository is public. The void build's agents reported test fixtures that use real-looking
+names — people, jobs and vendors — rather than synthetic ones (`JOB-T0001`, "Test Crew Lead"). Files
+named: `tests/test_material_list.py`, `tests/test_material_receipts.py`,
+`tests/test_fieldops_sync.py`, `safety_portal/test/fieldops-material-receipts.test.ts`,
+`safety_portal/test/fieldops-weekly-report.test.ts`,
+`safety_portal/src/pages/__tests__/JobMaterialsPage.test.tsx`,
+`safety_portal/src/pages/__tests__/WeeklyReportPage.test.tsx`. The void build's new tests use synthetic
+fixtures; it did not rewrite the existing ones (out of scope, and a rename touches many assertions).
+Rewriting the tree does not remove what git history already published. Beyond fixtures, an older
+entry in this file names a real-looking job in its prose; treat it in the same sweep.
+
+**Tag:** `tests`, `privacy`, `public-repo`.
+
+**Revisit when:** the next session that touches any of those files, or a repo-wide fixture sweep —
+replace with synthetic values in one pass, and decide separately whether history needs attention.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] JobMaterialsPage "Report a problem" still asks for its note with `window.prompt`
+
+Every other action on the per-job Materials page now asks inline (the two-step mark arm, the void
+panel with its required reason, the "already fully received" question). "Report a problem" still
+collects its required note through `window.prompt`: unstyled, blocked or auto-dismissed in some
+embedded and mobile browsers, and impossible to give an inline error. A dismissed prompt files
+nothing, so it fails safe, but it reads as a broken button.
+
+**Tag:** `safety-portal`, `ux`, `field-ops`.
+
+**Revisit when:** the next change to the Materials page's problem flow — reuse the void panel's
+inline reason + Confirm + Cancel shape.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] Material List back-fill failure is not handled like the receipts one
+
+`progress_reports/material_receipts.backfill_columns` skips a job's upserts when its column top-up
+fails (one WARN per job per cycle instead of one ERROR per event) and raises a permanent refusal so
+`fieldops_sync` tickets it to the Review Queue. `material_list.backfill_columns` does neither: it
+always WARNs and returns, and every upsert that WRITES then raises `KeyError` at its per-line fence —
+one ERROR per changed line per cycle for one cause, with no ticket for a 403. Nothing is lost
+silently either way (every failure is logged), but the noise and the missing ticket differ.
+
+**Tag:** `field-ops`, `smartsheet`, `observability`.
+
+**Revisit when:** a Material List back-fill failure is first seen in `ITS_Errors`, or the next change
+to the Material List mirror — port the receipts handling (return a bool, skip the upserts on False,
+re-raise Permission/NotFound/Validation and route through the pass's permanent arm).
+
+Surfaced: 2026-10-21, receipt-void ops-stds re-review.
+
+## [OPEN 2026-10-21, low] The materials list read caps `removed_lines` and receipt events without saying so
+
+`GET /api/fieldops/expected-materials` reads `removed_lines` with `LIMIT 200` and receipt events with
+`LIMIT 2000 … ORDER BY e.line_id ASC`. Neither response carries a truncated flag (the weekly report
+has `deliveries_truncated`; this read has nothing). Under D11 a removed line's marks are voidable
+only if the read returns them, and the events cap drops the highest line ids first, so on a very
+large job a stranded mark could silently be un-voidable from the page. Production holds 2 removed
+lines and 3 marks, so this is theoretical today.
+
+**Tag:** `safety-portal`, `field-ops`, `no-silent-caps`.
+
+**Revisit when:** any job approaches 1,000 receipt events, or the next change to the list read — add
+`removed_lines_truncated` / `receipt_events_truncated` booleans (rows >= cap) and surface them on the
+page, or order the events read so marks on removed lines are never the ones dropped.
+
+Surfaced: 2026-10-21, receipt-void Worker security re-review.

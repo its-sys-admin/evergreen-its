@@ -893,6 +893,22 @@ describe("daily photo — material-line binding (0063)", () => {
     expect((await json<{ error: string }>(res)).error).toBe("unknown_receipt_event");
   });
 
+  it("422 unknown_receipt_event for a VOIDED event (0080) — no new evidence for a mark that no longer counts", async () => {
+    // Same code as a foreign event on purpose: from the uploader's side the mark is no longer
+    // one the line counts, so there is nothing valid to attach the photo to.
+    const line = await seedLine("JOB-A");
+    const evId = await seedReceiptEvent(line.id, "JOB-A");
+    await env.DB.prepare(
+      "UPDATE material_receipt_events SET voided_at = unixepoch(), voided_by = 'mgr.max', void_reason = 'Duplicate tap' WHERE id = ?",
+    )
+      .bind(evId)
+      .run();
+    const res = await upload(manager, { line_uuid: line.line_uuid, receipt_event_id: evId });
+    expect(res.status).toBe(422);
+    expect((await json<{ error: string }>(res)).error).toBe("unknown_receipt_event");
+    expect(await poolRows()).toHaveLength(0); // refused BEFORE the insert
+  });
+
   it("400 receipt_event_without_line — an event alone skips the only ownership check", async () => {
     const line = await seedLine("JOB-A");
     const evId = await seedReceiptEvent(line.id, "JOB-A");

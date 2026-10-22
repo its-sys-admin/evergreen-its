@@ -384,8 +384,8 @@ NODE_BRIEFS: dict[str, NodeBrief] = {
     "trackers": NodeBrief(
         what=(
             "Five write helpers, all driven by fieldops-sync. Hours, incidents, and receipts only "
-            "gain rows — a receipt is append-only, corrected by a further event; its two derived "
-            "columns (Line Status, Line Qty Received) move as the rollup updates. Equipment and "
+            "gain rows. A voided receipt keeps its row, grayed with Entry Status Voided, and drops "
+            "out of the derived Line Qty Received, which moves with the rollup. Equipment and "
             "the material list re-project current state: rows update in place and retire rather "
             "than delete."
             "\n\n"

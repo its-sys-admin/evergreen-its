@@ -6,6 +6,7 @@ import { auditStmtIfChanged } from "./audit";
 import { hmacHex } from "./hmac";
 import { b64DecodedLen, isPhotoItem, validateSinglePhoto } from "./photo_bounds";
 import { requireJob } from "./fieldops_scope";
+import { RECEIPT_ACTIVE_SQL } from "./fieldops_expected_materials";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Daily-report photo POOL (DR-photo-pool Slice 1, operator directive 2026-07-03: "add more photo
@@ -371,8 +372,14 @@ export function registerDailyPhotoRoutes(app: FieldopsApp, gates: FieldopsGates)
         // The event must belong to the line just resolved. Otherwise a photo could be filed
         // against line A while pointing at an event on line B — reading as evidence for a
         // delivery it has nothing to do with.
+        //
+        // …and it must still COUNT (0080). A voided mark is one the line no longer believes, so a
+        // photo newly bound to it would be evidence for a delivery nobody is claiming. Same 422 as
+        // a foreign event: there is nothing valid to attach to. Bindings made BEFORE a void are
+        // left alone — the void annotates the mark, it does not rewrite what was filed against it.
         const ev = await c.env.DB.prepare(
-          "SELECT id FROM material_receipt_events WHERE id = ?1 AND line_id = ?2",
+          `SELECT e.id FROM material_receipt_events e
+            WHERE e.id = ?1 AND e.line_id = ?2 AND ${RECEIPT_ACTIVE_SQL}`,
         )
           .bind(body.receipt_event_id, line.id)
           .first<{ id: number }>();

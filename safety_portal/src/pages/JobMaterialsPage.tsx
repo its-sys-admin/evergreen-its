@@ -18,7 +18,15 @@ import {
   type FormState,
 } from "../components/ExpectedMaterialsSection";
 import { pacificToday } from "../components/myTasksShared";
-import { owedLabel, rollupMaterials, lineOwed } from "../lib/materials_view";
+import {
+  owedLabel,
+  rollupMaterials,
+  lineOwed,
+  needsSettledConfirm,
+  pacificDateOf,
+  pacificTimeOf,
+  settledConfirmText,
+} from "../lib/materials_view";
 
 // Per-job MATERIALS TRACKING page (PR2) — the deep-link target from the Job Tracker's
 // "Materials tracking →" and from the daily field report's material-receipt region.
@@ -40,6 +48,15 @@ import { owedLabel, rollupMaterials, lineOwed } from "../lib/materials_view";
 /** One delivery mark in flight, per line. */
 type MarkDraft = { qty: string; note: string; date: string; shipmentId: string };
 const emptyMark = (): MarkDraft => ({ qty: "", note: "", date: pacificToday(), shipmentId: "" });
+
+/** A CORRECTION in flight (0080, decision D3): a mark that replaces a voided one. It carries its
+ *  own kind because a correction is often a different kind from the mark it replaces — a
+ *  "Delivered 40" that was really "Partially delivered 30". */
+type CorrDraft = MarkDraft & { kind: api.MaterialReceiptKind };
+
+/** The voided-entry reason cap. The Worker refuses longer (400 invalid_reason); the box is capped
+ *  to match so the refusal can only come from a stale tab or a direct call. */
+const VOID_REASON_MAX = 500;
 
 /** How long a delivery-mark button stays ARMED before reverting to its normal label. Long enough
  *  to read the confirm and tap it deliberately, short enough that a forgotten armed button is not
@@ -88,6 +105,70 @@ function errText(e: unknown, fallback: string): string {
   return code ? errorText(code) : fallback;
 }
 
+/** "2026-10-02 · Delivered · 40" — what a mark SAID: its date, kind and quantity. The pills that
+ *  link a correction to the entry it replaced, and the correction form's own copy, name the other
+ *  entry with this. */
+function eventSummary(line: api.ExpectedMaterialRow, ev: api.MaterialReceiptEventRow): string {
+  return `${ev.event_date ?? "—"} · ${rollupPill({ ...line, receipt_status: ev.kind }).label}` +
+    (ev.qty != null ? ` · ${ev.qty}` : "");
+}
+
+/** "2026-10-02 · Delivered · 40 · recorded 09:47" — the part of a history row that IDENTIFIES the
+ *  mark. A double-mark is exactly two rows whose date, kind, quantity and note all match, so
+ *  without the moment each was RECORDED (created_at, Pacific) the two rows — and the two Void
+ *  buttons a screen reader announces — would be word-for-word the same, and the person voiding
+ *  could not say which one they meant. The Void button and the panels name the entry with this. */
+function eventRowSummary(line: api.ExpectedMaterialRow, ev: api.MaterialReceiptEventRow): string {
+  return `${eventSummary(line, ev)} · recorded ${pacificTimeOf(ev.created_at)}`;
+}
+
+/** Worker refusals that are about the void REASON itself. Any other refusal (already voided, the
+ *  job closed) leaves the reason box valid: aria-invalid draws the red border, so it may only
+ *  point at the box when the box is what is wrong. */
+const REASON_CODES = new Set(["reason_required", "invalid_reason"]);
+/** …and the ones about a correction's QUANTITY, for the same reason. */
+const QTY_CODES = new Set(["qty_required", "invalid_qty"]);
+
+/** An inline error, and whether it is about the input it sits under (→ aria-invalid). */
+type FieldError = { text: string; invalid: boolean };
+
+/** D9 — the inline "this line is already in full" question, asked before a delivered/partial mark
+ *  on a settled line (lib/materials_view.needsSettledConfirm decides WHEN). Inline, never
+ *  window.confirm: a browser lets its user suppress a page's native dialogs, after which confirm()
+ *  returns false without asking — and the mark would become silently impossible to record.
+ *  `action` names what is being confirmed, in the question, the button and Cancel alike: the
+ *  correction form asks about "the correction", not "another delivery". */
+function SettledAsk({
+  line,
+  busy,
+  onRecord,
+  onCancel,
+  action = "Record another delivery",
+}: {
+  line: api.ExpectedMaterialRow;
+  busy: boolean;
+  onRecord: () => void;
+  onCancel: () => void;
+  action?: string;
+}) {
+  return (
+    <div className="mat-settled-ask" role="group" aria-label={`Already received — ${rowTitle(line)}`}>
+      <p className="mat-settled-ask__text">{settledConfirmText(line, action)}</p>
+      <button type="button" className="btn btn--primary btn--sm" disabled={busy} onClick={onRecord}>
+        {action}
+      </button>{" "}
+      <button
+        type="button"
+        className="btn btn--secondary btn--sm"
+        aria-label={`Cancel — do not ${action.toLowerCase()} for ${rowTitle(line)}`}
+        onClick={onCancel}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 export function JobMaterialsPage({
   jobId,
   onHome,
@@ -108,6 +189,9 @@ export function JobMaterialsPage({
 
   const [data, setData] = useState<{
     lines: api.ExpectedMaterialRow[];
+    /** D11: lines taken off the list that still carry receipt events. Their deliveries count
+     *  until voided, so they stay reachable here — void-only, nothing new recorded against them. */
+    removed: api.ExpectedMaterialRow[];
     shipments: api.MaterialShipmentRow[];
     events: api.MaterialReceiptEventRow[];
     project_name: string | null;
@@ -130,11 +214,57 @@ export function JobMaterialsPage({
   // delivery mark never does it.
   const [resolveFor, setResolveFor] = useState<number | null>(null);
   const [resolveNote, setResolveNote] = useState("");
+  const [resolveError, setResolveError] = useState<string | null>(null);
+
+  // ── Void a delivery mark (0080; operator decisions D1-D3) ──────────────────────────────────
+  // A mis-recorded mark used to be permanent: the ledger is append-only and had no delete path,
+  // so a double-tapped "Delivered" read as twice the material on this page, the §51 Receipts
+  // mirror and the client's weekly report alike. A void KEEPS the row (struck through, with who,
+  // when and why) and takes it out of every rollup. Who may void is exactly who may mark (D1) —
+  // `canMark` below — and the Worker re-gates role, job scope and an active job.
+  //
+  // The reason is REQUIRED and is kept with the row: a struck-through delivery with no "why" is
+  // a question every later reader has to chase. `voidFor` is the EVENT id whose panel is open.
+  const [voidFor, setVoidFor] = useState<number | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidError, setVoidError] = useState<FieldError | null>(null);
+  const voidReasonInput = useRef<HTMLInputElement | null>(null);
+  // Voided rows are HIDDEN by default, per line: the history is read to answer "what came", and
+  // a struck-through row mostly answers a different question. The toggle says how many it hides,
+  // so nothing vanishes silently.
+  const [showVoided, setShowVoided] = useState<Record<number, boolean>>({});
+
+  // ── Record the correct entry (D3, D4) ──────────────────────────────────────────────────────
+  // Step two, optional: a voided mark that was WRONG (not merely a duplicate) needs the right one
+  // recorded, linked back to it (supersedes_id) so the history reads "this replaced that" and the
+  // Worker files it in the original's position. Offered straight after a void (the second answer
+  // to the `afterVoid` question below) AND for as long as the voided row stays uncorrected — D4
+  // has no time window, so coming back next week must work. `corrFor` is the VOIDED event id
+  // being corrected.
+  const [corrFor, setCorrFor] = useState<number | null>(null);
+  const [corrDraft, setCorrDraft] = useState<CorrDraft>({ ...emptyMark(), kind: "delivered" });
+  const [corrError, setCorrError] = useState<FieldError | null>(null);
+  const [corrAsk, setCorrAsk] = useState(false);
+  // Straight after a void the page ASKS rather than opening the correction form: most voids are
+  // duplicates, which need nothing more, and a form that opens on its own makes that common case
+  // look unfinished — and invites a second mark nobody needed. "Done — it was a duplicate" comes
+  // first for that reason. `afterVoid` names the line and the event just voided.
+  const [afterVoid, setAfterVoid] = useState<{ lineId: number; eventId: number } | null>(null);
+
+  // Remove-line refusals (D11: 409 line_has_deliveries) are shown AT the line, like the other
+  // per-line errors on this page — the banner is off-screen for most of a long BOM.
+  const [removeError, setRemoveError] = useState<{ lineId: number; text: string } | null>(null);
+
+  // D9: which (line, kind) is showing the "already received in full — record another?" question.
+  // On a settled line this question REPLACES the two-step arm rather than stacking a third tap on
+  // it: it is a stronger confirmation than "Confirm delivered?", and it sits below the row, so a
+  // double-tap on the button cannot land on its "Record another delivery".
+  const [settledAsk, setSettledAsk] = useState<{ lineId: number; kind: api.MaterialReceiptKind } | null>(null);
 
   // ── Two-step confirm on every delivery mark (operator request, 2026-08-10) ────────────────
-  // A mark is an APPEND-ONLY ledger event with no delete path: a mis-tap cannot be undone, only
-  // corrected by recording a compensating event, and until someone notices, the running total and
-  // the §51 Material Receipts mirror both read wrong. These three buttons also sit right next to
+  // A mark is an APPEND-ONLY ledger event with no delete path: since 0080 a mis-tap can be VOIDED
+  // (kept, struck through, taken out of every total), but only once someone notices — and until
+  // then the running total and the §51 Material Receipts mirror both read wrong. These three buttons also sit right next to
   // each other on a phone held on a job site. So the first click ARMS the button and the second
   // commits.
   //
@@ -189,8 +319,8 @@ export function JobMaterialsPage({
       .fetchExpectedMaterials(jobId)
       .then((d) =>
         setData({
-          lines: d.expected_materials, shipments: d.shipments, events: d.receipt_events,
-          project_name: d.project_name,
+          lines: d.expected_materials, removed: d.removed_lines, shipments: d.shipments,
+          events: d.receipt_events, project_name: d.project_name,
         }),
       )
       .catch(() => setLoadError("Could not load this job's materials."));
@@ -246,16 +376,37 @@ export function JobMaterialsPage({
     return [...byCat.entries()].map(([name, ls]) => ({ name, lines: ls }));
   }, [data]);
 
-  async function run(id: number, fn: () => Promise<unknown>, okText: string) {
-    if (busyId !== null) return;
+  /**
+   * One mutation, single-flight. Resolves TRUE only when the request succeeded — callers holding
+   * typed input (a void reason, a resolve note, a correction) clear it ONLY then. It used to
+   * resolve the same either way, and the resolve panel's `.then` wiped the note and closed the
+   * panel on a refusal too: the person lost what they wrote AND the place the error belonged.
+   *
+   * `onFail` routes the error copy to an INLINE slot beside the input that caused it instead of
+   * the page banner. This page renders a whole BOM flat, so the banner is often thousands of
+   * pixels above the row being worked on (the qty-required precedent below); and showing both
+   * would announce the same refusal twice to a screen reader. It also gets the Worker's machine
+   * code, so the caller can tell a refusal OF the typed input from a refusal of the action.
+   */
+  async function run(
+    id: number,
+    fn: () => Promise<unknown>,
+    okText: string,
+    onFail?: (text: string, code: string) => void,
+  ): Promise<boolean> {
+    if (busyId !== null) return false;
     setBusyId(id);
     setMsg(null);
     try {
       await fn();
       load();
       setMsg({ ok: true, text: okText });
+      return true;
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, "That didn't work — try again.") });
+      const text = errText(e, "That didn't work — try again.");
+      if (onFail) onFail(text, e instanceof Error ? e.message : "");
+      else setMsg({ ok: false, text });
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -316,6 +467,14 @@ export function JobMaterialsPage({
       return;
     }
     clearQtyError(line.id);
+    // D9: the line already has everything it was owed. Ask in words — with the numbers — instead
+    // of arming; the answer to this question IS the second step (see `settledAsk`).
+    if (needsSettledConfirm(line, kind)) {
+      setArmed(null);
+      setSettledAsk({ lineId: line.id, kind });
+      return;
+    }
+    setSettledAsk(null);
     // First click on this (line, kind) only ARMS it — see the `armed` state above for why a
     // delivery mark is not a one-click action.
     if (!(armed && armed.lineId === line.id && armed.kind === kind)) {
@@ -323,15 +482,316 @@ export function JobMaterialsPage({
       return;
     }
     setArmed(null);
+    commitMark(line, kind, d, parsed.qty);
+  }
+
+  /** "Record another delivery" on the D9 question. Re-reads and RE-VALIDATES the draft: the
+   *  quantity box stays editable while the question is up, so what was valid when it was asked
+   *  is not necessarily what would be posted now. */
+  function onSettledRecord(line: api.ExpectedMaterialRow) {
+    if (!settledAsk || settledAsk.lineId !== line.id) return;
+    const kind = settledAsk.kind;
+    setSettledAsk(null);
+    const d = marks[line.id] ?? emptyMark();
+    const parsed = readMarkQty(kind, d.qty);
+    if (typeof parsed === "string") {
+      setQtyError((m) => ({ ...m, [line.id]: parsed }));
+      qtyInputs.current[line.id]?.focus();
+      return;
+    }
+    commitMark(line, kind, d, parsed.qty);
+  }
+
+  function commitMark(
+    line: api.ExpectedMaterialRow,
+    kind: api.MaterialReceiptKind,
+    d: MarkDraft,
+    qty: number | null,
+  ) {
     const body: Parameters<typeof api.markReceipt>[1] = { kind, event_date: d.date || undefined };
     if (d.note.trim()) body.note = d.note.trim();
     if (d.shipmentId) body.shipment_id = Number(d.shipmentId);
-    if (parsed.qty !== null) body.qty = parsed.qty;
+    if (qty !== null) body.qty = qty;
     void run(line.id, async () => {
       await api.markReceipt(line.id, body);
       setMarks((m) => ({ ...m, [line.id]: emptyMark() }));
       clearQtyError(line.id);
     }, "Delivery recorded.");
+  }
+
+  function openVoid(ev: api.MaterialReceiptEventRow) {
+    setVoidFor(ev.id);
+    setVoidReason("");
+    setVoidError(null);
+    setAfterVoid(null);
+  }
+
+  /** `removed` — the line is off the list (D11): the void goes through, but nothing is offered
+   *  after it, because a correction is a new mark and the Worker records none on a removed line. */
+  function onConfirmVoid(line: api.ExpectedMaterialRow, ev: api.MaterialReceiptEventRow, removed: boolean) {
+    const reason = voidReason.trim();
+    // Checked here, not by disabling the button: a disabled "Confirm void" says nothing about
+    // WHY it will not go, and a silent no-op is how a person comes to believe a void happened.
+    if (!reason) {
+      setVoidError({ text: "Say why this entry is being voided — the reason is kept with it.", invalid: true });
+      voidReasonInput.current?.focus();
+      return;
+    }
+    setVoidError(null);
+    void run(
+      line.id,
+      () => api.voidReceiptEvent(ev.id, reason),
+      "Entry voided — it stays in the history, struck through, and no longer counts toward the received total.",
+      (text, code) => setVoidError({ text, invalid: REASON_CODES.has(code) }),
+    ).then((ok) => {
+      // On a refusal NOTHING is cleared: the panel, the typed reason and the inline error stay.
+      if (!ok) return;
+      setVoidFor(null);
+      setVoidReason("");
+      // D3: ask whether a correction is needed (see `afterVoid`) — never on a removed line.
+      if (!removed) setAfterVoid({ lineId: line.id, eventId: ev.id });
+    });
+  }
+
+  /** Open the correction form for a VOIDED mark, prefilled from it — the usual fix is one field
+   *  (the quantity, or the kind), so retyping the date, note and load would be busywork and a
+   *  fresh chance to get them wrong. The line's voided rows are shown while it is open: they are
+   *  hidden by default, and the entry being replaced is the one row this form is about. */
+  function openCorrection(line: api.ExpectedMaterialRow, ev: api.MaterialReceiptEventRow) {
+    const loads = shipmentsByLine.get(line.id) ?? [];
+    setAfterVoid(null);
+    setShowVoided((m) => ({ ...m, [line.id]: true }));
+    setCorrFor(ev.id);
+    setCorrError(null);
+    setCorrAsk(false);
+    setCorrDraft({
+      kind: ev.kind,
+      qty: ev.qty != null ? String(ev.qty) : "",
+      note: ev.note ?? "",
+      date: ev.event_date ?? pacificToday(),
+      // Only a load still on the line: a removed load's id would be refused (invalid_shipment_id),
+      // and a <select> whose value matches no option would display as blank while posting it.
+      shipmentId:
+        ev.shipment_id != null && loads.some((s) => s.id === ev.shipment_id) ? String(ev.shipment_id) : "",
+    });
+  }
+
+  function onRecordCorrection(line: api.ExpectedMaterialRow, confirmed: boolean) {
+    if (corrFor === null) return;
+    const supersedes = corrFor;
+    // Held to the same quantity rule as any mark — a correction that does not say how much
+    // arrived could not fix the received total it exists to fix.
+    const parsed = readMarkQty(corrDraft.kind, corrDraft.qty);
+    if (typeof parsed === "string") {
+      setCorrError({ text: parsed, invalid: true });
+      return;
+    }
+    // D9 applies here too: the void has already taken the wrong mark out of the total, so a line
+    // that is STILL settled after it would be over-counted by this one.
+    if (!confirmed && needsSettledConfirm(line, corrDraft.kind)) {
+      setCorrAsk(true);
+      return;
+    }
+    setCorrAsk(false);
+    setCorrError(null);
+    const body: Parameters<typeof api.markReceipt>[1] = {
+      kind: corrDraft.kind,
+      supersedes_id: supersedes,
+    };
+    if (corrDraft.date) body.event_date = corrDraft.date;
+    if (corrDraft.note.trim()) body.note = corrDraft.note.trim();
+    if (corrDraft.shipmentId) body.shipment_id = Number(corrDraft.shipmentId);
+    if (parsed.qty !== null) body.qty = parsed.qty;
+    void run(
+      line.id,
+      () => api.markReceipt(line.id, body),
+      "Correct entry recorded — it takes the voided entry's place in the history.",
+      (text, code) => setCorrError({ text, invalid: QTY_CODES.has(code) }),
+    ).then((ok) => {
+      if (ok) setCorrFor(null);
+    });
+  }
+
+  function onRemoveLine(line: api.ExpectedMaterialRow) {
+    setRemoveError(null);
+    void run(
+      line.id,
+      () => api.deactivateExpectedMaterial(line.id),
+      "Removed.",
+      (text) => setRemoveError({ lineId: line.id, text }),
+    );
+  }
+
+  /**
+   * One line's delivery history: the marks in the Worker's order (newest first by the ledger's
+   * order key, so a correction sits where the mark it replaced did), each with its Void action
+   * and — once voided — who, when and why; then the Show/Hide voided toggle. Shared by the list's own lines
+   * and the "Removed from the list" group (D11), so the void rules have ONE rendering.
+   *
+   * `removed` makes it void-only: a removed line's marks still count until voided, so Void stays,
+   * but "Record the correct entry" does not — a correction is a new mark, and the Worker records
+   * none on a removed line (W2).
+   */
+  function historyBlock(line: api.ExpectedMaterialRow, removed: boolean) {
+    const history = eventsByLine.get(line.id) ?? [];
+    const byId = new Map(history.map((e) => [e.id, e] as const));
+    // Voided marks stay in the ledger and on the wire; the page hides them unless asked.
+    const voidedCount = history.filter((ev) => ev.voided_at !== null).length;
+    const shownHistory = showVoided[line.id] ? history : history.filter((ev) => ev.voided_at === null);
+    return (
+      <>
+        {shownHistory.length > 0 && (
+          <ul className="dash-tasklist" aria-label={`Delivery history for ${rowTitle(line)}`}>
+            {shownHistory.map((ev) => {
+              const summary = eventRowSummary(line, ev);
+              const isVoided = ev.voided_at !== null;
+              // The pills NAME the linked entry. "Corrects an earlier entry" left the reader to
+              // hunt for which one — on a line with several voided marks, a guess.
+              const corrects = ev.supersedes_id !== null ? byId.get(ev.supersedes_id) : undefined;
+              const correctedBy = ev.superseded_by_id !== null ? byId.get(ev.superseded_by_id) : undefined;
+              return (
+                <li key={ev.id}>
+                  {/* Struck through, NOT removed: a voided mark is still part of the record
+                      of what was claimed at the gate — it just no longer counts. */}
+                  <span className={isVoided ? "mat-event--voided" : undefined}>
+                    {summary}
+                    {ev.actor_name ? ` · ${ev.actor_name}` : ""}
+                    {ev.note ? ` — ${ev.note}` : ""}
+                  </span>
+                  {ev.supersedes_id !== null && (
+                    <span className="dash-pill mat-event__link-pill">
+                      {corrects ? `Corrects ${eventSummary(line, corrects)}` : "Corrects an earlier entry"}
+                    </span>
+                  )}
+                  {isVoided && <span className="dash-pill dash-pill--danger">Voided</span>}
+                  {isVoided && ev.superseded_by_id !== null && (
+                    <span className="dash-pill mat-event__link-pill">
+                      {correctedBy ? `Corrected by ${eventSummary(line, correctedBy)}` : "Corrected"}
+                    </span>
+                  )}
+                  {canMark && !isVoided && voidFor !== ev.id && (
+                    <button
+                      type="button"
+                      className="btn btn--danger btn--sm"
+                      disabled={busy}
+                      aria-label={`Void entry ${summary} for ${rowTitle(line)}`}
+                      onClick={() => openVoid(ev)}
+                    >
+                      Void
+                    </button>
+                  )}
+                  {/* Offered for as long as the voided row is uncorrected — not only in the
+                      moment after the void (decision D4 has no time window). Quieter than the
+                      post-void question's button: this row is history, and its action should
+                      not shout over the marks that still count. */}
+                  {canMark && !removed && isVoided && ev.superseded_by_id === null && corrFor !== ev.id && (
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--sm mat-quiet-btn"
+                      disabled={busy}
+                      aria-label={`Record the correct entry in place of ${summary} for ${rowTitle(line)}`}
+                      onClick={() => openCorrection(line, ev)}
+                    >
+                      Record the correct entry
+                    </button>
+                  )}
+                  {isVoided && (
+                    // Who, when and WHY — the reason is the point of requiring one. The name is a
+                    // roster display name or, for an unlinked account, its role label (decision
+                    // D6); never a username. A subcontractor account gets neither name nor reason
+                    // from the Worker (W7) and sees only that the mark was voided, and when. The
+                    // date is Pacific YYYY-MM-DD, the same form as the event date it sits under.
+                    <span className="dash-card__sub mat-event__void-note">
+                      {[
+                        "Voided",
+                        ev.voided_by_name ? `by ${ev.voided_by_name}` : null,
+                        ev.voided_at ? `on ${pacificDateOf(ev.voided_at)}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      {ev.void_reason ? ` — ${ev.void_reason}` : ""}
+                    </span>
+                  )}
+                  {voidFor === ev.id && (
+                    // The ConfirmDelete shape (danger action → inline group with the
+                    // consequence in words + a danger Confirm + Cancel), with the required
+                    // reason inside it. Inline, never window.confirm.
+                    <div
+                      className="dash-row mat-void"
+                      role="group"
+                      aria-label={`Void entry ${summary} for ${rowTitle(line)} confirmation`}
+                    >
+                      <p className="dash-card__sub mat-void__copy">
+                        {removed
+                          ? "Voiding keeps this entry in the history, struck through, and takes it " +
+                            "out of every total that still counts it."
+                          : "Voiding keeps this entry in the history, struck through, and takes it " +
+                            "out of the received total. If the mark was wrong rather than a " +
+                            "duplicate, you can record the correct entry next."}
+                      </p>
+                      <input
+                        ref={voidReasonInput}
+                        aria-label="Reason for voiding this entry"
+                        placeholder="Why is it being voided? (required)"
+                        maxLength={VOID_REASON_MAX}
+                        value={voidReason}
+                        aria-invalid={voidError?.invalid ? true : undefined}
+                        aria-describedby={voidError ? `void-error-${ev.id}` : undefined}
+                        onChange={(e) => {
+                          setVoidReason(e.target.value);
+                          setVoidError(null);
+                        }}
+                      />{" "}
+                      {/* Retire, not the small utility-delete: a void changes the received total,
+                          the §51 mirror and the client's weekly report — this screen's
+                          destructive lifecycle action (global.css design language). */}
+                      <button
+                        type="button"
+                        className="btn btn--retire btn--sm"
+                        disabled={busy}
+                        onClick={() => onConfirmVoid(line, ev, removed)}
+                      >
+                        Confirm void
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className="btn btn--secondary btn--sm"
+                        aria-label="Cancel void"
+                        onClick={() => {
+                          setVoidFor(null);
+                          setVoidReason("");
+                          setVoidError(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      {voidError && (
+                        <p className="mat-mark-error" id={`void-error-${ev.id}`} role="alert">
+                          {voidError.text}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {voidedCount > 0 && (
+          <div className="dash-row">
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm"
+              aria-expanded={!!showVoided[line.id]}
+              onClick={() => setShowVoided((m) => ({ ...m, [line.id]: !m[line.id] }))}
+            >
+              {showVoided[line.id] ? `Hide voided (${voidedCount})` : `Show voided (${voidedCount})`}
+            </button>
+          </div>
+        )}
+      </>
+    );
   }
 
   function onAddShipment(e: FormEvent) {
@@ -447,7 +907,11 @@ export function JobMaterialsPage({
       })() : null}
       <p className="dash__intro">
         What this job is expecting, when each part is due to ship and arrive, and what has actually
-        turned up. {canMark ? "Mark each line as loads arrive — a line can be marked more than once." : null}
+        turned up.{" "}
+        {canMark
+          ? "Mark each line as loads arrive — a line can be marked more than once. A wrong mark can be " +
+            "voided from its line's delivery history."
+          : null}
       </p>
 
       {msg && (
@@ -611,6 +1075,9 @@ export function JobMaterialsPage({
             const pill = rollupPill(line);
             const loads = shipmentsByLine.get(line.id) ?? [];
             const history = eventsByLine.get(line.id) ?? [];
+            const corrEvent = corrFor !== null ? history.find((ev) => ev.id === corrFor) ?? null : null;
+            const justVoided =
+              afterVoid?.lineId === line.id ? history.find((ev) => ev.id === afterVoid.eventId) ?? null : null;
             const draft = marks[line.id] ?? emptyMark();
             const setDraft = (patch: Partial<MarkDraft>) =>
               setMarks((m) => ({ ...m, [line.id]: { ...draft, ...patch } }));
@@ -647,6 +1114,7 @@ export function JobMaterialsPage({
                             onClick={() => {
                               setResolveFor((cur) => (cur === line.id ? null : line.id));
                               setResolveNote("");
+                              setResolveError(null);
                             }}
                           >
                             {resolveFor === line.id ? "Cancel" : "Resolve problem"}
@@ -663,6 +1131,7 @@ export function JobMaterialsPage({
                       aria-label="How was it resolved"
                       placeholder="How was it resolved? (required)"
                       value={resolveNote}
+                      aria-describedby={resolveError ? `resolve-error-${line.id}` : undefined}
                       onChange={(e) => setResolveNote(e.target.value)}
                     />
                     <button
@@ -674,14 +1143,25 @@ export function JobMaterialsPage({
                           line.id,
                           () => api.resolveExpectedMaterialIncident(line.id, resolveNote.trim()),
                           "Problem resolved — the line now shows what the delivery ledger says.",
-                        ).then(() => {
+                          setResolveError,
+                        ).then((ok) => {
+                          // Only on success. This used to clear the note and close the panel on a
+                          // refusal too, so the explanation the person had written vanished along
+                          // with the place the error message belonged.
+                          if (!ok) return;
                           setResolveFor(null);
                           setResolveNote("");
+                          setResolveError(null);
                         })
                       }
                     >
                       Mark resolved
                     </button>
+                    {resolveError && (
+                      <p className="mat-mark-error" id={`resolve-error-${line.id}`} role="alert">
+                        {resolveError}
+                      </p>
+                    )}
                   </div>
                 )}
                 <div className="dash-card__sub">
@@ -725,7 +1205,9 @@ export function JobMaterialsPage({
                   <div className="dash-row" aria-label={`Mark delivery for ${rowTitle(line)}`}>
                     {/* Quantity is required for Delivered / Partially delivered — see `onMark`.
                         The asterisk marks it required at a glance; the red prompt below the row
-                        says so in words the moment someone tries to record without it. */}
+                        says so in words the moment someone tries to record without it, and
+                        aria-invalid draws the red border (schedule-report.css keys it on the
+                        attribute, so the border and what a screen reader hears cannot differ). */}
                     <input
                       ref={(el) => {
                         qtyInputs.current[line.id] = el;
@@ -733,7 +1215,6 @@ export function JobMaterialsPage({
                       aria-label={`Quantity received for ${rowTitle(line)}`}
                       aria-invalid={qtyError[line.id] ? true : undefined}
                       aria-describedby={qtyError[line.id] ? `mark-qty-error-${line.id}` : undefined}
-                      className={qtyError[line.id] ? "mat-qty-invalid" : undefined}
                       value={draft.qty}
                       onChange={(e) => {
                         setDraft({ qty: e.target.value });
@@ -835,6 +1316,14 @@ export function JobMaterialsPage({
                         </button>
                       </>
                     ) : null}
+                    {settledAsk?.lineId === line.id && (
+                      <SettledAsk
+                        line={line}
+                        busy={busy}
+                        onRecord={() => onSettledRecord(line)}
+                        onCancel={() => setSettledAsk(null)}
+                      />
+                    )}
                     {/* role="alert" so a screen reader announces it the moment the tap is refused;
                         the input's aria-describedby points here regardless of DOM order. */}
                     {qtyError[line.id] && (
@@ -845,17 +1334,152 @@ export function JobMaterialsPage({
                   </div>
                 )}
 
-                {history.length > 0 && (
-                  <ul className="dash-tasklist" aria-label={`Delivery history for ${rowTitle(line)}`}>
-                    {history.map((ev) => (
-                      <li key={ev.id}>
-                        {ev.event_date ?? "—"} · {rollupPill({ ...line, receipt_status: ev.kind }).label}
-                        {ev.qty != null ? ` · ${ev.qty}` : ""}
-                        {ev.actor_name ? ` · ${ev.actor_name}` : ""}
-                        {ev.note ? ` — ${ev.note}` : ""}
-                      </li>
-                    ))}
-                  </ul>
+                {historyBlock(line, false)}
+
+                {canMark && justVoided !== null && corrFor === null && (
+                  <div
+                    className="dash-row mat-void-done"
+                    role="group"
+                    aria-label={`After voiding ${eventRowSummary(line, justVoided)} for ${rowTitle(line)}`}
+                  >
+                    <p className="dash-card__sub mat-void-done__copy">
+                      Voided {eventRowSummary(line, justVoided)}. If it was a duplicate, that is all.
+                      If the mark itself was wrong, record the correct entry — now, or later from the
+                      voided row.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn--primary btn--sm"
+                      onClick={() => setAfterVoid(null)}
+                    >
+                      Done — it was a duplicate
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--sm"
+                      disabled={busy}
+                      onClick={() => openCorrection(line, justVoided)}
+                    >
+                      Record the correct entry
+                    </button>
+                  </div>
+                )}
+
+                {canMark && corrEvent !== null && (
+                  <div
+                    className="dash-row mat-correct"
+                    role="group"
+                    aria-label={`Record the correct entry for ${rowTitle(line)}`}
+                  >
+                    <p className="dash-card__sub mat-correct__copy">
+                      Replacing the voided entry {eventSummary(line, corrEvent)}. Only needed if that
+                      mark was wrong — a duplicate needs no correction.
+                    </p>
+                    {/* VISIBLE labels, each wrapping its control: this form opens PREFILLED, so a
+                        placeholder would never be seen, and a row of bare values ("Delivered",
+                        "40", a date) does not say which box is which. The aria-labels stay the
+                        accessible names and each contains its visible word (label-in-name). */}
+                    <label className="mat-correct__field">
+                      <span className="mat-correct__label">Kind</span>
+                      <select
+                        aria-label="Correct entry kind"
+                        value={corrDraft.kind}
+                        onChange={(e) => {
+                          setCorrDraft({ ...corrDraft, kind: e.target.value as api.MaterialReceiptKind });
+                          setCorrAsk(false);
+                        }}
+                      >
+                        <option value="delivered">Delivered</option>
+                        <option value="partial">Partially delivered</option>
+                        <option value="not_delivered">Not delivered</option>
+                      </select>
+                    </label>{" "}
+                    <label className="mat-correct__field">
+                      <span className="mat-correct__label">Quantity</span>
+                      <input
+                        aria-label="Correct entry quantity"
+                        aria-invalid={corrError?.invalid ? true : undefined}
+                        aria-describedby={corrError ? `correct-error-${line.id}` : undefined}
+                        value={corrDraft.qty}
+                        onChange={(e) => {
+                          setCorrDraft({ ...corrDraft, qty: e.target.value });
+                          setCorrError(null);
+                        }}
+                        placeholder="Qty *"
+                        inputMode="decimal"
+                        size={6}
+                      />
+                    </label>{" "}
+                    <label className="mat-correct__field">
+                      <span className="mat-correct__label">Note</span>
+                      <input
+                        aria-label="Correct entry note"
+                        value={corrDraft.note}
+                        onChange={(e) => setCorrDraft({ ...corrDraft, note: e.target.value })}
+                        placeholder="Note"
+                        maxLength={500}
+                      />
+                    </label>{" "}
+                    <label className="mat-correct__field">
+                      <span className="mat-correct__label">Date</span>
+                      <input
+                        aria-label="Correct entry date"
+                        type="date"
+                        value={corrDraft.date}
+                        onChange={(e) => setCorrDraft({ ...corrDraft, date: e.target.value })}
+                      />
+                    </label>{" "}
+                    {loads.length > 0 && (
+                      <label className="mat-correct__field">
+                        <span className="mat-correct__label">Load</span>
+                        <select
+                          aria-label="Correct entry load"
+                          value={corrDraft.shipmentId}
+                          onChange={(e) => setCorrDraft({ ...corrDraft, shipmentId: e.target.value })}
+                        >
+                          <option value="">— against which load? —</option>
+                          {loads.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.bol_number ?? `load ${s.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}{" "}
+                    <button
+                      type="button"
+                      className="btn btn--primary btn--sm"
+                      disabled={busy}
+                      onClick={() => onRecordCorrection(line, false)}
+                    >
+                      Record correct entry
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--sm"
+                      onClick={() => {
+                        setCorrFor(null);
+                        setCorrAsk(false);
+                        setCorrError(null);
+                      }}
+                    >
+                      Not now
+                    </button>
+                    {corrAsk && (
+                      <SettledAsk
+                        line={line}
+                        busy={busy}
+                        action="Record the correction"
+                        onRecord={() => onRecordCorrection(line, true)}
+                        onCancel={() => setCorrAsk(false)}
+                      />
+                    )}
+                    {corrError && (
+                      <p className="mat-mark-error" id={`correct-error-${line.id}`} role="alert">
+                        {corrError.text}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 {canManage && (
@@ -920,11 +1544,17 @@ export function JobMaterialsPage({
                           ariaLabel={`Remove ${rowTitle(line)}`}
                           copy="Remove this line from the list? Its delivery history is kept."
                           busy={busy}
-                          onConfirm={() =>
-                            void run(line.id, () => api.deactivateExpectedMaterial(line.id), "Removed.")
-                          }
+                          onConfirm={() => onRemoveLine(line)}
                         />
                       </>
+                    )}
+                    {/* D11: a line whose deliveries still count is refused (409
+                        line_has_deliveries) — said here, at the line, in words that name the way
+                        out (void them first). */}
+                    {removeError?.lineId === line.id && (
+                      <p className="mat-mark-error" role="alert">
+                        {removeError.text}
+                      </p>
                     )}
                   </div>
                 )}
@@ -1002,6 +1632,41 @@ export function JobMaterialsPage({
           </details>
         );
       })}
+
+      {/* ── Removed from the list (D11, operator decision 2026-10-21) ──────────────────────────
+          A line can no longer be removed while its deliveries count — but lines removed BEFORE
+          that rule still carry marks, and those marks still count toward the Receipts mirror and
+          the client's weekly report. Without this group they could be neither seen nor voided
+          from anywhere. VOID-ONLY by design: no mark buttons, no correction, no editing — the
+          Worker records nothing new on a removed line, and the affordances say so by absence.
+          Not in the summary above: that counts what this job is still expecting. */}
+      {data !== null && data.removed.length > 0 && (
+        <section className="card dash-section" aria-label="Removed from the list">
+          <h3 className="dash-detail__h2">Removed from the list</h3>
+          {data.removed.map((line) => {
+            const pill = rollupPill(line);
+            return (
+              <div key={line.id} className="dash-card">
+                {/* Title first: the head is a space-between row, and with no owed chip on the
+                    right a leading pill would push the title to the far edge of the card. */}
+                <div className="dash-card__head">
+                  <strong>{rowTitle(line)}</strong>{" "}
+                  <span className={pill.className}>{pill.label}</span>
+                </div>
+                <p className="dash-card__sub">
+                  Removed from this job&apos;s list. Deliveries recorded against it still count until voided.
+                </p>
+                <div className="dash-card__sub">
+                  {line.part_number ? `Part ${line.part_number} · ` : ""}
+                  Expected {fmtQty(line.qty)} {line.unit ?? ""}
+                  {line.qty_received_total != null ? ` · received ${fmtQty(line.qty_received_total)}` : ""}
+                </div>
+                {historyBlock(line, true)}
+              </div>
+            );
+          })}
+        </section>
+      )}
 
       {canManage && (
         <section className="card dash-section" aria-label="Add an expected material">

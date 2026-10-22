@@ -152,6 +152,34 @@ screened yet (see `portal_poll` health) or none were uploaded.
 
 **Recompile after curating:** tick **Compile Now**.
 
+## Symptom 6b — "delivery rows were removed / replaced" notice after a void / a voided delivery still prints
+
+Page 5's delivery log lists only delivery marks that still count. When the crew **voids** a mistaken
+mark on the job's Materials page (migration 0080), it drops off the next compile, and a correct entry
+recorded in its place prints on its own date. If the office had **curated** that week's delivery
+list, a curated row copied from the voided mark is handled when the report is read — the saved list
+is not rewritten:
+
+- **Replaced** — when the voided mark was corrected, and the correct entry is a *Delivered* or
+  *Partially delivered* mark that still counts, dated inside the same report week, and not already
+  on the curated list, the correct entry takes the row's place in the list.
+- **Removed** — otherwise (no correction yet, a correction dated in another week, or a correction
+  that is itself voided with nothing after it) the row is dropped.
+
+A gold notice on the weekly report screen says how many of each, in words — for example "1 delivery
+row was replaced with the corrected entry." and "2 delivery rows were removed because their marks
+were voided." — so the list never changes silently.
+
+- **The notice shows** — working as designed; it is informational, not an error. Tick **Compile
+  Now** so the PDF matches the screen.
+- **A voided delivery still prints on a curated week** — that row was curated before migration 0080
+  and carries no link back to its mark, so the void cannot find it. On the weekly report screen,
+  **Remove** the row, tap **Save weekly report inputs**, then tick **Compile Now**.
+- **The week's report was already sent** — leave the sent PDF alone and escalate (below).
+
+How to void a mark, and who may: [`job_materials.md`](job_materials.md) → "Voiding a mistaken
+delivery mark".
+
 ---
 
 ## Boundary — escalate to the Developer-Operator (Seth)
@@ -163,4 +191,6 @@ Everything above is Tier-2. Escalate, do not attempt:
 - `client_report_failed` repeating after a clean re-run (a wired-but-broken report).
 - A report that renders **wrong numbers** rather than blank ones — that is a data-correctness
   question, not a re-run.
+- A delivery voided **after** that week's report was already sent. The sent PDF is what the client
+  received and is not changed; whether they need a corrected report is a decision, not a re-run.
 - Anything requiring a code change, a secret, or a doctrine call.

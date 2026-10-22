@@ -11,7 +11,7 @@
 // `receipt_status`), so this is derivation, not new data. It is pure and lives here so the
 // rule has one definition and a test, rather than being inlined twice.
 
-import type { ExpectedMaterialRow } from "./fieldops_expected_materials";
+import type { ExpectedMaterialRow, MaterialReceiptKind } from "./fieldops_expected_materials";
 
 export interface LineOwed {
   /** null when the line carries no expected quantity — absent data, not a zero. */
@@ -81,4 +81,69 @@ export function owedLabel(r: ExpectedMaterialRow): string | null {
   if (owed.over) return `${Math.abs(r.qty! - (r.qty_received_total ?? 0))}${unit} over`;
   if (owed.settled) return "Settled";
   return `${owed.outstanding}${unit} outstanding`;
+}
+
+/**
+ * D9 (receipt-event VOID, 2026-10-21): must the page ask before recording this mark?
+ *
+ * WHY. The receipt-event void exists because a second "Delivered" on a line that already had
+ * everything it was owed is easy to record — a double tap, two people marking the same truck —
+ * and until 0080 it could never be taken back. Voiding cleans it up afterwards; this stops most
+ * of them being made. A settled line can legitimately take another delivery (a replacement
+ * pallet, a line under-ordered in the BOM), so this ASKS, it never refuses.
+ *
+ * Only delivered and partial add to the received total; not_delivered records that nothing came,
+ * so asking "record ANOTHER delivery?" before it would be a question about the wrong thing. A line
+ * with no expected quantity is never settled (lineOwed), and the explicit `qty` check keeps that
+ * true even if lineOwed's null rule ever changes. ONE rule for every mark surface — call this
+ * rather than re-deriving it.
+ */
+export function needsSettledConfirm(r: ExpectedMaterialRow, kind: MaterialReceiptKind): boolean {
+  if (kind === "not_delivered") return false;
+  return r.qty !== null && lineOwed(r).settled;
+}
+
+/** The D9 question, in the line's own numbers and unit — "already has 40 of 40 ea received" is
+ *  something the person holding the delivery ticket can check; "this line is settled" is not.
+ *  `action` names the act being confirmed: the correction form asks "Record the correction
+ *  anyway?", because "another delivery" would describe something the person is not doing. */
+export function settledConfirmText(r: ExpectedMaterialRow, action = "Record another delivery"): string {
+  const unit = r.unit ? ` ${r.unit}` : "";
+  return `This line already has ${r.qty_received_total ?? 0} of ${r.qty ?? 0}${unit} received. ` +
+    `${action} anyway?`;
+}
+
+// ── Epoch instants in the crews' day ─────────────────────────────────────────────────────────────
+// A mark's `event_date` is already a Pacific YYYY-MM-DD, but `created_at` and `voided_at` are
+// epoch instants. Rendered with toLocaleDateString they printed "10/21/2026" beside "2026-10-19"
+// in the same history row, in whatever zone the browser sat in. These put them on the same
+// footing: Pacific, ISO-ordered, 24-hour. formatToParts rather than format() so no engine's
+// separator or ordering choice can leak into the string.
+const PACIFIC_PARTS = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Los_Angeles",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  // h23, not hour12:false — under hour12:false some engines print midnight as "24".
+  hourCycle: "h23",
+});
+
+function pacificParts(epochSeconds: number): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of PACIFIC_PARTS.formatToParts(new Date(epochSeconds * 1000))) out[p.type] = p.value;
+  return out;
+}
+
+/** Epoch seconds → the Pacific calendar date as YYYY-MM-DD (the format event dates use). */
+export function pacificDateOf(epochSeconds: number): string {
+  const p = pacificParts(epochSeconds);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/** Epoch seconds → Pacific wall-clock time as 24-hour HH:MM. */
+export function pacificTimeOf(epochSeconds: number): string {
+  const p = pacificParts(epochSeconds);
+  return `${p.hour}:${p.minute}`;
 }

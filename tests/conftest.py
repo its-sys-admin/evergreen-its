@@ -388,6 +388,18 @@ def _mock_kill_switch_state(
 
 
 @pytest.fixture(autouse=True)
+def _fresh_smartsheet_column_map_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test an empty `smartsheet_client._column_maps`.
+
+    `get_rows` seeds that process-wide cache as a side effect (so the mirror's writes after a read
+    need no column fetch of their own), which means any test reaching a REAL `get_rows` leaves
+    sheet-id → column-id entries behind for the next test to resolve against. A test that wants a
+    seeded map sets one with `monkeypatch`/`mocker` inside its body; that applies after this.
+    """
+    monkeypatch.setattr("shared.smartsheet_client._column_maps", {})
+
+
+@pytest.fixture(autouse=True)
 def _redirect_live_log_dir(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

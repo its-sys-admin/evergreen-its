@@ -424,13 +424,15 @@ export interface ExpectedMaterialRow {
   /** Expected SHIP date (YYYY-MM-DD). Distinct from `expected_date`, which keeps its 0031
    *  meaning — the expected DELIVERY date. The UI labels the pair ship/delivery. */
   expected_ship_date: string | null;
-  /** The delivery ROLLUP, DERIVED from material_receipt_events (latest event by id wins);
-   *  null = never marked. THIS — not `status` — is the three-way delivery state. `status` stays
-   *  the coarse legacy projection the daily form, the §51 Material List mirror and the M3
-   *  incident join already read, and it carries the orthogonal `incident` flag. */
+  /** The delivery ROLLUP, DERIVED from material_receipt_events: the kind of the latest COUNTING
+   *  mark by order key (COALESCE(sort_id, id) — a correction sits in the slot of the mark it
+   *  replaced; voided marks are skipped). null = no counting mark, so a line whose marks are all
+   *  voided reads as never marked. THIS — not `status` — is the three-way delivery state.
+   *  `status` stays the coarse legacy projection the daily form, the §51 Material List mirror and
+   *  the M3 incident join already read, and it carries the orthogonal `incident` flag. */
   receipt_status: MaterialReceiptKind | null;
-  /** Running total: SUM of every event qty for this line. null = nothing quantified yet, which
-   *  is deliberately distinct from a recorded 0. */
+  /** Running total: SUM over marks that still count (voided excluded). null = nothing counting
+   *  is quantified, which is deliberately distinct from a recorded 0. */
   qty_received_total: number | null;
 }
 
@@ -448,6 +450,18 @@ export interface MaterialReceiptEventRow {
   event_date: string | null; // YYYY-MM-DD (defaults to Pacific today at write)
   created_at: number; // epoch seconds
   actor_name: string | null; // DISPLAY NAME ONLY (W9) — null when the account has no roster link
+  // ── Void (migration 0080). A voided mark is KEPT, annotated, and excluded from every rollup. ──
+  voided_at: number | null; // epoch seconds; null = the mark counts
+  /** Who voided it: the personnel DISPLAY NAME, else the account's ROLE LABEL (e.g. "Admin
+   *  (Office)") for an account with no roster link (operator decision D6). Never a username.
+   *  ALWAYS null for a subcontractor ('submitter') reader, as is `void_reason`: they see THAT a
+   *  mark was voided (`voided_at`), not who or why. */
+  voided_by_name: string | null;
+  void_reason: string | null;
+  /** The voided event this one corrects (same line). null on an ordinary mark. */
+  supersedes_id: number | null;
+  /** The event that corrects THIS one, when it has been corrected. null otherwise. */
+  superseded_by_id: number | null;
 }
 
 /** One SCHEDULED shipment attached to an expected-material LINE. A shipping-log row is a LOAD,
@@ -471,6 +485,12 @@ export interface ExpectedMaterialsResponse {
   expected_materials: ExpectedMaterialRow[];
   // REQUIRED, not optional, on purpose: tsconfig covers src/, so every SPA mock that omits them
   // fails `npm run typecheck` — that is the registry teeth keeping the two surfaces in step.
+  /** REMOVED (inactive) lines of this job that carry any receipt event, voided or not — marks
+   *  stranded by removals made before a line with counting marks became unremovable (operator
+   *  decision D11). Same row shape and rollup as `expected_materials`, seq order, capped at 200.
+   *  Their events ride `receipt_events`. They are VOID-ONLY: no mark or correction lands on a
+   *  removed line. */
+  removed_lines: ExpectedMaterialRow[];
   shipments: MaterialShipmentRow[];
   receipt_events: MaterialReceiptEventRow[];
   /** The job's display name for the page heading ("Materials — Deep Lake", never the
@@ -1155,6 +1175,11 @@ export interface WeeklyReportLaborRow {
  *  (0078) store this exact shape so the screen and the Mac's 4-key narrowing render curated and
  *  derived rows identically. `kind` is screen-only provenance (the PDF drops it). */
 export interface WeeklyReportDelivery {
+  /** The ledger event this row was derived from (0080). Lets a curated snapshot drop a row whose
+   *  mark was later VOIDED (operator decision D5), or swap in that mark's in-week correction.
+   *  Absent on rows the office typed in and on rows curated before 0080 — those can't be matched
+   *  and are never dropped. Screen-only; the Mac's 4-key narrowing drops it. */
+  event_uuid?: string;
   event_date: string;
   kind: string;
   item: string;
@@ -1255,6 +1280,17 @@ export interface ProductionReportResponse {
    *  screen must say so (the photos.truncated / schedule.truncated no-silent-caps convention). */
   deliveries_truncated: boolean;
   material_incidents_truncated: boolean;
+  /** Curated delivery rows dropped from `deliveries` because their ledger mark was VOIDED after
+   *  the office saved the snapshot (0080, decision D5) and no correction could take their place.
+   *  Always 0 for an un-curated week: the live derivation already excludes voided marks. The
+   *  screen must say so rather than letting a row vanish silently (the no-silent-caps convention). */
+  deliveries_voided_removed: number;
+  /** Curated delivery rows whose voided mark was REPLACED, in the same position, by the live tip
+   *  of its correction chain — when that tip is a delivered/partial mark dated inside this report
+   *  week and not already on the list. The substitute is the derivation's own row for that mark
+   *  (it carries `event_uuid`), so the office's edits to the voided row do not carry over. Always 0
+   *  for an un-curated week. */
+  deliveries_voided_replaced: number;
   photos: { available: WeeklyReportPhotoOffered[]; selected: WeeklyReportPhoto[]; auto_selected: boolean;
     /** True when the offered list hit the pool cap — more clean photos exist than were offered. */
     truncated: boolean };

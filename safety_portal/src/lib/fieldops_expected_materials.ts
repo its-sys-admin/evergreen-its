@@ -16,7 +16,7 @@ export type {
   MaterialReceiptKind,
   MaterialShipmentRow,
 } from "../../worker/wire-types";
-import type { MaterialReceiptKind } from "../../worker/wire-types";
+import type { ExpectedMaterialStatus, MaterialReceiptKind } from "../../worker/wire-types";
 
 export async function fetchExpectedMaterials(jobId: string): Promise<ExpectedMaterialsResponse> {
   const res = await fetch(`/api/fieldops/expected-materials?job_id=${encodeURIComponent(jobId)}`, {
@@ -90,8 +90,11 @@ export async function deactivateExpectedMaterial(id: number): Promise<void> {
   await postJson(`/api/fieldops/expected-material/${id}/delete`, {});
 }
 
-/** Confirm receipt — a 'delivered' mark. Kept for the daily form's existing button; under 0059 it
- *  appends to the receipt ledger, so a REPEAT is now a legal second event, not a 409. */
+/** Confirm receipt — a 'delivered' mark. Under 0059 it appends to the receipt ledger, so a REPEAT
+ *  is a legal second event, not a 409. It has NO SPA caller: the daily form's "Confirm receipt"
+ *  button it served was removed with the deep-link card (#74, 2026-08-11), leaving the Materials
+ *  page's `markReceipt` as the only mark surface. Any caller re-added here must ask the D9
+ *  question first (lib/materials_view.needsSettledConfirm) — that rule lives in one place. */
 export async function receiveExpectedMaterial(
   id: number,
   opts: { qty_received?: number; note?: string } = {},
@@ -112,12 +115,36 @@ export async function markReceipt(
     note?: string;
     event_date?: string;
     shipment_id?: number;
+    /** A CORRECTION (0080, decision D3): the VOIDED event on this same line that this mark
+     *  replaces. The Worker refuses one that is not voided (409 supersedes_not_voided), not on
+     *  this line (422 unknown_supersedes), or already corrected (409 already_corrected), and
+     *  files the correction in the original's history position however much later it lands (D4). */
+    supersedes_id?: number;
   },
 ): Promise<{ event_id: number | null }> {
   return postJson<{ ok: boolean; id: number; event_id: number | null; kind: MaterialReceiptKind }>(
     `/api/fieldops/expected-material/${id}/receipt`,
     body,
   );
+}
+
+/** VOID a delivery mark (0080). The row is KEPT — annotated with who/when/why and excluded from
+ *  every rollup — never deleted: the ledger stays append-only, and the void is itself an audited
+ *  event. `reason` is REQUIRED (1..500 chars after trim; 400 reason_required / invalid_reason).
+ *  The same people who may mark may void (decision D1), and the Worker re-gates it: role, job
+ *  scope, an ACTIVE job (409 job_not_active), and one void per mark (409 already_voided).
+ *  Returns the line's persisted status + received total after the void. */
+export async function voidReceiptEvent(
+  eventId: number,
+  reason: string,
+): Promise<{
+  ok: boolean;
+  event_id: number;
+  line_id: number;
+  status: ExpectedMaterialStatus | null;
+  qty_received: number | null;
+}> {
+  return postJson(`/api/fieldops/receipt-event/${eventId}/void`, { reason });
 }
 
 export async function createMaterialShipment(
@@ -153,7 +180,8 @@ export async function flagExpectedMaterialIncident(
 /** Clear a line's problem flag — an explicit human act, never a side effect of a delivery
  *  mark (a delivered-but-damaged pallet is still a problem). note is REQUIRED: the record
  *  of HOW it was resolved is the point. Status lands where the delivery ledger says —
- *  latest event delivered → received, otherwise back to expected. */
+ *  the latest COUNTING (non-voided) mark, by order key, delivered → received, otherwise
+ *  back to expected. */
 export async function resolveExpectedMaterialIncident(
   id: number,
   note: string,

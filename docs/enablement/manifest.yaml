@@ -139,7 +139,7 @@ docs:
     title: "ITS Data Model Reference"
     version: v1
     source: docs/references/data_model_reference.md
-    sha256: 82ee48614334a1c525abd853594930114c5bd6b6f64714e53a5c15613c5fd27d
+    sha256: 234ad3e8526c3ed318f2c0d65c66793694b276e8c4788f1e817158166f1b3a54
     audience: operator
 
   - key: integration_reference
@@ -185,5 +185,5 @@ docs:
     title: "ITS Troubleshooting Guide"
     version: v1
     source: docs/troubleshooting/troubleshooting_guide.md
-    sha256: e522d7dff76aee6ae545d463155f1e8b7bba3fd4eeb3891b39023bda83613790
+    sha256: b812814c10c8d31709a3c5140a12c410d24d91348495a80cb2304cea8a742a6a
     audience: operator

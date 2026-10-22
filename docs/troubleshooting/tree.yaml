@@ -364,14 +364,46 @@ workflows:
             checks:
               - Marking needs cap.materials.receive AND a manager/admin role — a submitter holds the capability but not the role (the same gate the daily report uses).
               - Non-admins only reach the job they are PLACED on (personnel.current_job); a 403 forbidden_job is the designed scope, not a fault.
-              - The received total is the SUM over an append-only ledger — open the line's history, which shows every event with its quantity, note, date and who recorded it.
+              - The received total is the SUM of every mark that still counts (a VOIDED mark counts for nothing) — open the line's history, which shows every mark with its quantity, note, date and who recorded it.
               - The incident flag is STICKY by design; a delivery mark records the delivery without clearing the flag.
             resolutions:
               - Fix the role in Accounts or the placement on the job's crew, per the runbook.
-              - A duplicate or mistaken ledger event is corrected by recording a FURTHER event — the ledger is append-only and has no delete path.
-              - Correcting a total at source, or clearing a stuck incident flag, is Seth's — escalate.
+              - A duplicate or mistaken mark is VOIDED in the portal (never deleted) and, if it was wrong rather than a duplicate, followed by the correct entry — see the next node.
+              - Un-voiding or deleting a mark, changing a closed job's delivery history, or clearing a stuck incident flag is Seth's — escalate.
             class: seth_coresolve
             runbook: docs/runbooks/job_materials.md
+          - id: materials_mark_void
+            symptom: >-
+              A delivery was recorded by mistake — a double tap, a load that was already marked, or
+              the wrong quantity — and the line's received total (and its Smartsheet rows) now read
+              wrong.
+            signals: ["over-received line", "duplicate delivery mark", "reason_required", "invalid_reason", "already_voided", "job_not_active", "supersedes_not_voided", "unknown_supersedes", "already_corrected", "invalid_supersedes_id", "removed because its mark was voided", "removed because their marks were voided", "replaced with the corrected entry", "replaced with their corrected entries", "Voided with no name or reason"]
+            checks:
+              - On the job's Materials tracking page, open the line's delivery history and find the wrong entry (quantity, date, who recorded it). Show voided (N) under the history reveals entries already voided.
+              - Who can void is exactly who can mark — a manager placed on the job, or an admin on any job. A submitter account cannot, and sees that an entry was voided but not who voided it or why.
+              - A void on a closed or archived job is refused ("That job is no longer active…") by design.
+            resolutions:
+              - A manager on the job (or an admin) taps Void beside the wrong entry (each entry shows the time it was recorded, so identical double-tap marks can be told apart), types why (required), and taps Confirm void. The entry stays in the history, struck through, and stops counting on every surface.
+              - The page then asks which it was — "Done — it was a duplicate" (the usual case; nothing more to do) or "Record the correct entry" when the mark was WRONG rather than a duplicate (no time limit; each voided entry is corrected once; the line must still be on the list). A good mark voided by mistake is fixed the same way, with its original values.
+              - Verify — the page total changes at once; the Material List and Material Receipts sheets follow after one ~90s sync cycle (the Receipts row stays, grayed, Entry Status = Voided). On a curated Weekly Production Report week the row is dropped when read — or replaced by the correct entry when that is a delivery dated in the same week — and a gold notice says how many; tick Compile Now. A week curated before migration 0080 needs the row removed by hand on the weekly report screen, then Compile Now.
+              - Escalate — anything asking to un-void or delete a mark, a void refused on a non-active job, a week whose report was already sent, or a Receipts sheet still not showing the void after several cycles with fieldops_sync errors.
+            class: daniel_solo
+            runbook: docs/runbooks/job_materials.md#voiding-a-mistaken-delivery-mark
+          - id: materials_line_removal
+            symptom: >-
+              A material line cannot be removed from a job's list ("This line has delivery marks
+              recorded. Void them first, then remove the line."), or a "Removed from the list" group
+              shows on the job's Materials page.
+            signals: ["line_has_deliveries", "Void them first, then remove the line", "Removed from the list", "Deliveries recorded against it still count until voided"]
+            checks:
+              - A line with deliveries that still count cannot be removed — its deliveries would keep counting on the Material Receipts sheet and the weekly report where nobody can see them. A line whose deliveries are all voided can be removed.
+              - The "Removed from the list" group lists removed lines that have delivery history — usually lines removed before this rule, whose deliveries may still count.
+            resolutions:
+              - If the line's deliveries were mistakes, a manager on the job (or an admin) voids each one, then removes the line. If they are real, the line stays on the list.
+              - In the "Removed from the list" group the office decides whether each old delivery is real; any that is not is voided there. That group is void-only (no new marks, no corrections), and the Material List row of a removed line does not change — only the Material Receipts sheet and the weekly report follow.
+              - Escalate — anything asking to restore a removed line, or to change a delivery on a closed job.
+            class: daniel_solo
+            runbook: docs/runbooks/job_materials.md#removing-a-line-and-the-removed-from-the-list-group
       - id: job_mirror
         title: fieldops-sync mirrors dirty jobs UP into both Active-Jobs sheets
         what_happens:
@@ -419,13 +451,15 @@ workflows:
             runbook: docs/runbooks/hours_log_sync.md
           - id: receipts_ledger_stale
             symptom: A delivery mark made in the portal never appears on the job's Material Receipts sheet, or a line's Line Qty Received / Line Status stops moving.
-            signals: ["material_receipts_perjob_failed", "material_receipts_row_cap_check_failed", "material_receipts_sheet_race_duplicate", "receipts pass gate off"]
+            signals: ["material_receipts_perjob_failed", "material_receipts_row_cap_check_failed", "material_receipts_sheet_race_duplicate", "material_receipts_column_backfill_failed", "material_receipts_columns_backfilled", "material_receipts_void_format_failed", "receipts pass gate off"]
             checks:
               - The ledger re-projects IN FULL every cycle (no watermark), so a transient fault self-heals on the next cycle — wait one 90s cycle before treating it as a fault.
-              - Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption.
+              - Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption. The six void columns (Entry Status, Voided By, Voided At, Void Reason, Supersedes, Superseded By) also fill in later when a mark is voided or corrected — a voided row stays on the sheet, grayed, and is never deleted.
               - Check field_ops.fieldops_sync.receipts_enabled, then the error journal for the codes above.
+              - material_receipts_column_backfill_failed means that ONE job's receipts mirror is paused (no new rows, no void annotations) until the six void columns can be added; it repeats once per cycle and other jobs carry on. A permanent refusal (a 403 — adding a column needs Admin on the sheet) files a fieldops_receipt_permanent Review-Queue row with phase back-fill instead, and escalates. material_receipts_columns_backfilled (once per sheet) and material_receipts_void_format_failed (a void written but not grayed) are informational / cosmetic.
             resolutions:
               - Gate off → flip it back on (no documented precondition); rows catch up on the first cycle back. A permanent per-event failure opens a Review Queue row naming the job — follow it.
+              - Back-fill failed → wait a cycle or two, then check the circuit breaker and the fieldops_sync heartbeat; the job catches up in full once the columns are added. Still failing after several cycles, or the message names SmartsheetPermissionError (a 403 — lost access to the sheet) → escalate.
               - Duplicate rows after a create race → keep the daemon's row (the one that keeps updating); the duplicate is inert. Escalate only if duplicates keep appearing.
             class: daniel_solo
             runbook: docs/runbooks/fieldops_sync.md

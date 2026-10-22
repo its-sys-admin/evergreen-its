@@ -58,8 +58,8 @@ def sc(mocker):
         "get_setting": mocker.patch(
             "progress_reports.material_list.smartsheet_client.get_setting", return_value="15000"
         ),
-        # 0059 column back-fill on the FIND branch. Defaults to "nothing was missing" so every
-        # pre-existing test stays byte-identical; the back-fill tests below make it return titles.
+        # 0059 column back-fill (`backfill_columns`, called by the pass AFTER its index read).
+        # Defaults to "nothing was missing"; the back-fill tests below make it return titles.
         "ensure_columns": mocker.patch(
             "progress_reports.material_list.smartsheet_client.ensure_columns", return_value=[]
         ),
@@ -394,6 +394,28 @@ def test_row_cap_check_never_raises_on_read_failure(sc):
     )
 
 
+def test_read_row_cap_threshold_is_the_its_config_value(sc):
+    assert material_list.read_row_cap_threshold() == 15000
+    sc["get_setting"].assert_called_once_with(
+        material_list.CFG_ROW_CAP_WARN, workstream="progress_reports"
+    )
+
+
+def test_read_row_cap_threshold_falls_back_loudly_never_raises(sc):
+    sc["get_setting"].side_effect = RuntimeError("smartsheet down")
+    assert material_list.read_row_cap_threshold() == material_list.DEFAULT_ROW_CAP_WARN
+    assert [c.kwargs.get("error_code") for c in sc["log"].call_args_list] == [
+        "material_list_row_cap_check_failed"
+    ]
+
+
+def test_row_cap_with_a_pass_resolved_threshold_reads_no_config(sc):
+    material_list.check_row_cap(9001, "Job One — Material List", row_count=60, threshold=50)
+    sc["get_setting"].assert_not_called()
+    sc["review"].assert_called_once()
+    assert sc["review"].call_args.kwargs["payload"]["threshold"] == 50
+
+
 # ---- 0059 columns (Part Number / Category / Expected Ship Date) ------------
 
 
@@ -467,25 +489,30 @@ def test_upsert_defaults_the_new_columns_blank_for_a_pre_0059_line(sc):
     assert cells[material_list.COL_EXPECTED_SHIP_DATE] == ""
 
 
-def test_ensure_backfills_columns_on_the_find_branch(sc):
+def test_backfill_columns_adds_the_full_set_in_one_call(sc):
+    material_list.backfill_columns(4242, "Job One — Material List")
+    sc["ensure_columns"].assert_called_once_with(4242, material_list.BACKFILL_COLUMNS)
+
+
+def test_ensure_never_backfills_the_pass_does_it_after_its_index_read(sc):
+    # P2: ensure is find-or-create ONLY. Back-filling here ran BEFORE the pass's index read, on a
+    # cold column map — a full-sheet read of its own, every cycle, for a sheet about to be read
+    # anyway. The pass now reads first (seeding the map) and back-fills after, for free.
     sc["find_sheet"].return_value = 4242
     assert material_list.ensure_material_list_sheet("Job One") == 4242
-    sc["ensure_columns"].assert_called_once_with(4242, material_list.BACKFILL_COLUMNS)
+    sc["ensure_columns"].assert_not_called()
     sc["create_sheet"].assert_not_called()
 
 
 def test_ensure_does_not_backfill_on_the_create_branch(sc):
-    # A sheet created from MATERIAL_LIST_COLUMNS already has every column — a back-fill there would
-    # be a pointless read on the hot create path.
     material_list.ensure_material_list_sheet("Job One")
     sc["create_sheet"].assert_called_once()
     sc["ensure_columns"].assert_not_called()
 
 
 def test_backfill_logs_what_it_added(sc):
-    sc["find_sheet"].return_value = 4242
     sc["ensure_columns"].return_value = ["Part Number", "Category"]
-    material_list.ensure_material_list_sheet("Job One")
+    material_list.backfill_columns(4242, "Job One — Material List")
     assert any(
         c.kwargs.get("error_code") == "material_list_columns_backfilled"
         for c in sc["log"].call_args_list
@@ -495,21 +522,17 @@ def test_backfill_logs_what_it_added(sc):
 def test_backfill_is_silent_when_nothing_was_missing(sc):
     # The steady-state path must not WARN every cycle for every job — that is how a log stops being
     # read.
-    sc["find_sheet"].return_value = 4242
     sc["ensure_columns"].return_value = []
-    material_list.ensure_material_list_sheet("Job One")
-    assert not any(
-        c.kwargs.get("error_code") == "material_list_columns_backfilled"
-        for c in sc["log"].call_args_list
-    )
+    material_list.backfill_columns(4242, "Job One — Material List")
+    assert not sc["log"].call_args_list
 
 
-def test_backfill_failure_warns_but_still_returns_the_sheet(sc):
-    # A stale-schema sheet still mirrors every column it DOES have; a top-up failure must not stop
-    # the mirror.
-    sc["find_sheet"].return_value = 4242
+def test_backfill_failure_warns_and_never_raises(sc):
+    # A top-up failure must not stop the pass: the retire (which writes only On List, a column every
+    # sheet has had since create) still runs, and each line upsert that names an absent column fails
+    # loudly at its own per-line fence rather than being silently under-written.
     sc["ensure_columns"].side_effect = RuntimeError("breaker open")
-    assert material_list.ensure_material_list_sheet("Job One") == 4242
+    material_list.backfill_columns(4242, "Job One — Material List")
     assert any(
         c.kwargs.get("error_code") == "material_list_column_backfill_failed"
         for c in sc["log"].call_args_list

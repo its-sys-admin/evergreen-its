@@ -25,7 +25,11 @@ import { registerPersonnelWriteRoutes } from "./fieldops_personnel_write";
 import { registerCrewAssignRoutes } from "./fieldops_crew_assign";
 import { registerCrewWriteRoutes } from "./fieldops_crew_write";
 import { registerMaterialWriteRoutes } from "./fieldops_material_write";
-import { registerExpectedMaterialsRoutes } from "./fieldops_expected_materials";
+import {
+  registerExpectedMaterialsRoutes,
+  RECEIPT_ACTIVE_SQL,
+  VOIDED_BY_DISPLAY_SQL,
+} from "./fieldops_expected_materials";
 import {
   claimAdditionalPhotos,
   parseAdditionalPhotoRefs,
@@ -2706,25 +2710,52 @@ app.get("/api/internal/fieldops/material-incidents", requireFieldopsToken, async
  * receipts are structured D1 rows, not form payloads. Two DERIVED columns ride along because the
  * mirror shows them and they legitimately change after the event is written: `line_status` (the
  * line's coarse status, which goes 'incident' if a problem is later flagged) and
- * `line_qty_received` (the ledger ROLLUP across all events for that line, recomputed here rather
- * than stored, so it can never drift from the events it summarizes).
+ * `line_qty_received` (the ledger ROLLUP across all COUNTING events for that line, recomputed here
+ * rather than stored, so it can never drift from the events it summarizes).
+ *
+ * VOIDED marks (0080) stay in this feed. A void is a further fact ABOUT a mark, not its removal, so
+ * the mirror ANNOTATES the row instead of retiring it and the no-retire-path property above still
+ * holds. Five columns carry it, all of which change after the event is written (hence the
+ * change-only upsert): `voided_at` (epoch seconds, null while the mark counts),
+ * `voided_by_display`, `void_reason`, and the correction links `supersedes_uuid` (the voided mark
+ * this one replaces) and `superseded_by_uuid` (the mark that replaced this one). The links are
+ * event UUIDs, not D1 ids, because the sheet is keyed by Event UUID and a row id means nothing
+ * there. A voided mark is excluded from `line_qty_received` through the shared
+ * RECEIPT_ACTIVE_SQL rule, the same one every other rollup surface reads, so the sheet can never
+ * total a line differently from the portal. `line_status` remains the STORED `jem.status`, which
+ * the void route itself recomputes.
  *
  * `bol_number` is LEFT-JOINed from the optional shipment the event names — a mark made against a
  * specific truckload carries its BOL, one made against the line as a whole does not.
- * DISPLAY-NAME-ONLY received_by (personnel.name; the raw actor username is never returned — House
- * Reflex §5). All values flow only to a Smartsheet cell (no AI, no send).
+ * DISPLAY-NAME-ONLY received_by and voided_by (personnel.name; the raw actor username is never
+ * returned — House Reflex §5). A voider with no roster link reads as the account's ROLE LABEL
+ * (VOIDED_BY_DISPLAY_SQL, operator decision D6), never blank and never the username. All values
+ * flow only to a Smartsheet cell (no AI, no send).
  */
 app.get("/api/internal/fieldops/material-receipts", requireFieldopsToken, async (c) => {
+  // The rollup subquery aliases its own table `e`, shadowing the outer `e`, because the shared
+  // RECEIPT_ACTIVE_SQL fragment is written over that alias. It therefore correlates on `jem.id`,
+  // which the LEFT JOIN below makes equal to the outer event's line_id (the RECEIPT_ROLLUP_SQL
+  // shape exactly). Lines and events are only ever hard-deleted together (purge-job), so the join
+  // never misses for a live event.
   const { results } = await c.env.DB
     .prepare(
       `SELECT e.event_uuid, e.job_id, j.project_name, e.kind, e.qty, e.note, e.event_date,
               jem.line_uuid, jem.description AS material_description, jem.unit,
               jem.part_number, jem.qty AS line_qty_expected, jem.status AS line_status,
-              (SELECT SUM(e2.qty) FROM material_receipt_events e2 WHERE e2.line_id = e.line_id)
+              (SELECT SUM(e.qty) FROM material_receipt_events e
+                WHERE e.line_id = jem.id AND ${RECEIPT_ACTIVE_SQL})
                 AS line_qty_received,
               sh.bol_number,
               (SELECT p.name FROM personnel p WHERE p.username = e.actor ORDER BY p.id ASC LIMIT 1)
-                AS received_by_display
+                AS received_by_display,
+              e.voided_at,
+              ${VOIDED_BY_DISPLAY_SQL} AS voided_by_display,
+              e.void_reason,
+              (SELECT o.event_uuid FROM material_receipt_events o WHERE o.id = e.supersedes_id)
+                AS supersedes_uuid,
+              (SELECT c2.event_uuid FROM material_receipt_events c2 WHERE c2.supersedes_id = e.id)
+                AS superseded_by_uuid
          FROM material_receipt_events e
          JOIN jobs j ON j.job_id = e.job_id AND j.status = ?1
          LEFT JOIN job_expected_materials jem ON jem.id = e.line_id

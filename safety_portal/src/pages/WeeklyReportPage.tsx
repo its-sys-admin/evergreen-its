@@ -175,7 +175,12 @@ function toDraft(d: ProductionReportResponse): Draft {
     ifc_review: o.pending.ifc_review,
     change_orders: o.pending.change_orders,
     photos: o.photos,
-    deliveries: o.deliveries,
+    // A curated week edits the EFFECTIVE list (`d.deliveries`), not the stored snapshot. They
+    // are the same rows except after a VOID (0080, decision D5): a curated row whose ledger mark
+    // was later voided is dropped when the report is read, and the stored snapshot may still
+    // hold it. Seeding the editor from that copy would put the voided delivery back on screen
+    // and back into the snapshot on the next save — un-doing the void for the client's report.
+    deliveries: o.deliveries === null ? null : d.deliveries,
     material_incidents: o.material_incidents,
   };
 }
@@ -191,6 +196,30 @@ function shiftWeek(weekStart: string, weeks: number): string {
   const d = new Date(`${weekStart}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + weeks * 7);
   return d.toISOString().slice(0, 10);
+}
+
+/** The curated-list notice after a VOID (0080: D5 + W4), in plain English. Replaced rows lead —
+ *  the report still shows a delivery there, just the right one — then rows that are gone with
+ *  nothing in their place. Counted in words, never "row(s)": the office reads this, not a log. */
+function voidedDeliveriesNotice(d: ProductionReportResponse): string {
+  const replaced = d.deliveries_voided_replaced;
+  const removed = d.deliveries_voided_removed;
+  const parts: string[] = [];
+  if (replaced > 0) {
+    parts.push(
+      replaced === 1
+        ? "1 delivery row was replaced with the corrected entry."
+        : `${replaced} delivery rows were replaced with their corrected entries.`,
+    );
+  }
+  if (removed > 0) {
+    parts.push(
+      removed === 1
+        ? "1 delivery row was removed because its mark was voided."
+        : `${removed} delivery rows were removed because their marks were voided.`,
+    );
+  }
+  return parts.join(" ");
 }
 
 /** Delivery mark → chip copy. The ledger's three kinds read as what happened, not as codes. */
@@ -319,7 +348,9 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
   const addDelivery = () => {
     const base = draft.deliveries ?? data.deliveries;
     // kind stays "" — an office-added row has NO gate mark, and the chip prints an em dash.
-    // Defaulting it to "delivered" would dress an authored row up as a ledger record.
+    // Defaulting it to "delivered" would dress an authored row up as a ledger record. For the
+    // same reason it carries NO event_uuid: that key ties a row to a ledger mark so a later void
+    // of the mark can drop it (0080), and a typed row has no mark to be voided.
     set("deliveries", [...base, {
       event_date: "", kind: "", item: "", part_number: "",
       qty: "", unit: "", vendor: "", bol_number: "", carrier: "",
@@ -386,7 +417,9 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
         ...(draft.photos === null ? {} : { photos: draft.photos }),
         // The material lists ride the same omit-preserves-auto contract. Identity-less rows are
         // filtered at save (the labor blank-company rule); an all-blank curated list therefore
-        // saves as [] — "nothing on the report", which is what an emptied table means.
+        // saves as [] — "nothing on the report", which is what an emptied table means. Rows go
+        // out WHOLE — never re-picked field by field — so a ledger row's `event_uuid` survives
+        // every edit: it is the only link a later void has back to this curated row (0080).
         ...(draft.deliveries === null ? {} : {
           deliveries: draft.deliveries.filter((r) => r.item.trim() || r.part_number.trim()),
         }),
@@ -819,6 +852,14 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
                 : `Curated for this report — the live import has ${data.deliveries_import_count} ` +
                   "row(s). The ledger is unchanged; Reset to imported discards this list on save."}
             </p>
+            {/* D5 (0080): curated rows whose ledger mark was voided after the snapshot was saved —
+                swapped for the mark's correction when there is one (W4), dropped when there is
+                not. Said, never silent — otherwise the office sees its own curated list change
+                and has no way to know why (the no-silent-caps convention). Gold, not the red
+                --warn: nothing needs fixing — the report followed the ledger, as it should. */}
+            {(data.deliveries_voided_replaced > 0 || data.deliveries_voided_removed > 0) && (
+              <p className="wpr-banner">{voidedDeliveriesNotice(data)}</p>
+            )}
             {data.deliveries_truncated && (
               <p className="wpr-banner wpr-banner--warn">
                 The live import shows the first {data.deliveries_import_count} deliveries — more

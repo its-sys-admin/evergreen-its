@@ -35,6 +35,12 @@ interface ReceiptRow {
   line_qty_received: number | null;
   bol_number: string | null;
   received_by_display: string | null;
+  // ── Void annotation (0080) ──
+  voided_at: number | null;
+  voided_by_display: string | null;
+  void_reason: string | null;
+  supersedes_uuid: string | null;
+  superseded_by_uuid: string | null;
 }
 
 async function readReceipts(bearer = FIELDOPS_BEARER): Promise<Response> {
@@ -196,5 +202,114 @@ describe("material-receipts internal route", () => {
     expect(row).toMatchObject({ kind: "not_delivered", qty: null, note: "truck never arrived" });
     // A not_delivered mark contributes nothing to the rollup rather than zeroing it.
     expect(row.line_qty_received).toBeNull();
+  });
+});
+
+// ── VOID (0080) — the mirror keeps every voided row, annotated, and stops COUNTING it ──────────
+// A void is seeded by writing the 0080 columns directly: this suite pins the READ contract the
+// Receipts mirror depends on, independent of the route that writes them. A correction is seeded the
+// way the mark route records one: `supersedes_id` names the voided event and `sort_id` inherits its
+// order position (decision D4).
+describe("material-receipts — voided marks (0080)", () => {
+  const JOB_T = "JOB-T0001";
+
+  async function voidEvent(
+    uuid: string,
+    opts: { by?: string; reason?: string; at?: number } = {},
+  ): Promise<void> {
+    await env.DB
+      .prepare("UPDATE material_receipt_events SET voided_at=?1, voided_by=?2, void_reason=?3 WHERE event_uuid=?4")
+      .bind(opts.at ?? 1_790_000_000, opts.by ?? "test.crewlead", opts.reason ?? "Duplicate tap", uuid)
+      .run();
+  }
+
+  /** Record a correction of the (already voided) `supersedesUuid`, inheriting its position. */
+  async function seedCorrection(
+    jobId: string, lineId: number, supersedesUuid: string,
+    opts: { kind?: string; qty?: number } = {},
+  ): Promise<string> {
+    const uuid = `ev-corr-${Math.random().toString(36).slice(2)}`;
+    await env.DB
+      .prepare(
+        "INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, qty, note, event_date, actor, supersedes_id, sort_id) " +
+          "SELECT ?1, ?2, ?3, ?4, ?5, '', '2026-06-27', 'test.crewlead', o.id, COALESCE(o.sort_id, o.id) " +
+          "FROM material_receipt_events o WHERE o.event_uuid = ?6",
+      )
+      .bind(uuid, lineId, jobId, opts.kind ?? "partial", opts.qty ?? 4, supersedesUuid)
+      .run();
+    return uuid;
+  }
+
+  beforeEach(async () => {
+    await seedJob(JOB_T, { projectName: "Test Project T0001" });
+  });
+
+  it("drops a VOIDED mark out of line_qty_received on every row of its line (contract A, Receipts-mirror leg)", async () => {
+    // The double-mark the feature exists for: one load marked twice. Before 0080 the rollup read
+    // 20 of 10. Voiding the repeat must bring EVERY row of the line back to the true 10 — the
+    // total is a property of the line, so the voided row reports the corrected figure too.
+    const line = await seedLine(JOB_T, { description: "Test pile cap", qty: 10 });
+    await seedEvent(JOB_T, line, { kind: "delivered", qty: 10 });
+    const repeat = await seedEvent(JOB_T, line, { kind: "delivered", qty: 10 });
+    await voidEvent(repeat);
+
+    const got = await rows();
+    expect(got, "the voided row is still served — it is annotated, never deleted").toHaveLength(2);
+    expect(got.map((r) => r.line_qty_received)).toEqual([10, 10]);
+  });
+
+  it("serves the voided row ANNOTATED with who/when/why, and an active row with nulls (contract C)", async () => {
+    await seedPersonnel("Test Crew Lead", "test.crewlead");
+    const line = await seedLine(JOB_T, { qty: 10 });
+    const kept = await seedEvent(JOB_T, line, { kind: "partial", qty: 4 });
+    const voided = await seedEvent(JOB_T, line, { kind: "partial", qty: 4 });
+    await voidEvent(voided, { by: "test.crewlead", reason: "Same load marked twice", at: 1_790_000_123 });
+
+    const res = await readReceipts();
+    const text = await res.clone().text();
+    const byUuid = Object.fromEntries(
+      ((await res.json()) as { receipts: ReceiptRow[] }).receipts.map((r) => [r.event_uuid, r]),
+    );
+    expect(byUuid[voided]).toMatchObject({
+      voided_at: 1_790_000_123,
+      voided_by_display: "Test Crew Lead",
+      void_reason: "Same load marked twice",
+      qty: 4, // the row keeps its own recorded qty — only the LINE rollup stops counting it
+    });
+    expect(byUuid[kept]).toMatchObject({ voided_at: null, voided_by_display: null, void_reason: null });
+    expect(byUuid[kept].line_qty_received).toBe(4);
+    expect(text, "the voider's raw account username must never leave the Worker").not.toContain("test.crewlead");
+  });
+
+  it("names a voider with NO roster link by the account's ROLE LABEL, never the username (D6)", async () => {
+    await env.DB
+      .prepare("INSERT OR IGNORE INTO users (username, password_hash, role) VALUES ('test.officeadmin', 'x', 'admin')")
+      .run();
+    const line = await seedLine(JOB_T);
+    const ev = await seedEvent(JOB_T, line);
+    await voidEvent(ev, { by: "test.officeadmin" });
+
+    const res = await readReceipts();
+    const text = await res.clone().text();
+    const [row] = ((await res.json()) as { receipts: ReceiptRow[] }).receipts;
+    expect(row.voided_by_display).toBe("Admin (Office)");
+    expect(text).not.toContain("test.officeadmin");
+  });
+
+  it("links a correction to the mark it replaces, BOTH directions, by event uuid (contract D)", async () => {
+    // The mirror is keyed by Event UUID, so the cross-references are uuids too — a D1 row id
+    // means nothing on the sheet.
+    const line = await seedLine(JOB_T, { qty: 10 });
+    const wrong = await seedEvent(JOB_T, line, { kind: "partial", qty: 6 });
+    const other = await seedEvent(JOB_T, line, { kind: "partial", qty: 3 });
+    await voidEvent(wrong, { reason: "Qty typo" });
+    const fix = await seedCorrection(JOB_T, line, wrong, { kind: "partial", qty: 4 });
+
+    const byUuid = Object.fromEntries((await rows()).map((r) => [r.event_uuid, r]));
+    expect(byUuid[fix]).toMatchObject({ supersedes_uuid: wrong, superseded_by_uuid: null, voided_at: null });
+    expect(byUuid[wrong]).toMatchObject({ supersedes_uuid: null, superseded_by_uuid: fix });
+    expect(byUuid[other]).toMatchObject({ supersedes_uuid: null, superseded_by_uuid: null });
+    // 3 + 4: the wrong 6 no longer counts, its correction does.
+    expect(Object.values(byUuid).map((r) => r.line_qty_received)).toEqual([7, 7, 7]);
   });
 });

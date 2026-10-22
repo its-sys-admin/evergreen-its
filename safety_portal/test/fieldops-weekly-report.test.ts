@@ -33,6 +33,9 @@ const qs = (over: Record<string, string> = {}): string => {
 type PhotoPick = { pool_id: number; box_file_id: string; caption: string; work_date: string };
 type PhotoOffered = PhotoPick & { has_thumb: boolean };
 type DeliveryRow = {
+  // 0080: the ledger event a row came from — present on derived rows and on curated rows that
+  // kept it; absent on office-typed rows.
+  event_uuid?: string;
   event_date: string; kind: string; item: string; part_number: string;
   qty: string; unit: string; vendor: string; bol_number: string; carrier: string;
 };
@@ -57,6 +60,8 @@ type ReportBody = {
   material_incidents_import_count: number;
   deliveries_truncated: boolean;
   material_incidents_truncated: boolean;
+  deliveries_voided_removed: number;
+  deliveries_voided_replaced: number;
   photos: { available: PhotoOffered[]; selected: PhotoPick[]; auto_selected: boolean };
   // Mirrors worker/wire-types.ts ProductionReportResponse["schedule"] — null until a schedule
   // is committed, then the grouped sections plus the behind-schedule set.
@@ -1011,6 +1016,277 @@ describe("weekly report — curated material lists (0078)", () => {
       "SELECT COUNT(*) AS n FROM audit_log WHERE action = 'weekly_report_inputs_save'",
     ).first<{ n: number }>();
     expect(n!.n).toBe(1);
+  });
+});
+
+// ── voided marks (0080, operator decision D5) ───────────────────────────────
+// A VOIDED mark never prints on the client's delivery log. The live derivation excludes it, and a
+// curated snapshot row that names one by event_uuid is dropped at READ time and counted, because
+// the screen must say a row vanished rather than let it vanish silently. Voids are seeded by
+// writing the 0080 columns directly: this suite pins the report's read contract, not the route.
+describe("weekly report — voided marks (0080, D5)", () => {
+  const save = async (cookie: string, payload: Record<string, unknown>): Promise<Response> =>
+    call("/api/fieldops/weekly-report", {
+      method: "PUT", cookie, body: JSON.stringify({ job_id: JOB, week_start: WEEK_START, ...payload }),
+    });
+  const adminCookie = (): Promise<string> => accountCookie("adm.two", "admin");
+
+  const TYPED_ROW: DeliveryRow = {
+    event_date: "2026-08-13", kind: "", item: "Test grounding lugs", part_number: "",
+    qty: "200", unit: "ea", vendor: "", bol_number: "", carrier: "",
+  };
+
+  async function seedLine(jobId = JOB, lineId = 1): Promise<void> {
+    await env.DB.prepare(
+      "INSERT INTO job_expected_materials (id, job_id, description, part_number, qty, unit, status, seq) VALUES (?,?,'Test pile cap','TP-0001',100,'ea','expected',1)",
+    ).bind(lineId, jobId).run();
+  }
+  /** A ledger mark with a REAL-shaped uuid (crypto.randomUUID, the one insert path's minting). */
+  async function seedMark(kind: string, eventDate: string, qty: number, jobId = JOB, lineId = 1): Promise<string> {
+    const uuid = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, qty, event_date, actor) VALUES (?,?,?,?,?,?,'pm.one')",
+    ).bind(uuid, lineId, jobId, kind, qty, eventDate).run();
+    return uuid;
+  }
+  async function voidMark(uuid: string): Promise<void> {
+    await env.DB.prepare(
+      "UPDATE material_receipt_events SET voided_at = ?1, voided_by = 'adm.two', void_reason = 'Duplicate tap' WHERE event_uuid = ?2",
+    ).bind(FROM + 86400, uuid).run();
+  }
+
+  it("a voided mark is ABSENT from the live derivation; each derived row carries its event_uuid (contract A, WPR leg)", async () => {
+    await seedLine();
+    const first = await seedMark("delivered", "2026-08-11", 40);
+    const repeat = await seedMark("delivered", "2026-08-12", 40); // the same load, marked twice
+    await voidMark(repeat);
+    const r = await body(await internal());
+    expect(r.deliveries).toHaveLength(1);
+    expect(r.deliveries[0]).toMatchObject({ event_uuid: first, event_date: "2026-08-11", qty: "40" });
+    expect(r.deliveries_import_count).toBe(1);
+    // The auto list never needs the drop: the derivation already excluded the void.
+    expect(r.deliveries_voided_removed).toBe(0);
+    expect(r.deliveries_voided_replaced).toBe(0);
+  });
+
+  it("drops a curated row whose mark was voided AFTER the save, counts it, and KEEPS an office-typed row", async () => {
+    await seedLine();
+    const kept = await seedMark("delivered", "2026-08-11", 40);
+    const doomed = await seedMark("partial", "2026-08-12", 10);
+    const cookie = await adminCookie();
+    // The office curates from the derived rows (the screen materializes `deliveries` into its
+    // draft on first edit), so the snapshot carries each derived row's event_uuid — plus one row
+    // the office typed itself, which has none.
+    const derived = (await body(await internal())).deliveries;
+    expect((await save(cookie, { deliveries: [...derived, TYPED_ROW] })).status).toBe(200);
+
+    await voidMark(doomed);
+    const r = await body(await internal());
+    expect(r.deliveries.map((d) => d.event_uuid ?? d.item)).toEqual([kept, "Test grounding lugs"]);
+    expect(r.deliveries_voided_removed).toBe(1);
+    // The echo the editor seeds its draft from agrees with the effective list, so a re-save
+    // cannot quietly put the voided row back in front of the office.
+    expect(r.office.deliveries).toEqual(r.deliveries);
+    // Dropped at READ — the stored snapshot itself is never rewritten by a read.
+    const stored = await env.DB.prepare(
+      "SELECT deliveries_json FROM job_weekly_report_inputs WHERE job_id = ? AND week_start = ?",
+    ).bind(JOB, WEEK_START).first<{ deliveries_json: string }>();
+    expect((JSON.parse(stored!.deliveries_json) as unknown[]).length).toBe(3);
+  });
+
+  it("never matches a curated uuid against ANOTHER job's voided mark", async () => {
+    await seedJob("JOB-T0002", { projectName: "Test Project T0002" });
+    await seedLine("JOB-T0002", 2);
+    const foreign = await seedMark("delivered", "2026-08-11", 10, "JOB-T0002", 2);
+    await voidMark(foreign);
+    const cookie = await adminCookie();
+    await save(cookie, { deliveries: [{ ...TYPED_ROW, item: "Test row naming a foreign mark", event_uuid: foreign }] });
+    const r = await body(await internal());
+    expect(r.deliveries).toHaveLength(1);
+    expect(r.deliveries[0].event_uuid).toBe(foreign);
+    expect(r.deliveries_voided_removed).toBe(0);
+  });
+
+  it("the save round-trips a UUID-shaped event_uuid and omits anything else", async () => {
+    const cookie = await adminCookie();
+    const uuid = crypto.randomUUID();
+    await save(cookie, {
+      deliveries: [
+        { ...TYPED_ROW, item: "Test row A", event_uuid: uuid },
+        { ...TYPED_ROW, item: "Test row B", event_uuid: "not-a-uuid" },
+        { ...TYPED_ROW, item: "Test row C", event_uuid: 42 },
+        { ...TYPED_ROW, item: "Test row D", event_uuid: uuid.toUpperCase() },
+      ],
+    });
+    const r = await body(await internal());
+    const rows = r.office.deliveries!;
+    expect(rows.map((d) => d.item)).toEqual(["Test row A", "Test row B", "Test row C", "Test row D"]);
+    expect(rows[0].event_uuid).toBe(uuid);
+    expect("event_uuid" in rows[1]).toBe(false);
+    expect("event_uuid" in rows[2]).toBe(false);
+    // RFC 4122: case-insensitive on input. Stored in the ledger's own lowercase so it can match.
+    expect(rows[3].event_uuid).toBe(uuid);
+    const stored = await env.DB.prepare(
+      "SELECT deliveries_json FROM job_weekly_report_inputs WHERE job_id = ? AND week_start = ?",
+    ).bind(JOB, WEEK_START).first<{ deliveries_json: string }>();
+    expect((JSON.parse(stored!.deliveries_json) as DeliveryRow[])[0].event_uuid).toBe(uuid);
+  });
+
+  // ── W4: a dropped row is REPLACED by its correction when that correction belongs on this page ──
+  // A void followed by a correction is one fact ("it was 12, not 10"), so a curated week shows the
+  // corrected row where the mistaken one sat instead of losing the delivery altogether. The chain
+  // is followed to its live tip; a tip that would not appear in this week's own derivation
+  // (voided, not a delivery, another week) is NOT substituted — the row is dropped and counted.
+
+  /** A correction of `of` (by uuid), seeded the way the mark route writes one: supersedes_id +
+   *  the inherited order key. */
+  async function seedCorrection(of: string, kind: string, eventDate: string, qty: number | null, jobId = JOB, lineId = 1): Promise<string> {
+    const uuid = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO material_receipt_events (event_uuid, line_id, job_id, kind, qty, event_date, actor, supersedes_id, sort_id)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'pm.one', o.id, COALESCE(o.sort_id, o.id)
+         FROM material_receipt_events o WHERE o.event_uuid = ?7`,
+    ).bind(uuid, lineId, jobId, kind, qty, eventDate, of).run();
+    return uuid;
+  }
+  /** Three in-week marks on one line, and the live derivation the office curates from. */
+  async function threeMarks(): Promise<{ cookie: string; a: string; b: string; c: string; derived: DeliveryRow[] }> {
+    await seedLine();
+    const a = await seedMark("delivered", "2026-08-11", 40);
+    const b = await seedMark("partial", "2026-08-12", 10);
+    const c = await seedMark("delivered", "2026-08-13", 20);
+    const cookie = await adminCookie();
+    const derived = (await body(await internal())).deliveries;
+    expect(derived.map((d) => d.event_uuid)).toEqual([a, b, c]);
+    return { cookie, a, b, c, derived };
+  }
+
+  it("W4: a voided curated row is REPLACED by its in-week correction, in the same position, carrying its event_uuid", async () => {
+    const { cookie, a, b, c, derived } = await threeMarks();
+    // The office reworded A. Curated rows keep the office's words; only the voided row is swapped.
+    const curated = derived.map((d) => (d.event_uuid === a ? { ...d, item: "Test pile cap (office wording)" } : d));
+    expect((await save(cookie, { deliveries: curated })).status).toBe(200);
+    await voidMark(b);
+    const fix = await seedCorrection(b, "partial", "2026-08-12", 12);
+
+    const r = await body(await internal());
+    expect(r.deliveries.map((d) => d.event_uuid)).toEqual([a, fix, c]);
+    expect(r.deliveries[0].item).toBe("Test pile cap (office wording)");
+    expect(r.deliveries[1]).toEqual({
+      event_uuid: fix, event_date: "2026-08-12", kind: "partial", item: "Test pile cap",
+      part_number: "TP-0001", qty: "12", unit: "ea", vendor: "", bol_number: "", carrier: "",
+    });
+    expect(r.deliveries_voided_replaced).toBe(1);
+    expect(r.deliveries_voided_removed).toBe(0);
+    // The editor's seed agrees, so a re-save stores the corrected row, not the voided one.
+    expect(r.office.deliveries).toEqual(r.deliveries);
+
+    // "The shape the derivation produces", literally: drop the curation and the live derivation
+    // yields the identical row for that mark.
+    expect((await save(cookie, {})).status).toBe(200);
+    const auto = await body(await internal());
+    expect(auto.deliveries.find((d) => d.event_uuid === fix)).toEqual(r.deliveries[1]);
+  });
+
+  it("W4: a chain of two corrections resolves to its live TIP", async () => {
+    const { cookie, a, b, c, derived } = await threeMarks();
+    expect((await save(cookie, { deliveries: derived })).status).toBe(200);
+    await voidMark(b);
+    const fix1 = await seedCorrection(b, "partial", "2026-08-12", 11);
+    await voidMark(fix1);
+    const fix2 = await seedCorrection(fix1, "partial", "2026-08-12", 12);
+    const r = await body(await internal());
+    expect(r.deliveries.map((d) => d.event_uuid)).toEqual([a, fix2, c]);
+    expect(r.deliveries[1].qty).toBe("12");
+    expect(r.deliveries_voided_replaced).toBe(1);
+    expect(r.deliveries_voided_removed).toBe(0);
+  });
+
+  it("W4: no substitution when the tip is outside the week, not a delivery, or itself voided — dropped and counted", async () => {
+    await seedLine();
+    const a = await seedMark("delivered", "2026-08-11", 40);
+    const nextWeek = await seedMark("partial", "2026-08-12", 1);
+    const notDelivered = await seedMark("partial", "2026-08-12", 2);
+    const withdrawn = await seedMark("partial", "2026-08-12", 3);
+    const uncorrected = await seedMark("partial", "2026-08-12", 4);
+    const cookie = await adminCookie();
+    const derived = (await body(await internal())).deliveries;
+    expect(derived).toHaveLength(5);
+    expect((await save(cookie, { deliveries: derived })).status).toBe(200);
+    for (const u of [nextWeek, notDelivered, withdrawn, uncorrected]) await voidMark(u);
+    await seedCorrection(nextWeek, "partial", "2026-08-20", 12);           // next week's page
+    await seedCorrection(notDelivered, "not_delivered", "2026-08-12", null); // not a delivery
+    await voidMark(await seedCorrection(withdrawn, "partial", "2026-08-12", 5)); // corrected, then withdrawn
+    // `uncorrected`: voided and never corrected — the plain D5 drop.
+
+    const r = await body(await internal());
+    expect(r.deliveries.map((d) => d.event_uuid)).toEqual([a]);
+    expect(r.deliveries_voided_removed).toBe(4);
+    expect(r.deliveries_voided_replaced).toBe(0);
+  });
+
+  it("W4: a tip already on the curated list is never duplicated — and the row it absorbs counts as replaced", async () => {
+    const { cookie, a, b, c } = await threeMarks();
+    await voidMark(b);
+    const fix = await seedCorrection(b, "partial", "2026-08-12", 12);
+    const live = (await body(await internal())).deliveries; // [a, fix, c] — the correction is live
+    expect(live.map((d) => d.event_uuid)).toEqual([a, fix, c]);
+    const voidedRow: DeliveryRow = { ...live[1], event_uuid: b, qty: "10" };
+    // A snapshot holding BOTH the voided mark and its correction (curated across the void).
+    expect((await save(cookie, { deliveries: [live[0], voidedRow, live[1], live[2]] })).status).toBe(200);
+    const r = await body(await internal());
+    expect(r.deliveries.map((d) => d.event_uuid)).toEqual([a, fix, c]);
+    // The correction prints (where it was curated), so the voided row was REPLACED, not lost:
+    // "removed" would tell the office a delivery left the client's report when it did not.
+    expect(r.deliveries_voided_replaced).toBe(1);
+    expect(r.deliveries_voided_removed).toBe(0);
+
+    // Two voided links of ONE chain on the list: the first takes the tip's slot, the second is
+    // absorbed by it — both replaced, nothing removed.
+    await voidMark(fix);
+    const fix2 = await seedCorrection(fix, "partial", "2026-08-12", 13);
+    expect((await save(cookie, { deliveries: [live[0], voidedRow, live[1], live[2]] })).status).toBe(200);
+    const r2 = await body(await internal());
+    expect(r2.deliveries.map((d) => d.event_uuid)).toEqual([a, fix2, c]);
+    expect(r2.deliveries_voided_replaced).toBe(2);
+    expect(r2.deliveries_voided_removed).toBe(0);
+  });
+
+  it("W4: another job's voided-and-corrected mark is never matched, so its row is neither dropped nor replaced", async () => {
+    await seedJob("JOB-T0002", { projectName: "Test Project T0002" });
+    await seedLine("JOB-T0002", 2);
+    const foreign = await seedMark("delivered", "2026-08-11", 10, "JOB-T0002", 2);
+    await voidMark(foreign);
+    await seedCorrection(foreign, "delivered", "2026-08-11", 11, "JOB-T0002", 2);
+    const cookie = await adminCookie();
+    await save(cookie, { deliveries: [{ ...TYPED_ROW, item: "Test row naming a foreign mark", event_uuid: foreign }] });
+    const r = await body(await internal());
+    expect(r.deliveries).toHaveLength(1);
+    expect(r.deliveries[0]).toMatchObject({ event_uuid: foreign, item: "Test row naming a foreign mark" });
+    expect(r.deliveries_voided_removed).toBe(0);
+    expect(r.deliveries_voided_replaced).toBe(0);
+  });
+
+  it("W4: the chain walk is BOUNDED — a tip 20 links down is followed, one 21 links down is not", async () => {
+    await seedLine();
+    async function chainOf(links: number, date: string): Promise<{ root: string; tip: string }> {
+      const root = await seedMark("partial", date, 1);
+      let cur = root;
+      for (let i = 0; i < links; i += 1) {
+        await voidMark(cur);
+        cur = await seedCorrection(cur, "partial", date, 1);
+      }
+      return { root, tip: cur };
+    }
+    const twenty = await chainOf(20, "2026-08-11");
+    const deep = await chainOf(21, "2026-08-12");
+    const cookie = await adminCookie();
+    const rows = [twenty.root, deep.root].map((u, i) => ({ ...TYPED_ROW, item: `Test chain ${i}`, event_uuid: u }));
+    expect((await save(cookie, { deliveries: rows })).status).toBe(200);
+    const r = await body(await internal());
+    expect(r.deliveries.map((d) => d.event_uuid)).toEqual([twenty.tip]);
+    expect(r.deliveries_voided_replaced).toBe(1);
+    expect(r.deliveries_voided_removed).toBe(1);
   });
 });
 
