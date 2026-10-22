@@ -54,6 +54,7 @@ interface ListLine {
   id: number;
   status: string;
   receipt_status: string | null;
+  qty_received: number | null;
   qty_received_total: number | null;
 }
 interface ListBody {
