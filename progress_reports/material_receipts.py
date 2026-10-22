@@ -190,9 +190,16 @@ FMT_VOIDED_DATE = ",,,,,,,,,18,,,,,,,2"        # light-gray bg + MMM_D_YYYY
 # both verified live that day, shape the descriptors: an EMPTY descriptor field means "leave this
 # unchanged", not "default", so the active look cannot be written as blanks; and of the palette's
 # no-colour entries only index 3 ("transparent") clears an inherited background — index 0 ("none")
-# is treated as unchanged too. Material keeps its column look (FMT_PRIMARY sets its own background).
+# is treated as unchanged too. Material keeps its column look, via FMT_ACTIVE_PRIMARY below.
 FMT_ACTIVE_PLAIN = ",,,,,,,,,3,,,,,,,"          # transparent bg — clears an inherited gray
 FMT_ACTIVE_DATE = ",,,,,,,,,3,,,,,,,2"          # transparent bg + MMM_D_YYYY
+# Material's add look cannot be FMT_PRIMARY itself. On an ADD, a cell format IDENTICAL to the
+# column's own format was dropped and the inherited gray kept, while a descriptor that differs from
+# it applied in every trial (a §30 sandbox probe the same day, after the first fix left the Test
+# job's appended Material cell gray). Stating field 0, fontFamily, as 0 makes the string differ
+# without changing the look: palette entry 0 is Arial, the font an empty field already renders.
+# Updates take FMT_PRIMARY as-is; only the add needs the distinct string.
+FMT_ACTIVE_PRIMARY = "0,,1,,,,,,38,7,,,,,,,"    # FMT_PRIMARY with fontFamily 0 (Arial) stated
 
 MATERIAL_RECEIPTS_STYLES: list[dict[str, Any]] = [
     {"title": COL_MATERIAL, "width": 220, "format": FMT_PRIMARY},
@@ -543,7 +550,7 @@ def _active_formats(cells: dict[str, Any]) -> dict[str, str]:
     format Smartsheet copies from the row above (gray, when that row is voided) never sticks."""
     return {
         title: (
-            FMT_PRIMARY if title == COL_MATERIAL
+            FMT_ACTIVE_PRIMARY if title == COL_MATERIAL
             else FMT_ACTIVE_DATE if title == COL_EVENT_DATE
             else FMT_ACTIVE_PLAIN
         )
