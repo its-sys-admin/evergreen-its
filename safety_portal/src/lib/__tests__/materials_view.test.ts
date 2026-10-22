@@ -13,6 +13,8 @@ import {
   lineOwed,
   needsSettledConfirm,
   owedLabel,
+  pacificDateOf,
+  pacificTimeOf,
   rollupMaterials,
   settledConfirmText,
 } from "../materials_view";
@@ -139,5 +141,37 @@ describe("settledConfirmText (D9)", () => {
     expect(settledConfirmText(row({ qty_received_total: 44, unit: null }))).toBe(
       "This line already has 44 of 40 received. Record another delivery anyway?",
     );
+  });
+
+  it("asks about a CORRECTION in a correction's own words", () => {
+    // The correction form reuses the question; "Record another delivery" would describe a
+    // different act from the one the person is about to take.
+    expect(settledConfirmText(row({ qty_received_total: 40 }), "Record the correction")).toBe(
+      "This line already has 40 of 40 ea received. Record the correction anyway?",
+    );
+  });
+});
+
+// The delivery history shows event dates as ISO YYYY-MM-DD in the crews' Pacific day. A void's
+// date and a mark's recorded time are epoch instants, so they need the same treatment: a
+// browser-local toLocaleDateString printed "10/21/2026" beside "2026-10-19", and a UTC slice
+// would put an evening void on the NEXT day.
+describe("pacificDateOf / pacificTimeOf", () => {
+  // 2026-10-06T03:15:00Z — already the 6th in UTC, still the evening of the 5th in Pacific.
+  const EVENING = 1_791_256_500;
+
+  it("gives the PACIFIC calendar date, not the UTC one", () => {
+    expect(pacificDateOf(EVENING)).toBe("2026-10-05");
+  });
+
+  it("gives the Pacific wall-clock time as 24-hour HH:MM", () => {
+    expect(pacificTimeOf(EVENING)).toBe("20:15");
+    // 2026-10-02T16:05:00Z — a morning mark: zero-padded hour.
+    expect(pacificTimeOf(1_790_957_100)).toBe("09:05");
+  });
+
+  it("prints midnight as 00, never 24", () => {
+    // 2026-10-02T07:00:00Z = 00:00 PDT. Some Intl engines render hour12:false midnight as "24".
+    expect(pacificTimeOf(1_790_924_400)).toBe("00:00");
   });
 });

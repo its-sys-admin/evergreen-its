@@ -54,6 +54,7 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
     deliveries_truncated: false,
     material_incidents_truncated: false,
     deliveries_voided_removed: 0,
+    deliveries_voided_replaced: 0,
     photos: {
       available: [
         { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles", has_thumb: false },
@@ -453,18 +454,59 @@ describe("WeeklyReportPage — curated rows dropped because their mark was voide
   const GONE = { ...KEEP, event_uuid: UUID_GONE, item: "Test bracket (double-marked)" };
   const materials = () => within(document.getElementById("wpr-materials")!);
 
-  it("says how many curated rows were removed because the mark was voided", async () => {
+  /** The one notice paragraph about voided marks, or null. */
+  const voidNotice = () =>
+    materials().queryAllByText(/because (its|their) marks? (was|were) voided|replaced with the corrected/)[0] ?? null;
+
+  it("says how many curated rows were removed because the mark was voided — in English, not 'row(s)'", async () => {
     const p = payload({ deliveries: [KEEP], deliveries_voided_removed: 2, deliveries_import_count: 1 });
     p.office.deliveries = [KEEP];
     await renderPage(p);
-    expect(materials().getByText("2 delivery row(s) removed because the mark was voided.")).toBeTruthy();
+    expect(voidNotice()?.textContent).toBe("2 delivery rows were removed because their marks were voided.");
   });
 
-  it("says nothing when no row was removed", async () => {
+  it("says ONE row in the singular", async () => {
+    const p = payload({ deliveries: [KEEP], deliveries_voided_removed: 1, deliveries_import_count: 1 });
+    p.office.deliveries = [KEEP];
+    await renderPage(p);
+    expect(voidNotice()?.textContent).toBe("1 delivery row was removed because its mark was voided.");
+  });
+
+  it("says how many rows were REPLACED with the corrected entry (W4), beside any removed count", async () => {
+    // A curated row whose mark was voided and then corrected is swapped for the correction, not
+    // dropped — the office still has to be told its list changed under it.
+    const p = payload({
+      deliveries: [KEEP], deliveries_voided_removed: 1, deliveries_voided_replaced: 2,
+      deliveries_import_count: 1,
+    });
+    p.office.deliveries = [KEEP];
+    await renderPage(p);
+    const text = voidNotice()?.textContent ?? "";
+    expect(text).toContain("2 delivery rows were replaced with their corrected entries.");
+    expect(text).toContain("1 delivery row was removed because its mark was voided.");
+  });
+
+  it("a single replacement reads in the singular, with no removed sentence when none were removed", async () => {
+    const p = payload({ deliveries: [KEEP], deliveries_voided_replaced: 1, deliveries_import_count: 1 });
+    p.office.deliveries = [KEEP];
+    await renderPage(p);
+    expect(voidNotice()?.textContent).toBe("1 delivery row was replaced with the corrected entry.");
+  });
+
+  it("is an informational (gold) banner, not the red warning — nothing is wrong, the list followed the ledger", async () => {
+    const p = payload({ deliveries: [KEEP], deliveries_voided_removed: 1, deliveries_import_count: 1 });
+    p.office.deliveries = [KEEP];
+    await renderPage(p);
+    const notice = voidNotice()!;
+    expect(notice.classList.contains("wpr-banner")).toBe(true);
+    expect(notice.classList.contains("wpr-banner--warn")).toBe(false);
+  });
+
+  it("says nothing when no row was removed or replaced", async () => {
     const p = payload({ deliveries: [KEEP], deliveries_import_count: 1 });
     p.office.deliveries = [KEEP];
     await renderPage(p);
-    expect(materials().queryByText(/removed because the mark was voided/)).toBeNull();
+    expect(voidNotice()).toBeNull();
   });
 
   it("edits the EFFECTIVE list — a row the server dropped for a void does not come back on save", async () => {

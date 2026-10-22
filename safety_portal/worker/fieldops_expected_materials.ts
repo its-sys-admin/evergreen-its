@@ -22,7 +22,10 @@ import type {
 //     ACTIVE material_catalog row (the 0019 type vocabulary); description is REQUIRED when
 //     material_id is null. Edits are confined to status='expected' rows — a received/incident row
 //     is a historical receipt record and must not be rewritten (409 not_editable); reorder (seq)
-//     stays allowed on any active row so the list keeps a coherent order.
+//     stays allowed on any active row so the list keeps a coherent order. Deactivate is REFUSED
+//     while any of the line's marks still counts (operator decision D11, 409 line_has_deliveries):
+//     void them first. Marks already stranded on removed lines stay voidable, and the list read
+//     returns those lines as `removed_lines`.
 //   • GET /api/fieldops/expected-materials?job_id — cap.materials.receive, PER-JOB ownership
 //     scope for non-admins (the /daily-form/status pattern: the actor's linked ACTIVE
 //     personnel.current_job must equal job_id, else 403 forbidden_job); cap.jobtracker.manage
@@ -101,12 +104,23 @@ export const RECEIPT_ROLLUP_SQL = `
   (SELECT SUM(e.qty) FROM material_receipt_events e
     WHERE e.line_id = jem.id AND ${RECEIPT_ACTIVE_SQL}) AS qty_received_total`;
 
-/** The latest COUNTING mark's kind for the row being updated, inside
- *  `UPDATE job_expected_materials`. Shared by the mark, void and resolve-incident projections. */
-export const LINE_LATEST_ACTIVE_KIND_SQL = `
-  (SELECT e.kind FROM material_receipt_events e
+/** One column of the latest COUNTING mark for the row being updated, inside
+ *  `UPDATE job_expected_materials`. `col` is always a literal from this module (below and the
+ *  void projection), never request input. */
+function lineLatestActive(col: "kind" | "event_uuid" | "created_at" | "actor"): string {
+  return `
+  (SELECT e.${col} FROM material_receipt_events e
     WHERE e.line_id = job_expected_materials.id AND ${RECEIPT_ACTIVE_SQL}
     ORDER BY ${RECEIPT_ORDER_SQL} LIMIT 1)`;
+}
+
+/** The latest COUNTING mark's kind. Shared by the mark, void and resolve-incident projections. */
+export const LINE_LATEST_ACTIVE_KIND_SQL = lineLatestActive("kind");
+
+/** The latest COUNTING mark's event_uuid. The mark projection compares it with the uuid it just
+ *  inserted to ask "is the mark I wrote now the line's latest?" (W5): only then does the mark
+ *  speak for the line's received_at / received_by / note. */
+export const LINE_LATEST_ACTIVE_UUID_SQL = lineLatestActive("event_uuid");
 
 /** The STORED line projection (`status` + `qty_received`), recomputed from the ledger. Used as
  *  the SET list of `UPDATE job_expected_materials` by the mark AND the void route, so the two can
@@ -132,12 +146,14 @@ export const VOIDED_BY_DISPLAY_SQL = `
 
 /** The void route's GUARDED write (binds: ?1 event id, ?2 acting username, ?3 trimmed reason).
  *  Every pre-check the route makes is re-asserted IN the WHERE, so a race past them (a second
- *  void, a line deactivated, a job closed in between) writes nothing: `voided_at IS NULL` makes
- *  the stamp write-once, which is what turns a double void into a clean 409 with exactly one
- *  stamp. The EXISTS walks the same line→job path the route's pre-read resolves, so the guard
- *  and the pre-check judge the same rows. Exported so a storage-level test can prove the guard
- *  bites: concurrent requests serialize in the workerd test pool, so no route-level test can
- *  land two voids inside the race window. */
+ *  void, a job closed in between) writes nothing: `voided_at IS NULL` makes the stamp
+ *  write-once, which is what turns a double void into a clean 409 with exactly one stamp. The
+ *  EXISTS walks the same line→job path the route's pre-read resolves, so the guard and the
+ *  pre-check judge the same rows. The line may be INACTIVE (operator decision D11): a removed
+ *  line's marks must stay voidable, or a removal that buried a double-count could never be
+ *  undone. Exported so a storage-level test can prove the guard bites: concurrent requests
+ *  serialize in the workerd test pool, so no route-level test can land two voids inside the race
+ *  window. */
 export const RECEIPT_VOID_SQL = `
   UPDATE material_receipt_events
      SET voided_at = unixepoch(), voided_by = ?2, void_reason = ?3
@@ -145,7 +161,20 @@ export const RECEIPT_VOID_SQL = `
      AND EXISTS (SELECT 1 FROM job_expected_materials jem
                    JOIN jobs j ON j.job_id = jem.job_id
                   WHERE jem.id = material_receipt_events.line_id
-                    AND jem.active = 1 AND j.status = 'active')`;
+                    AND j.status = 'active')`;
+
+/** The line-removal write (binds: ?1 line id), GUARDED the same way (operator decision D11). A
+ *  line whose marks still count is not removed: removing it would drop the line from every read
+ *  while its deliveries kept counting on the Receipts sheet. The rule lives ONLY here, in the
+ *  WHERE — the route makes no pre-check — so a mark that lands before this statement runs is
+ *  seen by it, and one that lands after finds an inactive line and is refused by the mark
+ *  route's own `active = 1` guard. Either order is consistent. Exported for the storage-level
+ *  test, for the reason given on RECEIPT_VOID_SQL. */
+export const LINE_DEACTIVATE_SQL = `
+  UPDATE job_expected_materials SET active = 0
+   WHERE id = ?1 AND active = 1
+     AND NOT EXISTS (SELECT 1 FROM material_receipt_events e
+                      WHERE e.line_id = ?1 AND ${RECEIPT_ACTIVE_SQL})`;
 
 // The cap that bypasses the per-job ownership scope — the same admin set the /daily-form/status
 // scope recognizes.
@@ -313,7 +342,19 @@ function readActionFields(body: Record<string, unknown>): ActionFields | string 
 }
 
 // The read row — single-sourced as ExpectedMaterialRow in wire-types.ts (the SPA re-exports the
-// same type, so a drift here fails the typecheck on both sides).
+// same type, so a drift here fails the typecheck on both sides). LINE_ROW_SQL is its ONE column
+// list over alias `jem`: the active list and `removed_lines` both select it, so the two arrays are
+// the same shape by construction rather than by two lists kept in step.
+const LINE_ROW_SQL = `
+  jem.id, jem.material_id,
+  (SELECT mc.model_id FROM material_catalog mc WHERE mc.id = jem.material_id) AS material_name,
+  jem.description, jem.qty, jem.unit, jem.expected_date, jem.status,
+  jem.received_at,
+  (SELECT p.name FROM personnel p WHERE p.username = jem.received_by ORDER BY p.id ASC LIMIT 1)
+    AS received_by_name,
+  jem.qty_received, jem.note, jem.seq, jem.line_uuid,
+  jem.part_number, jem.category, jem.expected_ship_date,
+  ${RECEIPT_ROLLUP_SQL}`;
 
 export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: FieldopsGates): void {
   // ── GET /api/fieldops/expected-materials?job_id — the job's active expectation list. ─────────────
@@ -335,22 +376,29 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       // PR2 — one read, three projections, ONE batch. A separate "materials page" read would be
       // free to drift from the daily form's read; keeping one wire shape is what stops the two
       // surfaces disagreeing about a delivery.
-      const [lines, shipments, events, jobRow] = await c.env.DB.batch([
+      const [lines, removed, shipments, events, jobRow] = await c.env.DB.batch([
         c.env.DB
           .prepare(
-            `SELECT jem.id, jem.material_id,
-                    (SELECT mc.model_id FROM material_catalog mc WHERE mc.id = jem.material_id) AS material_name,
-                    jem.description, jem.qty, jem.unit, jem.expected_date, jem.status,
-                    jem.received_at,
-                    (SELECT p.name FROM personnel p WHERE p.username = jem.received_by ORDER BY p.id ASC LIMIT 1)
-                      AS received_by_name,
-                    jem.qty_received, jem.note, jem.seq, jem.line_uuid,
-                    jem.part_number, jem.category, jem.expected_ship_date,
-                    ${RECEIPT_ROLLUP_SQL}
+            `SELECT ${LINE_ROW_SQL}
              FROM job_expected_materials jem
              WHERE jem.job_id = ?1 AND jem.active = 1
              ORDER BY jem.seq ASC, jem.id ASC
              LIMIT 500`,
+          )
+          .bind(jobId),
+        // D11 — REMOVED lines that carry any receipt event, voided or not: the marks stranded
+        // there by removals made before the delete route refused them. They are listed so those
+        // marks can be voided (the SPA's "Removed from the list" group); a removed line with no
+        // history is just gone, as before. RECEIPT_ROLLUP_SQL applies, so a stranded line whose
+        // marks are all voided reads as never-marked while its voided history stays visible.
+        c.env.DB
+          .prepare(
+            `SELECT ${LINE_ROW_SQL}
+             FROM job_expected_materials jem
+             WHERE jem.job_id = ?1 AND jem.active = 0
+               AND EXISTS (SELECT 1 FROM material_receipt_events x WHERE x.line_id = jem.id)
+             ORDER BY jem.seq ASC, jem.id ASC
+             LIMIT 200`,
           )
           .bind(jobId),
         c.env.DB
@@ -371,14 +419,22 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
         // default, but the history is the point of voiding instead of deleting.
         // superseded_by_id is the reverse of supersedes_id; the partial UNIQUE index (0080)
         // makes it at most one row, so the scalar subquery cannot pick arbitrarily.
+        // WHO voided and WHY are shown only to the roles that may void (W7, review fix
+        // 2026-10-21): a subcontractor reading this list sees THAT a mark was voided (voided_at
+        // stays, so the history still reads honestly), not who or why. ?2 is the session role,
+        // bound, never interpolated. Roles are a closed three-value vocabulary, so this is
+        // exactly "submitter → NULL"; it is spelt as the requireDailyReportRole allow-list so a
+        // role added later starts out seeing less, not more.
         c.env.DB
           .prepare(
             `SELECT e.id, e.line_id, e.shipment_id, e.kind, e.qty, e.note, e.event_date, e.created_at,
                     (SELECT p.name FROM personnel p WHERE p.username = e.actor ORDER BY p.id ASC LIMIT 1)
                       AS actor_name,
                     e.voided_at,
-                    ${VOIDED_BY_DISPLAY_SQL} AS voided_by_name,
-                    e.void_reason, e.supersedes_id,
+                    CASE WHEN ?2 IN ('manager', 'admin') THEN ${VOIDED_BY_DISPLAY_SQL} END
+                      AS voided_by_name,
+                    CASE WHEN ?2 IN ('manager', 'admin') THEN e.void_reason END AS void_reason,
+                    e.supersedes_id,
                     (SELECT c2.id FROM material_receipt_events c2 WHERE c2.supersedes_id = e.id)
                       AS superseded_by_id
              FROM material_receipt_events e
@@ -386,7 +442,7 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
              ORDER BY e.line_id ASC, ${RECEIPT_ORDER_SQL}
              LIMIT 2000`,
           )
-          .bind(jobId),
+          .bind(jobId, c.get("role")),
         // The job's display name — the page's heading says "Materials — Deep Lake", not
         // the JOB-###### key (operator request 2026-08-11). Rides the same batch; the
         // route is deep-linkable, so the name must come from data, not navigation state.
@@ -396,6 +452,7 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       ]);
       const payload: ExpectedMaterialsResponse = {
         expected_materials: (lines.results ?? []) as ExpectedMaterialRow[],
+        removed_lines: (removed.results ?? []) as ExpectedMaterialRow[],
         shipments: (shipments.results ?? []) as MaterialShipmentRow[],
         receipt_events: (events.results ?? []) as MaterialReceiptEventRow[],
         project_name:
@@ -532,7 +589,9 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
 
   // ── POST /api/fieldops/expected-material/:id/delete — deactivate (office; soft, idempotent). ─────
   // active=0 keeps the row (a received/incident row is history). Mirrors the catalog retire shape:
-  // second call → 200 already_inactive with NO second audit.
+  // second call → 200 already_inactive with NO second audit. REFUSED with 409 line_has_deliveries
+  // while any of the line's marks still counts (D11, LINE_DEACTIVATE_SQL): void them first. A
+  // line whose marks are all voided removes normally, cascade included.
   app.post(
     "/api/fieldops/expected-material/:id/delete",
     gates.requireSession,
@@ -542,7 +601,7 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       if (id === null) return c.json({ error: "invalid_id" }, 400);
       const actor = c.get("session").username;
       const res = await c.env.DB.batch([
-        c.env.DB.prepare("UPDATE job_expected_materials SET active = 0 WHERE id = ?1 AND active = 1").bind(id),
+        c.env.DB.prepare(LINE_DEACTIVATE_SQL).bind(id),
         auditStmtIfChanged(c, actor, "expected_material_deactivate", String(id), { expectation_id: id }),
         // CASCADE (2026-08-11): a line's scheduled loads die with it. They were invisible
         // orphans before — the shipments read is job-scoped while the SPA buckets by
@@ -569,8 +628,17 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
           .bind(actor, String(id), JSON.stringify({ expectation_id: id })),
       ]);
       if ((res[0].meta.changes ?? 0) === 0) {
-        const row = await c.env.DB.prepare("SELECT id FROM job_expected_materials WHERE id = ?1").bind(id).first();
-        return row ? c.json({ ok: true, id, already_inactive: true }, 200) : c.json({ error: "not_found" }, 404);
+        // 0 changes = unknown (404), already removed (200 already_inactive — checked FIRST, so a
+        // pre-D11 removed line that still carries counting marks keeps its idempotent answer), or
+        // refused. A line still active after the guarded UPDATE was refused for counting marks:
+        // that is the only other clause in its WHERE. Answered from the write's verdict, not a
+        // recount, so a mark voided since the batch cannot turn a refusal into a false success.
+        const row = await c.env.DB.prepare("SELECT active FROM job_expected_materials WHERE id = ?1")
+          .bind(id)
+          .first<{ active: number }>();
+        if (!row) return c.json({ error: "not_found" }, 404);
+        if (row.active === 0) return c.json({ ok: true, id, already_inactive: true }, 200);
+        return c.json({ error: "line_has_deliveries" }, 409);
       }
       return c.json({ ok: true, id }, 200);
     },
@@ -785,18 +853,28 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
         //    status now comes from the ledger's latest counting mark by ORDER KEY, not from
         //    the incoming kind (0080): a correction is back-positioned, so the mark being
         //    written is not necessarily the latest. For an ordinary mark the two agree.
+        //
+        //    received_at / received_by / note follow the same rule (W5): they are stamped only
+        //    when the mark just inserted (?4, its event_uuid) IS the latest counting mark. A
+        //    back-positioned correction sits behind a later mark, so it must not present itself
+        //    as the line's last receipt; and an INSERT whose guard refused it (nothing landed)
+        //    matches nothing, so it stamps nothing. An ordinary mark always has the highest
+        //    order key, so for it this is byte-for-byte the old unconditional stamp.
         //    `note` is COALESCEd so an un-noted mark keeps the last note instead of blanking it
         //    on the operator's sheet.
         c.env.DB
           .prepare(
             `UPDATE job_expected_materials
                 SET ${LINE_PROJECTION_SET_SQL},
-                    received_at  = unixepoch(),
-                    received_by  = ?2,
-                    note         = COALESCE(?3, note)
+                    received_at  = CASE WHEN ${LINE_LATEST_ACTIVE_UUID_SQL} = ?4
+                                        THEN unixepoch() ELSE received_at END,
+                    received_by  = CASE WHEN ${LINE_LATEST_ACTIVE_UUID_SQL} = ?4
+                                        THEN ?2 ELSE received_by END,
+                    note         = CASE WHEN ${LINE_LATEST_ACTIVE_UUID_SQL} = ?4
+                                        THEN COALESCE(?3, note) ELSE note END
               WHERE id = ?1 AND active = 1`,
           )
-          .bind(id, actor, f.note),
+          .bind(id, actor, f.note, eventUuid),
       ]);
     } catch (e) {
       // Two racing corrections of one voided mark both pass supersedesRefusal; the loser hits
@@ -909,9 +987,12 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
   }
 
   // ── POST /api/fieldops/expected-material/:id/receive — confirm receipt (manager/field). ──────────
-  // KEPT for the daily form's existing "Confirm receipt" button: same path, same cap, same gate
-  // stack, same `{qty_received?, note?}` body, same `{ok, id, status:"received"}`-shaped success.
-  // Internally it is now a 'delivered' EVENT (0059), so the ledger has ONE writer.
+  // KEPT as the legacy alias: same path, same cap, same gate stack, same `{qty_received?, note?}`
+  // body, same `{ok, id, status}`-shaped success. The daily form's "Confirm receipt" button it was
+  // built for was removed (#74, 2026-08-11), and no SPA surface calls it today (the client
+  // wrapper in src/lib/fieldops_expected_materials.ts has no caller). It funnels through
+  // appendReceiptEvent, so it is no side door around the mark rules (qty required, W5 stamping,
+  // supersedes_id). Internally it is a 'delivered' EVENT (0059), so the ledger has ONE writer.
   //
   // INTENTIONAL BEHAVIOUR CHANGE: a repeat call is now 200 + a second delivered event, where M1
   // returned 409 already_actioned. That one-shot guard is precisely what made a partial delivery
@@ -929,7 +1010,7 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
         event_id: number | null;
         status: string | null;
       };
-      // Legacy success shape — the daily form reads `status` off this response. Pass through the
+      // Legacy success shape — its callers read `status` off this response. Pass through the
       // PERSISTED status rather than asserting "received": on an incident-flagged line the sticky
       // guard leaves it 'incident', and claiming otherwise would show the crew a resolved delivery
       // that the office's Material List still flags as a problem.
@@ -1030,16 +1111,18 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
     job_status: string;
   };
 
-  /** Resolve an event THROUGH its active line to its job. null = the event is missing OR its line
-   *  is deactivated — both 404, because a deactivated line's marks are gone from the flow (the
-   *  same answer /receipt gives for that line). The job is the line's, the scope anchor every
-   *  other materials write uses. */
+  /** Resolve an event THROUGH its line to its job. The line may be INACTIVE (operator decision
+   *  D11): marks stranded on a line removed before the delete route refused that must stay
+   *  voidable, and the list read serves those lines as `removed_lines` for exactly that. null =
+   *  no such event (or no line row at all), 404. The job is the line's, active line or not — the
+   *  scope anchor every other materials write uses, so a removed line's marks are no easier to
+   *  reach across jobs than a live line's. */
   async function readVoidTarget(c: Ctx, eventId: number): Promise<VoidTarget | null> {
     return await c.env.DB.prepare(
       `SELECT e.id, e.event_uuid, e.line_id, jem.job_id, e.kind, e.qty, e.note, e.voided_at,
               j.status AS job_status
          FROM material_receipt_events e
-         JOIN job_expected_materials jem ON jem.id = e.line_id AND jem.active = 1
+         JOIN job_expected_materials jem ON jem.id = e.line_id
          JOIN jobs j ON j.job_id = jem.job_id
         WHERE e.id = ?1`,
     )
@@ -1061,7 +1144,8 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
   // the per-job placement scope (admins bypass via cap.jobtracker.manage). Any eligible person
   // may void anyone's mark: the mistake is usually someone else's double tap.
   // `reason` is REQUIRED (1..500 trimmed, the ledger's note bound): a void without a why is an
-  // unexplained edit to a delivery record.
+  // unexplained edit to a delivery record. WHERE (D11): any mark on the job's lines, removed
+  // lines included — those are void-only, since a correction needs an active line to land on.
   app.post(
     "/api/fieldops/receipt-event/:id/void",
     gates.requireSession,
@@ -1115,30 +1199,32 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
         //    race must not re-stamp received_* below (they are not purely ledger-derived: the
         //    resolve route stamps them too).
         //
-        //    received_at / received_by / note (operator rule): NEVER the voider — a void is not
-        //    a receipt. On a flagged line all three belong to the FLAG and are left alone (the
+        //    `active = 1` makes this a no-op on a REMOVED line (D11): its stored projection stays
+        //    as it was at removal. The §51 Material List mirror never reads a removed line, and
+        //    the list read's `removed_lines` derive their rollup from the ledger
+        //    (RECEIPT_ROLLUP_SQL), so the void still shows there; the Receipts mirror's Line Qty
+        //    Received is ledger-derived too, while its Line Status keeps the stored status.
+        //
+        //    received_at / received_by (operator rule): NEVER the voider — a void is not a
+        //    receipt. On a flagged line they may be the FLAG's stamp, so they are left alone (the
         //    pre-update `status` the CASEs read is unchanged by the sticky projection). Otherwise
-        //    received_* follow the latest COUNTING mark (NULL when none remain, so a fully voided
-        //    line reads like a never-marked one), and `note` changes only when it IS the voided
-        //    mark's note — then the latest counting non-null note, else NULL. A note the office
-        //    or a flag wrote is not the void's to erase. `note = ?2` is deliberately `=`, not
-        //    IS: a voided mark with no note equals nothing.
+        //    they follow the latest COUNTING mark (NULL when none remain, so a fully voided line
+        //    reads like a never-marked one).
+        //
+        //    `note` changes only when it IS the voided mark's note — then the latest counting
+        //    non-null note, else NULL — on a flagged line too (W6): a withdrawn mark's words must
+        //    not stay on the operator's sheet because the line happens to be flagged. A note the
+        //    office or the flag wrote is not the void's to erase, and is untouched. `note = ?2` is
+        //    deliberately `=`, not IS: a voided mark with no note equals nothing.
         c.env.DB
           .prepare(
             `UPDATE job_expected_materials
                 SET ${LINE_PROJECTION_SET_SQL},
                     received_at = CASE WHEN status = 'incident' THEN received_at
-                                       ELSE (SELECT e.created_at FROM material_receipt_events e
-                                              WHERE e.line_id = job_expected_materials.id
-                                                AND ${RECEIPT_ACTIVE_SQL}
-                                              ORDER BY ${RECEIPT_ORDER_SQL} LIMIT 1) END,
+                                       ELSE ${lineLatestActive("created_at")} END,
                     received_by = CASE WHEN status = 'incident' THEN received_by
-                                       ELSE (SELECT e.actor FROM material_receipt_events e
-                                              WHERE e.line_id = job_expected_materials.id
-                                                AND ${RECEIPT_ACTIVE_SQL}
-                                              ORDER BY ${RECEIPT_ORDER_SQL} LIMIT 1) END,
-                    note        = CASE WHEN status = 'incident' THEN note
-                                       WHEN note = ?2
+                                       ELSE ${lineLatestActive("actor")} END,
+                    note        = CASE WHEN note = ?2
                                        THEN (SELECT e.note FROM material_receipt_events e
                                               WHERE e.line_id = job_expected_materials.id
                                                 AND ${RECEIPT_ACTIVE_SQL} AND e.note IS NOT NULL
@@ -1151,8 +1237,9 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
       if ((res[0].meta.changes ?? 0) === 0) {
         // Lost a race past the pre-checks. Re-read and report what actually changed, through
         // the SAME refusal helper. The final fallback is job_not_active: a void is never
-        // undone and a line is never re-activated, so the only state that can flip BACK between
-        // the batch and this read is a job reopening — and at write time it was not active.
+        // undone and the line's activeness is not part of the guard (D11), so the only state
+        // that can flip BACK between the batch and this read is a job reopening — and at write
+        // time it was not active.
         const now = await readVoidTarget(c, id);
         if (!now) return c.json({ error: "not_found" }, 404);
         return voidStateRefusal(c, now) ?? c.json({ error: "job_not_active" }, 409);

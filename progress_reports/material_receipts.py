@@ -47,10 +47,13 @@ Design (PORTAL-AUTHORED, ONE-WAY-UP, APPEND-ONLY — the `material_incidents` po
   office reader sees at a glance that it no longer counts. The Worker already excludes voided marks
   from `Line Qty Received`, so the sheet can never total a line differently from the portal.
 - **Schema back-fill.** A sheet's columns are fixed at CREATE, so every sheet made before 0080 lacks
-  the six. The FIND branch of `ensure_material_receipts_sheet` adds them through
-  `smartsheet_client.ensure_columns` (the `material_list` back-fill, best-effort). Each row mirrored
-  before 0080 is then re-written ONCE, its blank `Entry Status` becoming `Active` — a one-time
-  per-row write on the first cycle after the back-fill, steady again from the next.
+  the six. `backfill_columns` adds them through `smartsheet_client.ensure_columns` — called by the
+  pass AFTER its index read (`read_receipt_index`), whose `get_rows` seeds the column map, so on an
+  up-to-date sheet the back-fill check costs no read at all. If the back-fill fails, or a column is
+  still absent after it, the pass skips that job's upserts for the cycle (every one would raise on
+  the absent column) and the back-fill's WARN is the one signal. Each row mirrored before 0080 is
+  then re-written ONCE, its blank `Entry Status` becoming `Active` — a one-time per-row write on the
+  first cycle after the back-fill, steady again from the next.
 - **ONE-WAY-UP ONLY.** The mark is authored IN THE PORTAL (the daily report's receipt region and the
   per-job Materials page); this mirror is read-only reflection UP. No down-sync, no
   `smartsheet_row_id` reverse link.
@@ -158,12 +161,13 @@ MATERIAL_RECEIPTS_COLUMNS: list[dict[str, Any]] = [
     {"title": COL_SUPERSEDED_BY, "type": "TEXT_NUMBER"},
 ]
 
-# What `ensure_material_receipts_sheet` back-fills onto an ALREADY-CREATED sheet: EVERY non-primary
-# column, derived from the creation schema so the two cannot drift (material_list.BACKFILL_COLUMNS'
-# reasoning — a hand-cut tail slice goes silently wrong on the next addition). It costs nothing:
-# `ensure_columns` resolves every title against ONE cached map and makes no API call when none is
-# missing. When some are, they go in ONE call under ONE shared index — a body whose columns carry
-# different indices is rejected (HTTP 400, errorCode 1135, live 2026-08-10).
+# What `backfill_columns` adds to an ALREADY-CREATED sheet: EVERY non-primary column, derived from
+# the creation schema so the two cannot drift (material_list.BACKFILL_COLUMNS' reasoning — a
+# hand-cut tail slice goes silently wrong on the next addition). It costs nothing once the pass's
+# index read has seeded the column map: `ensure_columns` resolves every title against that ONE map
+# and makes no API call when none is missing. When some are, they go in ONE call under ONE shared
+# index — a body whose columns carry different indices is rejected (HTTP 400, errorCode 1135, live
+# 2026-08-10).
 BACKFILL_COLUMNS: list[dict[str, Any]] = [
     c for c in MATERIAL_RECEIPTS_COLUMNS if not c.get("primary")
 ]
@@ -293,26 +297,35 @@ def _warn_on_thin_headroom(sheet_name: str) -> None:
         )
 
 
-def _backfill_columns_best_effort(sheet_id: int, sheet_name: str) -> None:
-    """Add any `BACKFILL_COLUMNS` title missing from an existing sheet. Never raises.
+def backfill_columns(sheet_id: int, sheet_name: str) -> bool:
+    """Add any `BACKFILL_COLUMNS` title missing from the sheet; True iff every one is present after.
+    Never raises.
 
-    Best-effort on purpose (the `material_list` back-fill, mirrored). A back-fill failure (breaker
-    OPEN, a 403, an API blip) must NOT stop the mirror: the next cycle retries. Until it succeeds,
-    a row whose write names an absent column fails loudly at the per-event fence (`_resolve_cells`
-    raises `KeyError`) rather than being silently under-written — this closes the common cause, it
-    does not hide the symptom.
+    CALL IT AFTER `read_receipt_index`. That read seeds the process column map, so on an up-to-date
+    sheet this is a dict lookup with no API call. Called first — as the find branch of
+    `ensure_material_receipts_sheet` used to — it ran on a cold map and paid a full-sheet read of
+    its own every cycle (fieldops_sync is one-shot per launchd interval, so the map is never warm).
+
+    False means a row write would fail: the add raised (breaker OPEN, a 403, an API blip), or a
+    column is STILL absent afterwards (`smartsheet_client.missing_columns` is the post-condition —
+    after an add it is the re-read the first write would have made anyway, so it costs nothing
+    extra). The pass then skips this job's upserts for the cycle: each one names every tracked
+    column, so each would raise `KeyError` out of `_resolve_cells` — one ERROR per event, every
+    cycle, for one cause. This WARN is that cause's ONE signal; the next cycle retries.
     """
+    titles = [str(c["title"]) for c in BACKFILL_COLUMNS]
     try:
         added = smartsheet_client.ensure_columns(sheet_id, BACKFILL_COLUMNS)
-    except Exception as exc:  # noqa: BLE001 — schema top-up; never block the mirror
+        absent = smartsheet_client.missing_columns(sheet_id, titles)
+    except Exception as exc:  # noqa: BLE001 — schema top-up; reported via the return, never raised
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
             f"could not back-fill columns on Material Receipts {sheet_name!r} (sheet {sheet_id}); "
-            f"rows whose write names a missing column will fail per-event until this succeeds: "
+            f"this job's receipts are NOT mirrored until it succeeds (retried every cycle): "
             f"{type(exc).__name__}: {exc!r}",
             error_code="material_receipts_column_backfill_failed",
         )
-        return
+        return False
     if added:
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
@@ -321,6 +334,16 @@ def _backfill_columns_best_effort(sheet_id: int, sheet_name: str) -> None:
             f"current tracker schema.",
             error_code="material_receipts_columns_backfilled",
         )
+    if absent:
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"Material Receipts {sheet_name!r} (sheet {sheet_id}) still lacks column(s) "
+            f"{', '.join(absent)} after the back-fill; this job's receipts are NOT mirrored until "
+            f"they exist (retried every cycle).",
+            error_code="material_receipts_column_backfill_failed",
+        )
+        return False
+    return True
 
 
 def ensure_material_receipts_sheet(project_name: str) -> int:
@@ -330,17 +353,14 @@ def ensure_material_receipts_sheet(project_name: str) -> int:
     and sheet levels (re-find after create, adopt first, WARN the duplicate). The A1 capacity tripwire
     runs ONLY on the create branch.
 
-    On the FIND branch it also back-fills any missing column (`BACKFILL_COLUMNS`) — the 0080 void
-    columns on every sheet created before them. Costs nothing when nothing is missing (see
-    `smartsheet_client.ensure_columns`), and is best-effort: a back-fill failure WARNs and returns the
-    sheet. Not on the create branch: a sheet created from `MATERIAL_RECEIPTS_COLUMNS` already has them.
+    Find-or-create ONLY — the column back-fill is the caller's next step after its index read
+    (`backfill_columns`), so that it runs on the column map the read seeded rather than fetching one.
     """
     folder_id = _ensure_job_folder(project_name)
     name = material_receipts_sheet_name(project_name)
 
     existing = smartsheet_client.find_sheet_by_name_in_folder(folder_id, name)
     if existing is not None:
-        _backfill_columns_best_effort(existing, name)
         return existing
 
     _warn_on_thin_headroom(name)
@@ -550,7 +570,34 @@ def _read_int_setting(key: str, fallback: int) -> int:
         return fallback
 
 
-def check_row_cap(sheet_id: int, sheet_name: str, *, row_count: int | None = None) -> None:
+def read_row_cap_threshold() -> int:
+    """The row-cap WARN threshold, for a caller to read ONCE per pass and hand to every
+    `check_row_cap`. Never raises.
+
+    `get_setting` is an uncached full read of ITS_Config, so reading it inside `check_row_cap` cost
+    every job its own ITS_Config read on every cycle — a second full-sheet read per job beside the
+    job's own index read. A failed read WARNs (the per-job check's own code) and returns
+    `DEFAULT_ROW_CAP_WARN`, so the tripwire stays armed at the conservative mark rather than being
+    skipped for the whole pass."""
+    try:
+        return _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
+    except Exception as exc:  # noqa: BLE001 — advisory tripwire; never block the mirror
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"row-cap threshold read failed; using the default {DEFAULT_ROW_CAP_WARN} for this "
+            f"pass: {exc!r}",
+            error_code="material_receipts_row_cap_check_failed",
+        )
+        return DEFAULT_ROW_CAP_WARN
+
+
+def check_row_cap(
+    sheet_id: int,
+    sheet_name: str,
+    *,
+    row_count: int | None = None,
+    threshold: int | None = None,
+) -> None:
     """SoR-safe row-cap monitor — the §51 "A5 row-cap watchdog" for the standing Material Receipts
     sheet.
 
@@ -561,10 +608,13 @@ def check_row_cap(sheet_id: int, sheet_name: str, *, row_count: int | None = Non
     ADVISORY: any read/enqueue failure is reduced to a WARN and never blocks the mirror.
 
     `row_count` may be passed by a caller that already read the sheet's rows this cycle (avoids a
-    second full read); when None, a `get_rows` count is taken.
+    second full read); when None, a `get_rows` count is taken. `threshold` likewise, from
+    `read_row_cap_threshold` once per pass (avoids an ITS_Config read per job); when None, it is
+    read here.
     """
     try:
-        threshold = _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
+        if threshold is None:
+            threshold = _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
         count = row_count if row_count is not None else len(smartsheet_client.get_rows(sheet_id))
         if count < threshold:
             return

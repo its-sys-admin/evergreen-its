@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { call, provision, login, g, p, seedJob, seedPersonnel } from "./helpers";
-import { RECEIPT_VOID_SQL } from "../worker/fieldops_expected_materials";
+import { LINE_DEACTIVATE_SQL, RECEIPT_VOID_SQL } from "../worker/fieldops_expected_materials";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Receipt-event VOID (migration 0080) — POST /api/fieldops/receipt-event/:id/void, the optional
@@ -17,7 +17,11 @@ import { RECEIPT_VOID_SQL } from "../worker/fieldops_expected_materials";
 //     original's ORDER position (decision D4), so a fix recorded weeks later sits where the
 //     mistake sat instead of becoming "the latest thing the field told us".
 //   • voided_by is stored as the account username but read as the personnel display name, else
-//     the account's role label (decision D6). The username never leaves the Worker.
+//     the account's role label (decision D6). The username never leaves the Worker. A
+//     subcontractor ('submitter') reading the list sees THAT a mark was voided, not who or why.
+//   • D11: a line whose marks still count cannot be removed; marks already on a removed line
+//     (pre-D11 data) can still be voided, and the list read returns those lines as
+//     `removed_lines`. A removed line is void-only: no correction lands on it.
 // All fixtures are synthetic. Runs against the REAL worker + Miniflare D1 (migrations
 // auto-apply).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,6 +58,7 @@ interface ListLine {
 }
 interface ListBody {
   expected_materials: ListLine[];
+  removed_lines: ListLine[];
   receipt_events: ListEvent[];
 }
 
@@ -223,7 +228,7 @@ describe("B — a double void is one void", () => {
   // enters the window between the route's pre-check and its batch. The two tests below reach that
   // window deterministically instead: one runs the guarded write itself, the other injects the
   // competing write INSIDE the batch with a SQLite trigger.
-  it("RECEIPT_VOID_SQL is write-once and re-asserts the active line + active job (storage level)", async () => {
+  it("RECEIPT_VOID_SQL is write-once, re-asserts the active job, and reaches a REMOVED line (storage level)", async () => {
     const line = await createLine(JOB, "Test guard line", 10);
     const e1 = await markOk(lead, line, { kind: "partial", qty: 4 });
     const first = await env.DB.prepare(RECEIPT_VOID_SQL).bind(e1, LEAD_USER, "first").run();
@@ -236,14 +241,17 @@ describe("B — a double void is one void", () => {
     expect(after.void_reason).toBe("first");
     expect(after.voided_at).toBe(stamped.voided_at);
 
-    // A job closed, or a line deactivated, inside the race window: the write lands nowhere.
+    // A job closed inside the race window: the write lands nowhere.
     const e2 = await markOk(lead, line, { kind: "partial", qty: 1 });
     await env.DB.prepare("UPDATE jobs SET status='closed' WHERE job_id=?1").bind(JOB).run();
     expect((await env.DB.prepare(RECEIPT_VOID_SQL).bind(e2, LEAD_USER, "x").run()).meta.changes).toBe(0);
+    expect((await eventRow(e2)).voided_at).toBeNull();
+    // A REMOVED line is no barrier (D11/W2): its counting marks must stay voidable, or a
+    // removal that buried a double-count could never be undone.
     await env.DB.prepare("UPDATE jobs SET status='active' WHERE job_id=?1").bind(JOB).run();
     await env.DB.prepare("UPDATE job_expected_materials SET active=0 WHERE id=?1").bind(line).run();
-    expect((await env.DB.prepare(RECEIPT_VOID_SQL).bind(e2, LEAD_USER, "x").run()).meta.changes).toBe(0);
-    expect((await eventRow(e2)).voided_at).toBeNull();
+    expect((await env.DB.prepare(RECEIPT_VOID_SQL).bind(e2, LEAD_USER, "x").run()).meta.changes).toBe(1);
+    expect((await eventRow(e2)).voided_at).not.toBeNull();
   });
 
   it("a void whose guarded write lands nothing writes no audit row and leaves the line untouched", async () => {
@@ -449,18 +457,163 @@ describe("void — gates (decision D1: exactly who may mark)", () => {
     expect(await audits("material_receipt_void")).toHaveLength(0);
   });
 
-  it("an event on a deactivated line → 404 (the line is gone from the flow)", async () => {
-    const line = await createLine(JOB, "Test removed line");
-    const e1 = await markOk(lead, line, { kind: "delivered", qty: 3 });
-    const e2 = await markOk(lead, line, { kind: "delivered", qty: 3 });
-    // The same line's marks ARE voidable while it is active — so the 404 below is the
-    // deactivation speaking, not a missing route.
+});
+
+// ── D11 (operator decision 2026-10-21) ──────────────────────────────────────────────────────────
+// Removing a line used to bury its marks: the line vanished from every read while its deliveries
+// kept counting on the Receipts sheet, and nothing could void them (the void route resolved
+// through the ACTIVE line only). Now a line whose marks still count cannot be removed, and the
+// marks already stranded on removed lines (pre-D11 data — production holds some) stay voidable.
+// That stranded state can no longer be made through the routes, so these tests make it at
+// storage, the way production holds it.
+
+/** A removed line carrying counting marks, as pre-D11 removals left it. */
+async function strandedLine(jobId: string, cookie: string, description: string, qtys: number[]): Promise<{ line: number; events: number[] }> {
+  const line = await createLine(jobId, description, 10);
+  const events: number[] = [];
+  for (const qty of qtys) events.push(await markOk(cookie, line, { kind: "delivered", qty }));
+  await env.DB.prepare("UPDATE job_expected_materials SET active = 0 WHERE id = ?1").bind(line).run();
+  return { line, events };
+}
+
+describe("D11 — a line whose marks still count cannot be removed (W1)", () => {
+  it("delete → 409 line_has_deliveries: nothing deactivated, no audit row, the loads not cascaded", async () => {
+    const line = await createLine(JOB, "Test delivered line", 10);
+    const ship = await p(admin, "/api/fieldops/material-shipment", { line_id: line, bol_number: "BOL-T0001", qty: 10 });
+    expect(ship.status, await ship.clone().text()).toBe(201);
+    await markOk(lead, line, { kind: "delivered", qty: 10 });
+
+    const res = await p(admin, `/api/fieldops/expected-material/${line}/delete`);
+    expect(res.status, await res.clone().text()).toBe(409);
+    expect(await errOf(res)).toBe("line_has_deliveries");
+    expect((await lineRow(line)).active).toBe(1);
+    expect(await audits("expected_material_deactivate")).toHaveLength(0);
+    expect(await audits("material_shipment_cascade_deactivate")).toHaveLength(0);
+    const load = await env.DB.prepare("SELECT active FROM material_shipments WHERE line_id = ?1").bind(line).first<{ active: number }>();
+    expect(load!.active).toBe(1);
+
+    // EVERY counting mark blocks, not only a delivery: a "Not delivered" report is still a field
+    // record that a removal would bury.
+    const reported = await createLine(JOB, "Test not-delivered line", 10);
+    await markOk(lead, reported, { kind: "not_delivered", note: "Truck did not arrive" });
+    const blocked = await p(admin, `/api/fieldops/expected-material/${reported}/delete`);
+    expect(blocked.status).toBe(409);
+    expect(await errOf(blocked)).toBe("line_has_deliveries");
+  });
+
+  it("allowed once every mark is voided — and the load cascade then runs exactly as before", async () => {
+    const line = await createLine(JOB, "Test fully voided line", 10);
+    const ship = await p(admin, "/api/fieldops/material-shipment", { line_id: line, bol_number: "BOL-T0002", qty: 10 });
+    expect(ship.status).toBe(201);
+    const e1 = await markOk(lead, line, { kind: "delivered", qty: 10 });
+    const e2 = await markOk(lead, line, { kind: "partial", qty: 2 });
+    await voidOk(lead, e1);
+    expect((await p(admin, `/api/fieldops/expected-material/${line}/delete`)).status).toBe(409); // e2 still counts
     await voidOk(lead, e2);
-    expect((await p(admin, `/api/fieldops/expected-material/${line}/delete`)).status).toBe(200);
-    const res = await voidEvent(lead, e1, { reason: "x" });
-    expect(res.status).toBe(404);
-    expect(await errOf(res)).toBe("not_found");
+
+    const res = await p(admin, `/api/fieldops/expected-material/${line}/delete`);
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, id: line });
+    expect((await lineRow(line)).active).toBe(0);
+    expect(await audits("expected_material_deactivate")).toHaveLength(1);
+    expect(await audits("material_shipment_cascade_deactivate")).toHaveLength(1);
+    // The voided marks are kept — removal never deletes history.
+    expect((await eventRow(e1)).voided_at).not.toBeNull();
+  });
+
+  it("a line ALREADY removed (pre-D11, marks still counting) answers 200 already_inactive, not 409", async () => {
+    const { line } = await strandedLine(JOB, lead, "Test stranded line", [5]);
+    const res = await p(admin, `/api/fieldops/expected-material/${line}/delete`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { already_inactive?: boolean }).already_inactive).toBe(true);
+    expect(await audits("expected_material_deactivate")).toHaveLength(0);
+  });
+
+  // The route has no pre-check to race past: the rule lives ONLY in the deactivate UPDATE's WHERE,
+  // so a mark that lands before the UPDATE runs is seen by it. Proven at storage level, the
+  // RECEIPT_VOID_SQL way (requests serialize in the test pool, see the note above).
+  it("LINE_DEACTIVATE_SQL re-asserts 'no counting marks' IN its WHERE (storage level)", async () => {
+    const line = await createLine(JOB, "Test raced line", 10);
+    const e1 = await markOk(lead, line, { kind: "partial", qty: 3 }); // the mark that won the race
+    expect((await env.DB.prepare(LINE_DEACTIVATE_SQL).bind(line).run()).meta.changes).toBe(0);
+    expect((await lineRow(line)).active).toBe(1);
+    await env.DB.prepare(RECEIPT_VOID_SQL).bind(e1, LEAD_USER, "x").run();
+    expect((await env.DB.prepare(LINE_DEACTIVATE_SQL).bind(line).run()).meta.changes).toBe(1);
+    expect((await lineRow(line)).active).toBe(0);
+  });
+});
+
+describe("D11 — marks on a REMOVED line can still be voided (W2)", () => {
+  it("a manager placed on the job voids one, an admin voids another; a void never re-activates the line", async () => {
+    const { line, events: [e1, e2] } = await strandedLine(JOB, lead, "Test stranded pair", [3, 3]);
+    const res = await voidOk(lead, e1, "Duplicate left on a removed line");
+    expect(await res.json()).toMatchObject({ ok: true, event_id: e1, line_id: line });
+    expect((await eventRow(e1)).voided_by).toBe(LEAD_USER);
+    await voidOk(admin, e2); // the admin is placed nowhere: the bypass reaches removed lines too
+    expect(await audits("material_receipt_void")).toHaveLength(2);
+    expect((await lineRow(line)).active).toBe(0);
+    // Both marks gone from the rollup the "Removed from the list" group reads.
+    const { body } = await readList(admin);
+    const removed = body.removed_lines.find((r) => r.id === line)!;
+    expect(removed.qty_received_total).toBeNull();
+    expect(removed.receipt_status).toBeNull();
+  });
+
+  it("the job scope still binds (cross-job manager 403), and a closed job is still frozen (409)", async () => {
+    const { events: [e1] } = await strandedLine(JOB, lead, "Test stranded scope line", [2]);
+    const cross = await voidEvent(otherLead, e1, { reason: "not my job" });
+    expect(cross.status).toBe(403);
+    expect(await errOf(cross)).toBe("forbidden_job");
+    await env.DB.prepare("UPDATE jobs SET status='closed' WHERE job_id=?1").bind(JOB).run();
+    const closed = await voidEvent(admin, e1, { reason: "too late" });
+    expect(closed.status).toBe(409);
+    expect(await errOf(closed)).toBe("job_not_active");
     expect((await eventRow(e1)).voided_at).toBeNull();
+    expect(await audits("material_receipt_void")).toHaveLength(0);
+  });
+
+  it("a removed line is void-only: a CORRECTION on it is still refused (the mark route's active-line rule)", async () => {
+    const { line, events: [e1] } = await strandedLine(JOB, lead, "Test stranded correction line", [4]);
+    await voidOk(lead, e1);
+    const fix = await mark(lead, line, { kind: "partial", qty: 2, supersedes_id: e1 });
+    expect(fix.status).toBe(404);
+    expect(await errOf(fix)).toBe("not_found");
+    expect((await listEvents(line)).filter((e) => e.supersedes_id === e1)).toHaveLength(0);
+  });
+});
+
+describe("the list read's removed_lines (W3)", () => {
+  it("returns REMOVED lines that carry ANY receipt event — rollup applied, same row shape, seq order", async () => {
+    const active = await createLine(JOB, "Test active line", 10);
+    await markOk(lead, active, { kind: "partial", qty: 2 });
+    const { line: counting, events: [c1] } = await strandedLine(JOB, lead, "Test removed counting", [5]);
+    const { line: voidedOnly, events: [v1] } = await strandedLine(JOB, lead, "Test removed voided-only", [3]);
+    await voidOk(lead, v1); // a voided mark is still history: the line stays listed
+    const bare = await createLine(JOB, "Test removed bare", 10);
+    expect((await p(admin, `/api/fieldops/expected-material/${bare}/delete`)).status).toBe(200);
+    await strandedLine(OTHER_JOB, otherLead, "Test other-job removed", [1]);
+    // seq order, not id order: the voided-only line sorts first.
+    await env.DB.prepare("UPDATE job_expected_materials SET seq = 20 WHERE id = ?1").bind(counting).run();
+    await env.DB.prepare("UPDATE job_expected_materials SET seq = 10 WHERE id = ?1").bind(voidedOnly).run();
+
+    const { body } = await readList(admin);
+    expect(body.removed_lines.map((r) => r.id)).toEqual([voidedOnly, counting]);
+    expect(body.expected_materials.map((r) => r.id)).toEqual([active]);
+    const byId = Object.fromEntries(body.removed_lines.map((r) => [r.id, r]));
+    expect(byId[counting].receipt_status).toBe("delivered");
+    expect(byId[counting].qty_received_total).toBe(5);
+    expect(byId[voidedOnly].receipt_status).toBeNull();
+    expect(byId[voidedOnly].qty_received_total).toBeNull();
+    // The SAME row shape as an active line, so the SPA renders both with one component.
+    expect(Object.keys(byId[counting]).sort()).toEqual(Object.keys(body.expected_materials[0]).sort());
+    // Their events already ride the job-scoped events read.
+    expect(body.receipt_events.map((e) => e.id)).toEqual(expect.arrayContaining([c1, v1]));
+  });
+
+  it("is an empty array — present, not absent — when nothing was removed", async () => {
+    await createLine(JOB, "Test lone active line", 10);
+    const { body } = await readList(lead);
+    expect(body.removed_lines).toEqual([]);
   });
 });
 
@@ -506,16 +659,16 @@ describe("void — the received_at / received_by / note rule", () => {
     expect((await lineRow(resolved)).note).toBe("office waived");
   });
 
-  it("an incident-flagged line stays 'incident' and keeps its stamp + note; qty still tracks", async () => {
+  it("an incident-flagged line stays 'incident' and keeps its received_* stamp; qty still tracks", async () => {
     const line = await createLine(JOB, "Test flagged line", 10);
     // flag-incident only fires from 'expected', so the flag comes first; the later deliveries are
     // accepted and the sticky rule keeps the line at 'incident'.
     const flag = await p(lead, `/api/fieldops/expected-material/${line}/flag-incident`, { note: "crate crushed" });
     expect(flag.status).toBe(200);
-    await markOk(lead, line, { kind: "delivered", qty: 5 });
+    await markOk(lead, line, { kind: "delivered", qty: 5, note: "first truck" });
     const e2 = await markOk(lead, line, { kind: "delivered", qty: 5, note: "second truck" });
     // Sentinel stamp so the assertion discriminates: on a NON-incident line the void would
-    // rewrite received_* to the latest counting mark (the lead) and the note (it IS e2's note).
+    // rewrite received_* to the latest counting mark (the lead).
     await env.DB.prepare(
       "UPDATE job_expected_materials SET received_at = 1700000000, received_by = ?2 WHERE id = ?1",
     ).bind(line, OTHER_LEAD_USER).run();
@@ -526,8 +679,113 @@ describe("void — the received_at / received_by / note rule", () => {
     expect(after.status).toBe("incident");
     expect(after.received_at).toBe(1700000000);
     expect(after.received_by).toBe(OTHER_LEAD_USER);
-    expect(after.note).toBe("second truck");
     expect(after.qty_received).toBe(5); // the quantity still follows the ledger
+    // W6: the note scrub applies on a flagged line too. The line's note IS the voided mark's, so
+    // it falls back to the latest counting note — a withdrawn mark's words must not linger on
+    // the Material List mirror just because the line is flagged.
+    expect(after.note).toBe("first truck");
+  });
+
+  it("W6: on a flagged line the FLAG's own note survives a void (only the voided mark's note is scrubbed)", async () => {
+    const line = await createLine(JOB, "Test flag-note line", 10);
+    expect((await p(lead, `/api/fieldops/expected-material/${line}/flag-incident`, { note: "crate crushed" })).status).toBe(200);
+    const e1 = await markOk(lead, line, { kind: "delivered", qty: 5 }); // un-noted: COALESCE keeps the flag's note
+    expect((await lineRow(line)).note).toBe("crate crushed");
+    await voidOk(admin, e1);
+    expect((await lineRow(line)).note).toBe("crate crushed");
+  });
+});
+
+describe("W5 — the mark projection stamps received_* / note only for the LATEST counting mark", () => {
+  it("a back-positioned correction leaves received_at / received_by / note alone; an ordinary mark still stamps", async () => {
+    const line = await createLine(JOB, "Test back-position line", 20);
+    const wrong = await markOk(lead, line, { kind: "partial", qty: 5 });
+    await markOk(lead, line, { kind: "delivered", qty: 10, note: "second truck" });
+    await voidOk(lead, wrong, "Partial qty was 10");
+    // Backdate the stamp the delivered mark left so a re-stamp is visible.
+    await env.DB.prepare("UPDATE job_expected_materials SET received_at = 1700000000 WHERE id = ?1").bind(line).run();
+    expect((await lineRow(line)).received_by).toBe(LEAD_USER);
+
+    // The correction sits in the voided partial's slot, BEHIND the delivered mark — it is not
+    // "what the field told us last", so it must not present itself as the line's last receipt.
+    await markOk(admin, line, { kind: "partial", qty: 10, note: "corrected qty", supersedes_id: wrong });
+    const after = await lineRow(line);
+    expect(after.received_at).toBe(1700000000);
+    expect(after.received_by).toBe(LEAD_USER);
+    expect(after.note).toBe("second truck");
+    expect(after.qty_received).toBe(20); // the ledger half of the projection still moves
+    expect(after.status).toBe("received");
+
+    // An ordinary mark is always the latest by order key, so it stamps exactly as before 0080.
+    await markOk(admin, line, { kind: "partial", qty: 1, note: "third load" });
+    const ordinary = await lineRow(line);
+    expect(ordinary.received_by).toBe(ADMIN_USER);
+    expect(ordinary.received_at).toBeGreaterThan(1700000000);
+    expect(ordinary.note).toBe("third load");
+  });
+
+  it("a correction that IS the latest counting mark stamps like any mark", async () => {
+    const line = await createLine(JOB, "Test latest-correction line", 10);
+    const only = await markOk(lead, line, { kind: "partial", qty: 4, note: "typo" });
+    await voidOk(lead, only);
+    await markOk(admin, line, { kind: "partial", qty: 6, note: "fixed qty", supersedes_id: only });
+    const row = await lineRow(line);
+    expect(row.received_by).toBe(ADMIN_USER);
+    expect(row.note).toBe("fixed qty");
+  });
+
+  it("a guarded INSERT that landed nothing stamps nothing (404, no audit, line untouched)", async () => {
+    const line = await createLine(JOB, "Test lost-insert line", 10);
+    await markOk(lead, line, { kind: "partial", qty: 2, note: "kept note" });
+    await env.DB.prepare(
+      "UPDATE job_expected_materials SET received_at = 1700000000, received_by = ?2 WHERE id = ?1",
+    ).bind(line, OTHER_LEAD_USER).run();
+    // The lost race, simulated the way the void race is: the INSERT is matched and then dropped,
+    // exactly as if its in-WHERE guard had refused it (a line or load deactivated in between).
+    await env.DB.prepare(
+      `CREATE TRIGGER test_lost_mark_race BEFORE INSERT ON material_receipt_events
+       BEGIN
+         SELECT RAISE(IGNORE);
+       END`,
+    ).run();
+    let res: Response;
+    try {
+      res = await mark(admin, line, { kind: "partial", qty: 3, note: "never landed" });
+    } finally {
+      await env.DB.prepare("DROP TRIGGER IF EXISTS test_lost_mark_race").run();
+    }
+    expect(res.status, await res.clone().text()).toBe(404);
+    const row = await lineRow(line);
+    expect(row.received_at).toBe(1700000000);
+    expect(row.received_by).toBe(OTHER_LEAD_USER);
+    expect(row.note).toBe("kept note");
+    expect(row.qty_received).toBe(2);
+    expect(await audits("expected_material_receipt")).toHaveLength(1);
+  });
+});
+
+describe("W7 — a subcontractor sees THAT a mark was voided, not who or why", () => {
+  it("submitter: void_reason + voided_by_name NULL (voided_at kept); manager + admin: both present", async () => {
+    await seedPersonnel("Test Sub Crew", SUB_USER, JOB); // a placed subcontractor may READ the list
+    const line = await createLine(JOB, "Test visibility line", 10);
+    // Marked by the admin (no roster link, so no actor_name), voided by the lead: the lead's
+    // display name can then reach the response ONLY as voided_by_name.
+    const e1 = await markOk(admin, line, { kind: "partial", qty: 2 });
+    await voidOk(lead, e1, "Distinctive void reason T0001");
+
+    const sub = await readList(submitter);
+    const subEv = sub.body.receipt_events.find((e) => e.id === e1)!;
+    expect(subEv.voided_at).not.toBeNull();
+    expect(subEv.voided_by_name).toBeNull();
+    expect(subEv.void_reason).toBeNull();
+    expect(sub.text).not.toContain("Distinctive void reason T0001");
+    expect(sub.text).not.toContain(LEAD_NAME);
+
+    for (const cookie of [lead, admin]) {
+      const ev = (await readList(cookie)).body.receipt_events.find((e) => e.id === e1)!;
+      expect(ev.voided_by_name).toBe(LEAD_NAME);
+      expect(ev.void_reason).toBe("Distinctive void reason T0001");
+    }
   });
 });
 

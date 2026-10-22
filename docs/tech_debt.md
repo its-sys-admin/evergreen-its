@@ -3275,23 +3275,28 @@ WHERE the way `/receipt` re-asserts its shipment and correction targets.
 
 Surfaced: 2026-10-21, receipt-event void build.
 
-## [OPEN 2026-10-21, low] The mark route's line projection stamps `received_at` / `received_by` / `note` even when its guarded INSERT lands nothing (pre-existing)
+## [OPEN 2026-10-21, low] Deliveries on lines removed before the remove-line guard still count until the office reviews them
 
-`appendReceiptEvent` (`/receipt` and `/receive`) batches a guarded INSERT…SELECT, the audit row, then
-`UPDATE job_expected_materials … received_at = unixepoch(), received_by = ?, note = COALESCE(?, note)
-WHERE id = ? AND active = 1` with no `changes()` chain. When the INSERT's in-WHERE guard refuses (a
-load deactivated, or a correction target that fails its re-assertion, between the pre-read and the
-batch) the line is still active, so the UPDATE stamps the caller as the receiver and can overwrite the
-note for a mark that was never recorded — then the route answers 404. The Material List mirror shows
-that phantom stamp. Predates 0080 (the shipment race always had it); the void route's own projection
-is already chained on `changes() = 1`.
+The receipt-void addendum (operator decision D11) refuses to remove a material line while any of its
+deliveries still counts (`409 line_has_deliveries`). Lines removed BEFORE that guard can still carry
+counting deliveries — observed 2026-10-21 in production: 3 marks, total qty 5, on 2 removed lines
+(an observation, not a live count). They keep counting on the Material Receipts sheet's
+`Line Qty Received` and on the weekly report's delivery log, and the Materials page now lists them
+under **Removed from the list**, where they can be voided. Not voided automatically on purpose:
+whether each is a real delivery is the office's call. Two consequences are accepted, not fixed: a
+removed line takes no new marks or corrections (void-only), and its Material List row
+(`On List = Removed`) is no longer refreshed, so a void there leaves that row's `Delivered Qty` as it
+was when the line was removed.
 
-**Tag:** `field-ops`, `safety-portal`, `data-integrity`.
+**Tag:** `field-ops`, `data-integrity`, `production-repair`.
 
-**Revisit when:** the next change to `appendReceiptEvent` — add `AND changes() = 1` to statement 3
-(it already follows the audit INSERT, which lands exactly when the event did), with a race test.
+**Revisit when:** after the receipt-void deploy — ask the office to review the **Removed from the
+list** group on the affected job(s) and void any delivery that is not real (§43:
+`docs/runbooks/job_materials.md` → "Removing a line, and the "Removed from the list" group"). Close
+this entry once that group holds no counting delivery the office has not confirmed, or reopen the
+Material List question if a frozen removed-line total is reported as misleading.
 
-Surfaced: 2026-10-21, receipt-event void build (adversarial review of the shared projection).
+Surfaced: 2026-10-21, receipt-event void addendum (D11).
 
 ## [OPEN 2026-10-21, medium] Real-looking personal and job names in materials test fixtures, in a public repo
 

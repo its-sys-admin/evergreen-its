@@ -121,7 +121,7 @@ beforeEach(() => {
   vi.mocked(jobs.fetchJobDetail).mockResolvedValue(DETAIL);
   vi.mocked(fetchDailyFormStatus).mockResolvedValue(EMPTY_STATUS);
   vi.mocked(fetchDailyRequirements).mockResolvedValue([]);
-  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [], project_name: "Deep Lake" });
+  vi.mocked(fetchExpectedMaterials).mockResolvedValue({ expected_materials: [], shipments: [], receipt_events: [], project_name: "Deep Lake", removed_lines: [] });
   vi.mocked(receiveExpectedMaterial).mockResolvedValue(undefined);
   vi.mocked(flagExpectedMaterialIncident).mockResolvedValue(undefined);
   vi.mocked(api.fetchRecent).mockResolvedValue(null);
@@ -693,7 +693,7 @@ describe("DailyReportTab — expected materials is a DEEP-LINK CARD (2026-08-11)
   it("shows the counts + deep link — never the lines, never the old actions", async () => {
     vi.mocked(fetchExpectedMaterials).mockResolvedValue({
       expected_materials: [PENDING, { ...PENDING, id: 12, status: "incident" as const }],
-      shipments: [], receipt_events: [], project_name: "Alpha",
+      shipments: [], receipt_events: [], project_name: "Alpha", removed_lines: [],
     });
     const onOpenMaterials = vi.fn();
     const { container, getByText } = render(
@@ -712,7 +712,7 @@ describe("DailyReportTab — expected materials is a DEEP-LINK CARD (2026-08-11)
 
   it("files NO expected-materials key — a new filing's PDF renders the classic note line", async () => {
     vi.mocked(fetchExpectedMaterials).mockResolvedValue({
-      expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Alpha",
+      expected_materials: [PENDING], shipments: [], receipt_events: [], project_name: "Alpha", removed_lines: [],
     });
     const { container, getByLabelText } = render(
       <DailyReportTab linked={true} placement={PLACED} onOpenForm={vi.fn()} />,

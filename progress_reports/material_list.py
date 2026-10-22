@@ -123,15 +123,16 @@ MATERIAL_LIST_COLUMNS: list[dict[str, Any]] = [
     {"title": COL_EXPECTED_SHIP_DATE, "type": "DATE"},
 ]
 
-# What `ensure_material_list_sheet` back-fills onto an ALREADY-CREATED sheet: EVERY non-primary
-# column, not just the newest three. Derived from the creation schema so the two cannot drift.
+# What `backfill_columns` adds to an ALREADY-CREATED sheet: EVERY non-primary column, not just the
+# newest three. Derived from the creation schema so the two cannot drift.
 #
 # Deliberately the whole set rather than a tail slice. A slice would have to be re-cut by hand on
 # every future addition, and getting it wrong is silent — appending a fourth column while the slice
 # still says "last three" would quietly stop back-filling `Part Number` onto sheets that never got
-# it. Passing everything costs nothing, because `ensure_columns` resolves all titles against ONE
-# cached map and issues no API call when none are missing; it also self-heals a column an operator
-# deleted by hand. The primary is excluded because a sheet's primary is fixed at create.
+# it. Passing everything costs nothing once the pass's index read has seeded the column map, because
+# `ensure_columns` resolves all titles against that ONE map and issues no API call when none are
+# missing; it also self-heals a column an operator deleted by hand. The primary is excluded because
+# a sheet's primary is fixed at create.
 BACKFILL_COLUMNS: list[dict[str, Any]] = [
     c for c in MATERIAL_LIST_COLUMNS if not c.get("primary")
 ]
@@ -251,14 +252,21 @@ def _warn_on_thin_headroom(sheet_name: str) -> None:
         )
 
 
-def _backfill_columns_best_effort(sheet_id: int, sheet_name: str) -> None:
-    """Add any `BACKFILL_COLUMNS` title missing from an existing sheet. Never raises.
+def backfill_columns(sheet_id: int, sheet_name: str) -> None:
+    """Add any `BACKFILL_COLUMNS` title missing from the sheet. Never raises.
+
+    CALL IT AFTER `read_line_index`. That read seeds the process column map, so on an up-to-date
+    sheet this is a dict lookup with no API call. Called first — as the find branch of
+    `ensure_material_list_sheet` used to — it ran on a cold map and paid a full-sheet read of its own
+    every cycle (fieldops_sync is one-shot per launchd interval, so the map is never warm).
 
     Best-effort on purpose. A back-fill failure (breaker OPEN, a 403, an API blip) must NOT stop the
-    mirror: a sheet whose schema is one column behind still mirrors every column it does have, and
-    the next cycle retries. The cells for a genuinely-absent column still surface loudly through the
-    per-line fence rather than being silently dropped — this closes the common cause, it does not
-    hide the symptom.
+    pass, and the next cycle retries. What it costs meanwhile: the retire still runs (it writes only
+    `On List`, which every sheet has had since create), but each line upsert names every tracked
+    column, so on a sheet still missing one, every upsert raises `KeyError` out of `_resolve_cells`
+    and fails loudly at its per-line fence — never silently under-written. (The receipts mirror
+    skips its upserts on a failed back-fill, so its WARN is the job's one signal; this pass does not
+    — a known asymmetry, not a deliberate contrast.)
     """
     try:
         added = smartsheet_client.ensure_columns(sheet_id, BACKFILL_COLUMNS)
@@ -288,21 +296,18 @@ def ensure_material_list_sheet(project_name: str) -> int:
     and sheet levels (re-find after create, adopt first, WARN the duplicate). The A1 capacity
     tripwire runs ONLY on the create branch.
 
-    On the FIND branch it also back-fills any missing column (`BACKFILL_COLUMNS`). A sheet's columns
-    are fixed at CREATE, so every tracker addition splits the estate in two — sheets new enough to
-    have the column, and sheets that predate it, where writing the new cell raises `KeyError` out of
-    `_resolve_cells`. That error is what deferred the 0059 Part Number / Category / Expected Ship
-    Date columns; closing it here means the mirror never has to choose between erroring on old
-    sheets and silently under-writing them. Costs nothing when nothing is missing (see
-    `smartsheet_client.ensure_columns`), and is best-effort: a back-fill failure WARNs and returns
-    the sheet, because a stale-schema sheet still mirrors every column it DOES have.
+    Find-or-create ONLY. A sheet's columns are fixed at CREATE, so every tracker addition splits the
+    estate in two — sheets new enough to have the column, and sheets that predate it, where writing
+    the new cell raises `KeyError` out of `_resolve_cells`. That error is what deferred the 0059 Part
+    Number / Category / Expected Ship Date columns. Closing it is the caller's next step after its
+    index read (`backfill_columns`), so that the back-fill runs on the column map the read seeded
+    rather than fetching one of its own.
     """
     folder_id = _ensure_job_folder(project_name)
     name = material_list_sheet_name(project_name)
 
     existing = smartsheet_client.find_sheet_by_name_in_folder(folder_id, name)
     if existing is not None:
-        _backfill_columns_best_effort(existing, name)
         return existing
 
     _warn_on_thin_headroom(name)
@@ -534,7 +539,34 @@ def _read_int_setting(key: str, fallback: int) -> int:
         return fallback
 
 
-def check_row_cap(sheet_id: int, sheet_name: str, *, row_count: int | None = None) -> None:
+def read_row_cap_threshold() -> int:
+    """The row-cap WARN threshold, for a caller to read ONCE per pass and hand to every
+    `check_row_cap`. Never raises.
+
+    `get_setting` is an uncached full read of ITS_Config, so reading it inside `check_row_cap` cost
+    every job its own ITS_Config read on every cycle — a second full-sheet read per job beside the
+    job's own index read. A failed read WARNs (the per-job check's own code) and returns
+    `DEFAULT_ROW_CAP_WARN`, so the tripwire stays armed at the conservative mark rather than being
+    skipped for the whole pass."""
+    try:
+        return _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
+    except Exception as exc:  # noqa: BLE001 — advisory tripwire; never block the mirror
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"row-cap threshold read failed; using the default {DEFAULT_ROW_CAP_WARN} for this "
+            f"pass: {exc!r}",
+            error_code="material_list_row_cap_check_failed",
+        )
+        return DEFAULT_ROW_CAP_WARN
+
+
+def check_row_cap(
+    sheet_id: int,
+    sheet_name: str,
+    *,
+    row_count: int | None = None,
+    threshold: int | None = None,
+) -> None:
     """SoR-safe row-cap monitor — the §51 "A5 row-cap watchdog" for the standing Material List sheet.
 
     A per-job material list is bounded by line count, so this ~never fires — it is kept for PARITY
@@ -544,10 +576,13 @@ def check_row_cap(sheet_id: int, sheet_name: str, *, row_count: int | None = Non
     the mirror.
 
     `row_count` may be passed by a caller that already read the sheet's rows this cycle (avoids a
-    second full read); when None, a `get_rows` count is taken.
+    second full read); when None, a `get_rows` count is taken. `threshold` likewise, from
+    `read_row_cap_threshold` once per pass (avoids an ITS_Config read per job); when None, it is
+    read here.
     """
     try:
-        threshold = _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
+        if threshold is None:
+            threshold = _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
         count = row_count if row_count is not None else len(smartsheet_client.get_rows(sheet_id))
         if count < threshold:
             return

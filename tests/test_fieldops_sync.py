@@ -171,6 +171,14 @@ def _patch(mocker):
         "mat_row_cap": mocker.patch(
             "field_ops.fieldops_sync.material_list.check_row_cap", return_value=None
         ),
+        # P2/P3 seams — the post-index back-fill and the pass's one threshold read. Mocked whole like
+        # the rest; the API-level counting tests at the bottom drive the real ones.
+        "backfill_mat": mocker.patch(
+            "field_ops.fieldops_sync.material_list.backfill_columns", return_value=None
+        ),
+        "mat_row_cap_threshold": mocker.patch(
+            "field_ops.fieldops_sync.material_list.read_row_cap_threshold", return_value=15000
+        ),
         # Track 6 archive pass seam — archive_enabled defaults OFF so EVERY existing test stays
         # byte-identical (the pass is skipped). This MUST be patched rather than left to the real
         # reader: `_archive_enabled` resolves an ITS_Config row, which is a live Smartsheet call,
@@ -222,6 +230,12 @@ def _patch(mocker):
         ),
         "rcp_row_cap": mocker.patch(
             "field_ops.fieldops_sync.material_receipts.check_row_cap", return_value=None
+        ),
+        "backfill_rcp": mocker.patch(
+            "field_ops.fieldops_sync.material_receipts.backfill_columns", return_value=True
+        ),
+        "rcp_row_cap_threshold": mocker.patch(
+            "field_ops.fieldops_sync.material_receipts.read_row_cap_threshold", return_value=15000
         ),
         # §51 archive-on-closure seams — default to "an Hours Log exists" so the archived-job
         # tests exercise the move; the guard/idempotency tests below flip these to None.
@@ -1890,6 +1904,10 @@ def _real_mirror(mocker):
     mocker.patch.object(smartsheet_client, "update_rows", side_effect=fake.update_rows)
     # The row-cap watchdog's ITS_Config threshold read — far above any test sheet.
     mocker.patch.object(smartsheet_client, "get_setting", return_value="15000")
+    # The post-index column back-fill: every column present. (These tests count only the row reads;
+    # the API-level counting tests at the bottom of this file drive the real back-fill.)
+    mocker.patch.object(smartsheet_client, "ensure_columns", return_value=[])
+    mocker.patch.object(smartsheet_client, "missing_columns", return_value=[])
     mocker.patch.object(
         fieldops_sync.material_list, "ensure_material_list_sheet",
         side_effect=_T_LIST_SHEETS.__getitem__,
@@ -2152,3 +2170,326 @@ def test_a_genuine_403_still_files_a_permanent_review_row(mocker, _real_mirror, 
 
     _real_mirror["review"].assert_called()
     assert out["reviewed"] >= 1 and out["errors"] == 0
+
+
+# ---- P1-P3: what a job REALLY costs per pass, measured at the Smartsheet API ------------------
+#
+# The D10 tests above mock `ensure_*_sheet` and `get_rows` WHOLE, so they count only the index read
+# and are blind to anything below it. That blindness hid a second full read per job per cycle: the
+# find branch of `ensure_*_sheet` back-filled columns BEFORE the index read, on a cold column map
+# (fieldops_sync is one-shot per launchd interval, so the map is never warm), and the cold fetch is
+# a whole-sheet `Sheets.get_sheet`. The row-cap watchdog added a third: an ITS_Config read per job.
+#
+# These drive the REAL ensure → index → back-fill → upsert → row-cap path and fake only what sits
+# below `smartsheet_client`: the SDK client and the two raw-REST container listings. Every call is
+# counted, so a read added anywhere on the path shows up here.
+
+_T_WORKSPACE_LISTING = f"/workspaces/{sheet_ids.WORKSPACE_PROGRESS_REPORTING}"
+
+
+class _FakeSmartsheetApi:
+    """The API below `smartsheet_client`: SDK `Sheets.*` plus the REST container listings that
+    `find_folder_by_name_in_workspace` / `find_sheet_by_name_in_folder` issue. Stateful — a write
+    is visible to the next read — and every call is counted."""
+
+    def __init__(self) -> None:
+        self.columns: dict[int, list[SimpleNamespace]] = {}
+        self.rows: dict[int, list[dict[str, Any]]] = {}  # {"id": int, "cells": {col_id: value}}
+        self.folders: list[dict[str, Any]] = []          # the progress workspace's folder listing
+        self.folder_sheets: dict[int, list[dict[str, Any]]] = {}
+        self.get_sheet_calls: Counter[int] = Counter()
+        self.rest_gets: list[str] = []
+        self.add_columns_calls: list[tuple[int, list[Any]]] = []
+        self.added: list[tuple[int, dict[str, Any]]] = []
+        self.updated: list[tuple[int, dict[str, Any]]] = []
+        self.add_columns_error: Exception | None = None
+        self._next_id = 50_000
+
+    def _id(self) -> int:
+        self._next_id += 1
+        return self._next_id
+
+    # -- fixtures --
+    def make_sheet(
+        self, sheet_id: int, folder_id: int, folder: str, name: str,
+        column_titles: list[str], rows: list[dict[str, Any]] | None = None,
+    ) -> None:
+        if not any(f["id"] == folder_id for f in self.folders):
+            self.folders.append({"id": folder_id, "name": folder})
+        self.folder_sheets.setdefault(folder_id, []).append({"id": sheet_id, "name": name})
+        self.columns[sheet_id] = [SimpleNamespace(id=self._id(), title=t) for t in column_titles]
+        by_title = {c.title: c.id for c in self.columns[sheet_id]}
+        self.rows[sheet_id] = [
+            {"id": self._id(), "cells": {by_title[k]: v for k, v in r.items()}} for r in rows or []
+        ]
+
+    def row_values(self, sheet_id: int) -> list[dict[str, Any]]:
+        title_by_id = {c.id: c.title for c in self.columns[sheet_id]}
+        return [{title_by_id[c]: v for c, v in r["cells"].items()} for r in self.rows[sheet_id]]
+
+    # -- SDK surface (client.Sheets.*) --
+    def get_sheet(self, sheet_id: int, **_kwargs: Any) -> SimpleNamespace:
+        self.get_sheet_calls[sheet_id] += 1
+        return SimpleNamespace(
+            columns=list(self.columns[sheet_id]),
+            rows=[
+                SimpleNamespace(
+                    id=r["id"],
+                    cells=[SimpleNamespace(column_id=c, value=v) for c, v in r["cells"].items()],
+                )
+                for r in self.rows[sheet_id]
+            ],
+        )
+
+    def add_rows(self, sheet_id: int, sdk_rows: list[Any]) -> SimpleNamespace:
+        ids = []
+        for sdk_row in sdk_rows:
+            cells = {c.column_id: c.value for c in sdk_row.cells}
+            self.rows[sheet_id].append({"id": self._id(), "cells": cells})
+            self.added.append((sheet_id, cells))
+            ids.append(SimpleNamespace(id=self._next_id))
+        return SimpleNamespace(result=ids)
+
+    def update_rows(self, sheet_id: int, sdk_rows: list[Any]) -> None:
+        for sdk_row in sdk_rows:
+            cells = {c.column_id: c.value for c in sdk_row.cells}
+            next(r for r in self.rows[sheet_id] if r["id"] == sdk_row.id)["cells"].update(cells)
+            self.updated.append((sheet_id, cells))
+
+    def add_columns(self, sheet_id: int, bodies: list[Any]) -> SimpleNamespace:
+        self.add_columns_calls.append((sheet_id, list(bodies)))
+        if self.add_columns_error is not None:
+            raise self.add_columns_error
+        self.columns[sheet_id].extend(SimpleNamespace(id=self._id(), title=b.title) for b in bodies)
+        return SimpleNamespace(result=[])
+
+    # -- REST surface (requests.get on /workspaces/{id} and /folders/{id}) --
+    def rest_get(self, url: str, **_kwargs: Any) -> SimpleNamespace:
+        path = url.split("/2.0", 1)[1]
+        self.rest_gets.append(path)
+        if path == _T_WORKSPACE_LISTING:
+            body: dict[str, Any] = {"folders": self.folders}
+        else:
+            body = {"sheets": self.folder_sheets.get(int(path.rsplit("/", 1)[1]), [])}
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: body, status_code=200)
+
+
+@pytest.fixture
+def _api(mocker, monkeypatch):
+    api = _FakeSmartsheetApi()
+    # A cold, test-local column-map cache: each pass below runs as a fresh fieldops_sync process
+    # would, and nothing this test seeds can leak into another.
+    monkeypatch.setattr(smartsheet_client, "_column_maps", {})
+    mocker.patch.object(smartsheet_client, "get_client", return_value=SimpleNamespace(Sheets=api))
+    mocker.patch.object(smartsheet_client.requests, "get", side_effect=api.rest_get)
+    # ITS_Config, read for real through get_setting: the row-cap thresholds.
+    api.columns[sheet_ids.SHEET_CONFIG] = [
+        SimpleNamespace(id=1, title="Setting"), SimpleNamespace(id=2, title="Value"),
+        SimpleNamespace(id=3, title="Workstream"),
+    ]
+    api.rows[sheet_ids.SHEET_CONFIG] = [
+        {"id": 11, "cells": {1: material_receipts.CFG_ROW_CAP_WARN, 2: "15000", 3: "progress_reports"}},
+        {"id": 12, "cells": {
+            1: fieldops_sync.material_list.CFG_ROW_CAP_WARN, 2: "15000", 3: "progress_reports",
+        }},
+    ]
+    return {
+        "api": api,
+        "receipts": mocker.patch.object(fieldops_sync.portal_client, "get_fieldops_material_receipts"),
+        "mat_snapshot": mocker.patch.object(
+            fieldops_sync.portal_client, "get_fieldops_material_list_snapshot"
+        ),
+        "review": mocker.patch.object(fieldops_sync.review_queue, "safe_add", return_value=True),
+        "log": mocker.patch.object(fieldops_sync.error_log, "log", return_value=None),
+    }
+
+
+def _new_process(monkeypatch) -> None:
+    """The next launchd fire is a fresh process: its column-map cache starts cold."""
+    monkeypatch.setattr(smartsheet_client, "_column_maps", {})
+
+
+_RCP_ALL = [c["title"] for c in material_receipts.MATERIAL_RECEIPTS_COLUMNS]
+_RCP_PRE_VOID = _RCP_ALL[:-6]  # a Material Receipts sheet created before migration 0080
+
+
+def _rcp_sheet_row(event_uuid: str, *, pre_void: bool = False, **over: Any) -> dict[str, Any]:
+    """The sheet row the mirror writes for `_t_receipt(event_uuid)` (synthetic values)."""
+    row: dict[str, Any] = {
+        "Material": "Test panel", "Event UUID": event_uuid, "Kind": "Partial", "Qty": "40",
+        "Unit": "ea", "Part Number": "TP-0001", "Line UUID": "u-t1", "Line Status": "partial",
+        "Line Qty Expected": "120", "Line Qty Received": "40", "BOL": "BOL-T0001", "Note": "",
+        "Received By": "Test Crew Lead", "Event Date": "2026-08-06",
+    }
+    if not pre_void:
+        row.update({"Entry Status": "Active", "Voided By": "", "Voided At": "",
+                    "Void Reason": "", "Supersedes": "", "Superseded By": ""})
+    row.update(over)
+    return row
+
+
+def _rcp_place(api: _FakeSmartsheetApi, project: str, sheet_id: int, folder_id: int,
+               columns: list[str], rows: list[dict[str, Any]]) -> None:
+    api.make_sheet(
+        sheet_id, folder_id, material_receipts._folder_name(project),
+        material_receipts.material_receipts_sheet_name(project), columns, rows,
+    )
+
+
+def test_receipts_pass_costs_one_sheet_read_per_job_writes_included(_api):
+    # Up-to-date schema, and the cycle WRITES: one unchanged event, one whose derived rollup moved
+    # (update), one new (add) on job 1; one new on job 2.
+    api = _api["api"]
+    _rcp_place(api, _T_PROJECT_1, 7101, 801, _RCP_ALL,
+               [_rcp_sheet_row("evt-t1"), _rcp_sheet_row("evt-t2")])
+    _rcp_place(api, _T_PROJECT_2, 7102, 802, _RCP_ALL, [])
+    _api["receipts"].return_value = [
+        _t_receipt("evt-t1", line_qty_received=40.0),
+        _t_receipt("evt-t2", line_qty_received=80.0),
+        _t_receipt("evt-t3", line_qty_received=80.0),
+        _t_receipt("evt-t10", project=_T_PROJECT_2, line_qty_received=40.0),
+    ]
+
+    out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    assert out == {"upserted": 4, "reviewed": 0, "errors": 0}
+    assert (len(api.added), len(api.updated)) == (2, 1)  # the writes really happened
+    # EXACTLY ONE Sheets.get_sheet per job — the index read; it seeds the column map, so the
+    # back-fill check and all three writes resolve their columns with no further read — plus ONE
+    # ITS_Config read for the whole pass (the row-cap threshold, read once, not once per job).
+    assert api.get_sheet_calls == Counter({7101: 1, 7102: 1, sheet_ids.SHEET_CONFIG: 1})
+    assert api.add_columns_calls == []
+    # The only other reads: the find-or-create's two container listings per job (the workspace's
+    # folders, then the folder's sheets). Listings, not sheet reads — no rows come back.
+    assert api.rest_gets == [_T_WORKSPACE_LISTING, "/folders/801", _T_WORKSPACE_LISTING, "/folders/802"]
+
+
+def test_receipts_pass_back_fills_a_pre_void_sheet_then_settles_to_one_read(_api, monkeypatch):
+    api = _api["api"]
+    _rcp_place(api, _T_PROJECT_1, 7101, 801, _RCP_PRE_VOID,
+               [_rcp_sheet_row("evt-t1", pre_void=True), _rcp_sheet_row("evt-t2", pre_void=True)])
+    _api["receipts"].return_value = [
+        _t_receipt("evt-t1", line_qty_received=40.0),
+        _t_void("evt-t2", line_qty_received=40.0),
+    ]
+
+    out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    assert out == {"upserted": 2, "reviewed": 0, "errors": 0}
+    # ONE add_columns call: the six void columns, all at ONE shared index (errorCode 1135) = the
+    # pre-void column count, i.e. appended in creation order.
+    [(sheet, bodies)] = api.add_columns_calls
+    assert sheet == 7101
+    assert [b.title for b in bodies] == _RCP_ALL[-6:]
+    assert {b.index for b in bodies} == {len(_RCP_PRE_VOID)}
+    # THREE reads of the job's sheet on the back-fill cycle, and why:
+    #   1. the index read (get_rows) — seeds the column map;
+    #   2. ensure_columns' pre-add re-read — its duplicate-title guard (Smartsheet permits duplicate
+    #      titles, so it re-checks a fresh map before adding);
+    #   3. the back-fill's post-condition (missing_columns) after the add invalidated the map — the
+    #      read the first row write would otherwise make; it then serves every write.
+    # (Pre-fix: FOUR — the back-fill ran first on a cold map, so the index read was a 3rd and the
+    # first write re-read the post-add map as a 4th.)
+    assert api.get_sheet_calls == Counter({7101: 3, sheet_ids.SHEET_CONFIG: 1})
+    # Every pre-0080 row re-written ONCE in place: Active stamped, the voided one annotated.
+    assert len(api.updated) == 2 and api.added == []
+    by_uuid = {r["Event UUID"]: r for r in api.row_values(7101)}
+    assert by_uuid["evt-t1"]["Entry Status"] == "Active"
+    assert by_uuid["evt-t2"]["Entry Status"] == "Voided"
+    assert by_uuid["evt-t2"]["Void Reason"] == "Counted twice"
+
+    # Next launchd fire (fresh process, cold cache): back to ONE read, no add, no writes.
+    _new_process(monkeypatch)
+    api.get_sheet_calls.clear()
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+    assert api.get_sheet_calls == Counter({7101: 1, sheet_ids.SHEET_CONFIG: 1})
+    assert len(api.add_columns_calls) == 1 and len(api.updated) == 2
+
+
+def test_receipts_failed_back_fill_skips_the_job_with_one_warn_not_one_error_per_event(_api):
+    # P3: the six columns cannot be added (a 403 here). Every upsert names them, so each would raise
+    # KeyError — one ERROR per event, every cycle, for one cause. The job is skipped instead; the
+    # back-fill WARN is the one log row, and the cycle counts ONE error for the skipped job.
+    api = _api["api"]
+    _rcp_place(api, _T_PROJECT_1, 7101, 801, _RCP_PRE_VOID, [_rcp_sheet_row("evt-t1", pre_void=True)])
+    _rcp_place(api, _T_PROJECT_2, 7102, 802, _RCP_ALL, [])
+    api.add_columns_error = _sdk_403(1004)
+    _api["receipts"].return_value = [
+        _t_receipt("evt-t1"), _t_void("evt-t2"), _t_receipt("evt-t3"),
+        _t_receipt("evt-t10", project=_T_PROJECT_2),
+    ]
+
+    out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    # Job 1 skipped whole (no row written, nothing reviewed); job 2 is untouched by it.
+    assert [s for s, _ in api.added + api.updated] == [7102]
+    assert out == {"upserted": 1, "reviewed": 0, "errors": 1}
+    _api["review"].assert_not_called()
+    codes = [c.kwargs.get("error_code") for c in _api["log"].call_args_list]
+    assert codes.count("material_receipts_column_backfill_failed") == 1
+    assert "fieldops_receipt_upsert_transient" not in codes
+    assert not any(str(c).endswith("_permanent") for c in codes)
+
+
+_ML_ALL = [c["title"] for c in fieldops_sync.material_list.MATERIAL_LIST_COLUMNS]
+
+
+def _ml_place(api: _FakeSmartsheetApi, project: str, sheet_id: int, folder_id: int,
+              columns: list[str], rows: list[dict[str, Any]]) -> None:
+    ml = fieldops_sync.material_list
+    api.make_sheet(
+        sheet_id, folder_id, ml._folder_name(project), ml.material_list_sheet_name(project),
+        columns, rows,
+    )
+
+
+def test_material_list_pass_costs_one_sheet_read_per_job_writes_included(_api):
+    # Job 1 writes (one new line, and a stale row the retire marks Removed); job 2's list dropped to
+    # ZERO active lines, so it takes the find-only reconcile path — whose retire read is its one read.
+    ml = fieldops_sync.material_list
+    api = _api["api"]
+    _ml_place(api, _T_PROJECT_1, 5101, 801, _ML_ALL,
+              [{ml.COL_LINE: "Gone", ml.COL_LINE_UUID: "u-told", ml.COL_ON_LIST: ml.ON_LIST_ACTIVE}])
+    _ml_place(api, _T_PROJECT_2, 5102, 802, _ML_ALL,
+              [{ml.COL_LINE: "Gone", ml.COL_LINE_UUID: "u-t20", ml.COL_ON_LIST: ml.ON_LIST_ACTIVE}])
+    _api["mat_snapshot"].return_value = _mat_snap(
+        [_t_line("u-t1")],
+        roster=[
+            {"job_id": "JOB-T0001", "project_name": _T_PROJECT_1},
+            {"job_id": "JOB-T0002", "project_name": _T_PROJECT_2},
+        ],
+    )
+
+    out = fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+
+    assert out == {"upserted": 1, "retired": 2, "reviewed": 0, "errors": 0}
+    assert len(api.added) == 1 and len(api.updated) == 2
+    # ONE read per job sheet (index on job 1, the retire's own read on job 2), ONE ITS_Config read
+    # for the pass's row-cap threshold, and no column add.
+    assert api.get_sheet_calls == Counter({5101: 1, 5102: 1, sheet_ids.SHEET_CONFIG: 1})
+    assert api.add_columns_calls == []
+    assert api.rest_gets == [_T_WORKSPACE_LISTING, "/folders/801", _T_WORKSPACE_LISTING, "/folders/802"]
+
+
+def test_material_list_pass_back_fills_a_pre_0059_sheet_then_settles(_api, monkeypatch):
+    ml = fieldops_sync.material_list
+    api = _api["api"]
+    _ml_place(api, _T_PROJECT_1, 5101, 801, _ML_ALL[:-3], [])  # before Part Number / Category / Ship
+    _api["mat_snapshot"].return_value = _mat_snap([_t_line("u-t1")])
+
+    out = fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+
+    assert out == {"upserted": 1, "retired": 0, "reviewed": 0, "errors": 0}
+    [(_, bodies)] = api.add_columns_calls
+    assert [b.title for b in bodies] == _ML_ALL[-3:]
+    # Index read + ensure_columns' pre-add re-read + the first write's re-read of the post-add map
+    # (material_list runs no post-condition check, so the write is where that read lands).
+    assert api.get_sheet_calls == Counter({5101: 3, sheet_ids.SHEET_CONFIG: 1})
+    [row] = api.row_values(5101)
+    assert row[ml.COL_PART_NUMBER] == "TP-0001"
+
+    _new_process(monkeypatch)
+    api.get_sheet_calls.clear()
+    fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+    assert api.get_sheet_calls == Counter({5101: 1, sheet_ids.SHEET_CONFIG: 1})
+    assert len(api.add_columns_calls) == 1

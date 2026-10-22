@@ -2589,8 +2589,18 @@ form.dash-row select {
    line below the fold. Danger INK plus a danger BORDER on the box the message is about, so the
    two read as one thing. Deliberately NOT the tinted-red ground (#fdf1f1): global.css reserves
    that for life-safety and says so — "boldness spent once". A missing quantity is a data-entry
-   refusal, not a hazard, and borrowing the life-safety ground would spend it twice. */
-.mat-qty-invalid {
+   refusal, not a hazard, and borrowing the life-safety ground would spend it twice.
+
+   KEYED ON aria-invalid, and written at this specificity, on purpose. It used to be a bare
+   `.mat-qty-invalid` class (0,1,0), and global.css's `div.dash-row input:not([type="checkbox"])`
+   (0,2,2) sets the 1.5px hairline border on every one of these boxes — so the red border NEVER
+   drew: a real-WebKit render showed the qty box, the void reason and the correction quantity all
+   flagged invalid with a plain grey edge. This selector (0,3,2) wins wherever a .dash-row input
+   does. And the attribute is the right key anyway: it is what a screen reader announces, so the
+   border can no longer say "invalid" where the markup does not, or the other way round — which
+   is also why the page only sets aria-invalid when the refusal is about that box's value. */
+div.dash-row input[aria-invalid="true"]:not([type="checkbox"]),
+form.dash-row input[aria-invalid="true"]:not([type="checkbox"]) {
   border: 2px solid var(--c-danger);
 }
 
@@ -2605,12 +2615,10 @@ form.dash-row select {
 }
 
 /* ── Delivery history: voided marks, corrections, and the D9 question (0080) ──────────────────
-   A history row now carries pills and a Void / Record-the-correct-entry button beside its text,
-   and can open an inline panel under itself. `.dash-tasklist li` is a single non-wrapping flex
-   line, so without the wrap a phone pushes the button off the right edge of the card. */
-.mat-history li {
-  flex-wrap: wrap;
-}
+   A history row carries pills and a Void / Record-the-correct-entry button beside its text, and
+   can open an inline panel under itself. It is a `.dash-tasklist li`, which this file already
+   wraps (the task-row rule above) — global.css alone would leave it one non-wrapping flex line
+   and push the button off a phone's edge — so the panels below rely on that wrap. */
 
 /* Struck through, not removed: a voided mark is still part of the record of what was claimed at
    the gate. Muted as well as struck, so it reads as "no longer counts" at a glance — the
@@ -2620,11 +2628,37 @@ form.dash-row select {
   color: var(--c-muted);
 }
 
-/* The inline void and correction panels, and the D9 question, each take their own full-width
-   line under the row they belong to (the .mat-mark-error reasoning: squeezed between two flex
-   items is unreadable at exactly the width where it matters). */
+/* Who voided it, when and why — its own line under the struck row. Inline, it ran on after the
+   pills and the action button, so the reason (the point of requiring one) read as part of
+   whatever happened to sit before it. */
+.mat-event__void-note {
+  flex-basis: 100%;
+}
+
+/* "Corrects 2026-10-01 · Partially delivered · 25" names the linked entry, so it is long. The
+   .dash-pill base is nowrap (pills are normally one word), which pushed this one past the card
+   edge on a 400px phone; it may wrap. */
+.mat-event__link-pill {
+  white-space: normal;
+}
+
+/* The voided row's own "Record the correct entry": still a full 48px tap target (the .btn base),
+   but drawn as an underlined text action. The row is history; its action should not shout over
+   the marks that still count — the post-void question carries the loud version. */
+.mat-quiet-btn {
+  border-color: transparent;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding-inline: var(--space-1);
+}
+
+/* The inline void and correction panels, the post-void question and the D9 question each take
+   their own full-width line under the row they belong to (the .mat-mark-error reasoning:
+   squeezed between two flex items is unreadable at exactly the width where it matters). */
 .mat-void,
 .mat-correct,
+.mat-void-done,
 .mat-settled-ask {
   flex-basis: 100%;
   margin-top: var(--space-2);
@@ -2632,6 +2666,7 @@ form.dash-row select {
 
 .mat-void__copy,
 .mat-correct__copy,
+.mat-void-done__copy,
 .mat-settled-ask__text {
   flex-basis: 100%;
   margin: 0 0 4px;
@@ -2642,6 +2677,49 @@ form.dash-row select {
 .mat-void {
   padding-left: var(--space-3);
   border-left: 3px solid var(--c-danger);
+}
+
+/* The reason gets the panel's whole width. Left to its intrinsic size it was a ~200px box that
+   clipped its own placeholder ("Why is it being voided? (rec") on a phone — and the reason is
+   the one thing this panel exists to collect. */
+.mat-void input {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+/* The correction form is a panel of its own: a green edge (it records a mark, the page's
+   ordinary green action) and some air, so its five fields read as one form rather than as more
+   loose controls on the line card. */
+.mat-correct {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--c-brg);
+  /* Bottom-aligned: the labelled fields are columns of slightly different heights (a date input
+     is taller than a text box), and centring them set their labels on a ragged line. */
+  align-items: flex-end;
+}
+
+/* Each field's VISIBLE label sits above its control. The form opens prefilled, so a placeholder
+   is never seen; without these a row of bare values does not say which box is which. min-width 0
+   for the reason the .dash-row input rule above gives: a flex item will not otherwise shrink
+   below its control's intrinsic width on a phone. */
+.mat-correct__field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mat-correct__label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* After a void: "was it a duplicate, or wrong?" A question, so gold like the D9 one below — not
+   the danger edge of the void panel it replaces, because nothing here is destructive. */
+.mat-void-done {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--c-gold);
 }
 
 /* The D9 question asks, it does not refuse — so gold (attention), not danger red. */

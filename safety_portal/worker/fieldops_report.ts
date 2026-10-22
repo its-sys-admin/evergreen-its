@@ -53,6 +53,11 @@ const PHOTO_CAP = 200;     // clean photos offered to the office for curation
 const INCIDENT_CAP = 100;  // material incidents in the week
 const SCHEDULE_TASK_CAP = 600; // active schedule tasks on one job (a real solar schedule is ~100-300)
 const JHA_SIGNIN_CAP = 400;    // JHA worker-acknowledgement sign-ins in a week (~12 signers × 7 days, amend-collapsed)
+/** Max correction links the W4 chain walk follows from a voided curated mark to its live tip. A
+ *  real chain is one or two links (void, correct, rarely re-correct); the bound only keeps a
+ *  pathological one from costing more than a bounded read. Chains cannot cycle — a correction
+ *  always names an EARLIER event — so this is a cost bound, not a loop guard. */
+const CORRECTION_CHAIN_MAX = 20;
 
 /** Max photos the deterministic auto-selection will place on the report's photo page. */
 export const AUTO_SELECT_MAX = 8;
@@ -304,6 +309,49 @@ function normalizeDeliveries(v: unknown): WeeklyReportDelivery[] | null {
   }).filter((r) => r.item !== "" || r.part_number !== "");
 }
 
+/** "This mark prints on the week's delivery log", over alias `e`, with the week's first and last
+ *  day as the named bound parameters (module literals, never request input). ONE copy for the
+ *  week's derivation (deliverySql) and the W4 correction-tip test, so a row substituted into a
+ *  curated list is always one this week's own derivation would print. A VOIDED mark (0080) never
+ *  prints: the field withdrew it, and RECEIPT_ACTIVE_SQL is the same rule every rollup applies. */
+function onWeekLogSql(startParam: string, endParam: string): string {
+  return `e.event_date >= ${startParam} AND e.event_date <= ${endParam}
+       AND e.kind IN ('delivered', 'partial')
+       AND ${RECEIPT_ACTIVE_SQL}`;
+}
+
+/** A delivery row's columns and joins, over alias `e`, starting at FROM. ONE copy for
+ *  deliverySql and the W4 tip read, so a substitute carries exactly the derivation's values. */
+const DELIVERY_ROW_SQL = `
+           e.event_uuid, e.event_date, e.kind, e.qty,
+           jem.description AS item, jem.part_number, jem.unit,
+           mc.manufacturer AS vendor,
+           sh.bol_number, sh.carrier
+      FROM material_receipt_events e
+      LEFT JOIN job_expected_materials jem ON jem.id = e.line_id
+      LEFT JOIN material_catalog       mc  ON mc.id = jem.material_id
+      LEFT JOIN material_shipments     sh  ON sh.id = e.shipment_id`;
+
+/** One DELIVERY_ROW_SQL row, wire-shaped (all strings). ONE mapper for the derived log and a W4
+ *  substitute. `event_uuid` is the row's anchor to its ledger mark (0080): the screen copies
+ *  derived rows into its draft on first edit, so this is what a saved snapshot carries back for
+ *  the D5 void match. */
+function shapeDelivery(r: Record<string, unknown>): WeeklyReportDelivery {
+  const text = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
+  return {
+    event_uuid: String(r.event_uuid ?? ""),
+    event_date: String(r.event_date ?? ""),
+    kind: String(r.kind ?? ""),
+    item: text(r.item),
+    part_number: text(r.part_number),
+    qty: text(r.qty),
+    unit: text(r.unit),
+    vendor: text(r.vendor),
+    bol_number: text(r.bol_number),
+    carrier: text(r.carrier),
+  };
+}
+
 /** incidents_json — the deliveries contract for the Material Problems list. `details` gets 1000
  *  chars: it becomes one Critical-Items seed line, already bounded again Mac-side, so MAX_TEXT's
  *  4000 buys nothing. A row needs a material or an issue — the Mac seed itself skips rows with
@@ -547,25 +595,15 @@ async function buildReportData(
   // line names a catalog type; material lines carry no vendor link, and the corpus reports read
   // "(Owner Provided)" in most of those cells, so a blank here matches the source documents.
   //
-  // A VOIDED mark (0080) never reaches the client's log: it is one the field withdrew, and the
-  // shared RECEIPT_ACTIVE_SQL rule is the same one every rollup surface applies, so page 5 can
-  // never list a delivery the materials page no longer counts. `event_uuid` rides along so a row
-  // the office curates from this derivation can still be matched to its mark after a later void.
+  // A VOIDED mark (0080) never reaches the client's log (onWeekLogSql), so page 5 can never list
+  // a delivery the materials page no longer counts. `event_uuid` rides along so a row the office
+  // curates from this derivation can still be matched to its mark after a later void.
   // The LOG stays in event_date order (it is a dated log, not a "latest state" read), so the
   // 0080 order key does not apply here; a correction prints on its own date.
   const deliverySql = `
-    SELECT e.event_uuid, e.event_date, e.kind, e.qty,
-           jem.description AS item, jem.part_number, jem.unit,
-           mc.manufacturer AS vendor,
-           sh.bol_number, sh.carrier
-      FROM material_receipt_events e
-      LEFT JOIN job_expected_materials jem ON jem.id = e.line_id
-      LEFT JOIN material_catalog       mc  ON mc.id = jem.material_id
-      LEFT JOIN material_shipments     sh  ON sh.id = e.shipment_id
+    SELECT ${DELIVERY_ROW_SQL}
      WHERE e.job_id = ?1
-       AND e.event_date >= ?2 AND e.event_date <= ?3
-       AND e.kind IN ('delivered', 'partial')
-       AND ${RECEIPT_ACTIVE_SQL}
+       AND ${onWeekLogSql("?2", "?3")}
      ORDER BY e.event_date ASC, e.event_uuid ASC
      LIMIT ?4
   `;
@@ -574,18 +612,49 @@ async function buildReportData(
   // here with its siblings; it runs as a SECOND, conditional round-trip because the uuids it binds
   // exist only once the office blob has been parsed and normalized.
   //
-  // ONE bounded query: the curated list is capped at DELIVERY_CAP rows, every uuid already passed
-  // EVENT_UUID_SHAPE, and the whole array rides ONE bound parameter through json_each (never
-  // interpolated). `e.job_id = ?1` means a uuid copied in from ANOTHER job's report can never
-  // match, whatever that job's mark says. `NOT (RECEIPT_ACTIVE_SQL)` is "voided" by the one shared
-  // definition of "counts", rather than a second spelling of it.
+  // ONE bounded query. `voided` = the curated uuids whose mark is voided: the curated list is
+  // capped at DELIVERY_CAP rows, every uuid already passed EVENT_UUID_SHAPE, and the whole array
+  // rides ONE bound parameter through json_each (never interpolated). `e.job_id = ?1` on the seed
+  // means a uuid copied in from ANOTHER job's report can never match, whatever that job's mark
+  // says. The same filter on each chain step is belt-and-braces: the mark route already keeps a
+  // correction on its original's line, so no chain can leave the job through the data.
+  // `NOT (RECEIPT_ACTIVE_SQL)` is "voided" by the one shared definition of "counts", rather than a
+  // second spelling of it.
+  //
+  // `chain` (W4) walks each voided mark's corrections (supersedes_id links) at most ?5 links deep
+  // (CORRECTION_CHAIN_MAX); `tip` keeps each chain's last link. The partial UNIQUE index (0080)
+  // allows at most one correction per mark, so a chain is a line, never a tree, and MAX(depth)
+  // names exactly one tip. Exactly one row comes back per voided curated uuid. `substitutable`
+  // is onWeekLogSql over the tip: it holds only when the tip is a mark THIS week's derivation
+  // prints. An uncorrected root is its own tip and is voided, so it can never substitute itself.
   const voidedCuratedSql = `
-    SELECT e.event_uuid
-      FROM material_receipt_events e
-     WHERE e.job_id = ?1
-       AND e.event_uuid IN (SELECT value FROM json_each(?2))
-       AND NOT (${RECEIPT_ACTIVE_SQL})
-     LIMIT ?3
+    WITH RECURSIVE
+      voided(root_uuid, id) AS (
+        SELECT e.event_uuid, e.id
+          FROM material_receipt_events e
+         WHERE e.job_id = ?1
+           AND e.event_uuid IN (SELECT value FROM json_each(?2))
+           AND NOT (${RECEIPT_ACTIVE_SQL})
+      ),
+      chain(root_uuid, id, depth) AS (
+        SELECT root_uuid, id, 0 FROM voided
+        UNION ALL
+        SELECT chain.root_uuid, nx.id, chain.depth + 1
+          FROM chain
+          JOIN material_receipt_events nx ON nx.supersedes_id = chain.id AND nx.job_id = ?1
+         WHERE chain.depth < ?5
+      ),
+      tip(root_uuid, id) AS (
+        SELECT ch.root_uuid, ch.id
+          FROM chain ch
+          JOIN (SELECT root_uuid, MAX(depth) AS depth FROM chain GROUP BY root_uuid) deepest
+            ON deepest.root_uuid = ch.root_uuid AND deepest.depth = ch.depth
+      )
+    SELECT tip.root_uuid AS voided_uuid,
+           CASE WHEN ${onWeekLogSql("?3", "?4")} THEN 1 ELSE 0 END AS substitutable,
+           ${DELIVERY_ROW_SQL}
+      JOIN tip ON tip.id = e.id
+     LIMIT ?6
   `;
 
   // Material incidents filed this week — feeds the assembled Critical Items text.
@@ -716,19 +785,27 @@ async function buildReportData(
 
   // ── Decision D5: a curated row whose mark was VOIDED is dropped at READ (0080) ──────────────
   // A deliberate EXCEPTION to migration 0078's rule that a curated row "survives any later change
-  // to the ledger". The snapshot is still a copy of values, so a later mark, flag or correction
-  // never reaches it. A void is different in kind: it is the field WITHDRAWING the delivery, and
-  // printing it on a client's report would assert a delivery nobody claims any more (operator
-  // decision D5, 2026-10-21). A row is matched only by the event_uuid it carried over from the
-  // derivation; an office-typed row, and any row curated before 0080, carries none and stays.
+  // to the ledger". The snapshot is still a copy of values, so a later mark or flag never reaches
+  // it. A void is different in kind: it is the field WITHDRAWING the delivery, and printing it on
+  // a client's report would assert a delivery nobody claims any more (operator decision D5,
+  // 2026-10-21). A row is matched only by the event_uuid it carried over from the derivation; an
+  // office-typed row, and any row curated before 0080, carries none and stays.
   //
-  // Read-time only. The stored snapshot is not rewritten (a read never writes), so the count rides
-  // the payload and the screen says how many rows were dropped instead of letting them vanish (the
-  // no-silent-caps convention). The `office.deliveries` echo carries the SAME filtered list as the
-  // effective top-level key: the screen seeds its editing draft from the echo, so an unfiltered
-  // echo would put the voided row back in front of the office and the next save would re-store it.
+  // W4 (review fix): a void followed by a correction is ONE fact — "it was 12, not 10" — so the
+  // dropped row is REPLACED, in its position, by the live tip of its correction chain when that tip
+  // is a mark this week's own derivation prints and its uuid is not already on the list (it was
+  // curated too, or an earlier dropped row of the same chain took it). The substitute is the
+  // derivation's row for that mark, so office edits to the voided row do not carry over: they
+  // described a delivery the field has since withdrawn. Otherwise the row is simply dropped.
+  //
+  // Read-time only. The stored snapshot is not rewritten (a read never writes), so both counts ride
+  // the payload and the screen says what changed instead of letting rows vanish or swap silently
+  // (the no-silent-caps convention). The `office.deliveries` echo carries the SAME effective list
+  // as the top-level key: the screen seeds its editing draft from the echo, so an unfiltered echo
+  // would put the voided row back in front of the office and the next save would re-store it.
   let curatedDeliveries = shapedOffice.deliveries;
   let deliveriesVoidedRemoved = 0;
+  let deliveriesVoidedReplaced = 0;
   if (curatedDeliveries !== null) {
     const curatedUuids = [...new Set(
       curatedDeliveries.flatMap((d) => (d.event_uuid === undefined ? [] : [d.event_uuid])),
@@ -736,12 +813,31 @@ async function buildReportData(
     // No uuid, no lookup: an all-typed list or a pre-0080 snapshot costs no extra round-trip.
     if (curatedUuids.length > 0) {
       const { results } = await c.env.DB.prepare(voidedCuratedSql)
-        .bind(w.jobId, JSON.stringify(curatedUuids), DELIVERY_CAP)
-        .all<{ event_uuid: string }>();
-      const voided = new Set((results ?? []).map((r) => r.event_uuid));
-      const kept = curatedDeliveries.filter((d) => d.event_uuid === undefined || !voided.has(d.event_uuid));
-      deliveriesVoidedRemoved = curatedDeliveries.length - kept.length;
-      curatedDeliveries = kept;
+        .bind(w.jobId, JSON.stringify(curatedUuids), w.weekStart, w.weekEnd, CORRECTION_CHAIN_MAX, DELIVERY_CAP)
+        .all<Record<string, unknown>>();
+      // voided curated uuid → its substitute (row + uuid), or null when its chain ends in nothing
+      // this week prints. A uuid absent from the map is not voided (or not this job's): kept.
+      const verdicts = new Map<string, { row: WeeklyReportDelivery; uuid: string } | null>();
+      for (const r of results ?? []) {
+        const root = String(r.voided_uuid);
+        if (verdicts.has(root)) continue;
+        verdicts.set(root, r.substitutable === 1 ? { row: shapeDelivery(r), uuid: String(r.event_uuid) } : null);
+      }
+      const onList = new Set(curatedUuids);
+      const effective: WeeklyReportDelivery[] = [];
+      for (const d of curatedDeliveries) {
+        const verdict = d.event_uuid === undefined ? undefined : verdicts.get(d.event_uuid);
+        if (verdict === undefined) {
+          effective.push(d);
+        } else if (verdict !== null && !onList.has(verdict.uuid)) {
+          effective.push(verdict.row);
+          onList.add(verdict.uuid);
+          deliveriesVoidedReplaced += 1;
+        } else {
+          deliveriesVoidedRemoved += 1;
+        }
+      }
+      curatedDeliveries = effective;
     }
   }
   const office = { ...shapedOffice, deliveries: curatedDeliveries };
@@ -760,20 +856,7 @@ async function buildReportData(
   // The LIVE material derivations, shaped for the wire. Kept as consts (not inlined in the
   // return) because the top-level keys below are EFFECTIVE — curated-wins — while the
   // `*_import_count` keys must always report the live derivation, curated or not.
-  const derivedDeliveries = deliveries.map((r) => ({
-    // The row's anchor to its ledger mark (0080). The screen copies these rows into its draft on
-    // first edit, so this is what a saved snapshot carries back for the D5 void match above.
-    event_uuid: String(r.event_uuid ?? ""),
-    event_date: String(r.event_date ?? ""),
-    kind: String(r.kind ?? ""),
-    item: r.item === null || r.item === undefined ? "" : String(r.item),
-    part_number: r.part_number === null || r.part_number === undefined ? "" : String(r.part_number),
-    qty: r.qty === null || r.qty === undefined ? "" : String(r.qty),
-    unit: r.unit === null || r.unit === undefined ? "" : String(r.unit),
-    vendor: r.vendor === null || r.vendor === undefined ? "" : String(r.vendor),
-    bol_number: r.bol_number === null || r.bol_number === undefined ? "" : String(r.bol_number),
-    carrier: r.carrier === null || r.carrier === undefined ? "" : String(r.carrier),
-  }));
+  const derivedDeliveries = deliveries.map(shapeDelivery);
   const derivedIncidents = incidents.map((r) => ({
     work_date: String(r.work_date ?? ""),
     material: r.material === null || r.material === undefined ? "" : String(r.material),
@@ -841,10 +924,12 @@ async function buildReportData(
     // say so rather than presenting the subset as the whole week.
     deliveries_truncated: derivedDeliveries.length >= DELIVERY_CAP,
     material_incidents_truncated: derivedIncidents.length >= INCIDENT_CAP,
-    // Curated rows dropped above because their mark was voided after the save (D5). The same
-    // no-silent-caps reason: the screen must be able to say a row left, not just show fewer.
-    // Always 0 for the auto list, whose derivation never contained a voided mark to drop.
+    // Curated rows whose mark was voided after the save (D5): dropped outright, or replaced in
+    // place by the correction's row (W4). The same no-silent-caps reason: the screen must be able
+    // to say a row left or changed, not just show a different list. Both always 0 for the auto
+    // list, whose derivation never contained a voided mark.
     deliveries_voided_removed: deliveriesVoidedRemoved,
+    deliveries_voided_replaced: deliveriesVoidedReplaced,
     photos: {
       available: photosAvailable,
       // The office's explicit picks win outright — including the empty list, which means "no

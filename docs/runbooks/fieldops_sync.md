@@ -179,16 +179,16 @@ events land against the same line: **`Line Status`** (goes `incident` if a probl
 **`Line Qty Received`** (the running rollup across every mark on that line that still counts). Seeing
 those move on an old row is correct behaviour, not a bug.
 
-**A VOIDED mark (migration 0080) is annotated, not removed.** When a crew member voids a mistaken mark
-in the portal, the next cycle keeps its row and fills six further columns on it: **`Entry Status`**
+**A VOIDED mark (migration 0080) is annotated, not removed.** When a manager placed on the job, or an
+admin, voids a mistaken mark in the portal, the next cycle keeps its row and fills six further columns on it: **`Entry Status`**
 (`Active` → `Voided`), **`Voided By`** (a display name, or the account's role label — never a
 username), **`Voided At`** (Pacific date and time), **`Void Reason`**, and the correction links
 **`Supersedes`** / **`Superseded By`** (Event UUIDs: a correct entry recorded in place of a voided one
 is a new row whose `Supersedes` names the voided row, and the voided row's `Superseded By` names it).
 A voided row is grayed out, and its quantity leaves `Line Qty Received` on every row for that line. So
 a grayed row with `Entry Status = Voided` is the void working, not a stale sheet. Sheets created before
-0080 gain the six columns automatically on their first cycle with the new code. Voiding itself is a
-portal action — [job_materials.md](job_materials.md) → "Voiding a mistaken delivery mark".
+0080 gain the six columns automatically on their first cycle with the new code (appended at the far
+right — see `material_receipts_columns_backfilled` below). Voiding itself is a portal action — [job_materials.md](job_materials.md) → "Voiding a mistaken delivery mark".
 
 An archived job's ledger is MOVED to the Archive workspace on
 closure (never deleted) — the fifth of the five standing trackers the §51 archive-on-closure hook
@@ -214,6 +214,36 @@ move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.
   truckloads writes an event per load — so expect it here before the incident ledger. Operator
   **period-splits** it (archive this sheet, start a fresh one) — **NEVER delete rows** (§51 SoR).
   **Low-class** but coordinate with Seth on the archive location.
+- `material_receipts_columns_backfilled` (WARN, **informational**) → a sheet created before migration
+  0080 was missing some of the six void columns, and the mirror appended them at the far right. The
+  message names the sheet and exactly which columns were added. Expect it **once per job's sheet**,
+  on the first cycle after the new code lands that reaches that job (while the receipts mirror is
+  on). The mirror then fills `Entry Status = Active` on every existing row of that sheet — one
+  update per row, once — so a burst of row edits right after it is expected. **No action.** If the
+  same sheet logs it again later,
+  someone deleted those columns by hand and the mirror put them back and refills them from the
+  portal — ask whoever edits that sheet to leave the columns alone; drag them elsewhere if they are
+  in the way.
+- `material_receipts_column_backfill_failed` (WARN) → the mirror could not add the six void columns
+  to one job's Material Receipts sheet (the add failed, or the message says the sheet "still lacks"
+  them after it). **That job's receipts mirror pauses until the top-up
+  succeeds**: no new rows and no void annotations reach that sheet, and it is skipped for the cycle
+  rather than logging an error per delivery — this WARN, repeating once per cycle, is the one
+  signal. Other jobs and the other mirror passes carry on, and nothing is lost: the ledger
+  re-projects in full on the first cycle the top-up works. **Low-class:** wait a cycle or two (most
+  causes clear by themselves). Check the circuit breaker (the operator dashboard's breaker panel, or
+  a watchdog Check J alert — a message naming `SmartsheetCircuitOpenError` means the breaker was
+  open and the next cycle after its cooldown retries) and that the `field_ops.fieldops_sync` row in
+  `ITS_Daemon_Health` is heartbeating. A message naming `SmartsheetRateLimitError` is rate limiting,
+  not a permission fault, even if it mentions 403. **Escalate to Seth** if it persists for several
+  cycles, or if the message names `SmartsheetPermissionError` (a 403 — ITS lost its access to the
+  sheet; sharing and access are not a Tier-2 repair).
+- `material_receipts_void_format_failed` (WARN, **cosmetic**) → a void was written to the sheet —
+  `Entry Status = Voided` and the who/when/why are on the row — but Smartsheet refused the gray, so
+  the row is not grayed. The record is correct; read `Entry Status`, not the colour. The mirror does
+  not go back to gray it by itself — only a later change to that row (a new `Line Qty Received`,
+  say) sends the gray again. **No action** for an occasional one; you may gray the row by hand. If
+  **every** void logs it, the gray itself is being refused — **escalate to Seth** (a code change).
 - A `Kind` cell showing a raw lower-case value (e.g. `returned` rather than `Not delivered`) → the D1
   `kind` CHECK constraint grew a value the mirror's display map does not know. Harmless to the data
   (the mark is still recorded verbatim rather than blanked), but it means code and schema have

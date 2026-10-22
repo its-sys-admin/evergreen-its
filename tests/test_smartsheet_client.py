@@ -427,6 +427,91 @@ def test_get_rows_filters_match_all_keys_and_equality(mocker):
     assert [r["_row_id"] for r in rows] == [1]
 
 
+# ---- get_rows seeds the column-map cache (P1) ------------------------------
+#
+# get_rows already holds the sheet's full column list. Before P1 it threw it away, so the first
+# ensure_columns / _resolve_cells after it paid a SECOND full-sheet read for the same columns — on
+# every fieldops_sync cycle, because each cycle is a fresh process with a cold cache.
+
+
+def test_get_rows_seeds_the_column_map_so_a_later_lookup_and_write_read_nothing(mocker):
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.return_value = SimpleNamespace(
+        columns=[_column(1, "Line UUID"), _column(2, "Status")],
+        rows=[_row(101, [(1, "u-t1"), (2, "expected")])],
+    )
+
+    smartsheet_client.get_rows(42)
+    assert smartsheet_client.ensure_columns(42, [_spec("Status")]) == []
+    smartsheet_client.update_rows(42, [{"_row_id": 101, "Status": "received"}])
+
+    # ONE read serves the rows, the back-fill presence check AND the write's title→id resolution.
+    assert client.Sheets.get_sheet.call_count == 1
+    [sdk_row] = client.Sheets.update_rows.call_args.args[1]
+    assert [c.column_id for c in sdk_row.cells] == [2]
+
+
+def test_get_rows_with_filters_still_seeds_every_column(mocker):
+    # `filters` narrows ROWS client-side; the response always carries every column, so a filtered
+    # read seeds the complete map, never a partial one that would KeyError a later write.
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.return_value = SimpleNamespace(
+        columns=[_column(1, "Setting"), _column(2, "Value"), _column(3, "Workstream")],
+        rows=[_row(1, [(1, "x"), (2, "v"), (3, "global")])],
+    )
+
+    smartsheet_client.get_rows(42, filters={"Setting": "nope"})
+
+    assert smartsheet_client._column_maps[42] == {"Setting": 1, "Value": 2, "Workstream": 3}
+
+
+def test_get_rows_replaces_a_stale_cached_map_with_what_it_just_read(mocker):
+    # A column renamed since the cache was filled: the read is the newer truth, so it REPLACES the
+    # entry (never merges — a merge would keep the dead title resolving to a live column id).
+    client = _install_client(mocker)
+    smartsheet_client._column_maps[42] = {"Old Name": 1, "Status": 2}
+    client.Sheets.get_sheet.return_value = SimpleNamespace(
+        columns=[_column(1, "New Name"), _column(2, "Status")], rows=[],
+    )
+
+    smartsheet_client.get_rows(42)
+
+    assert smartsheet_client._column_maps[42] == {"New Name": 1, "Status": 2}
+
+
+def test_a_failed_get_rows_leaves_the_cached_map_alone(mocker):
+    client = _install_client(mocker)
+    smartsheet_client._column_maps[42] = {"Status": 2}
+    client.Sheets.get_sheet.side_effect = _api_error(404, message="gone")
+
+    with pytest.raises(SmartsheetNotFoundError):
+        smartsheet_client.get_rows(42)
+
+    assert smartsheet_client._column_maps[42] == {"Status": 2}
+
+
+# ---- missing_columns (P3 — the back-fill's post-condition) -----------------
+
+
+def test_missing_columns_answers_from_a_warm_map_with_no_api_call(mocker):
+    client = _install_client(mocker)
+    smartsheet_client._column_maps[42] = {"A": 1, "B": 2}
+
+    assert smartsheet_client.missing_columns(42, ["A", "C", "B", "D"]) == ["C", "D"]
+    client.Sheets.get_sheet.assert_not_called()
+
+
+def test_missing_columns_reads_the_sheet_once_on_a_cold_map(mocker):
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.return_value = SimpleNamespace(
+        columns=[_column(1, "A")], rows=[],
+    )
+
+    assert smartsheet_client.missing_columns(42, ["A", "B"]) == ["B"]
+    assert smartsheet_client.missing_columns(42, ["A"]) == []
+    assert client.Sheets.get_sheet.call_count == 1
+
+
 # ---- get_setting ---------------------------------------------------------
 
 

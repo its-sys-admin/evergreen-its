@@ -152,15 +152,26 @@ screened yet (see `portal_poll` health) or none were uploaded.
 
 **Recompile after curating:** tick **Compile Now**.
 
-## Symptom 6b — "N delivery row(s) removed because the mark was voided" / a voided delivery still prints
+## Symptom 6b — "delivery rows were removed / replaced" notice after a void / a voided delivery still prints
 
 Page 5's delivery log lists only delivery marks that still count. When the crew **voids** a mistaken
-mark on the job's Materials page (migration 0080), it drops off the next compile. If the office had
-**curated** that week's delivery list, a curated row copied from the voided mark is dropped when the
-report is read — the saved list is not rewritten — and the weekly report screen says how many were
-removed, so the list never shrinks silently.
+mark on the job's Materials page (migration 0080), it drops off the next compile, and a correct entry
+recorded in its place prints on its own date. If the office had **curated** that week's delivery
+list, a curated row copied from the voided mark is handled when the report is read — the saved list
+is not rewritten:
 
-- **The banner shows** — working as designed. Tick **Compile Now** so the PDF matches the screen.
+- **Replaced** — when the voided mark was corrected, and the correct entry is a *Delivered* or
+  *Partially delivered* mark that still counts, dated inside the same report week, and not already
+  on the curated list, the correct entry takes the row's place in the list.
+- **Removed** — otherwise (no correction yet, a correction dated in another week, or a correction
+  that is itself voided with nothing after it) the row is dropped.
+
+A gold notice on the weekly report screen says how many of each, in words — for example "1 delivery
+row was replaced with the corrected entry." and "2 delivery rows were removed because their marks
+were voided." — so the list never changes silently.
+
+- **The notice shows** — working as designed; it is informational, not an error. Tick **Compile
+  Now** so the PDF matches the screen.
 - **A voided delivery still prints on a curated week** — that row was curated before migration 0080
   and carries no link back to its mark, so the void cannot find it. On the weekly report screen,
   **Remove** the row, tap **Save weekly report inputs**, then tick **Compile Now**.

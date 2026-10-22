@@ -198,6 +198,30 @@ function shiftWeek(weekStart: string, weeks: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** The curated-list notice after a VOID (0080: D5 + W4), in plain English. Replaced rows lead —
+ *  the report still shows a delivery there, just the right one — then rows that are gone with
+ *  nothing in their place. Counted in words, never "row(s)": the office reads this, not a log. */
+function voidedDeliveriesNotice(d: ProductionReportResponse): string {
+  const replaced = d.deliveries_voided_replaced;
+  const removed = d.deliveries_voided_removed;
+  const parts: string[] = [];
+  if (replaced > 0) {
+    parts.push(
+      replaced === 1
+        ? "1 delivery row was replaced with the corrected entry."
+        : `${replaced} delivery rows were replaced with their corrected entries.`,
+    );
+  }
+  if (removed > 0) {
+    parts.push(
+      removed === 1
+        ? "1 delivery row was removed because its mark was voided."
+        : `${removed} delivery rows were removed because their marks were voided.`,
+    );
+  }
+  return parts.join(" ");
+}
+
 /** Delivery mark → chip copy. The ledger's three kinds read as what happened, not as codes. */
 function deliveryKindChip(kind: string): { label: string; className: string } {
   switch (kind) {
@@ -828,13 +852,13 @@ export function WeeklyReportPage({ jobId, onBack, onHome, onOpenSchedule }: Prop
                 : `Curated for this report — the live import has ${data.deliveries_import_count} ` +
                   "row(s). The ledger is unchanged; Reset to imported discards this list on save."}
             </p>
-            {/* D5 (0080): curated rows dropped because their ledger mark was voided after the
-                snapshot was saved. Said, never silent — otherwise the office sees its own curated
-                list quietly shrink and has no way to know why (the no-silent-caps convention). */}
-            {data.deliveries_voided_removed > 0 && (
-              <p className="wpr-banner wpr-banner--warn">
-                {data.deliveries_voided_removed} delivery row(s) removed because the mark was voided.
-              </p>
+            {/* D5 (0080): curated rows whose ledger mark was voided after the snapshot was saved —
+                swapped for the mark's correction when there is one (W4), dropped when there is
+                not. Said, never silent — otherwise the office sees its own curated list change
+                and has no way to know why (the no-silent-caps convention). Gold, not the red
+                --warn: nothing needs fixing — the report followed the ledger, as it should. */}
+            {(data.deliveries_voided_replaced > 0 || data.deliveries_voided_removed > 0) && (
+              <p className="wpr-banner">{voidedDeliveriesNotice(data)}</p>
             )}
             {data.deliveries_truncated && (
               <p className="wpr-banner wpr-banner--warn">

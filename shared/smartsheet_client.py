@@ -18,6 +18,12 @@ Column-name cache:
     than fast-failing on a stale title. Long-lived processes that need to
     survive a rename must restart or call `invalidate_column_cache()`.
 
+    `get_rows` also SEEDS the cache from the columns its own read returns, so a
+    write that follows a read of the same sheet resolves its titles with no
+    second fetch. A cold fetch (`_fetch_column_map`) is a FULL-sheet read —
+    rows included — so on a one-shot daemon that never warms up, reading
+    first is the difference between one sheet read and two.
+
 External Send Gate (Foundation Mission v8, Invariant 1):
     Smartsheet writes are not external sends. This module is freely
     importable by both generation and send scripts.
@@ -773,6 +779,10 @@ circuit_breaker.set_recovery_hook(_close_fleet_circuit_open_window)
 
 
 def _fetch_column_map(sheet_id: int) -> dict[str, int]:
+    # NOT a cheap columns-only call: `columns` is not one of GET /sheets/{id}'s documented
+    # `include` values, and nothing here narrows the response, so this is the WHOLE sheet, every
+    # row included. That is why `get_rows` seeds this cache instead of letting the next write fetch
+    # it again.
     try:
         sheet = get_client().Sheets.get_sheet(sheet_id, include="columns")
     except sdk_exc.SmartsheetException as e:
@@ -797,6 +807,20 @@ def invalidate_column_cache(sheet_id: int | None = None) -> None:
         _column_maps.clear()
     else:
         _column_maps.pop(sheet_id, None)
+
+
+@_breaker_guard
+def missing_columns(sheet_id: int, titles: Iterable[str]) -> list[str]:
+    """The titles in `titles` that the sheet does NOT have, in the order given.
+
+    Answered from the process column-map cache: no API call when the map is warm (a `get_rows` of
+    the sheet seeds it), one full-sheet read when it is cold. Read-only. A caller uses it as the
+    post-condition of a schema top-up (`ensure_columns`) — after an add, that call invalidated the
+    map, so this read is the one the first row write would otherwise have made; it moves earlier
+    rather than being added.
+    """
+    columns = _column_map(sheet_id)
+    return [t for t in titles if t not in columns]
 
 
 def _resolve_cells(sheet_id: int, values: dict[str, Any]) -> list[Any]:
@@ -917,6 +941,9 @@ def get_rows(
     `filters` is an equality-AND match applied client-side. Use only on
     sheets small enough to fetch in one round-trip (config, time-off, etc.);
     big logs should use Reports or scoped row queries.
+
+    Side effect: SEEDS the column-map cache for `sheet_id` from this read's
+    columns (see the module docstring), REPLACING any older entry.
     """
     try:
         sheet = get_client().Sheets.get_sheet(sheet_id)
@@ -924,6 +951,17 @@ def get_rows(
         raise _translate(e, idempotent=True) from e
 
     title_by_id = {col.id: col.title for col in sheet.columns}
+    # §42 — WHY seed here (P1, 2026-10-21). This response already carries every column, so the
+    # title→id map a later write needs is sitting in hand. Discarding it made the next
+    # ensure_columns / _resolve_cells on a cold cache re-read the WHOLE sheet (`_fetch_column_map`)
+    # — and fieldops_sync is one-shot per launchd interval, so its cache is cold every cycle: each
+    # mirrored job cost two full reads where one suffices. Safe for every caller: `filters` trims
+    # rows, never columns, so the map is always complete; and a read is the NEWEST schema this
+    # process has seen, so REPLACING the entry can only make it fresher (a rename since the last
+    # fetch is picked up, not hidden). The existing miss→refetch in `_resolve_cells` still covers a
+    # column added after this read. A new dict is assigned, never mutated in place, so a caller
+    # still holding the previous map keeps a consistent snapshot.
+    _column_maps[sheet_id] = {col.title: col.id for col in sheet.columns}
     out: list[dict[str, Any]] = []
     for row in sheet.rows:
         record: dict[str, Any] = {"_row_id": row.id}
@@ -1574,12 +1612,15 @@ def ensure_columns(sheet_id: int, specs: list[dict[str, Any]]) -> list[str]:
         Material List columns. This makes the column exist instead of softening the write.
 
     Cost
-        NEAR-ZERO in steady state, which is what makes it safe to call per cycle. It reads the
-        title→id map through `_column_map`, which is CACHED per process; when nothing is missing it
-        issues NO API call at all and returns `[]`. The daemon resolves that same map moments later
-        for the row write, so on the common path this adds a dict lookup and nothing else.
-        (Contrast `create_picklist_column`, whose docstring calls a column add operator/maintenance
-        work — true of an unconditional add, which is why this one is conditional.)
+        ZERO API calls on a WARM map when nothing is missing — it reads the title→id map through
+        `_column_map`, CACHED per process, and returns `[]`. On a COLD map that lookup is a FULL
+        sheet read (`_fetch_column_map` — rows and all), so a one-shot daemon must READ THE SHEET
+        FIRST (`get_rows` seeds the map) and back-fill after; called first, this costs the cycle a
+        second full read of a sheet it is about to read anyway. When something IS missing it adds
+        one pre-write re-read (the duplicate-title guard below) and the add itself, then
+        invalidates the map, so the next title lookup re-reads once more. (Contrast
+        `create_picklist_column`, whose docstring calls a column add operator/maintenance work —
+        true of an unconditional add, which is why this one is conditional.)
 
     Invariants
         - **ADDITIVE ONLY.** Adds titles that are absent; never edits, retypes, reorders or removes

@@ -1637,17 +1637,26 @@ def _mirror_material_list_pass(base_url: str, bearer: str) -> dict[str, int]:
     RECONCILE ROSTER (the count-drops-to-zero fix): the pass iterates `jobs_with_materials` — every
     active job with ANY `job_expected_materials` row (active OR deactivated) — NOT just the jobs that
     have active lines this cycle. For each job:
-      • HAS active lines → ensure the sheet (find-or-create) → upsert each (change-only) → mark
-        Removed any sheet row NOT in THIS cycle's snapshot (On List=Removed, never delete) →
-        row-cap watchdog.
+      • HAS active lines → ensure the sheet (find-or-create) → read it once → back-fill any missing
+        column → upsert each (change-only) → mark Removed any sheet row NOT in THIS cycle's snapshot
+        (On List=Removed, never delete) → row-cap watchdog.
       • ZERO active lines → find (NEVER create) the sheet; if it exists, mark ALL its Active rows
         Removed; if no sheet ever existed, skip (never create an empty sheet). Without this branch a
         job whose whole list was deactivated would keep stale `On List=Active` rows forever.
 
-    READ BUDGET (D10): exactly ONE full-sheet read per visited job per cycle. The with-lines path
-    reads once (`material_list.read_line_index`) and threads that index through every upsert, the
-    retire and the row-cap count; the zeroed path's retire is its one read. Read-load DID bite —
-    one read per line drew Smartsheet rate limiting on 2026-10-21 — and read-once was the fix.
+    READ BUDGET (D10 + P1/P2, measured at the API by
+    `tests/test_fieldops_sync.py::test_material_list_pass_costs_one_sheet_read_per_job_writes_included`):
+    exactly ONE `Sheets.get_sheet` of a visited job's sheet per cycle, writes included. The
+    with-lines path reads once (`material_list.read_line_index`) and threads that index through
+    every upsert, the retire and the row-cap count; that read also seeds the column map, so the
+    back-fill check after it and every write resolve their columns with no read of their own. The
+    zeroed path's retire is its one read. Per PASS, one ITS_Config read for the row-cap threshold
+    (`material_list.read_row_cap_threshold`), not one per job. Beside those, `ensure` / `find` list
+    two containers per job (the workspace's folders, the folder's sheets) — listings, no rows.
+    Read-load DID bite — one read per line drew Smartsheet rate limiting on 2026-10-21. The one
+    exception is the cycle that back-fills a missing column: three reads of that sheet (the index,
+    `ensure_columns`' pre-add duplicate-title re-read, and the first write's re-read of the
+    post-add map), once per sheet lifetime.
 
     No throttle: per-cycle change-only re-projection is simple-correct at current scale (an upsert
     with no change issues no write, and retire skips already-Removed rows). A throttle is a FUTURE
@@ -1677,6 +1686,9 @@ def _mirror_material_list_pass(base_url: str, bearer: str) -> dict[str, int]:
         return out
 
     by_job = _group_materials_by_job(snapshot.lines)
+    # ONE ITS_Config read for the whole pass, and only when some job has lines (the zeroed path runs
+    # no row-cap check). Read per job, it was a second full-sheet read per job per cycle.
+    row_cap_threshold = material_list.read_row_cap_threshold() if by_job else None
     # Iterate the RECONCILE ROSTER (active jobs with any material line history), so a job whose
     # active lines dropped to ZERO is still visited and its stale Active rows marked Removed.
     for roster in snapshot.jobs_with_materials:
@@ -1694,7 +1706,8 @@ def _mirror_material_list_pass(base_url: str, bearer: str) -> dict[str, int]:
         current = by_job.get(job_id)
         if current:
             _reconcile_job_with_materials(
-                job_id, project_name, current, correlation_id, out
+                job_id, project_name, current, correlation_id, out,
+                row_cap_threshold=row_cap_threshold,
             )
         else:
             _reconcile_job_zeroed_materials(job_id, project_name, correlation_id, out)
@@ -1703,11 +1716,12 @@ def _mirror_material_list_pass(base_url: str, bearer: str) -> dict[str, int]:
 
 def _reconcile_job_with_materials(
     job_id: str, project_name: str, rows: list[dict[str, Any]],
-    correlation_id: str, out: dict[str, int],
+    correlation_id: str, out: dict[str, int], *, row_cap_threshold: int | None = None,
 ) -> None:
     """Reconcile a job that HAS active material lines: find-or-create its sheet, read it ONCE (D10),
-    change-only upsert each line, mark Removed any sheet row NOT in this cycle's snapshot, run the
-    row-cap watchdog — the upserts, the retire and the row-cap count all share that one read."""
+    back-fill any missing column, change-only upsert each line, mark Removed any sheet row NOT in
+    this cycle's snapshot, run the row-cap watchdog — the back-fill, the upserts, the retire and the
+    row-cap count all share that one read. `row_cap_threshold` is the pass's one ITS_Config read."""
     phase = "ensure-sheet"
     try:
         sheet_id = material_list.ensure_material_list_sheet(project_name)
@@ -1715,6 +1729,7 @@ def _reconcile_job_with_materials(
         # to find its own row — N lines cost N+2 reads a cycle — and that read storm is what drew
         # the 2026-10-21 Smartsheet rate limiting. Inside this fence on purpose: a failed read
         # skips the job exactly as a failed ensure does, instead of failing every line one by one.
+        # It also seeds the process column map (P1), which is why the back-fill comes AFTER it.
         phase = "read-sheet"
         index = material_list.read_line_index(sheet_id)
     except (
@@ -1741,6 +1756,11 @@ def _reconcile_job_with_materials(
             correlation_id=correlation_id,
         )
         return
+
+    # Schema top-up on the map the read just seeded — no API call unless a column is missing
+    # (P2). Never raises; a failure WARNs and the upserts below then fail per-line on the absent
+    # column (see material_list.backfill_columns for why this pass does not skip them).
+    material_list.backfill_columns(sheet_id, material_list.material_list_sheet_name(project_name))
 
     # The authoritative on-list set for retire = EVERY line in this cycle's snapshot for the job,
     # regardless of per-line upsert success (a transient upsert failure does NOT mean the line was
@@ -1804,9 +1824,11 @@ def _reconcile_job_with_materials(
     )
 
     # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here). Counted from
-    # the index (the read + this pass's appends), so it costs no read of its own.
+    # the index (the read + this pass's appends) against the pass's one threshold read, so it costs
+    # no read of its own.
     material_list.check_row_cap(
-        sheet_id, material_list.material_list_sheet_name(project_name), row_count=len(index.rows)
+        sheet_id, material_list.material_list_sheet_name(project_name), row_count=len(index.rows),
+        threshold=row_cap_threshold,
     )
 
 
@@ -2308,17 +2330,19 @@ def _group_receipts_by_job(
 
 def _reconcile_job_receipts(
     job_id: str, project_name: str, rows: list[dict[str, Any]],
-    correlation_id: str, out: dict[str, int],
+    correlation_id: str, out: dict[str, int], *, row_cap_threshold: int | None = None,
 ) -> None:
     """Reconcile a job that HAS receipt events: find-or-create its Material Receipts sheet, read it
-    ONCE (D10), change-only upsert each event (append-only — never retire), run the row-cap
-    watchdog — the upserts and the row-cap count share that one read."""
+    ONCE (D10), back-fill any missing column, change-only upsert each event (append-only — never
+    retire), run the row-cap watchdog — the back-fill, the upserts and the row-cap count share that
+    one read. `row_cap_threshold` is the pass's one ITS_Config read."""
     phase = "ensure-sheet"
     try:
         sheet_id = material_receipts.ensure_material_receipts_sheet(project_name)
         # ONE full-ledger read for the whole job (D10) — each upsert used to re-read the entire
         # ledger to find its own row (N receipts cost N+1 reads a cycle). Inside this fence on
-        # purpose: a failed read skips the job like a failed ensure, not event by event.
+        # purpose: a failed read skips the job like a failed ensure, not event by event. It also
+        # seeds the process column map (P1), which is why the back-fill comes AFTER it.
         phase = "read-sheet"
         index = material_receipts.read_receipt_index(sheet_id)
     except (
@@ -2346,6 +2370,37 @@ def _reconcile_job_receipts(
         )
         return
 
+    sheet_name = material_receipts.material_receipts_sheet_name(project_name)
+    # Schema top-up on the map the read just seeded — no API call unless a column is missing (P2).
+    # False = the six 0080 void columns (or any tracked column) could not be made to exist. Every
+    # upsert names all of them, so each would raise KeyError at `_resolve_cells` — one ERROR per
+    # event, every cycle, for ONE cause (P3). Skip the job's upserts instead: `backfill_columns`
+    # already WARNed (`material_receipts_column_backfill_failed`, the one signal), the cycle counts
+    # one error for the job, and the next cycle retries the back-fill. Nothing is lost — the ledger
+    # re-projects in full once the columns exist.
+    if not material_receipts.backfill_columns(sheet_id, sheet_name):
+        out["errors"] += 1
+    else:
+        _upsert_job_receipts(
+            sheet_id, index, job_id, project_name, rows, correlation_id, out
+        )
+
+    # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here). It matters
+    # MORE here than for incidents: a job with many lines delivered across many truckloads writes an
+    # event per load, so this ledger is the fastest-growing of the per-job trackers. Counted from the
+    # index (the read + this pass's appends) against the pass's one threshold read, so it costs no
+    # read of its own — which is also why it still runs on a cycle whose upserts were skipped.
+    material_receipts.check_row_cap(
+        sheet_id, sheet_name, row_count=len(index.rows), threshold=row_cap_threshold,
+    )
+
+
+def _upsert_job_receipts(
+    sheet_id: int, index: smartsheet_client.RowIndex, job_id: str, project_name: str,
+    rows: list[dict[str, Any]], correlation_id: str, out: dict[str, int],
+) -> None:
+    """Change-only upsert of one job's receipt events through the pass's index, each under its own
+    per-event fence (a permanent fault → Review Queue; a transient one re-projects next cycle)."""
     for e in rows:
         event_uuid = str(e.get("event_uuid") or "").strip()
         # 0080: a void is keyed off the PRESENCE of voided_at, not off whether it formats — a mark
@@ -2365,8 +2420,9 @@ def _reconcile_job_receipts(
                 unit=str(e.get("unit") or "").strip(),
                 part_number=str(e.get("part_number") or "").strip(),
                 line_uuid=str(e.get("line_uuid") or "").strip(),
-                # The DERIVED pair — the only two fields that legitimately change after the event
-                # is written, and therefore the whole reason this re-projects every cycle.
+                # The DERIVED pair — with the void annotation below, the only fields that
+                # legitimately change after the event is written, and therefore the whole reason
+                # this re-projects every cycle.
                 line_status=str(e.get("line_status") or "").strip(),
                 line_qty_expected=_fmt_qty(e.get("line_qty_expected")),
                 line_qty_received=_fmt_qty(e.get("line_qty_received")),
@@ -2414,15 +2470,6 @@ def _reconcile_job_receipts(
                 error_code="fieldops_receipt_upsert_transient",
                 correlation_id=correlation_id,
             )
-
-    # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here). It matters
-    # MORE here than for incidents: a job with many lines delivered across many truckloads writes an
-    # event per load, so this ledger is the fastest-growing of the per-job trackers. Counted from the
-    # index (the read + this pass's appends), so it costs no read of its own.
-    material_receipts.check_row_cap(
-        sheet_id, material_receipts.material_receipts_sheet_name(project_name),
-        row_count=len(index.rows),
-    )
 
 
 def _route_receipt_to_review(
@@ -2483,9 +2530,20 @@ def _mirror_material_receipts_pass(base_url: str, bearer: str) -> dict[str, int]
     write-once mirror would go stale. A VOIDED mark stays in the feed and is ANNOTATED in place
     (Entry Status=Voided, grayed), never retired: there is still no retire path here, so the #468
     zero-drop class stays structurally impossible. `upsert_receipt_row` is change-only, so a cycle
-    where nothing moved costs ONE read per job ledger (D10 — the index from
-    `material_receipts.read_receipt_index` serves every upsert and the row-cap count; it used to be
-    one full read per receipt) and no writes.
+    where nothing moved writes nothing.
+
+    READ BUDGET (D10 + P1/P2, measured at the API by
+    `tests/test_fieldops_sync.py::test_receipts_pass_costs_one_sheet_read_per_job_writes_included`):
+    exactly ONE `Sheets.get_sheet` of a job's ledger per cycle, writes included — the index from
+    `material_receipts.read_receipt_index`, which serves every upsert and the row-cap count (it used
+    to be one full read per receipt) and seeds the column map, so the back-fill check after it and
+    every write resolve their columns with no read of their own. Per PASS, one ITS_Config read for
+    the row-cap threshold (`material_receipts.read_row_cap_threshold`), not one per job. Beside
+    those, `ensure_material_receipts_sheet` lists two containers per job (the workspace's folders,
+    the folder's sheets) — listings, no rows. The one exception is the cycle that back-fills a
+    missing column (every pre-0080 ledger, once): three reads of that sheet — the index,
+    `ensure_columns`' pre-add duplicate-title re-read, and the back-fill's post-condition re-read
+    of the post-add map, which then serves the writes.
 
     No throttle: per-cycle change-only re-projection is simple-correct at current scale. A throttle
     is a FUTURE optimization only if the one-read-per-job budget itself bites — do NOT build it now.
@@ -2513,9 +2571,15 @@ def _mirror_material_receipts_pass(base_url: str, bearer: str) -> dict[str, int]
         )
         return out
 
-    for job_id, (project_name, rows) in _group_receipts_by_job(receipts).items():
+    by_job = _group_receipts_by_job(receipts)
+    # ONE ITS_Config read for the whole pass, and none when there is no job to visit. Read per job,
+    # it was a second full-sheet read per job per cycle.
+    row_cap_threshold = material_receipts.read_row_cap_threshold() if by_job else None
+    for job_id, (project_name, rows) in by_job.items():
         correlation_id = uuid.uuid4().hex[:12]
-        _reconcile_job_receipts(job_id, project_name, rows, correlation_id, out)
+        _reconcile_job_receipts(
+            job_id, project_name, rows, correlation_id, out, row_cap_threshold=row_cap_threshold,
+        )
     return out
 
 

@@ -33,3 +33,14 @@ describe("void + correction error copy", () => {
     for (const code of VOID_CODES) expect(ERROR_COPY[code] ?? "").not.toMatch(/\bclear/i);
   });
 });
+
+// D11 (2026-10-21): removing a material line that still has deliveries COUNTING is refused
+// (409 line_has_deliveries). The copy has to say what to do — the refusal is permanent until the
+// marks are voided, so "try again" (the generic fallback) would send the office round in a loop.
+describe("remove-line refusal copy (D11)", () => {
+  it("line_has_deliveries tells the office to void the marks first", () => {
+    expect(errorText("line_has_deliveries")).toBe(
+      "This line has deliveries recorded. Void them first, then remove the line.",
+    );
+  });
+});

@@ -66,9 +66,14 @@ def sc(mocker):
             "progress_reports.material_receipts.smartsheet_client.get_setting",
             return_value="15000",
         ),
-        # The void columns' back-fill (find branch only). Default: nothing was missing.
+        # The void columns' back-fill (`backfill_columns`, called by the pass AFTER its index read).
+        # Default: nothing was missing, and nothing is missing afterwards either.
         "ensure_columns": mocker.patch(
             "progress_reports.material_receipts.smartsheet_client.ensure_columns",
+            return_value=[],
+        ),
+        "missing_columns": mocker.patch(
+            "progress_reports.material_receipts.smartsheet_client.missing_columns",
             return_value=[],
         ),
         # Never called by this module — patched so a test can PROVE that (a voided mark is
@@ -349,15 +354,23 @@ def test_backfill_set_is_every_non_primary_creation_column():
     assert material_receipts.COL_MATERIAL not in titles  # a sheet's primary is fixed at create
 
 
-def test_ensure_backfills_all_six_void_columns_in_one_call_on_the_find_branch(sc):
-    sc["find_sheet"].return_value = 4242
-    assert material_receipts.ensure_material_receipts_sheet("Job One") == 4242
+def test_backfill_adds_all_six_void_columns_in_one_call(sc):
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is True
     # ONE call carrying every spec — never one call per column — so the six land under the single
     # shared index `ensure_columns` assigns (a split call is fine for the API but would not be the
     # material_list shape; a multi-index body is what 400'd live with errorCode 1135).
     sc["ensure_columns"].assert_called_once_with(4242, material_receipts.BACKFILL_COLUMNS)
     passed = [c["title"] for c in sc["ensure_columns"].call_args.args[1]]
     assert passed[-6:] == list(_VOID_COLS)
+
+
+def test_ensure_never_backfills_the_pass_does_it_after_its_index_read(sc):
+    # P2: ensure is find-or-create ONLY. Back-filling here ran BEFORE the pass's index read, on a
+    # cold column map — a full-sheet read of its own, every cycle, for a sheet about to be read
+    # anyway. The pass now reads first (seeding the map) and back-fills after, for free.
+    sc["find_sheet"].return_value = 4242
+    assert material_receipts.ensure_material_receipts_sheet("Job One") == 4242
+    sc["ensure_columns"].assert_not_called()
     sc["create_sheet"].assert_not_called()
 
 
@@ -369,22 +382,45 @@ def test_ensure_does_not_backfill_on_the_create_branch(sc):
 
 
 def test_backfill_logs_what_it_added_and_is_silent_when_nothing_was_missing(sc):
-    sc["find_sheet"].return_value = 4242
     sc["ensure_columns"].return_value = list(_VOID_COLS)
-    material_receipts.ensure_material_receipts_sheet("Job One")
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is True
     codes = [c.kwargs.get("error_code") for c in sc["log"].call_args_list]
     assert codes.count("material_receipts_columns_backfilled") == 1
 
     sc["log"].reset_mock()
     sc["ensure_columns"].return_value = []
-    material_receipts.ensure_material_receipts_sheet("Job One")
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is True
     assert not sc["log"].call_args_list  # steady state: no WARN every cycle for every job
 
 
-def test_backfill_failure_warns_but_still_returns_the_sheet(sc):
-    sc["find_sheet"].return_value = 4242
+def test_backfill_failure_warns_once_and_reports_false(sc):
+    # P3: False tells the pass to skip this job's upserts — every one would KeyError on an absent
+    # column — so this WARN is the job's ONE signal, not the first of one ERROR per event.
     sc["ensure_columns"].side_effect = material_receipts.smartsheet_client.SmartsheetError("boom")
-    assert material_receipts.ensure_material_receipts_sheet("Job One") == 4242
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is False
+    codes = [c.kwargs.get("error_code") for c in sc["log"].call_args_list]
+    assert codes == ["material_receipts_column_backfill_failed"]
+
+
+def test_backfill_reports_false_when_a_column_is_still_absent_after_it(sc):
+    # The add "succeeded" but the post-condition does not hold — the same outcome for the upserts
+    # (every write would KeyError), so the same one WARN and the same skip.
+    sc["ensure_columns"].return_value = list(_VOID_COLS)
+    sc["missing_columns"].return_value = ["Entry Status"]
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is False
+    sc["missing_columns"].assert_called_once_with(
+        4242, [c["title"] for c in material_receipts.BACKFILL_COLUMNS]
+    )
+    failed = [
+        c for c in sc["log"].call_args_list
+        if c.kwargs.get("error_code") == "material_receipts_column_backfill_failed"
+    ]
+    assert len(failed) == 1 and "Entry Status" in failed[0].args[2]
+
+
+def test_backfill_post_condition_read_failure_reports_false(sc):
+    sc["missing_columns"].side_effect = material_receipts.smartsheet_client.SmartsheetError("boom")
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is False
     assert any(
         c.kwargs.get("error_code") == "material_receipts_column_backfill_failed"
         for c in sc["log"].call_args_list
@@ -398,13 +434,18 @@ def test_backfill_through_the_real_ensure_columns_is_one_add_at_one_shared_index
     pre_void = {
         c["title"]: n for n, c in enumerate(material_receipts.MATERIAL_RECEIPTS_COLUMNS[:-6], 1)
     }
-    mocker.patch.object(material_receipts.smartsheet_client, "_column_map", return_value=pre_void)
+    post_void = {c["title"]: n for n, c in enumerate(material_receipts.MATERIAL_RECEIPTS_COLUMNS, 1)}
+    # Pre-add check, pre-add re-read (the duplicate-title guard), then the post-condition read.
+    mocker.patch.object(
+        material_receipts.smartsheet_client, "_column_map",
+        side_effect=[pre_void, pre_void, post_void],
+    )
     mocker.patch.object(material_receipts.smartsheet_client, "invalidate_column_cache")
     client = MagicMock()
     mocker.patch.object(material_receipts.smartsheet_client, "get_client", return_value=client)
     mocker.patch.object(material_receipts.error_log, "log")
 
-    material_receipts._backfill_columns_best_effort(4242, "Job One — Material Receipts")
+    assert material_receipts.backfill_columns(4242, "Job One — Material Receipts") is True
 
     client.Sheets.add_columns.assert_called_once()
     bodies = client.Sheets.add_columns.call_args.args[1]
@@ -647,3 +688,94 @@ def test_row_cap_check_never_raises_on_read_failure(sc):
         c.kwargs.get("error_code") == "material_receipts_row_cap_check_failed"
         for c in sc["log"].call_args_list
     )
+
+
+def test_read_row_cap_threshold_is_the_its_config_value(sc):
+    assert material_receipts.read_row_cap_threshold() == 15000
+    sc["get_setting"].assert_called_once_with(
+        material_receipts.CFG_ROW_CAP_WARN, workstream="progress_reports"
+    )
+
+
+def test_read_row_cap_threshold_falls_back_loudly_never_raises(sc):
+    # Read ONCE per pass for every job, so it must not raise into the pass: a failure WARNs (the
+    # same code the per-job check uses) and the conservative default keeps the tripwire armed.
+    sc["get_setting"].side_effect = RuntimeError("smartsheet down")
+    assert material_receipts.read_row_cap_threshold() == material_receipts.DEFAULT_ROW_CAP_WARN
+    assert [c.kwargs.get("error_code") for c in sc["log"].call_args_list] == [
+        "material_receipts_row_cap_check_failed"
+    ]
+
+
+def test_row_cap_with_a_pass_resolved_threshold_reads_no_config(sc):
+    # The pass hands over the threshold it read once — a per-job ITS_Config read was a full-sheet
+    # read of ITS_Config for every job, every cycle.
+    material_receipts.check_row_cap(
+        9001, "Job One — Material Receipts", row_count=60, threshold=50
+    )
+    sc["get_setting"].assert_not_called()
+    sc["review"].assert_called_once()
+    assert sc["review"].call_args.kwargs["payload"]["threshold"] == 50
+
+
+# ---- P4: the voided gray reaches the SDK Cell objects ---------------------
+#
+# Every other gray test stops at the `_formats` dict handed to a MOCKED add_rows / update_rows, so
+# none proves the descriptor survives `_resolve_cells` into the Cell the API receives. This drives
+# the REAL add_rows / update_rows / _resolve_cells, faking only the SDK client.
+
+
+def _sdk_receipts_sheet(rows: list[dict[str, Any]]) -> tuple[SimpleNamespace, dict[int, str]]:
+    columns = [
+        SimpleNamespace(id=100 + n, title=c["title"])
+        for n, c in enumerate(material_receipts.MATERIAL_RECEIPTS_COLUMNS)
+    ]
+    title_by_id = {c.id: c.title for c in columns}
+    id_by_title = {c.title: c.id for c in columns}
+    sdk_rows = [
+        SimpleNamespace(
+            id=r["_row_id"],
+            cells=[
+                SimpleNamespace(column_id=id_by_title[k], value=v)
+                for k, v in r.items() if not k.startswith("_")
+            ],
+        )
+        for r in rows
+    ]
+    return SimpleNamespace(columns=columns, rows=sdk_rows), title_by_id
+
+
+def _formats_by_title(sdk_row: Any, title_by_id: dict[int, str]) -> dict[str, Any]:
+    return {title_by_id[c.column_id]: getattr(c, "format", None) for c in sdk_row.cells}
+
+
+def test_voided_row_formats_reach_the_sdk_cells_through_the_real_resolve_cells(mocker, monkeypatch):
+    sc_mod = material_receipts.smartsheet_client
+    monkeypatch.setattr(sc_mod, "_column_maps", {})  # a cold, test-local cache
+    client = MagicMock()
+    mocker.patch.object(sc_mod, "get_client", return_value=client)
+    client.Sheets.add_rows.return_value = SimpleNamespace(result=[SimpleNamespace(id=555)])
+
+    # MISS → add_rows: a mark first seen already voided lands grayed.
+    sheet, title_by_id = _sdk_receipts_sheet([])
+    client.Sheets.get_sheet.return_value = sheet
+    material_receipts.upsert_receipt_row(9001, **_voided_kwargs())
+    [added] = client.Sheets.add_rows.call_args.args[1]
+    fmts = _formats_by_title(added, title_by_id)
+    assert fmts.pop(material_receipts.COL_EVENT_DATE) == material_receipts.FMT_VOIDED_DATE
+    assert set(fmts.values()) == {material_receipts.FMT_VOIDED}
+    assert material_receipts.COL_EVENT_UUID in fmts  # the key cell is grayed too
+
+    # HIT → update_rows: an Active row the route now reports voided is re-written grayed, whole-row.
+    sc_mod.invalidate_column_cache()
+    sheet, title_by_id = _sdk_receipts_sheet([_t_row()])
+    client.Sheets.get_sheet.return_value = sheet
+    material_receipts.upsert_receipt_row(9001, **_voided_kwargs())
+    [updated] = client.Sheets.update_rows.call_args.args[1]
+    assert updated.id == 888
+    fmts = _formats_by_title(updated, title_by_id)
+    assert fmts.pop(material_receipts.COL_EVENT_DATE) == material_receipts.FMT_VOIDED_DATE
+    assert set(fmts.values()) == {material_receipts.FMT_VOIDED}
+    assert set(fmts) | {material_receipts.COL_EVENT_DATE} == {
+        c["title"] for c in material_receipts.MATERIAL_RECEIPTS_COLUMNS
+    }

@@ -42,9 +42,11 @@ The **Expected materials** section on a job's detail (Job Tracker) is the per-jo
 that job is waiting on (`job_expected_materials`, migration 0031). The office
 (`cap.materials.manage`, admin) adds rows — picked from this catalog or typed free-text — with
 qty/unit/expected date, edits them while still *Expected*, reorders, and removes (a soft
-deactivate; history is kept). Once migration 0079 is applied **managers hold `cap.materials.manage`
-too**, so the same authoring controls are theirs. Field PMs (`cap.materials.receive` only) see the
-list **read-only**. Marking a delivery happens on the job's **Materials tracking** page — NOT in the
+deactivate; history is kept — refused with "This line has deliveries recorded. Void them first,
+then remove the line." while any delivery on the line still counts; see `job_materials.md` →
+"Removing a line, and the "Removed from the list" group"). Once migration 0079 is applied
+**managers hold `cap.materials.manage` too**, so the same authoring controls are theirs. Field PMs
+(`cap.materials.receive` only) see the list **read-only**. Marking a delivery happens on the job's **Materials tracking** page — NOT in the
 daily form, whose per-line receipt controls were removed on 2026-08-11 (#74).
 
 ### Manager receipt flow — the daily form (Material receipts M2)

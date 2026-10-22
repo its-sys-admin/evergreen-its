@@ -63,6 +63,9 @@ its migration fail-closes `resolveCapabilities` → the universal-lockout class 
 | `0075_rfq_job_id` | Job-tracker Procurement section (Track A8) | #142 | ✅ |
 | `0076_procurement_lifecycle` | Procurement lifecycle + change orders (Track D) | #147 | ✅ 2026-08-14 |
 | `0077_change_order_documents` | Change orders as DOCUMENTS (Track D2): `change_order_of`/`co_seq` on both lanes + partial unique seq indexes + DROP `procurement_change_orders` (0-row record model). **Bidirectional**: apply BEFORE this Worker deploys, and deploy immediately after applying — the DROP breaks the pre-0077 Worker's CO-record routes | #148 | ✅ 2026-08-15 |
+| `0078_weekly_report_material_curation` | WPR curated material lists: `deliveries_json`/`incidents_json` on `job_weekly_report_inputs` (three-state curation snapshots, never carried forward) | #185 | ✅ 2026-08-20 (per that day's session log) |
+| `0079_manager_materials_manage` | `cap.materials.manage` → `manager` (managers author the materials list; cross-job WRITE without cross-job READ — read the migration header's decision block) | #188 | ✅ 2026-08-27 (per that day's session log) |
+| `0080_receipt_event_void` | VOID a delivery mark: `voided_at`/`voided_by`/`void_reason`/`supersedes_id`/`sort_id` on `material_receipt_events` + a partial UNIQUE index on `supersedes_id`. Apply BEFORE the Worker that reads them deploys — the materials list read, the mark route, the Receipts mirror route and the WPR builder all bind these columns, so a Worker deployed first 500s every materials surface. No clean reverse (see the migration header) | (receipt void) | ☐ pending |
 
 > ⚠️ **This table is behind the migrations directory: `0053`–`0058`, `0060`, and `0063`–`0072`
 > shipped but were never listed here.** Pre-existing drift, not introduced by `0059`/`0061`/`0073`.
@@ -70,14 +73,22 @@ its migration fail-closes `resolveCapabilities` → the universal-lockout class 
 > applies everything pending in order regardless of what this table says. Worth a reconciling pass.
 
 Canonical apply-and-deploy sequence (applies **all** pending migrations, in order — never a
-subset):
+subset). The ORDER is load-bearing: pull `main` first, then apply the D1 migrations to the
+**remote** database, then `npm run deploy`. A Worker that reaches production before its
+migration fails on every route that reads the new columns (`0080` above is one).
 
 ```bash
 cd ~/its && git pull origin main   # ALWAYS first — the stale-migrations-list lockout class
 cd safety_portal
 npx wrangler d1 migrations apply its-safety-portal-db --remote
-npm run deploy
+npm run deploy                     # NEVER a bare `wrangler deploy` — see below
 ```
+
+`npm run deploy` is `vite build` followed by the Wrangler upload. The Worker uses
+`import.meta.glob`, a Vite feature, so a bare `wrangler deploy` either fails validation or —
+worse — "succeeds" by re-uploading the last bundle Vite built, reporting a new version while the
+new routes 404. After any deploy, confirm the new behaviour live (a new route answers non-404)
+before calling it deployed.
 
 Each linked per-slice **Activation** section carries that slice's post-deploy live smoke.
 
