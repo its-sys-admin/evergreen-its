@@ -2603,3 +2603,53 @@ form.dash-row select {
   font-weight: 600;
   font-size: 0.85rem;
 }
+
+/* ── Delivery history: voided marks, corrections, and the D9 question (0080) ──────────────────
+   A history row now carries pills and a Void / Record-the-correct-entry button beside its text,
+   and can open an inline panel under itself. `.dash-tasklist li` is a single non-wrapping flex
+   line, so without the wrap a phone pushes the button off the right edge of the card. */
+.mat-history li {
+  flex-wrap: wrap;
+}
+
+/* Struck through, not removed: a voided mark is still part of the record of what was claimed at
+   the gate. Muted as well as struck, so it reads as "no longer counts" at a glance — the
+   "Voided" pill beside it carries the same fact in words for anyone who can't see the line. */
+.mat-event--voided {
+  text-decoration: line-through;
+  color: var(--c-muted);
+}
+
+/* The inline void and correction panels, and the D9 question, each take their own full-width
+   line under the row they belong to (the .mat-mark-error reasoning: squeezed between two flex
+   items is unreadable at exactly the width where it matters). */
+.mat-void,
+.mat-correct,
+.mat-settled-ask {
+  flex-basis: 100%;
+  margin-top: var(--space-2);
+}
+
+.mat-void__copy,
+.mat-correct__copy,
+.mat-settled-ask__text {
+  flex-basis: 100%;
+  margin: 0 0 4px;
+}
+
+/* Danger INK on the void panel's left edge ties the panel to the danger button that opened it,
+   without the tinted-red ground that global.css reserves for life-safety ("boldness spent once"). */
+.mat-void {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--c-danger);
+}
+
+/* The D9 question asks, it does not refuse — so gold (attention), not danger red. */
+.mat-settled-ask {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--c-gold);
+}
+
+.mat-settled-ask__text {
+  font-weight: 600;
+}

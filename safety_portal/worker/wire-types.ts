@@ -448,6 +448,16 @@ export interface MaterialReceiptEventRow {
   event_date: string | null; // YYYY-MM-DD (defaults to Pacific today at write)
   created_at: number; // epoch seconds
   actor_name: string | null; // DISPLAY NAME ONLY (W9) — null when the account has no roster link
+  // ── Void (migration 0080). A voided mark is KEPT, annotated, and excluded from every rollup. ──
+  voided_at: number | null; // epoch seconds; null = the mark counts
+  /** Who voided it: the personnel DISPLAY NAME, else the account's ROLE LABEL (e.g. "Admin
+   *  (Office)") for an account with no roster link (operator decision D6). Never a username. */
+  voided_by_name: string | null;
+  void_reason: string | null;
+  /** The voided event this one corrects (same line). null on an ordinary mark. */
+  supersedes_id: number | null;
+  /** The event that corrects THIS one, when it has been corrected. null otherwise. */
+  superseded_by_id: number | null;
 }
 
 /** One SCHEDULED shipment attached to an expected-material LINE. A shipping-log row is a LOAD,
@@ -1155,6 +1165,11 @@ export interface WeeklyReportLaborRow {
  *  (0078) store this exact shape so the screen and the Mac's 4-key narrowing render curated and
  *  derived rows identically. `kind` is screen-only provenance (the PDF drops it). */
 export interface WeeklyReportDelivery {
+  /** The ledger event this row was derived from (0080). Lets a curated snapshot drop a row whose
+   *  mark was later VOIDED (operator decision D5). Absent on rows the office typed in and on rows
+   *  curated before 0080 — those can't be matched and are never dropped. Screen-only; the Mac's
+   *  4-key narrowing drops it. */
+  event_uuid?: string;
   event_date: string;
   kind: string;
   item: string;
@@ -1255,6 +1270,11 @@ export interface ProductionReportResponse {
    *  screen must say so (the photos.truncated / schedule.truncated no-silent-caps convention). */
   deliveries_truncated: boolean;
   material_incidents_truncated: boolean;
+  /** Curated delivery rows dropped from `deliveries` because their ledger mark was VOIDED after
+   *  the office saved the snapshot (0080, decision D5). Always 0 for an un-curated week: the live
+   *  derivation already excludes voided marks. The screen must say so rather than letting a row
+   *  vanish silently (the no-silent-caps convention). */
+  deliveries_voided_removed: number;
   photos: { available: WeeklyReportPhotoOffered[]; selected: WeeklyReportPhoto[]; auto_selected: boolean;
     /** True when the offered list hit the pool cap — more clean photos exist than were offered. */
     truncated: boolean };

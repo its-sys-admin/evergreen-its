@@ -14,7 +14,7 @@
  *
  * Mocks the two lib modules + useAuth (the FieldOpsJobTracker / ExpectedMaterialsSection convention).
  */
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../lib/fieldops_expected_materials", async (importOriginal) => {
@@ -27,6 +27,8 @@ vi.mock("../../lib/fieldops_expected_materials", async (importOriginal) => {
     setExpectedMaterialSeq: vi.fn(),
     deactivateExpectedMaterial: vi.fn(),
     markReceipt: vi.fn(),
+    voidReceiptEvent: vi.fn(),
+    resolveExpectedMaterialIncident: vi.fn(),
     createMaterialShipment: vi.fn(),
     deactivateMaterialShipment: vi.fn(),
   };
@@ -75,6 +77,7 @@ const SHIPMENT: api.MaterialShipmentRow = {
 const EVENT: api.MaterialReceiptEventRow = {
   id: 9, line_id: 1, shipment_id: 5, kind: "partial", qty: 50, note: "two bundles short",
   event_date: "2026-06-29", created_at: 1_700_000_000, actor_name: "Mo Manager",
+  voided_at: null, voided_by_name: null, void_reason: null, supersedes_id: null, superseded_by_id: null,
 };
 
 function mountAs(role: Role, caps: string[]) {
@@ -401,5 +404,327 @@ describe("the manifest list's Remove (operator request 2026-08-11)", () => {
     await waitFor(() => expect(manifestsApi.discardManifest).toHaveBeenCalledWith(2));
     // The list refreshes so the discarded row (now server-filtered) disappears.
     await waitFor(() => expect(manifestsApi.fetchManifests).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ── Receipt-event VOID (migration 0080; operator decisions D1-D4, D9 — 2026-10-21) ─────────────
+// A delivery mark is an append-only ledger event. Until 0080 a wrong one could only be offset,
+// so a double-tapped "Delivered" read as twice the material forever. A void keeps the row (struck
+// through, with who/when/why) and takes it out of every rollup; a correction can then be linked
+// to it. Every fixture here is synthetic.
+const VLINE: api.ExpectedMaterialRow = {
+  id: 2, material_id: null, material_name: null, description: "Test conduit 2in",
+  qty: 40, unit: "ea", expected_date: null, status: "received",
+  received_at: null, received_by_name: null, qty_received: 40, note: null, seq: 10,
+  line_uuid: "lu-t2", part_number: "TP-0001", category: null,
+  expected_ship_date: null, receipt_status: "delivered", qty_received_total: 40,
+};
+const VTITLE = "Test conduit 2in";
+const ev = (over: Partial<api.MaterialReceiptEventRow>): api.MaterialReceiptEventRow => ({
+  id: 0, line_id: 2, shipment_id: null, kind: "delivered", qty: 40, note: null,
+  event_date: "2026-10-01", created_at: 1_760_000_000, actor_name: "Test Crew Lead",
+  voided_at: null, voided_by_name: null, void_reason: null, supersedes_id: null, superseded_by_id: null,
+  ...over,
+});
+const MARK_A = ev({ id: 21, note: "first truck", event_date: "2026-10-01" });
+const MARK_B = ev({ id: 22, note: "same truck again", event_date: "2026-10-02" });
+const VOIDED = { voided_at: 1_760_100_000, voided_by_name: "Test Office Admin", void_reason: "Entered twice" };
+
+function serve(lines: api.ExpectedMaterialRow[], events: api.MaterialReceiptEventRow[]) {
+  vi.mocked(api.fetchExpectedMaterials).mockResolvedValue({
+    expected_materials: lines, shipments: [], receipt_events: events, project_name: "Test Project T0001",
+  });
+}
+function mountT(role: Role = "manager", caps: string[] = RECEIVE_ONLY) {
+  vi.mocked(useAuth).mockReturnValue(authWith(role, caps));
+  return render(<JobMaterialsPage jobId="JOB-T0001" onHome={vi.fn()} onOpenJob={vi.fn()} />);
+}
+const voidLabel = (summary: string) => `Void entry ${summary} for ${VTITLE}`;
+
+describe("JobMaterialsPage — voiding a delivery mark", () => {
+  beforeEach(() => {
+    // clearAllMocks keeps implementations, and an earlier test leaves markReceipt rejecting —
+    // so every test in this block states the outcome it needs.
+    vi.mocked(api.markReceipt).mockResolvedValue({ event_id: 99 });
+    vi.mocked(api.voidReceiptEvent).mockResolvedValue({
+      ok: true, event_id: 22, line_id: 2, status: "received", qty_received: 40,
+    });
+  });
+
+  it("Void → reason → Confirm void posts the reason and refreshes the list", async () => {
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { getByLabelText, getByText } = mountT();
+    await waitFor(() => expect(getByText(/same truck again/)).toBeTruthy());
+    fireEvent.click(getByLabelText(voidLabel("2026-10-02 · Delivered · 40")));
+    fireEvent.change(getByLabelText("Reason for voiding this entry"), { target: { value: "Entered twice" } });
+    fireEvent.click(getByText("Confirm void"));
+    await waitFor(() => expect(api.voidReceiptEvent).toHaveBeenCalledWith(22, "Entered twice"));
+    // The page re-reads the ledger: the rollup the server just recomputed is what it must show.
+    await waitFor(() => expect(api.fetchExpectedMaterials).toHaveBeenCalledTimes(2));
+  });
+
+  it("a blank reason posts NOTHING and says why, beside the box", async () => {
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { getByLabelText, getByText, findByRole } = mountT();
+    await waitFor(() => expect(getByText(/same truck again/)).toBeTruthy());
+    fireEvent.click(getByLabelText(voidLabel("2026-10-02 · Delivered · 40")));
+    fireEvent.change(getByLabelText("Reason for voiding this entry"), { target: { value: "   " } });
+    fireEvent.click(getByText("Confirm void"));
+    const alert = await findByRole("alert");
+    expect(alert.textContent ?? "").toContain("Say why this entry is being voided");
+    expect(api.voidReceiptEvent).not.toHaveBeenCalled();
+    expect(getByLabelText("Reason for voiding this entry").getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("the reason box is capped at 500 characters, the Worker's limit", async () => {
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { getByLabelText, getByText } = mountT();
+    await waitFor(() => expect(getByText(/same truck again/)).toBeTruthy());
+    fireEvent.click(getByLabelText(voidLabel("2026-10-02 · Delivered · 40")));
+    expect(getByLabelText("Reason for voiding this entry").getAttribute("maxlength")).toBe("500");
+  });
+
+  it("a FAILED void keeps the typed reason, keeps the panel open, and says what went wrong", async () => {
+    vi.mocked(api.voidReceiptEvent).mockRejectedValue(new Error("already_voided"));
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { getByLabelText, getByText, findAllByRole } = mountT();
+    await waitFor(() => expect(getByText(/same truck again/)).toBeTruthy());
+    fireEvent.click(getByLabelText(voidLabel("2026-10-02 · Delivered · 40")));
+    fireEvent.change(getByLabelText("Reason for voiding this entry"), { target: { value: "Entered twice" } });
+    fireEvent.click(getByText("Confirm void"));
+    const alerts = await findAllByRole("alert");
+    expect(alerts.map((a) => a.textContent).join(" ")).toContain("That entry was already voided");
+    // The typed words survive: retyping a reason after every refusal is how reasons get skipped.
+    expect((getByLabelText("Reason for voiding this entry") as HTMLInputElement).value).toBe("Entered twice");
+  });
+
+  it("only a marking role sees Void — a submitter reads the history but cannot change it", async () => {
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { queryByLabelText, getByText } = mountT("submitter", RECEIVE_ONLY);
+    await waitFor(() => expect(getByText(/same truck again/)).toBeTruthy());
+    expect(queryByLabelText(voidLabel("2026-10-02 · Delivered · 40"))).toBeNull();
+  });
+
+  it("the action is called Void, never Clear (operator decision D2)", async () => {
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { getByLabelText, getByText, container } = mountT();
+    await waitFor(() => expect(getByText(/same truck again/)).toBeTruthy());
+    expect(getByLabelText(voidLabel("2026-10-02 · Delivered · 40")).textContent).toBe("Void");
+    expect(container.textContent ?? "").not.toMatch(/\bClear\b/);
+  });
+});
+
+describe("JobMaterialsPage — voided rows in the history", () => {
+  it("are hidden by default; Show voided (n) reveals them struck through with who, when and why", async () => {
+    serve([VLINE], [MARK_A, ev({ ...MARK_B, ...VOIDED })]);
+    const { getByText, queryByText, getByLabelText } = mountT();
+    await waitFor(() => expect(getByText(/first truck/)).toBeTruthy());
+    expect(queryByText(/same truck again/)).toBeNull();
+
+    fireEvent.click(getByText("Show voided (1)"));
+    const history = getByLabelText(`Delivery history for ${VTITLE}`);
+    const row = within(history).getByText(/same truck again/).closest("li")!;
+    expect(row.textContent ?? "").toContain("Voided");
+    expect(row.textContent ?? "").toContain("Test Office Admin");
+    expect(row.textContent ?? "").toContain("Entered twice");
+    expect(row.querySelector(".mat-event--voided")).toBeTruthy();
+    // A voided row cannot be voided again.
+    expect(within(row).queryByText("Void")).toBeNull();
+    expect(getByText("Hide voided (1)")).toBeTruthy();
+  });
+
+  it("no toggle at all when nothing on the line is voided", async () => {
+    serve([VLINE], [MARK_A, MARK_B]);
+    const { getByText, queryByText } = mountT();
+    await waitFor(() => expect(getByText(/first truck/)).toBeTruthy());
+    expect(queryByText(/Show voided/)).toBeNull();
+  });
+
+  it("labels a correction and the voided entry it corrected", async () => {
+    const wrong = ev({ id: 23, kind: "partial", qty: 25, note: "miscounted", ...VOIDED, superseded_by_id: 24 });
+    const right = ev({ id: 24, kind: "partial", qty: 15, note: "recounted", supersedes_id: 23 });
+    serve([{ ...VLINE, qty_received_total: 15, receipt_status: "partial", status: "expected" }], [wrong, right]);
+    const { getByText } = mountT();
+    await waitFor(() => expect(getByText(/recounted/)).toBeTruthy());
+    expect(getByText(/recounted/).closest("li")!.textContent ?? "").toContain("Corrects an earlier entry");
+
+    fireEvent.click(getByText("Show voided (1)"));
+    const voidedRow = getByText(/miscounted/).closest("li")!;
+    expect(voidedRow.textContent ?? "").toContain("Corrected");
+    // Already corrected: offering a second correction would only meet 409 already_corrected.
+    expect(within(voidedRow).queryByText("Record the correct entry")).toBeNull();
+  });
+});
+
+describe("JobMaterialsPage — recording the correct entry (D3, D4)", () => {
+  const LINE_SHORT: api.ExpectedMaterialRow = {
+    ...VLINE, qty_received_total: 40, receipt_status: "delivered",
+  };
+  const WRONG = ev({ id: 31, kind: "delivered", qty: 40, note: "whole order", event_date: "2026-10-03" });
+
+  beforeEach(() => {
+    vi.mocked(api.markReceipt).mockResolvedValue({ event_id: 32 });
+    vi.mocked(api.voidReceiptEvent).mockResolvedValue({
+      ok: true, event_id: 31, line_id: 2, status: "expected", qty_received: null,
+    });
+  });
+
+  it("after a void, offers the form PREFILLED from the voided mark and posts supersedes_id", async () => {
+    serve([LINE_SHORT], [WRONG]);
+    const { getByLabelText, getByText } = mountT();
+    await waitFor(() => expect(getByText(/whole order/)).toBeTruthy());
+    // After the void the server reports the line owing everything again.
+    fireEvent.click(getByLabelText(voidLabel("2026-10-03 · Delivered · 40")));
+    fireEvent.change(getByLabelText("Reason for voiding this entry"), { target: { value: "Only 30 came" } });
+    serve([{ ...LINE_SHORT, qty_received_total: null, receipt_status: null, status: "expected" }],
+      [{ ...WRONG, ...VOIDED, void_reason: "Only 30 came" }]);
+    fireEvent.click(getByText("Confirm void"));
+
+    const form = await waitFor(() => getByLabelText(`Record the correct entry for ${VTITLE}`));
+    expect((within(form).getByLabelText("Correct entry kind") as HTMLSelectElement).value).toBe("delivered");
+    expect((within(form).getByLabelText("Correct entry quantity") as HTMLInputElement).value).toBe("40");
+    expect((within(form).getByLabelText("Correct entry note") as HTMLInputElement).value).toBe("whole order");
+    expect((within(form).getByLabelText("Correct entry date") as HTMLInputElement).value).toBe("2026-10-03");
+
+    fireEvent.change(within(form).getByLabelText("Correct entry kind"), { target: { value: "partial" } });
+    fireEvent.change(within(form).getByLabelText("Correct entry quantity"), { target: { value: "30" } });
+    fireEvent.click(within(form).getByText("Record correct entry"));
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(api.markReceipt).toHaveBeenCalledWith(2, {
+      kind: "partial", qty: 30, note: "whole order", event_date: "2026-10-03", supersedes_id: 31,
+    });
+  });
+
+  it("still works when the user comes back LATER — a voided, uncorrected row keeps the action", async () => {
+    // D4: no time window. Weeks later, other marks landed in between; the voided row still offers it.
+    const later = ev({ id: 40, kind: "partial", qty: 10, note: "next load", event_date: "2026-10-20" });
+    serve([{ ...LINE_SHORT, qty_received_total: 10, receipt_status: "partial", status: "expected" }],
+      [{ ...WRONG, ...VOIDED }, later]);
+    const { getByLabelText, getByText } = mountT();
+    await waitFor(() => expect(getByText(/next load/)).toBeTruthy());
+    fireEvent.click(getByText("Show voided (1)"));
+    const voidedRow = getByText(/whole order/).closest("li")!;
+    fireEvent.click(within(voidedRow).getByText("Record the correct entry"));
+    const form = getByLabelText(`Record the correct entry for ${VTITLE}`);
+    fireEvent.change(within(form).getByLabelText("Correct entry quantity"), { target: { value: "30" } });
+    fireEvent.click(within(form).getByText("Record correct entry"));
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.markReceipt).mock.calls[0][1]).toMatchObject({ qty: 30, supersedes_id: 31 });
+  });
+
+  it("a correction is held to the quantity rule like any mark — nothing posts without one", async () => {
+    serve([{ ...LINE_SHORT, qty_received_total: null, receipt_status: null }], [{ ...WRONG, ...VOIDED }]);
+    const { getByLabelText, getByText, findAllByRole } = mountT();
+    await waitFor(() => expect(getByText("Show voided (1)")).toBeTruthy());
+    fireEvent.click(getByText("Show voided (1)"));
+    fireEvent.click(getByText("Record the correct entry"));
+    const form = getByLabelText(`Record the correct entry for ${VTITLE}`);
+    fireEvent.change(within(form).getByLabelText("Correct entry quantity"), { target: { value: "" } });
+    fireEvent.click(within(form).getByText("Record correct entry"));
+    const alerts = await findAllByRole("alert");
+    expect(alerts.map((a) => a.textContent).join(" ")).toContain("Enter the quantity received");
+    expect(api.markReceipt).not.toHaveBeenCalled();
+  });
+
+  it("asks the D9 question too when the line is STILL fully received after the void", async () => {
+    // Voiding one of two identical marks leaves the line settled; a "correction" on top of that
+    // would count the material a second time — the very double-mark the void just removed.
+    serve([LINE_SHORT], [{ ...WRONG, ...VOIDED }, ev({ id: 33, qty: 40, note: "the real one" })]);
+    const { getByLabelText, getByText, queryByText } = mountT();
+    await waitFor(() => expect(getByText("Show voided (1)")).toBeTruthy());
+    fireEvent.click(getByText("Show voided (1)"));
+    fireEvent.click(getByText("Record the correct entry"));
+    const form = getByLabelText(`Record the correct entry for ${VTITLE}`);
+    fireEvent.click(within(form).getByText("Record correct entry"));
+    expect(within(form).getByText(/This line already has 40 of 40 ea received/)).toBeTruthy();
+    expect(api.markReceipt).not.toHaveBeenCalled();
+    fireEvent.click(within(form).getByLabelText(`Cancel — do not record another delivery for ${VTITLE}`));
+    expect(queryByText(/This line already has/)).toBeNull();
+    expect(api.markReceipt).not.toHaveBeenCalled();
+    fireEvent.click(within(form).getByText("Record correct entry"));
+    fireEvent.click(within(form).getByText("Record another delivery"));
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.markReceipt).mock.calls[0][1]).toMatchObject({ qty: 40, supersedes_id: 31 });
+  });
+
+  it("a FAILED correction keeps what was typed", async () => {
+    vi.mocked(api.markReceipt).mockRejectedValue(new Error("already_corrected"));
+    serve([{ ...LINE_SHORT, qty_received_total: null, receipt_status: null }], [{ ...WRONG, ...VOIDED }]);
+    const { getByLabelText, getByText, findAllByRole } = mountT();
+    await waitFor(() => expect(getByText("Show voided (1)")).toBeTruthy());
+    fireEvent.click(getByText("Show voided (1)"));
+    fireEvent.click(getByText("Record the correct entry"));
+    const form = getByLabelText(`Record the correct entry for ${VTITLE}`);
+    fireEvent.change(within(form).getByLabelText("Correct entry quantity"), { target: { value: "30" } });
+    fireEvent.click(within(form).getByText("Record correct entry"));
+    const alerts = await findAllByRole("alert");
+    expect(alerts.map((a) => a.textContent).join(" ")).toContain("already has a correction");
+    expect((within(form).getByLabelText("Correct entry quantity") as HTMLInputElement).value).toBe("30");
+  });
+});
+
+describe("JobMaterialsPage — a failed request never eats typed input (run())", () => {
+  it("a refused Resolve keeps the typed note and the panel open", async () => {
+    vi.mocked(api.resolveExpectedMaterialIncident).mockRejectedValue(new Error("note_required"));
+    serve([{ ...VLINE, status: "incident" }], [MARK_A]);
+    const { getByLabelText, getByText, findAllByRole } = mountT();
+    await waitFor(() => expect(getByText("Resolve problem")).toBeTruthy());
+    fireEvent.click(getByText("Resolve problem"));
+    fireEvent.change(getByLabelText("How was it resolved"), { target: { value: "Supplier re-sent the pallet" } });
+    fireEvent.click(getByText("Mark resolved"));
+    await waitFor(() => expect(api.resolveExpectedMaterialIncident).toHaveBeenCalled());
+    const alerts = await findAllByRole("alert");
+    expect(alerts.map((a) => a.textContent).join(" ")).toContain("Add a note explaining the shortfall");
+    expect((getByLabelText("How was it resolved") as HTMLInputElement).value).toBe("Supplier re-sent the pallet");
+  });
+});
+
+describe("JobMaterialsPage — D9: asking before another delivery on a fully received line", () => {
+  const D9 = "This line already has 40 of 40 ea received. Record another delivery anyway?";
+  beforeEach(() => {
+    vi.mocked(api.markReceipt).mockResolvedValue({ event_id: 50 });
+  });
+
+  it("Delivered on a settled line asks first; Cancel posts NOTHING", async () => {
+    serve([VLINE], [MARK_A]);
+    const { getByLabelText, getByText, queryByText } = mountT();
+    await waitFor(() => expect(getByText(/first truck/)).toBeTruthy());
+    setQty(getByLabelText, VTITLE, "40");
+    fireEvent.click(getByLabelText(`Mark ${VTITLE} delivered`));
+    expect(getByText(D9)).toBeTruthy();
+    fireEvent.click(getByLabelText(`Cancel — do not record another delivery for ${VTITLE}`));
+    expect(queryByText(D9)).toBeNull();
+    expect(api.markReceipt).not.toHaveBeenCalled();
+  });
+
+  it("Record another delivery posts the mark the user asked for", async () => {
+    serve([VLINE], [MARK_A]);
+    const { getByLabelText, getByText } = mountT();
+    await waitFor(() => expect(getByText(/first truck/)).toBeTruthy());
+    setQty(getByLabelText, VTITLE, "5");
+    fireEvent.click(getByLabelText(`Mark ${VTITLE} partially delivered`));
+    fireEvent.click(getByText("Record another delivery"));
+    await waitFor(() => expect(api.markReceipt).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.markReceipt).mock.calls[0][1]).toMatchObject({ kind: "partial", qty: 5 });
+  });
+
+  it("Not delivered on a settled line does NOT ask — it adds nothing to the total", async () => {
+    serve([VLINE], [MARK_A]);
+    const { getByLabelText, getByText, queryByText } = mountT();
+    await waitFor(() => expect(getByText(/first truck/)).toBeTruthy());
+    fireEvent.click(getByLabelText(`Mark ${VTITLE} not delivered`));
+    expect(queryByText(D9)).toBeNull();
+    // The ordinary two-step arm still applies.
+    expect(getByLabelText(`Confirm not delivered for ${VTITLE} — tap again to record`)).toBeTruthy();
+  });
+
+  it("a line that still owes something never asks", async () => {
+    serve([{ ...VLINE, qty_received_total: 30 }], [MARK_A]);
+    const { getByLabelText, getByText, queryByText } = mountT();
+    await waitFor(() => expect(getByText(/first truck/)).toBeTruthy());
+    setQty(getByLabelText, VTITLE, "10");
+    fireEvent.click(getByLabelText(`Mark ${VTITLE} delivered`));
+    expect(queryByText(/already has/)).toBeNull();
+    expect(getByLabelText(`Confirm delivered for ${VTITLE} — tap again to record`)).toBeTruthy();
   });
 });

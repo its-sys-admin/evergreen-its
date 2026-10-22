@@ -53,6 +53,7 @@ function payload(over: Partial<ProductionReportResponse> = {}): ProductionReport
     material_incidents_import_count: 1,
     deliveries_truncated: false,
     material_incidents_truncated: false,
+    deliveries_voided_removed: 0,
     photos: {
       available: [
         { pool_id: 1, work_date: "2026-08-10", box_file_id: "b1", caption: "Piles", has_thumb: false },
@@ -433,6 +434,66 @@ describe("WeeklyReportPage — curated material lists (0078)", () => {
       { work_date: "2026-08-12", material: "Torque tube (NE bay)", issue: "Short", details: "28 of 40." },
     ]);
     expect("deliveries" in body).toBe(false);
+  });
+});
+
+// ── Voided delivery marks on a CURATED week (0080, operator decision D5) ─────────────────────────
+// A curated delivery list is a snapshot, and 0078 made it survive any later change to the ledger.
+// D5 is the one exception: a row whose mark was later VOIDED is dropped when the report is read,
+// because a client must not be shown a delivery the job has formally said did not happen. The
+// screen has to SAY a row went, or the office sees its curated list quietly shrink. Synthetic data.
+describe("WeeklyReportPage — curated rows dropped because their mark was voided (D5)", () => {
+  const UUID_KEEP = "00000000-0000-4000-8000-000000000001";
+  const UUID_GONE = "00000000-0000-4000-8000-000000000002";
+  const KEEP = {
+    event_uuid: UUID_KEEP, event_date: "2026-08-10", kind: "delivered", item: "Test bracket",
+    part_number: "TP-0002", qty: "12", unit: "ea", vendor: "Test Vendor A", bol_number: "TB-0001",
+    carrier: "Test Carrier",
+  };
+  const GONE = { ...KEEP, event_uuid: UUID_GONE, item: "Test bracket (double-marked)" };
+  const materials = () => within(document.getElementById("wpr-materials")!);
+
+  it("says how many curated rows were removed because the mark was voided", async () => {
+    const p = payload({ deliveries: [KEEP], deliveries_voided_removed: 2, deliveries_import_count: 1 });
+    p.office.deliveries = [KEEP];
+    await renderPage(p);
+    expect(materials().getByText("2 delivery row(s) removed because the mark was voided.")).toBeTruthy();
+  });
+
+  it("says nothing when no row was removed", async () => {
+    const p = payload({ deliveries: [KEEP], deliveries_import_count: 1 });
+    p.office.deliveries = [KEEP];
+    await renderPage(p);
+    expect(materials().queryByText(/removed because the mark was voided/)).toBeNull();
+  });
+
+  it("edits the EFFECTIVE list — a row the server dropped for a void does not come back on save", async () => {
+    // Whatever the stored snapshot still holds, `deliveries` is what the report prints; seeding the
+    // editor from the stored copy would resurrect the voided row the moment the office saved.
+    const p = payload({ deliveries: [KEEP], deliveries_voided_removed: 1, deliveries_import_count: 1 });
+    p.office.deliveries = [KEEP, GONE];
+    await renderPage(p);
+    expect(materials().queryByDisplayValue("Test bracket (double-marked)")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Delivery 1 vendor"), { target: { value: "Test Vendor B" } });
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const sent = vi.mocked(saveWeeklyReport).mock.calls[0][0].deliveries;
+    expect(sent).toEqual([{ ...KEEP, vendor: "Test Vendor B" }]);
+  });
+
+  it("PRESERVES event_uuid on every ledger-derived row it saves — that link is how a later void finds it", async () => {
+    await renderPage(payload({ deliveries: [KEEP, GONE], deliveries_import_count: 2 }));
+    fireEvent.change(screen.getByLabelText("Delivery 2 item"), { target: { value: "Test bracket (rev B)" } });
+    fireEvent.click(materials().getByText("Add delivery"));
+    fireEvent.change(screen.getByLabelText("Delivery 3 item"), { target: { value: "Test lugs, typed by the office" } });
+    fireEvent.click(screen.getByText(/Save weekly report inputs/));
+    await waitFor(() => expect(saveWeeklyReport).toHaveBeenCalled());
+    const sent = vi.mocked(saveWeeklyReport).mock.calls[0][0].deliveries!;
+    expect(sent[0].event_uuid).toBe(UUID_KEEP);
+    expect(sent[1].event_uuid).toBe(UUID_GONE);
+    // A row the office typed has no ledger mark behind it, so no uuid to carry — and must not
+    // borrow one, or a void of some OTHER mark would delete the office's own row.
+    expect("event_uuid" in sent[2]).toBe(false);
   });
 });
 

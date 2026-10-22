@@ -9,7 +9,13 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExpectedMaterialRow } from "../fieldops_expected_materials";
-import { lineOwed, owedLabel, rollupMaterials } from "../materials_view";
+import {
+  lineOwed,
+  needsSettledConfirm,
+  owedLabel,
+  rollupMaterials,
+  settledConfirmText,
+} from "../materials_view";
 
 const row = (over: Partial<ExpectedMaterialRow> = {}): ExpectedMaterialRow => ({
   id: 1, material_id: null, material_name: null, description: "Torque tube", qty: 40,
@@ -91,5 +97,47 @@ describe("owedLabel", () => {
 
   it("renders nothing when there is no expected quantity to measure against", () => {
     expect(owedLabel(row({ qty: null }))).toBeNull();
+  });
+});
+
+// D9 (receipt-event VOID, 2026-10-21). A second "Delivered" on a line that has already got
+// everything it was owed is how the double-mark the void feature exists to clean up gets made
+// in the first place. The page asks before recording it — this is the one rule for WHEN.
+describe("needsSettledConfirm (D9)", () => {
+  it("asks before a delivered or partial mark on a fully received line", () => {
+    const settled = row({ qty_received_total: 40 });
+    expect(needsSettledConfirm(settled, "delivered")).toBe(true);
+    expect(needsSettledConfirm(settled, "partial")).toBe(true);
+  });
+
+  it("asks on an OVER-delivered line too — it is settled, and more is even less likely right", () => {
+    expect(needsSettledConfirm(row({ qty_received_total: 44 }), "delivered")).toBe(true);
+  });
+
+  it("never asks before Not delivered — that mark adds nothing to the received total", () => {
+    expect(needsSettledConfirm(row({ qty_received_total: 40 }), "not_delivered")).toBe(false);
+  });
+
+  it("never asks on a line that still owes something", () => {
+    expect(needsSettledConfirm(row({ qty_received_total: 28 }), "delivered")).toBe(false);
+    expect(needsSettledConfirm(row({ qty_received_total: null }), "partial")).toBe(false);
+  });
+
+  it("never asks on a line with no expected quantity — there is nothing to be settled against", () => {
+    expect(needsSettledConfirm(row({ qty: null, qty_received_total: 40 }), "delivered")).toBe(false);
+  });
+});
+
+describe("settledConfirmText (D9)", () => {
+  it("states what is already in, against what was expected, in the line's unit", () => {
+    expect(settledConfirmText(row({ qty_received_total: 40 }))).toBe(
+      "This line already has 40 of 40 ea received. Record another delivery anyway?",
+    );
+  });
+
+  it("drops the unit cleanly when the line has none, and reports an over-delivery as-is", () => {
+    expect(settledConfirmText(row({ qty_received_total: 44, unit: null }))).toBe(
+      "This line already has 44 of 40 received. Record another delivery anyway?",
+    );
   });
 });

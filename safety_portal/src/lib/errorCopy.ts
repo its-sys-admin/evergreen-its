@@ -239,6 +239,23 @@ export const ERROR_COPY: Record<string, string> = {
   invalid_receipt_event_id: "That delivery reference isn't valid — refresh and try again.",
   duplicate_event:
     "That delivery was already recorded — refresh to see it.",
+  // ── voiding a delivery mark + recording the correct entry (0080) ─────────────────────────────
+  // The action is "Void" in every string (operator decision D2) — never "Clear", which already
+  // means resolve-a-flag here and the PO soft-dismiss elsewhere. None of these says "try again":
+  // a second void of the same mark, or a second correction of the same void, can only fail the
+  // same way, so the copy says what to do instead.
+  reason_required: "Say why this entry is being voided — the reason is kept with it.",
+  invalid_reason: "The reason must be plain text, up to 500 characters.",
+  already_voided: "That entry was already voided — refresh to see who voided it and why.",
+  // 409 from the void route: the job has been closed or archived since the page loaded. Distinct
+  // from `not_active` (a closed job refusing NEW work) — this one is about changing the history.
+  job_not_active: "That job is no longer active, so its delivery history can't be changed.",
+  supersedes_not_voided:
+    "Only a voided entry can be corrected — void the wrong entry first, then record the correct one.",
+  unknown_supersedes:
+    "The entry being corrected isn't on this material line any more — refresh to see the history.",
+  already_corrected: "That voided entry already has a correction — refresh to see it.",
+  invalid_supersedes_id: "The entry being corrected couldn't be identified — refresh to see the history.",
   invalid_category: "The category is too long (64 characters max).",
   invalid_expected_ship_date: "That isn't a valid expected ship date.",
   invalid_bol_number: "The BOL / load number is too long (64 characters max).",
