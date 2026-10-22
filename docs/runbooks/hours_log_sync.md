@@ -277,8 +277,14 @@ pass is enabled and the daemon is alive but `<job>`'s Material List isn't popula
 
 **Symptom.** `ITS_Errors` `Error=fieldops_material_permanent`, AND an **ITS_Review_Queue** row
 (Workstream `progress_reports`) `field-ops Material List up-sync: PERMANENT failure …`. The payload
-names the `phase` (`ensure-sheet` / `upsert` / `find-sheet` / `retire`), the `job_id`/`project_name`,
-the `line_uuid`, and the error class.
+names the `phase` (`ensure-sheet` / `read-sheet` / `upsert` / `find-sheet` / `retire`), the
+`job_id`/`project_name`, the `line_uuid`, and the error class. `read-sheet` is the pass's ONE read of
+the job's sheet (since 2026-10-21 it reads each sheet once per cycle, not once per line).
+
+**Not this fault: a Smartsheet rate limit.** A rate limit (errorCode 4003 — Smartsheet sends it on an
+HTTP 403 as well as a 429) is `SmartsheetRateLimitError`, logged as `fieldops_material_sheet_transient`
+/ `fieldops_material_upsert_transient` and retried next cycle — it never files this Review-Queue row.
+A `SmartsheetPermissionError` here is a real access denial (a §46 share change).
 
 **Repair (Tier-2, low-class).** The pass is a snapshot — it **re-projects the whole live list every
 cycle**, so once the cause is resolved the next cycle self-heals (no watermark to unstick). If it needs

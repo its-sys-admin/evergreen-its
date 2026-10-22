@@ -3217,3 +3217,20 @@ including the skeptic lens, so this list is not independently confirmed complete
 **Revisit when:** Seth's next account-hygiene sweep.
 
 Surfaced: 2026-08-24/25 Kiwi forensic investigation. See memory-archive §G92.
+
+## [OPEN 2026-10-21, medium] Hours Log / Equipment / Material Incidents mirrors still re-read the whole sheet per item (D10 follow-up)
+
+D10 fixed the read amplification in the two material mirrors only: `material_list` and
+`material_receipts` now read each per-job sheet ONCE per `fieldops_sync` pass through
+`smartsheet_client.RowIndex` (`read_line_index` / `read_receipt_index`). The same per-item
+`find_*_row` → full `get_rows` pattern remains in `progress_reports/hours_log.py`,
+`progress_reports/equipment_status.py` and `progress_reports/material_incidents.py`; each costs
+one full-sheet read per entry / unit / incident per cycle and feeds the same Smartsheet rate
+limit (errorCode 4003). Scope was held to the two material mirrors deliberately.
+
+**Tag:** `field-ops`, `smartsheet`, `rate-limit`.
+
+**Revisit when:** any of those three passes' cycle time or 4003 rate shows up in `ITS_Errors`, or
+the next change to one of them — thread a `RowIndex` through it the way the material mirrors do.
+
+Surfaced: 2026-10-21, D10 (production logs: ~330 full-sheet reads per 90 s cycle).

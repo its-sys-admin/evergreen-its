@@ -34,6 +34,7 @@ SDK 404 noise:
 from __future__ import annotations
 
 import io
+import json
 import logging
 import time
 from collections.abc import Callable, Iterable
@@ -60,7 +61,10 @@ class SmartsheetAuthError(SmartsheetError):
 
 
 class SmartsheetPermissionError(SmartsheetError):
-    """Access denied for this sheet/resource (HTTP 403)."""
+    """Access denied for this sheet/resource (HTTP 403) — PERMANENT until a share is fixed.
+
+    NOT raised for a 403 whose body carries errorCode 4003: that is a rate limit wearing a 403,
+    and it translates to ``SmartsheetRateLimitError`` (see ``RATE_LIMIT_ERROR_CODE``)."""
 
 
 class SmartsheetNotFoundError(SmartsheetError):
@@ -68,7 +72,15 @@ class SmartsheetNotFoundError(SmartsheetError):
 
 
 class SmartsheetRateLimitError(SmartsheetError):
-    """SDK retry budget exhausted (HTTP 429)."""
+    """Rate limited: errorCode 4003 at ANY HTTP status (production has carried it on 403 as well
+    as 429 — D10, 2026-10-21), or a bare 429. On the SDK path it surfaces only after the SDK has
+    spent its own 4003 retry window; the raw-REST helpers have no such retry.
+
+    Not transient (``is_transient_error`` is False — see ``SmartsheetTransientError``), but not
+    permanent either: the request was refused, not processed, and the next cycle can succeed. It
+    COUNTS toward the circuit breaker (it is not in the guard's ignore list), so a run of
+    ``failure_threshold`` consecutive rate-limited calls opens the breaker and backs every daemon
+    off for the cooldown."""
 
 
 class SmartsheetValidationError(SmartsheetError):
@@ -201,6 +213,51 @@ _NON_IDEMPOTENT_SUFFIX = (
     "the sheet to establish the truth, then re-issue only if it did not commit."
 )
 
+#: Smartsheet's errorCode for "rate limit exceeded" (``shouldRetry: true`` — the SDK's own
+#: ``OperationErrorResult.error_lookup[4003]``). §42 — it is the AUTHORITY for a rate limit; the
+#: HTTP status is not. Production carried 4003 on HTTP **403** (D10, 2026-10-21), and both
+#: translation sites checked ``status == 403`` first, so every such rejection became a PERMANENT
+#: ``SmartsheetPermissionError``: fieldops_sync filed Review-Queue rows for load the API was asking
+#: it to shed, and the breaker IGNORED it (403 is on the ignore list), so nothing backed off. Both
+#: sites now test this code BEFORE any status branch.
+RATE_LIMIT_ERROR_CODE = 4003
+
+
+def _coerce_error_code(raw: object) -> int | None:
+    """An errorCode as an int, or None for anything that is not a whole number. NEVER raises: a
+    malformed code must leave the classification to the status, never break the translation."""
+    if isinstance(raw, bool):  # an int subclass — a JSON `true` is not error code 1
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float) and raw.is_integer():
+        return int(raw)
+    return None
+
+
+def _sdk_is_rate_limit(exc: sdk_exc.ApiError) -> bool:
+    """True iff an SDK ``ApiError`` is a 4003 rate limit, whatever its HTTP status. The SDK mints
+    its ``RateLimitExceededError`` subclass from that same code; testing both means neither an SDK
+    that stops subclassing nor a result missing its code reopens the gap."""
+    if isinstance(exc, sdk_exc.RateLimitExceededError):
+        return True
+    return _coerce_error_code(getattr(exc.error.result, "code", None)) == RATE_LIMIT_ERROR_CODE
+
+
+def _rest_error_code(resp: Any) -> int | None:
+    """The ``errorCode`` from a raw-REST error body, or None. NEVER raises — the body is whatever
+    the far end (or a proxy / challenge page in front of it) sent: not JSON, not an object, or
+    nested deep enough to blow the parser's recursion limit all read as "no code"."""
+    # getattr: the caller's `resp` is None when the HTTPError carried no response at all.
+    text = getattr(resp, "text", None)
+    if not isinstance(text, str):
+        return None
+    try:
+        body = json.loads(text)
+    except (ValueError, RecursionError):  # JSONDecodeError is a ValueError
+        return None
+    return _coerce_error_code(body.get("errorCode")) if isinstance(body, dict) else None
+
 
 def _translate(exc: sdk_exc.SmartsheetException, *, idempotent: bool) -> SmartsheetError:
     """Map an SDK exception onto our typed hierarchy.
@@ -234,6 +291,9 @@ def _translate(exc: sdk_exc.SmartsheetException, *, idempotent: bool) -> Smartsh
         status = result.status_code
         message = result.message or "Smartsheet API error"
         detail = f"HTTP {status} (code {result.code}): {message}"
+        # Before ANY status branch — a 4003 arrives as a 403 too (see RATE_LIMIT_ERROR_CODE).
+        if _sdk_is_rate_limit(exc):
+            return SmartsheetRateLimitError(detail)
         if status == 400:
             return SmartsheetValidationError(detail)
         if status == 401:
@@ -335,7 +395,10 @@ def _load_circuit_config() -> circuit_breaker.CircuitConfig:
 
 # Applied to every network-issuing method below. Reads + writes both count
 # toward tripping; 401/403/404 are ignored (deterministic / routine — must
-# surface as themselves, never as a degraded-service signal). NOTE:
+# surface as themselves, never as a degraded-service signal). A rate limit
+# COUNTS — including a 403 carrying errorCode 4003, which the translation now
+# types as SmartsheetRateLimitError rather than the ignored PermissionError, so
+# a consecutive run of rate limits trips the breaker and backs the fleet off. NOTE:
 # get_setting / get_settings_with_prefix are deliberately LEFT UNDECORATED —
 # they delegate to the decorated get_rows, so guarding them too would nest the
 # breaker and double-count a single failure.
@@ -872,6 +935,77 @@ def get_rows(
             continue
         out.append(record)
     return out
+
+
+class RowIndex:
+    """ONE ``get_rows`` read of a sheet, keyed by its upsert-key column — the read-once lookup a
+    per-cycle re-projection resolves every row through.
+
+    §42 — WHY (D10, 2026-10-21). The standing-tracker mirrors found each row by re-reading the
+    WHOLE sheet per item (``find_*_row`` → ``get_rows``), so a fieldops_sync cycle cost one
+    full-sheet read per material line and per receipt: ~330 reads per 90 s cycle in production,
+    which stretched the cycle to 170-290 s and drew Smartsheet rate limiting (errorCode 4003). A
+    pass now reads each sheet once and threads this index through every upsert and the retire.
+
+    It stays truthful by being told about the pass's OWN writes: ``record_added`` after an
+    ``add_rows``, and an in-place update of the dict ``find`` returned after an ``update_rows``
+    (those dicts ARE the cached rows). It cannot see anyone else's mid-pass write. These mirrors are
+    one-way-up — only the daemon writes their sheets programmatically — so the only such write is a
+    rare hand edit, which the next cycle's fresh read picks up (the per-item re-read it replaces was
+    a point-in-time snapshot too, just a narrower one).
+
+    Pure in-memory: no network, no breaker, no retry. The read that fills it is the caller's own
+    ordinary ``get_rows``.
+    """
+
+    def __init__(self, rows: list[dict[str, Any]], key_column: str) -> None:
+        #: EVERY row read, in sheet order, plus this pass's appends — the retire and the row-cap
+        #: count need all of them, keyless and duplicate-key rows included, which the map cannot hold.
+        self.rows = rows
+        self._key_column = key_column
+        self._by_key: dict[str, dict[str, Any]] = {}
+        self._unsettled: set[str] = set()
+        for row in rows:
+            key = _index_key(row.get(key_column))
+            if key:
+                # FIRST row per key wins — the linear scan's answer, so a sheet carrying a duplicate
+                # key (a historical race) resolves to the same row it did before the index existed.
+                self._by_key.setdefault(key, row)
+
+    def find(self, key: object) -> dict[str, Any] | None:
+        """The row whose key column matches (stripped text compare), or None; a blank key is None.
+
+        RAISES ``SmartsheetError`` for a key whose ``add_rows`` failed earlier in this pass: that
+        write may have COMMITTED (``_NON_IDEMPOTENT_SUFFIX``), so re-adding it from a cache that
+        cannot know would risk a duplicate row on a never-delete sheet. The next pass's fresh read
+        settles it — the per-item fence counts it as transient meanwhile."""
+        k = _index_key(key)
+        if k in self._unsettled:
+            raise SmartsheetError(
+                f"{self._key_column} {k!r}: an add_rows earlier in this pass failed, so it is "
+                "UNKNOWN whether that row committed — not re-adding from the index; the next "
+                "pass's fresh read settles it."
+            )
+        return self._by_key.get(k) if k else None
+
+    def record_added(self, row_id: int, cells: dict[str, Any]) -> None:
+        """Teach the index a row this pass just appended, so a repeat of its key is FOUND."""
+        row = {"_row_id": row_id, **cells}
+        self.rows.append(row)
+        key = _index_key(cells.get(self._key_column))
+        if key:
+            self._by_key.setdefault(key, row)
+
+    def record_add_failed(self, key: object) -> None:
+        """Mark a key whose ``add_rows`` raised as unsettled for the rest of the pass (see ``find``)."""
+        k = _index_key(key)
+        if k:
+            self._unsettled.add(k)
+
+
+def _index_key(raw: object) -> str:
+    """The match key — exactly the pre-index ``str(cell or "").strip()`` comparison."""
+    return str(raw or "").strip()
 
 
 def get_settings_with_prefix(
@@ -1598,7 +1732,8 @@ def _translate_smartsheet_error(
     No-op on 2xx — callers continue. On 4xx/5xx, dispatch the status code
     onto the same typed-exception hierarchy used by `_translate` for SDK
     errors (401 → Auth, 403 → Permission, 404 → NotFound, 429 → RateLimit,
-    everything else → base `SmartsheetError`).
+    everything else → base `SmartsheetError`) — EXCEPT that a body carrying
+    errorCode 4003 is RateLimit whatever the status, checked first.
 
     `idempotent` — REQUIRED, no default, so a new REST helper must decide rather than
     inherit. It gates the 5xx branch ONLY:
@@ -1636,6 +1771,10 @@ def _translate_smartsheet_error(
         resp = e.response if e.response is not None else response
         status = resp.status_code if resp is not None else 0
         body_text = ((resp.text or "")[:200]) if resp is not None else str(e)
+        # Before ANY status branch — Smartsheet answers a rate limit with errorCode 4003 on a 403
+        # as well as a 429 (see RATE_LIMIT_ERROR_CODE); read from the FULL body, not the excerpt.
+        if _rest_error_code(resp) == RATE_LIMIT_ERROR_CODE:
+            raise SmartsheetRateLimitError(f"{context}: HTTP {status}: {body_text}") from e
         if status == 400:
             raise SmartsheetValidationError(f"{context}: HTTP 400: {body_text}") from e
         if status == 401:

@@ -364,6 +364,9 @@ ITS_Daemon_Health return to OK.
   or empty → approver membership is the External Send Gate's authority, a FIXED
   high-capability class. **Escalate; do not edit shares.**
 - Any 401/403 in the same window → auth/secrets, a FIXED high-capability class. **Escalate.**
+  (Exception: a row naming `SmartsheetRateLimitError` / `code 4003` is a **rate limit**, even when
+  it says HTTP 403 — Smartsheet sends both. It is not an auth fault; it counts toward the breaker
+  and clears on its own once the request load drops. Escalate only if it is sustained.)
 
 ## Owner
 

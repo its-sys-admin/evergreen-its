@@ -325,7 +325,9 @@ itself has no default timeout.
 <!-- src: shared/smartsheet_client.py:210-263, shared/defaults.py:62-64 | verified 2026-07-14 -->
 The **F08 circuit breaker** wraps every network-issuing method: reads *and* writes count
 toward tripping, but `401/403/404` are ignored (deterministic/routine — they must
-surface as themselves, not a degraded-service signal). Config resolves from `ITS_Config`
+surface as themselves, not a degraded-service signal). A rate limit **counts** — including
+a 403 whose body carries `errorCode 4003`, which is typed `SmartsheetRateLimitError`, not
+a permission error (see Failure signatures). Config resolves from `ITS_Config`
 under `circuit_breaker.bypass()` (so an OPEN breaker can't block the read of its own
 kill flag), falling back to `defaults.py`: enabled `True`, threshold `5`, cooldown
 `300s`. `get_setting`/`get_settings_with_prefix` are deliberately **undecorated** — they
@@ -376,9 +378,9 @@ SDK client session — a sheet created via the SDK does not appear in a subseque
 | Exception | HTTP | Meaning |
 |-----------|------|---------|
 | `SmartsheetAuthError` | 401 | Token rejected |
-| `SmartsheetPermissionError` | 403 | Access denied for this sheet/resource |
+| `SmartsheetPermissionError` | 403 | Access denied for this sheet/resource — **permanent** (a 403 carrying `errorCode 4003` is NOT this; see the next row but one) |
 | `SmartsheetNotFoundError` | 404 | Sheet / row / column / config setting missing (the *expected* "row not yet seeded" case for `get_setting`) |
-| `SmartsheetRateLimitError` | 429 | SDK retry budget exhausted |
+| `SmartsheetRateLimitError` | 429, or **any** status with `errorCode 4003` (seen on 403) | Rate limited after the SDK's own retry budget — not permanent; the next cycle can succeed. The errorCode is checked before the status at both translation sites |
 | `SmartsheetValidationError` | 400 | **Permanent** (`shouldRetry:false`) — e.g. the 50-char sheet-name cap; lets the portal drain route to Review Queue instead of looping |
 | `SmartsheetCircuitOpenError` | — | Breaker OPEN, short-circuiting a sustained-degraded API |
 | `SmartsheetWriteCapabilityError` | — | Token can READ but not WRITE (raised by the B2 probe) |

@@ -336,16 +336,28 @@ def find_material_list_sheet(project_name: str) -> int | None:
     return smartsheet_client.find_sheet_by_name_in_folder(folder, material_list_sheet_name(project_name))
 
 
-def find_line_row(sheet_id: int, line_uuid: str) -> dict[str, Any] | None:
+def read_line_index(sheet_id: int) -> smartsheet_client.RowIndex:
+    """Read the sheet ONCE and index it by Line UUID — the read-once authority (D10) a pass threads
+    through every `upsert_line_row`, the `retire_removed`, and the row-cap count.
+
+    Before D10 each upsert re-read the WHOLE sheet to find its own row, so a job with N lines cost
+    N+2 full-sheet reads per cycle (N upserts + retire + row-cap); across every job that was the
+    read storm behind the 2026-10-21 Smartsheet rate limiting. It is now ONE per sheet per pass."""
+    return smartsheet_client.RowIndex(smartsheet_client.get_rows(sheet_id), COL_LINE_UUID)
+
+
+def find_line_row(
+    sheet_id: int, line_uuid: str, *, index: smartsheet_client.RowIndex | None = None
+) -> dict[str, Any] | None:
     """Return the row whose Line UUID == `line_uuid`, or None. The upsert/retire authority — every
-    snapshot re-projection resolves its target through this."""
-    key = (line_uuid or "").strip()
-    if not key:
-        return None
-    for row in smartsheet_client.get_rows(sheet_id):
-        if str(row.get(COL_LINE_UUID) or "").strip() == key:
-            return row
-    return None
+    snapshot re-projection resolves its target through this.
+
+    Pass the pass's `index` (from `read_line_index`); without one this does its own full read — the
+    pre-D10 behaviour, kept so a caller outside a pass still works. Matching is unchanged: stripped
+    text compare, FIRST row wins on a duplicate key, a blank key is None."""
+    if index is None:
+        index = read_line_index(sheet_id)
+    return index.find(line_uuid)
 
 
 def upsert_line_row(
@@ -367,6 +379,7 @@ def upsert_line_row(
     part_number: str = "",
     category: str = "",
     expected_ship_date: str = "",
+    index: smartsheet_client.RowIndex | None = None,
 ) -> int:
     """CHANGE-ONLY find-or-create of one material line as an On-List row; return its row ID.
 
@@ -386,6 +399,10 @@ def upsert_line_row(
     for them, so `''` is the truthful reading rather than a placeholder; every other field is
     required precisely so a caller cannot forget one. `expected_ship_date` is the SHIP date and is
     distinct from `expected_date`, which keeps its 0031 meaning of expected DELIVERY.
+
+    `index` (D10) is the pass's single read of the sheet (`read_line_index`); the upsert keeps it
+    truthful about its own writes, so a line repeated in the same pass is FOUND and updated, never
+    appended twice. Omitted, the upsert reads the sheet itself — one full read per call, as before.
     """
     desired: dict[str, str] = {
         COL_LINE: line,
@@ -406,18 +423,22 @@ def upsert_line_row(
         COL_EXPECTED_SHIP_DATE: expected_ship_date,
     }
 
-    existing = find_line_row(sheet_id, line_uuid)
+    if index is None:
+        index = read_line_index(sheet_id)
+    existing = index.find(line_uuid)
     if existing is None:
-        [row_id] = smartsheet_client.add_rows(
-            sheet_id,
-            [
-                {
-                    **desired,
-                    COL_LINE_UUID: line_uuid,
-                    "_formats": {COL_ON_LIST: ON_LIST_ACTIVE_FMT},  # green On-List cell
-                }
-            ],
-        )
+        cells = {**desired, COL_LINE_UUID: line_uuid}
+        try:
+            [row_id] = smartsheet_client.add_rows(
+                sheet_id,
+                [{**cells, "_formats": {COL_ON_LIST: ON_LIST_ACTIVE_FMT}}],  # green On-List cell
+            )
+        except Exception:
+            # The add may have COMMITTED (no idempotency key), so the index must not offer this line
+            # as "absent" again this pass — a repeat raises instead of risking a duplicate row.
+            index.record_add_failed(line_uuid)
+            raise
+        index.record_added(row_id, cells)  # a same-pass repeat of this line is now FOUND
         return row_id
 
     row_id = int(existing["_row_id"])
@@ -434,6 +455,9 @@ def upsert_line_row(
             }
         ],
     )
+    # `existing` IS the index's cached row: keep it equal to the sheet so a same-pass repeat compares
+    # against what was just written (exactly what the pre-D10 fresh re-read would have shown).
+    existing.update(desired)
     return row_id
 
 
@@ -446,7 +470,12 @@ def _row_matches(existing: dict[str, Any], desired: dict[str, str]) -> bool:
     return True
 
 
-def retire_removed(sheet_id: int, current_line_uuids: set[str]) -> int:
+def retire_removed(
+    sheet_id: int,
+    current_line_uuids: set[str],
+    *,
+    index: smartsheet_client.RowIndex | None = None,
+) -> int:
     """Mark every sheet row whose Line UUID is NOT in `current_line_uuids` as `On List=Removed`
     (only if not already Removed); return the number of rows newly retired.
 
@@ -454,15 +483,22 @@ def retire_removed(sheet_id: int, current_line_uuids: set[str]) -> int:
     was removed (deactivated) from the operator's list → mark it Removed IN PLACE. **NEVER deletes**
     (§51 SoR rule) — the row stays as the historical record of a line once on this job's list.
     Idempotent: a row already `Removed` is skipped, so a steady state issues no write.
+
+    `index` (D10) is the pass's single read — taken BEFORE the upserts, which is safe: an upsert only
+    touches rows whose Line UUID is in `current_line_uuids`, and those are exactly the rows this
+    skips, so every row it can retire is unchanged since the read. Omitted, it reads the sheet itself
+    (the reconcile-zeroed path, whose ONE read this is).
     """
     current = {(u or "").strip() for u in current_line_uuids}
+    rows = index.rows if index is not None else smartsheet_client.get_rows(sheet_id)
+    retired: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
-    for row in smartsheet_client.get_rows(sheet_id):
-        line_uuid = str(row.get(COL_LINE_UUID) or "").strip()
-        if line_uuid in current:
+    for row in rows:
+        if _cell_text(row, COL_LINE_UUID) in current:
             continue
-        if str(row.get(COL_ON_LIST) or "").strip() == ON_LIST_REMOVED:
+        if _cell_text(row, COL_ON_LIST) == ON_LIST_REMOVED:
             continue  # already retired — no needless write
+        retired.append(row)
         updates.append(
             {
                 "_row_id": row["_row_id"],
@@ -472,7 +508,14 @@ def retire_removed(sheet_id: int, current_line_uuids: set[str]) -> int:
         )
     if updates:
         smartsheet_client.update_rows(sheet_id, updates)
+        for row in retired:  # keep the index (if any) equal to the sheet it stands in for
+            row[COL_ON_LIST] = ON_LIST_REMOVED
     return len(updates)
+
+
+def _cell_text(row: dict[str, Any], col: str) -> str:
+    """A cell as stripped text, blank for empty/None — the retire's comparison form."""
+    return str(row.get(col) or "").strip()
 
 
 # ---- §51 A5 row-cap watchdog (SoR-safe, WARN-only, never delete) ---------

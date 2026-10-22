@@ -256,16 +256,28 @@ def ensure_material_receipts_sheet(project_name: str) -> int:
     return sheet_id
 
 
-def find_receipt_row(sheet_id: int, event_uuid: str) -> dict[str, Any] | None:
+def read_receipt_index(sheet_id: int) -> smartsheet_client.RowIndex:
+    """Read the ledger ONCE and index it by Event UUID — the read-once authority (D10) a pass threads
+    through every `upsert_receipt_row` and the row-cap count.
+
+    Before D10 each upsert re-read the WHOLE ledger to find its own row, so a job with N receipts
+    cost N+1 full-sheet reads per cycle — on the fastest-growing per-job tracker, whose reads only get
+    bigger. It is now ONE per sheet per pass."""
+    return smartsheet_client.RowIndex(smartsheet_client.get_rows(sheet_id), COL_EVENT_UUID)
+
+
+def find_receipt_row(
+    sheet_id: int, event_uuid: str, *, index: smartsheet_client.RowIndex | None = None
+) -> dict[str, Any] | None:
     """Return the row whose Event UUID == `event_uuid`, or None. The upsert authority — every
-    re-projection resolves its target through this."""
-    key = (event_uuid or "").strip()
-    if not key:
-        return None
-    for row in smartsheet_client.get_rows(sheet_id):
-        if str(row.get(COL_EVENT_UUID) or "").strip() == key:
-            return row
-    return None
+    re-projection resolves its target through this.
+
+    Pass the pass's `index` (from `read_receipt_index`); without one this does its own full read —
+    the pre-D10 behaviour, kept so a caller outside a pass still works. Matching is unchanged:
+    stripped text compare, FIRST row wins on a duplicate key, a blank key is None."""
+    if index is None:
+        index = read_receipt_index(sheet_id)
+    return index.find(event_uuid)
 
 
 def upsert_receipt_row(
@@ -285,6 +297,7 @@ def upsert_receipt_row(
     note: str,
     received_by: str,
     event_date: str,
+    index: smartsheet_client.RowIndex | None = None,
 ) -> int:
     """CHANGE-ONLY find-or-create of one receipt event as a ledger row; return its row ID.
 
@@ -298,6 +311,11 @@ def upsert_receipt_row(
     All values are pre-formatted strings; `material` is the primary label (the line's description);
     `received_by` is the DISPLAY name only. NEVER deletes and NEVER marks a row Removed — a
     signed-for delivery is a permanent historical event.
+
+    `index` (D10) is the pass's single read of the ledger (`read_receipt_index`); the upsert keeps it
+    truthful about its own writes, so an event repeated in the same pass is FOUND and updated, never
+    appended twice (a duplicate row here would read as a delivery counted twice, kept forever).
+    Omitted, the upsert reads the sheet itself — one full read per call, as before.
     """
     desired: dict[str, str] = {
         COL_MATERIAL: material,
@@ -315,12 +333,19 @@ def upsert_receipt_row(
         COL_EVENT_DATE: event_date,
     }
 
-    existing = find_receipt_row(sheet_id, event_uuid)
+    if index is None:
+        index = read_receipt_index(sheet_id)
+    existing = index.find(event_uuid)
     if existing is None:
-        [row_id] = smartsheet_client.add_rows(
-            sheet_id,
-            [{**desired, COL_EVENT_UUID: event_uuid}],
-        )
+        cells = {**desired, COL_EVENT_UUID: event_uuid}
+        try:
+            [row_id] = smartsheet_client.add_rows(sheet_id, [cells])
+        except Exception:
+            # The add may have COMMITTED (no idempotency key), so the index must not offer this event
+            # as "absent" again this pass — a repeat raises instead of risking a duplicate ledger row.
+            index.record_add_failed(event_uuid)
+            raise
+        index.record_added(row_id, cells)  # a same-pass repeat of this event is now FOUND
         return row_id
 
     row_id = int(existing["_row_id"])
@@ -331,6 +356,9 @@ def upsert_receipt_row(
         sheet_id,
         [{"_row_id": row_id, **desired}],
     )
+    # `existing` IS the index's cached row: keep it equal to the sheet so a same-pass repeat compares
+    # against what was just written (exactly what the pre-D10 fresh re-read would have shown).
+    existing.update(desired)
     return row_id
 
 
