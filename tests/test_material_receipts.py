@@ -270,6 +270,72 @@ def test_find_receipt_row_matches_by_uuid(sc):
     assert material_receipts.find_receipt_row(9001, "") is None
 
 
+# ---- read-once index (D10: one full-sheet read per pass, not one per receipt) ----
+#
+# Before D10 every upsert re-read the WHOLE ledger to find its row — ~138 receipts meant ~138 full
+# reads per 90 s cycle, on the fastest-growing per-job tracker. The pass now reads the sheet ONCE.
+
+
+def _t_kwargs(event_uuid: str, **over: Any) -> dict[str, Any]:
+    """Synthetic upsert kwargs (no real job / vendor / person names — the repo is public)."""
+    return _upsert_kwargs(
+        event_uuid=event_uuid, material="Test panel", part_number="TP-0001", line_uuid="u-t1",
+        bol="BOL-T0001", note="", received_by="Test Crew Lead", **over,
+    )
+
+
+def test_read_receipt_index_is_one_read_and_first_match_wins(sc):
+    sc["get_rows"].return_value = [
+        {"_row_id": 1, material_receipts.COL_EVENT_UUID: "evt-t1"},
+        {"_row_id": 2, material_receipts.COL_EVENT_UUID: "evt-t1"},  # duplicate — first hit, as before
+    ]
+    index = material_receipts.read_receipt_index(9001)
+    assert material_receipts.find_receipt_row(9001, "evt-t1", index=index)["_row_id"] == 1
+    assert material_receipts.find_receipt_row(9001, "evt-t9", index=index) is None
+    assert sc["get_rows"].call_count == 1
+
+
+def test_upserts_through_one_index_read_the_ledger_once(sc):
+    sc["get_rows"].return_value = [_existing_row(**{material_receipts.COL_EVENT_UUID: "evt-t0"})]
+    index = material_receipts.read_receipt_index(9001)
+    for n in range(5):
+        material_receipts.upsert_receipt_row(9001, **_t_kwargs(f"evt-t{n}"), index=index)
+    assert sc["get_rows"].call_count == 1
+
+
+def test_same_pass_repeat_event_updates_never_double_appends(sc):
+    sc["get_rows"].return_value = []
+    index = material_receipts.read_receipt_index(9001)
+    assert material_receipts.upsert_receipt_row(
+        9001, **_t_kwargs("evt-t1", line_qty_received="40"), index=index
+    ) == 555
+    # The same event again with its DERIVED rollup moved: an update of the appended row 555, never a
+    # second append — a duplicate ledger row would be a delivery counted twice, kept forever.
+    assert material_receipts.upsert_receipt_row(
+        9001, **_t_kwargs("evt-t1", line_qty_received="120"), index=index
+    ) == 555
+    sc["add_rows"].assert_called_once()
+    upd = sc["update_rows"].call_args.args[1][0]
+    assert upd["_row_id"] == 555 and upd[material_receipts.COL_LINE_QTY_RECEIVED] == "120"
+    material_receipts.upsert_receipt_row(
+        9001, **_t_kwargs("evt-t1", line_qty_received="120"), index=index
+    )
+    assert sc["update_rows"].call_count == 1  # the index tracked the update → identical is a no-op
+    assert sc["get_rows"].call_count == 1
+
+
+def test_add_with_unknown_outcome_is_not_re_added_in_the_same_pass(sc):
+    sc["get_rows"].return_value = []
+    sc["add_rows"].side_effect = material_receipts.smartsheet_client.SmartsheetError("timed out")
+    index = material_receipts.read_receipt_index(9001)
+    with pytest.raises(material_receipts.smartsheet_client.SmartsheetError, match="timed out"):
+        material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1"), index=index)
+    sc["add_rows"].side_effect = None
+    with pytest.raises(material_receipts.smartsheet_client.SmartsheetError, match="UNKNOWN"):
+        material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1"), index=index)
+    sc["add_rows"].assert_called_once()
+
+
 # ---- check_row_cap (§51 A5 row-cap watchdog, SoR-safe WARN-only) ----------
 
 

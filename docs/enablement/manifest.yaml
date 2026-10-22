@@ -146,7 +146,7 @@ docs:
     title: "ITS Integration Reference"
     version: v1
     source: docs/references/integration_reference.md
-    sha256: 742437ed2b9ee37576e47974f124cf0ed9dcfb4930524751cd8866932f9fd377
+    sha256: 42adf0c770cbee9e73dbc28f635e18fd857cff134e0cbe7da826250c2c0a9bce
     audience: operator
 
   - key: security_trust_model

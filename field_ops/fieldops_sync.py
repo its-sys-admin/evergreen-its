@@ -53,7 +53,9 @@ Failure modes
   next cycle" forever — no ticket, no CRITICAL, no operator ever told, on a retry that could
   never succeed. Every Review-Queue write on this path now goes through `review_queue.safe_add`
   (never `add`): the ticket is best-effort, so a Review-Queue outage can no longer abort the
-  cycle and skip the later mirror passes, the heartbeat and the watchdog marker.
+  cycle and skip the later mirror passes, the heartbeat and the watchdog marker. A Smartsheet
+  rate limit is NOT in that permanent set even when it arrives as an HTTP 403: errorCode 4003
+  translates to `SmartsheetRateLimitError` (D10, 2026-10-21), which takes the transient arm.
   `PortalAuthError` on the mark-mirrored
   write-back (401, non-transient) → CRITICAL (`fieldops_mark_mirrored_unauthorized`, see runbook
   Symptom E), job left dirty; any other `SmartsheetError` / `PortalTransportError` (transient) →
@@ -1642,9 +1644,14 @@ def _mirror_material_list_pass(base_url: str, bearer: str) -> dict[str, int]:
         Removed; if no sheet ever existed, skip (never create an empty sheet). Without this branch a
         job whose whole list was deactivated would keep stale `On List=Active` rows forever.
 
+    READ BUDGET (D10): exactly ONE full-sheet read per visited job per cycle. The with-lines path
+    reads once (`material_list.read_line_index`) and threads that index through every upsert, the
+    retire and the row-cap count; the zeroed path's retire is its one read. Read-load DID bite —
+    one read per line drew Smartsheet rate limiting on 2026-10-21 — and read-once was the fix.
+
     No throttle: per-cycle change-only re-projection is simple-correct at current scale (an upsert
-    with no change is a no-op read, and retire skips already-Removed rows). A throttle is a FUTURE
-    optimization if read-load bites — do NOT build it now.
+    with no change issues no write, and retire skips already-Removed rows). A throttle is a FUTURE
+    optimization only if the one-read-per-job budget itself bites — do NOT build it now.
     """
     out = {"upserted": 0, "retired": 0, "reviewed": 0, "errors": 0}
     try:
@@ -1698,27 +1705,37 @@ def _reconcile_job_with_materials(
     job_id: str, project_name: str, rows: list[dict[str, Any]],
     correlation_id: str, out: dict[str, int],
 ) -> None:
-    """Reconcile a job that HAS active material lines: find-or-create its sheet, change-only upsert
-    each line, mark Removed any sheet row NOT in this cycle's snapshot, run the row-cap watchdog."""
+    """Reconcile a job that HAS active material lines: find-or-create its sheet, read it ONCE (D10),
+    change-only upsert each line, mark Removed any sheet row NOT in this cycle's snapshot, run the
+    row-cap watchdog — the upserts, the retire and the row-cap count all share that one read."""
+    phase = "ensure-sheet"
     try:
         sheet_id = material_list.ensure_material_list_sheet(project_name)
+        # ONE full-sheet read for the whole job (D10). Each upsert used to re-read the entire sheet
+        # to find its own row — N lines cost N+2 reads a cycle — and that read storm is what drew
+        # the 2026-10-21 Smartsheet rate limiting. Inside this fence on purpose: a failed read
+        # skips the job exactly as a failed ensure does, instead of failing every line one by one.
+        phase = "read-sheet"
+        index = material_list.read_line_index(sheet_id)
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
         # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
         # the fault fell to the transient arm below and logged "re-projects next cycle"
-        # forever — no ticket, no CRITICAL, no operator ever told.
+        # forever — no ticket, no CRITICAL, no operator ever told. (A rate limit is NOT here
+        # even when it arrives as a 403: errorCode 4003 translates to SmartsheetRateLimitError,
+        # which takes the transient arm — see smartsheet_client.RATE_LIMIT_ERROR_CODE.)
         smartsheet_client.SmartsheetPermissionError,
         smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
-        _route_material_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
+        _route_material_to_review(job_id, project_name, exc, correlation_id, phase=phase)
         return
     except Exception as exc:  # noqa: BLE001 — per-job fence; one bad job never kills the pass
         out["errors"] += 1
         error_log.log(
             Severity.ERROR, SCRIPT_NAME,
-            f"transient failure ensuring Material List sheet for {project_name!r} "
+            f"transient failure ({phase}) on the Material List sheet for {project_name!r} "
             f"(job {job_id}); snapshot re-projects next cycle: {type(exc).__name__}: {exc!r}",
             error_code="fieldops_material_sheet_transient",
             correlation_id=correlation_id,
@@ -1755,6 +1772,7 @@ def _reconcile_job_with_materials(
                 part_number=str(e.get("part_number") or "").strip(),
                 category=str(e.get("category") or "").strip(),
                 expected_ship_date=str(e.get("expected_ship_date") or "").strip(),
+                index=index,
             )
             out["upserted"] += 1
         except (
@@ -1781,11 +1799,14 @@ def _reconcile_job_with_materials(
                 correlation_id=correlation_id,
             )
 
-    _retire_materials(sheet_id, snapshot_uuids, job_id, project_name, correlation_id, out)
+    _retire_materials(
+        sheet_id, snapshot_uuids, job_id, project_name, correlation_id, out, index=index
+    )
 
-    # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here).
+    # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here). Counted from
+    # the index (the read + this pass's appends), so it costs no read of its own.
     material_list.check_row_cap(
-        sheet_id, material_list.material_list_sheet_name(project_name)
+        sheet_id, material_list.material_list_sheet_name(project_name), row_count=len(index.rows)
     )
 
 
@@ -1832,13 +1853,15 @@ def _reconcile_job_zeroed_materials(
 def _retire_materials(
     sheet_id: int, current_uuids: set[str], job_id: str, project_name: str,
     correlation_id: str, out: dict[str, int],
+    *, index: smartsheet_client.RowIndex | None = None,
 ) -> None:
     """Mark Removed any sheet row whose Line UUID is NOT in `current_uuids` (On List=Removed, never
     delete), under a fence — a retire failure never blocks the caller's row-cap watchdog and
     re-projects next cycle. An empty `current_uuids` marks the whole sheet Removed (the
-    reconcile-zeroed case)."""
+    reconcile-zeroed case). `index` is the with-lines path's one read (D10); the zeroed path passes
+    none, so the retire's own read is that job's single read."""
     try:
-        out["retired"] += material_list.retire_removed(sheet_id, current_uuids)
+        out["retired"] += material_list.retire_removed(sheet_id, current_uuids, index=index)
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
@@ -2275,27 +2298,36 @@ def _reconcile_job_receipts(
     job_id: str, project_name: str, rows: list[dict[str, Any]],
     correlation_id: str, out: dict[str, int],
 ) -> None:
-    """Reconcile a job that HAS receipt events: find-or-create its Material Receipts sheet,
-    change-only upsert each event (append-only — never retire), run the row-cap watchdog."""
+    """Reconcile a job that HAS receipt events: find-or-create its Material Receipts sheet, read it
+    ONCE (D10), change-only upsert each event (append-only — never retire), run the row-cap
+    watchdog — the upserts and the row-cap count share that one read."""
+    phase = "ensure-sheet"
     try:
         sheet_id = material_receipts.ensure_material_receipts_sheet(project_name)
+        # ONE full-ledger read for the whole job (D10) — each upsert used to re-read the entire
+        # ledger to find its own row (N receipts cost N+1 reads a cycle). Inside this fence on
+        # purpose: a failed read skips the job like a failed ensure, not event by event.
+        phase = "read-sheet"
+        index = material_receipts.read_receipt_index(sheet_id)
     except (
         picklist_validation.PicklistViolationError,
         smartsheet_client.SmartsheetValidationError,
         # A §46 share change or a deleted tracker sheet is PERMANENT: without these two
         # the fault fell to the transient arm below and logged "re-projects next cycle"
-        # forever — no ticket, no CRITICAL, no operator ever told.
+        # forever — no ticket, no CRITICAL, no operator ever told. (A rate limit is NOT here
+        # even when it arrives as a 403: errorCode 4003 translates to SmartsheetRateLimitError,
+        # which takes the transient arm — see smartsheet_client.RATE_LIMIT_ERROR_CODE.)
         smartsheet_client.SmartsheetPermissionError,
         smartsheet_client.SmartsheetNotFoundError,
     ) as exc:
         out["reviewed"] += 1
-        _route_receipt_to_review(job_id, project_name, exc, correlation_id, phase="ensure-sheet")
+        _route_receipt_to_review(job_id, project_name, exc, correlation_id, phase=phase)
         return
     except Exception as exc:  # noqa: BLE001 — per-job fence; one bad job never kills the pass
         out["errors"] += 1
         error_log.log(
             Severity.ERROR, SCRIPT_NAME,
-            f"transient failure ensuring Material Receipts sheet for {project_name!r} "
+            f"transient failure ({phase}) on the Material Receipts sheet for {project_name!r} "
             f"(job {job_id}); ledger re-projects next cycle: {type(exc).__name__}: {exc!r}",
             error_code="fieldops_receipts_sheet_transient",
             correlation_id=correlation_id,
@@ -2327,6 +2359,7 @@ def _reconcile_job_receipts(
                 received_by=str(e.get("received_by_display") or "").strip(),
                 # Already a naive 'YYYY-MM-DD' Pacific work day in D1 — no epoch conversion.
                 event_date=str(e.get("event_date") or "").strip(),
+                index=index,
             )
             out["upserted"] += 1
         except (
@@ -2355,9 +2388,11 @@ def _reconcile_job_receipts(
 
     # §51 A5 row-cap watchdog — advisory, owns its own try/except (never raises here). It matters
     # MORE here than for incidents: a job with many lines delivered across many truckloads writes an
-    # event per load, so this ledger is the fastest-growing of the per-job trackers.
+    # event per load, so this ledger is the fastest-growing of the per-job trackers. Counted from the
+    # index (the read + this pass's appends), so it costs no read of its own.
     material_receipts.check_row_cap(
-        sheet_id, material_receipts.material_receipts_sheet_name(project_name)
+        sheet_id, material_receipts.material_receipts_sheet_name(project_name),
+        row_count=len(index.rows),
     )
 
 
@@ -2415,10 +2450,11 @@ def _mirror_material_receipts_pass(base_url: str, bearer: str) -> dict[str, int]
     Re-projection is not redundant work: two of the sixteen fields (`line_status`,
     `line_qty_received`) are DERIVED and change as later events land against the same line, so a
     write-once mirror would go stale. `upsert_receipt_row` is change-only, so a cycle where nothing
-    moved costs reads and no writes.
+    moved costs ONE read per job ledger (D10 — the index from `material_receipts.read_receipt_index`
+    serves every upsert and the row-cap count; it used to be one full read per receipt) and no writes.
 
     No throttle: per-cycle change-only re-projection is simple-correct at current scale. A throttle
-    is a FUTURE optimization if read-load bites — do NOT build it now.
+    is a FUTURE optimization only if the one-read-per-job budget itself bites — do NOT build it now.
     """
     out = {"upserted": 0, "reviewed": 0, "errors": 0}
     try:

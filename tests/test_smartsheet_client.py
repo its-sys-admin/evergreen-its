@@ -8,6 +8,7 @@ Run with: pytest -q tests/test_smartsheet_client.py
 """
 from __future__ import annotations
 
+import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -16,6 +17,7 @@ import pytest
 import requests
 import smartsheet
 import smartsheet.exceptions as sdk_exc
+from smartsheet.smartsheet import OperationErrorResult
 
 from shared import sheet_ids, smartsheet_client
 from shared.smartsheet_client import (
@@ -176,6 +178,91 @@ def test_non_5xx_http_error_is_not_transient(mocker, status):
         smartsheet_client.get_sheet(123)
 
     assert not isinstance(exc_info.value, SmartsheetTransientError)
+
+
+# ---- errorCode 4003 = rate limit, whatever the HTTP status (D10) ----------
+#
+# Smartsheet answers a rate limit with errorCode 4003 and `shouldRetry: true`, and it has been
+# observed carrying HTTP 403 as well as 429. Classifying by status alone turned every 403-flavoured
+# rate limit into a PERMANENT SmartsheetPermissionError — fieldops_sync filed Review-Queue rows for
+# load the API was asking it to shed. The errorCode is the authority; the status is not.
+
+
+def _rate_limit_sdk_error(status: int) -> sdk_exc.ApiError:
+    """The SDK's OWN class for 4003 (`OperationErrorResult.error_lookup[4003]`), raised once its
+    retry window is spent — the exact object the 2026-10-21 production logs carried."""
+    result = SimpleNamespace(status_code=status, code=4003, message="Rate limit exceeded.")
+    return sdk_exc.RateLimitExceededError(SimpleNamespace(result=result), "Rate limit exceeded.")
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_sdk_error_code_4003_is_a_rate_limit_at_any_status(mocker, status):
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.side_effect = _rate_limit_sdk_error(status)
+
+    with pytest.raises(SmartsheetError) as exc_info:
+        smartsheet_client.get_sheet(123)
+
+    assert type(exc_info.value) is SmartsheetRateLimitError
+    assert "4003" in str(exc_info.value)  # the operator can see WHY a 403 is not a permission fault
+
+
+def test_sdk_error_code_4003_classifies_on_the_code_not_the_sdk_subclass(mocker):
+    """A plain ApiError carrying 4003 (no RateLimitExceededError subclass) still classifies — the
+    code is read off the result, so an SDK that stops minting its subclass cannot reopen the gap."""
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.side_effect = _api_error(403, code=4003, message="Rate limit exceeded.")
+
+    with pytest.raises(SmartsheetError) as exc_info:
+        smartsheet_client.get_sheet(123)
+
+    assert type(exc_info.value) is SmartsheetRateLimitError
+
+
+@pytest.mark.parametrize("code", [0, 1004, None, "not-a-code", 4003.5, True])
+def test_sdk_genuine_403_without_4003_stays_a_permission_error(mocker, code):
+    """A real access denial (errorCode 1004 "not authorized") — and every malformed code value —
+    keeps the PERMANENT type. A code that cannot be read is never a reason to soften a 403."""
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.side_effect = _api_error(403, code=code, message="Not authorized.")
+
+    with pytest.raises(SmartsheetError) as exc_info:
+        smartsheet_client.get_sheet(123)
+
+    assert type(exc_info.value) is SmartsheetPermissionError
+
+
+def _sdk_built_error(status: int, error_code: int) -> sdk_exc.SmartsheetException:
+    """Build the exception EXACTLY as the SDK does for a non-2xx: `OperationErrorResult.native`
+    parses the real response body into its own `Error`/`ErrorResult` models, then
+    `Smartsheet._request_and_parse` raises the class its errorCode lookup names. No hand-rolled
+    SimpleNamespace — a stand-in can agree with our code while disagreeing with the SDK."""
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = json.dumps(
+        {"errorCode": error_code, "message": "synthetic test error", "refId": "t-ref"}
+    ).encode()
+    native = OperationErrorResult(resp.text, resp).native("Error")
+    the_ex = getattr(sdk_exc, native.result.name)
+    return the_ex(native, f"{native.result.code}: {native.result.message}")
+
+
+@pytest.mark.parametrize(
+    "status, error_code, expected",
+    [
+        (403, 4003, SmartsheetRateLimitError),   # the 2026-10-21 production signature
+        (429, 4003, SmartsheetRateLimitError),
+        (403, 1004, SmartsheetPermissionError),  # a genuine access denial stays permanent
+    ],
+)
+def test_sdk_built_errors_classify_by_error_code(mocker, status, error_code, expected):
+    client = _install_client(mocker)
+    client.Sheets.get_sheet.side_effect = _sdk_built_error(status, error_code)
+
+    with pytest.raises(SmartsheetError) as exc_info:
+        smartsheet_client.get_sheet(123)
+
+    assert type(exc_info.value) is expected
 
 
 # ---- Column-map cache ----------------------------------------------------
@@ -1560,6 +1647,47 @@ def test_a_5xx_on_a_create_is_never_classified_retry_safe(mocker):
     assert type(exc_info.value) is SmartsheetError  # NOT the transient subclass
     assert smartsheet_client.is_transient_error(exc_info.value) is False
     assert "NON-IDEMPOTENT" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_rest_error_code_4003_is_a_rate_limit_at_any_status(status):
+    """The REST twin of the SDK rule: the errorCode in the JSON body decides, not the status."""
+    response = _rest_get_folder_response(None, status=status)
+    response.text = '{"errorCode": 4003, "message": "Rate limit exceeded.", "refId": "t-ref"}'
+
+    with pytest.raises(SmartsheetError) as exc_info:
+        smartsheet_client._translate_smartsheet_error(
+            response, context="finding folder 'X' in folder 7", idempotent=True
+        )
+
+    assert type(exc_info.value) is SmartsheetRateLimitError
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"errorCode": 1004, "message": "You are not authorized to perform this action."}',
+        "<html>403 Forbidden</html>",          # a proxy / challenge page — not JSON at all
+        "",
+        "[4003]",                               # JSON, but not an object
+        '{"errorCode": "4003x"}',               # a code that is not a number
+        '{"errorCode": true}',                  # bool is an int subclass — must not read as 1
+        '{"errorCode": 4003.5}',
+        "[" * 100_000,                          # pathological nesting — the parser's own limit
+    ],
+)
+def test_rest_genuine_403_without_4003_stays_a_permission_error(body):
+    """A real access denial, and EVERY malformed body, keeps the PERMANENT type — the errorCode
+    parse never raises, and an unreadable body is never a reason to soften a 403."""
+    response = _rest_get_folder_response(None, status=403)
+    response.text = body
+
+    with pytest.raises(SmartsheetError) as exc_info:
+        smartsheet_client._translate_smartsheet_error(
+            response, context="finding folder 'X' in folder 7", idempotent=True
+        )
+
+    assert type(exc_info.value) is SmartsheetPermissionError
 
 
 @pytest.mark.parametrize(

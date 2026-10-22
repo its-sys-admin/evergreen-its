@@ -10,14 +10,22 @@ malformed (no job_id) row skip.
 """
 from __future__ import annotations
 
+from collections import Counter
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+import smartsheet.exceptions as sdk_exc
 
 from field_ops import fieldops_sync
 from progress_reports import material_receipts
 from shared import active_jobs_writer, sheet_ids, smartsheet_client
 from shared.portal_client import FieldopsEquipmentSnapshot, FieldopsMaterialListSnapshot
+
+# Captured at import, BEFORE any fixture patches it: the D10 rate-limit tests drive the REAL
+# get_rows → `_translate` path (only the SDK client is faked), which is the whole point of them.
+_REAL_GET_ROWS = smartsheet_client.get_rows
 
 
 def _job(**over: Any) -> dict[str, Any]:
@@ -146,6 +154,14 @@ def _patch(mocker):
         "find_mat_sheet": mocker.patch(
             "field_ops.fieldops_sync.material_list.find_material_list_sheet", return_value=555
         ),
+        # D10 read-once seam: an EMPTY index (the per-line upserts are mocked whole anyway). The
+        # real read lives in material_list; the D10 tests at the bottom drive it un-mocked.
+        "read_mat_index": mocker.patch(
+            "field_ops.fieldops_sync.material_list.read_line_index",
+            side_effect=lambda _sid: smartsheet_client.RowIndex(
+                [], fieldops_sync.material_list.COL_LINE_UUID
+            ),
+        ),
         "upsert_mat": mocker.patch(
             "field_ops.fieldops_sync.material_list.upsert_line_row", return_value=1
         ),
@@ -199,6 +215,10 @@ def _patch(mocker):
         ),
         "upsert_rcp": mocker.patch(
             "field_ops.fieldops_sync.material_receipts.upsert_receipt_row", return_value=1
+        ),
+        "read_rcp_index": mocker.patch(
+            "field_ops.fieldops_sync.material_receipts.read_receipt_index",
+            side_effect=lambda _sid: smartsheet_client.RowIndex([], material_receipts.COL_EVENT_UUID),
         ),
         "rcp_row_cap": mocker.patch(
             "field_ops.fieldops_sync.material_receipts.check_row_cap", return_value=None
@@ -1762,3 +1782,226 @@ def test_a_permission_or_missing_sheet_fault_is_permanent_not_transient(_patch, 
     assert stats.materials_reviewed == 1, "a permanent fault must route to review"
     assert stats.materials_errors == 0, "…and must NOT be counted as a transient error"
     _patch["review"].assert_called()
+
+
+# ---- D10: ONE full-sheet read per material sheet per pass; 4003 is a rate limit ----------------
+#
+# Everything above drives these passes through the `_patch` fixture, which mocks material_list /
+# material_receipts WHOLE — which is exactly why no test ever saw the read amplification (every
+# upsert re-reading the entire sheet: ~330 full reads per 90 s cycle in production, 2026-10-21).
+# These drive the REAL helpers against an in-memory sheet that reflects every write, so the pre-D10
+# re-read path and the read-once index produce the same sheet — only the READ COUNT differs.
+
+_T_PROJECT_1 = "JOB-T0001 Test Project"
+_T_PROJECT_2 = "JOB-T0002 Test Project"
+_T_LIST_SHEETS = {_T_PROJECT_1: 5101, _T_PROJECT_2: 5102}
+_T_RECEIPT_SHEETS = {_T_PROJECT_1: 7101, _T_PROJECT_2: 7102}
+
+
+class _FakeSheets:
+    """Stateful stand-in for the Smartsheet row surface: `get_rows` reflects every add/update
+    (fresh dicts per read, like the real wrapper) and every read is counted per sheet."""
+
+    def __init__(self) -> None:
+        self.rows: dict[int, list[dict[str, Any]]] = {}
+        self.reads: Counter[int] = Counter()
+        self.adds: list[tuple[int, dict[str, Any]]] = []
+        self.updates: list[tuple[int, dict[str, Any]]] = []
+        self._next_id = 9000
+
+    def get_rows(self, sheet_id: int, *, filters: Any = None) -> list[dict[str, Any]]:
+        self.reads[sheet_id] += 1
+        return [dict(r) for r in self.rows.get(sheet_id, [])]
+
+    def add_rows(self, sheet_id: int, rows: list[dict[str, Any]]) -> list[int]:
+        ids = []
+        for r in rows:
+            self._next_id += 1
+            cells = {k: v for k, v in r.items() if k != "_formats"}
+            self.rows.setdefault(sheet_id, []).append({"_row_id": self._next_id, **cells})
+            self.adds.append((sheet_id, cells))
+            ids.append(self._next_id)
+        return ids
+
+    def update_rows(self, sheet_id: int, updates: list[dict[str, Any]]) -> None:
+        for u in updates:
+            cells = {k: v for k, v in u.items() if k != "_formats"}
+            target = next(r for r in self.rows[sheet_id] if r["_row_id"] == cells["_row_id"])
+            target.update(cells)
+            self.updates.append((sheet_id, cells))
+
+    def keyed(self, sheet_id: int, key_col: str, key: str) -> list[dict[str, Any]]:
+        return [r for r in self.rows.get(sheet_id, []) if r.get(key_col) == key]
+
+
+@pytest.fixture
+def _real_mirror(mocker):
+    fake = _FakeSheets()
+    mocker.patch.object(smartsheet_client, "get_rows", side_effect=fake.get_rows)
+    mocker.patch.object(smartsheet_client, "add_rows", side_effect=fake.add_rows)
+    mocker.patch.object(smartsheet_client, "update_rows", side_effect=fake.update_rows)
+    # The row-cap watchdog's ITS_Config threshold read — far above any test sheet.
+    mocker.patch.object(smartsheet_client, "get_setting", return_value="15000")
+    mocker.patch.object(
+        fieldops_sync.material_list, "ensure_material_list_sheet",
+        side_effect=_T_LIST_SHEETS.__getitem__,
+    )
+    mocker.patch.object(
+        fieldops_sync.material_receipts, "ensure_material_receipts_sheet",
+        side_effect=_T_RECEIPT_SHEETS.__getitem__,
+    )
+    return {
+        "fake": fake,
+        "mat_snapshot": mocker.patch.object(
+            fieldops_sync.portal_client, "get_fieldops_material_list_snapshot"
+        ),
+        "receipts": mocker.patch.object(fieldops_sync.portal_client, "get_fieldops_material_receipts"),
+        "review": mocker.patch.object(fieldops_sync.review_queue, "safe_add", return_value=True),
+        "log": mocker.patch.object(fieldops_sync.error_log, "log", return_value=None),
+    }
+
+
+def _t_line(line_uuid: str, project: str = _T_PROJECT_1, **over: Any) -> dict[str, Any]:
+    job_id = project.split(" ", 1)[0]
+    return _mat_row(
+        line_uuid, job_id=job_id, project_name=project, catalog_name="TEST-PANEL-01",
+        description="Test panel", part_number="TP-0001", **over,
+    )
+
+
+def _t_receipt(event_uuid: str, project: str = _T_PROJECT_1, **over: Any) -> dict[str, Any]:
+    job_id = project.split(" ", 1)[0]
+    return _rcp_row(
+        event_uuid, job_id=job_id, project_name=project, material_description="Test panel",
+        part_number="TP-0001", bol_number="BOL-T0001", note="", line_uuid="u-t1",
+        received_by_display="Test Crew Lead", **over,
+    )
+
+
+def test_material_list_pass_reads_each_sheet_once_not_once_per_line(_real_mirror):
+    fake = _real_mirror["fake"]
+    fake.rows[5101] = [{  # a line deactivated since the last cycle — the retire must still find it
+        "_row_id": 1, fieldops_sync.material_list.COL_LINE_UUID: "u-told",
+        fieldops_sync.material_list.COL_ON_LIST: fieldops_sync.material_list.ON_LIST_ACTIVE,
+    }]
+    _real_mirror["mat_snapshot"].return_value = _mat_snap(
+        [_t_line(f"u-t{n}") for n in range(5)]
+        + [_t_line(f"u-t{n}", project=_T_PROJECT_2) for n in range(10, 13)]
+    )
+
+    out = fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+
+    # ONE read per sheet for upserts + retire + row-cap together (pre-D10: 5+1+1 and 3+1+1).
+    assert fake.reads == Counter({5101: 1, 5102: 1})
+    assert out == {"upserted": 8, "retired": 1, "reviewed": 0, "errors": 0}
+
+
+def test_material_list_pass_steady_state_cycle_writes_nothing(_real_mirror):
+    # CHANGE-ONLY semantics survive the index: a second identical cycle reads once and writes zero.
+    fake = _real_mirror["fake"]
+    _real_mirror["mat_snapshot"].return_value = _mat_snap([_t_line("u-t1"), _t_line("u-t2")])
+    fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+    writes_after_first = (len(fake.adds), len(fake.updates))
+
+    fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+
+    assert (len(fake.adds), len(fake.updates)) == writes_after_first == (2, 0)
+    assert fake.reads[5101] == 2  # one per cycle
+
+
+def test_material_list_pass_same_line_twice_updates_never_double_appends(_real_mirror):
+    fake = _real_mirror["fake"]
+    col = fieldops_sync.material_list
+    _real_mirror["mat_snapshot"].return_value = _mat_snap(
+        [_t_line("u-t1", qty=10.0), _t_line("u-t1", qty=12.0)]
+    )
+
+    fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+
+    rows = fake.keyed(5101, col.COL_LINE_UUID, "u-t1")
+    assert len(rows) == 1 and rows[0][col.COL_QTY] == "12"  # one row, carrying the later value
+    assert len(fake.adds) == 1
+    assert [u["_row_id"] for _, u in fake.updates] == [rows[0]["_row_id"]]
+    assert fake.reads[5101] == 1
+
+
+def test_receipts_pass_reads_each_sheet_once_not_once_per_receipt(_real_mirror):
+    fake = _real_mirror["fake"]
+    _real_mirror["receipts"].return_value = (
+        [_t_receipt(f"evt-t{n}") for n in range(4)]
+        + [_t_receipt(f"evt-t{n}", project=_T_PROJECT_2) for n in range(10, 12)]
+    )
+
+    out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    # ONE read per ledger for the upserts + row-cap together (pre-D10: 4+1 and 2+1).
+    assert fake.reads == Counter({7101: 1, 7102: 1})
+    assert out == {"upserted": 6, "reviewed": 0, "errors": 0}
+
+
+def test_receipts_pass_same_event_twice_updates_never_double_appends(_real_mirror):
+    fake = _real_mirror["fake"]
+    _real_mirror["receipts"].return_value = [
+        _t_receipt("evt-t1", line_qty_received=40.0), _t_receipt("evt-t1", line_qty_received=120.0),
+    ]
+
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    rows = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t1")
+    assert len(rows) == 1 and rows[0][material_receipts.COL_LINE_QTY_RECEIVED] == "120"
+    assert len(fake.adds) == 1 and len(fake.updates) == 1
+    assert fake.reads[7101] == 1
+
+
+def _sdk_403(code: int) -> sdk_exc.ApiError:
+    """What the SDK raises for a 403 once its own retry window is spent. 4003 arrives as its
+    RateLimitExceededError subclass (`shouldRetry: true`); 1004 is a genuine access denial."""
+    result = SimpleNamespace(status_code=403, code=code, message=f"errorCode {code}")
+    error = SimpleNamespace(result=result)
+    if code == 4003:
+        return sdk_exc.RateLimitExceededError(error, "Rate limit exceeded.")
+    return sdk_exc.ApiError(error, message="Not authorized.")
+
+
+@pytest.mark.parametrize("which", ["material_list", "receipts"])
+def test_a_4003_rate_limit_never_files_a_permanent_review_row(mocker, _real_mirror, which):
+    """End-to-end through the REAL get_rows → `_translate`: a 403 carrying errorCode 4003 is the API
+    asking us to slow down. Pre-D10 it surfaced as SmartsheetPermissionError and every line filed a
+    PERMANENT Review-Queue row; now it is a transient error the next cycle retries."""
+    mocker.patch.object(smartsheet_client, "get_rows", _REAL_GET_ROWS)
+    client = MagicMock()
+    client.Sheets.get_sheet.side_effect = _sdk_403(4003)
+    mocker.patch.object(smartsheet_client, "get_client", return_value=client)
+    _real_mirror["mat_snapshot"].return_value = _mat_snap([_t_line("u-t1"), _t_line("u-t2")])
+    _real_mirror["receipts"].return_value = [_t_receipt("evt-t1"), _t_receipt("evt-t2")]
+
+    if which == "material_list":
+        out = fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+    else:
+        out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    _real_mirror["review"].assert_not_called()
+    assert out["reviewed"] == 0 and out["errors"] >= 1
+    codes = [c.kwargs.get("error_code") for c in _real_mirror["log"].call_args_list]
+    assert not any(str(c).endswith("_permanent") for c in codes)
+    assert any("SmartsheetRateLimitError" in str(c.args) for c in _real_mirror["log"].call_args_list)
+
+
+@pytest.mark.parametrize("which", ["material_list", "receipts"])
+def test_a_genuine_403_still_files_a_permanent_review_row(mocker, _real_mirror, which):
+    """The counterpart: a real access denial (errorCode 1004 — a §46 share change) stays PERMANENT
+    and still tickets. Narrowing the rate-limit class must not soften this one."""
+    mocker.patch.object(smartsheet_client, "get_rows", _REAL_GET_ROWS)
+    client = MagicMock()
+    client.Sheets.get_sheet.side_effect = _sdk_403(1004)
+    mocker.patch.object(smartsheet_client, "get_client", return_value=client)
+    _real_mirror["mat_snapshot"].return_value = _mat_snap([_t_line("u-t1")])
+    _real_mirror["receipts"].return_value = [_t_receipt("evt-t1")]
+
+    if which == "material_list":
+        out = fieldops_sync._mirror_material_list_pass("https://portal.test", "tok")
+    else:
+        out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    _real_mirror["review"].assert_called()
+    assert out["reviewed"] >= 1 and out["errors"] == 0
