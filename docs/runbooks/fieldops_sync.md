@@ -176,8 +176,21 @@ it is switched back on. This is also why every transient fault below self-heals.
 retire path and never marks a row Removed, so the count-drops-to-zero / #468 zero-drop class does not
 exist here (unlike the Material List). Two cells on an existing row *do* legitimately change as later
 events land against the same line: **`Line Status`** (goes `incident` if a problem is flagged) and
-**`Line Qty Received`** (the running rollup across every event for that line). Seeing those move on an
-old row is correct behaviour, not a bug. An archived job's ledger is MOVED to the Archive workspace on
+**`Line Qty Received`** (the running rollup across every mark on that line that still counts). Seeing
+those move on an old row is correct behaviour, not a bug.
+
+**A VOIDED mark (migration 0080) is annotated, not removed.** When a crew member voids a mistaken mark
+in the portal, the next cycle keeps its row and fills six further columns on it: **`Entry Status`**
+(`Active` → `Voided`), **`Voided By`** (a display name, or the account's role label — never a
+username), **`Voided At`** (Pacific date and time), **`Void Reason`**, and the correction links
+**`Supersedes`** / **`Superseded By`** (Event UUIDs: a correct entry recorded in place of a voided one
+is a new row whose `Supersedes` names the voided row, and the voided row's `Superseded By` names it).
+A voided row is grayed out, and its quantity leaves `Line Qty Received` on every row for that line. So
+a grayed row with `Entry Status = Voided` is the void working, not a stale sheet. Sheets created before
+0080 gain the six columns automatically on their first cycle with the new code. Voiding itself is a
+portal action — [job_materials.md](job_materials.md) → "Voiding a mistaken delivery mark".
+
+An archived job's ledger is MOVED to the Archive workspace on
 closure (never deleted) — the fifth of the five standing trackers the §51 archive-on-closure hook
 relocates; the whole-job closure picture is in [project_closure.md](project_closure.md), the
 move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.

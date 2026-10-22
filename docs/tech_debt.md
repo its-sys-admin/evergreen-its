@@ -3142,6 +3142,12 @@ lines carry the contradiction (a green "Delivered" pill beside a full outstandin
 The ledger is append-only, so repair is a corrective event per line — and the real quantities have
 to come from the office, not be inferred from context.
 
+**UPDATE 2026-10-21 — the repair is now an in-portal action (migration 0080).** A qty-NULL mark can be
+VOIDED and replaced with **Record the correct entry** carrying the real quantity; the correction takes
+the voided mark's ordering position, so a line's status does not flip. No production D1 write is
+needed any more, but the quantities still have to come from the office. Procedure:
+`docs/runbooks/job_materials.md` → "Voiding a mistaken delivery mark".
+
 **Tag:** `field-ops`, `data-integrity`, `production-repair`.
 
 **Revisit when:** the office supplies real per-line delivered quantities for Deep Lake's 37 affected
@@ -3234,3 +3240,89 @@ limit (errorCode 4003). Scope was held to the two material mirrors deliberately.
 the next change to one of them — thread a `RowIndex` through it the way the material mirrors do.
 
 Surfaced: 2026-10-21, D10 (production logs: ~330 full-sheet reads per 90 s cycle).
+
+## [OPEN 2026-10-21, low] WPR delivery rows curated before migration 0080 cannot be dropped by a later void
+
+Migration 0080 (receipt-event void) makes a curated Weekly Production Report delivery row drop at READ
+time when the ledger mark it was copied from is voided (operator decision D5). The match is by the
+`event_uuid` a curated row now carries. Rows curated BEFORE 0080 were saved without one, so a void of
+their mark can never find them: a voided delivery keeps printing on that week's client report until
+the office removes the row by hand and re-saves. Not back-filled on purpose — the only candidate key
+(date + kind + qty) is ambiguous for a repeated load, and a wrong match would silently drop a real
+delivery from a client document.
+
+**Tag:** `field-ops`, `weekly-production-report`, `data-integrity`.
+
+**Revisit when:** a voided delivery is reported still printing on a curated week, or the office asks
+for a bulk re-curate. The §43 repair (Remove → Save weekly report inputs → Compile Now) is in
+`docs/runbooks/job_materials.md` and `docs/runbooks/progress_weekly_report.md` Symptom 6b.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] Photo-to-delivery binding checks "not voided" in a pre-read, not in the INSERT's own WHERE
+
+`fieldops_daily_photos.ts` refuses to bind a new pool photo to a voided receipt event (0080) with a
+SELECT that runs before the photo INSERT. A void that lands between that read and the INSERT binds a
+photo as evidence for a mark the line no longer counts. The window is one request wide and the harm is
+display-only (the photo is still screened and filed; only its delivery link is stale), so the void
+build kept the pre-read rather than reshaping the pool INSERT. The module's own discipline elsewhere
+re-asserts such checks in-WHERE.
+
+**Tag:** `field-ops`, `safety-portal`, `race`.
+
+**Revisit when:** the next change to the daily-photo pool INSERT — fold `voided_at IS NULL` into its
+WHERE the way `/receipt` re-asserts its shipment and correction targets.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] The mark route's line projection stamps `received_at` / `received_by` / `note` even when its guarded INSERT lands nothing (pre-existing)
+
+`appendReceiptEvent` (`/receipt` and `/receive`) batches a guarded INSERT…SELECT, the audit row, then
+`UPDATE job_expected_materials … received_at = unixepoch(), received_by = ?, note = COALESCE(?, note)
+WHERE id = ? AND active = 1` with no `changes()` chain. When the INSERT's in-WHERE guard refuses (a
+load deactivated, or a correction target that fails its re-assertion, between the pre-read and the
+batch) the line is still active, so the UPDATE stamps the caller as the receiver and can overwrite the
+note for a mark that was never recorded — then the route answers 404. The Material List mirror shows
+that phantom stamp. Predates 0080 (the shipment race always had it); the void route's own projection
+is already chained on `changes() = 1`.
+
+**Tag:** `field-ops`, `safety-portal`, `data-integrity`.
+
+**Revisit when:** the next change to `appendReceiptEvent` — add `AND changes() = 1` to statement 3
+(it already follows the audit INSERT, which lands exactly when the event did), with a race test.
+
+Surfaced: 2026-10-21, receipt-event void build (adversarial review of the shared projection).
+
+## [OPEN 2026-10-21, medium] Real-looking personal and job names in materials test fixtures, in a public repo
+
+The repository is public. The void build's agents reported test fixtures that use real-looking
+names — people, jobs and vendors — rather than synthetic ones (`JOB-T0001`, "Test Crew Lead"). Files
+named: `tests/test_material_list.py`, `tests/test_material_receipts.py`,
+`tests/test_fieldops_sync.py`, `safety_portal/test/fieldops-material-receipts.test.ts`,
+`safety_portal/test/fieldops-weekly-report.test.ts`,
+`safety_portal/src/pages/__tests__/JobMaterialsPage.test.tsx`,
+`safety_portal/src/pages/__tests__/WeeklyReportPage.test.tsx`. The void build's new tests use synthetic
+fixtures; it did not rewrite the existing ones (out of scope, and a rename touches many assertions).
+Rewriting the tree does not remove what git history already published.
+
+**Tag:** `tests`, `privacy`, `public-repo`.
+
+**Revisit when:** the next session that touches any of those files, or a repo-wide fixture sweep —
+replace with synthetic values in one pass, and decide separately whether history needs attention.
+
+Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] JobMaterialsPage "Report a problem" still asks for its note with `window.prompt`
+
+Every other action on the per-job Materials page now asks inline (the two-step mark arm, the void
+panel with its required reason, the "already fully received" question). "Report a problem" still
+collects its required note through `window.prompt`: unstyled, blocked or auto-dismissed in some
+embedded and mobile browsers, and impossible to give an inline error. A dismissed prompt files
+nothing, so it fails safe, but it reads as a broken button.
+
+**Tag:** `safety-portal`, `ux`, `field-ops`.
+
+**Revisit when:** the next change to the Materials page's problem flow — reuse the void panel's
+inline reason + Confirm + Cancel shape.
+
+Surfaced: 2026-10-21, receipt-event void build.

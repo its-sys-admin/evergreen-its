@@ -1566,6 +1566,54 @@ def test_receipt_grouper_is_not_the_incident_grouper(_patch):
     assert fieldops_sync._group_incidents_by_job([_rcp_row("evt-10")]) == {}
 
 
+# ---- 0080 receipt VOID — the route's five void fields reach the mirror ----
+
+# 2026-10-21 14:05 PDT. Synthetic; the Pacific wall-clock is what an office reader expects.
+_T_VOIDED_AT = 1_792_616_700
+
+
+def test_receipt_counting_mark_maps_active_and_blank_void_fields(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row("evt-10")]  # pre-0080 shape: no void keys
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_rcp"].call_args.kwargs
+    assert kw["entry_status"] == material_receipts.ENTRY_ACTIVE
+    assert (kw["voided_by"], kw["voided_at"], kw["void_reason"]) == ("", "", "")
+    assert (kw["supersedes"], kw["superseded_by"]) == ("", "")
+
+
+def test_receipt_void_fields_mapped(_patch):
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row(
+        "evt-t1", voided_at=_T_VOIDED_AT, voided_by_display="Test Crew Lead",
+        void_reason="  Counted twice  ", supersedes_uuid=None, superseded_by_uuid="evt-t2",
+    )]
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_rcp"].call_args.kwargs
+    assert kw["entry_status"] == material_receipts.ENTRY_VOIDED
+    assert kw["voided_by"] == "Test Crew Lead"
+    assert kw["voided_at"] == "2026-10-21 14:05"  # Pacific wall-clock, minute precision
+    assert kw["void_reason"] == "Counted twice"
+    assert kw["superseded_by"] == "evt-t2" and kw["supersedes"] == ""
+
+
+def test_receipt_voided_status_keys_off_voided_at_not_its_formatting(_patch):
+    # A voided_at the formatter cannot render still marks the row Voided: hiding a void because its
+    # timestamp was odd would put a struck delivery back in the office's count.
+    _patch["receipts_enabled"].return_value = True
+    _patch["receipts_list"].return_value = [_rcp_row("evt-t1", voided_at="not-an-epoch")]
+    fieldops_sync._sync_inside_lock()
+    kw = _patch["upsert_rcp"].call_args.kwargs
+    assert kw["entry_status"] == material_receipts.ENTRY_VOIDED and kw["voided_at"] == ""
+
+
+def test_fmt_epoch_minute_is_pacific_and_dst_aware():
+    assert fieldops_sync._fmt_epoch_minute(_T_VOIDED_AT) == "2026-10-21 14:05"  # PDT (UTC-7)
+    assert fieldops_sync._fmt_epoch_minute(1_768_491_000) == "2026-01-15 07:30"  # PST (UTC-8)
+    for bad in (None, "", "1792616700", True, 1.5):
+        assert fieldops_sync._fmt_epoch_minute(bad) == ""
+
+
 # ---- the receipts gate (the five-surface dark-ship contract) ----
 
 
@@ -1951,6 +1999,105 @@ def test_receipts_pass_same_event_twice_updates_never_double_appends(_real_mirro
     assert len(rows) == 1 and rows[0][material_receipts.COL_LINE_QTY_RECEIVED] == "120"
     assert len(fake.adds) == 1 and len(fake.updates) == 1
     assert fake.reads[7101] == 1
+
+
+# ---- 0080 receipt VOID through the REAL mirror: annotate in place, link, never delete ----------
+
+
+def _t_void(event_uuid: str, **over: Any) -> dict[str, Any]:
+    """A receipt the route now reports VOIDED (synthetic voider + reason)."""
+    void: dict[str, Any] = {
+        "voided_at": _T_VOIDED_AT, "voided_by_display": "Test Crew Lead",
+        "void_reason": "Counted twice",
+    }
+    return _t_receipt(event_uuid, **{**void, **over})
+
+
+def test_receipts_void_annotates_the_same_row_in_place_never_deletes(mocker, _real_mirror):
+    # (C) Cycle 1 mirrors the mark Active. Cycle 2 the route reports it voided: the SAME row is
+    # updated in place — no second row (it would read as another delivery), no delete (a void is a
+    # further fact about the mark, and the signed-for history stays).
+    fake = _real_mirror["fake"]
+    delete = mocker.patch.object(smartsheet_client, "delete_rows")
+    _real_mirror["receipts"].return_value = [_t_receipt("evt-t1")]
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+    [before] = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t1")
+    assert before[material_receipts.COL_ENTRY_STATUS] == "Active"
+
+    _real_mirror["receipts"].return_value = [_t_void("evt-t1")]
+    out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    assert out == {"upserted": 1, "reviewed": 0, "errors": 0}
+    [after] = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t1")
+    assert after["_row_id"] == before["_row_id"]
+    assert len(fake.rows[7101]) == 1 and len(fake.adds) == 1  # no add on the void cycle
+    delete.assert_not_called()
+    assert after[material_receipts.COL_ENTRY_STATUS] == "Voided"
+    assert after[material_receipts.COL_VOIDED_BY] == "Test Crew Lead"
+    assert after[material_receipts.COL_VOIDED_AT] == "2026-10-21 14:05"
+    assert after[material_receipts.COL_VOID_REASON] == "Counted twice"
+    assert [u["_row_id"] for _, u in fake.updates] == [before["_row_id"]]
+
+
+def test_receipts_correction_and_original_link_to_each_other(_real_mirror):
+    # (D) The original was voided; a correction is recorded linked to it. The route names the pair
+    # from both ends — supersedes_uuid on the correction, superseded_by_uuid on the original — and
+    # both rows carry the link as Event UUIDs (the sheet's key; a D1 row id means nothing there).
+    fake = _real_mirror["fake"]
+    _real_mirror["receipts"].return_value = [_t_void("evt-t1")]
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    _real_mirror["receipts"].return_value = [
+        _t_void("evt-t1", superseded_by_uuid="evt-t2"),
+        _t_receipt("evt-t2", qty=20.0, supersedes_uuid="evt-t1"),
+    ]
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    [orig] = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t1")
+    [corr] = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t2")
+    assert orig[material_receipts.COL_SUPERSEDED_BY] == "evt-t2"
+    assert orig[material_receipts.COL_ENTRY_STATUS] == "Voided"
+    assert corr[material_receipts.COL_SUPERSEDES] == "evt-t1"
+    assert corr[material_receipts.COL_ENTRY_STATUS] == "Active"
+    assert corr[material_receipts.COL_SUPERSEDED_BY] == ""
+
+
+def test_receipts_voided_by_is_the_route_display_and_no_username_is_added(_real_mirror):
+    # Voided By is whatever DISPLAY the route sent (personnel.name, else the role label — D6). The
+    # mirror must not reach for any actor/username field, even if one were ever put on the wire.
+    fake = _real_mirror["fake"]
+    _real_mirror["receipts"].return_value = [_t_void(
+        "evt-t1", voided_by_display="Admin (Office)",
+        actor="t.username.one", voided_by="t.username.two", voided_by_username="t.username.three",
+    )]
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    [row] = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t1")
+    assert row[material_receipts.COL_VOIDED_BY] == "Admin (Office)"
+    written = [str(v) for _, cells in fake.adds + fake.updates for v in cells.values()]
+    assert not any("t.username" in v for v in written)
+
+
+def test_receipts_void_steady_state_second_identical_cycle_writes_nothing(_real_mirror):
+    # Change-only survives the six new columns: once a voided + linked row is written, an identical
+    # cycle reads once and writes zero.
+    fake = _real_mirror["fake"]
+    _real_mirror["receipts"].return_value = [
+        _t_void("evt-t1", superseded_by_uuid="evt-t2"),
+        _t_receipt("evt-t2", supersedes_uuid="evt-t1"),
+        _t_receipt("evt-t3"),
+    ]
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+    writes_after_first = (len(fake.adds), len(fake.updates))
+    # The first cycle really did write the annotation — otherwise "writes nothing" proves nothing.
+    [orig] = fake.keyed(7101, material_receipts.COL_EVENT_UUID, "evt-t1")
+    assert orig[material_receipts.COL_ENTRY_STATUS] == "Voided"
+    assert orig[material_receipts.COL_SUPERSEDED_BY] == "evt-t2"
+
+    fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    assert (len(fake.adds), len(fake.updates)) == writes_after_first == (3, 0)
+    assert fake.reads[7101] == 2  # one per cycle
 
 
 def _sdk_403(code: int) -> sdk_exc.ApiError:

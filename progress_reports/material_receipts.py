@@ -31,8 +31,26 @@ Design (PORTAL-AUTHORED, ONE-WAY-UP, APPEND-ONLY — the `material_incidents` po
   `update_rows` ONLY when something actually changed. A receipt event's own fields are immutable, so
   in steady state this is a no-op. The fields that legitimately change are the two DERIVED ones —
   `Line Status` (the referenced line's coarse status, which goes `incident` if a problem is later
-  flagged) and `Line Qty Received` (the ledger rollup, which grows as further partials land). That
-  live-resolution signal is the same payoff `material_incidents` gets from its line reference.
+  flagged) and `Line Qty Received` (the ledger rollup, which grows as further partials land) — plus
+  the VOID annotation below. That live-resolution signal is the same payoff `material_incidents`
+  gets from its line reference.
+- **A VOIDED mark is ANNOTATED, never removed (migration 0080).** A manager can void a mark entered
+  in error (a double count, the wrong line) and optionally record the correct entry linked to it.
+  The void is a further fact ABOUT the mark — who struck it, when, and why — not an erasure of it,
+  so the row stays and the no-retire property above still holds: there is still no delete and no
+  retire path anywhere in this module. Six columns appended at the END of the schema carry it:
+  `Entry Status` (`Active` | `Voided`, a TEXT controlled vocabulary like the Hours Log's Status —
+  NOT a PICKLIST, so nothing here enters `picklist_validation.REGISTRY`), `Voided By` (the route's
+  DISPLAY name, never a username), `Voided At` (Pacific wall-clock), `Void Reason`, and the
+  correction links `Supersedes` / `Superseded By` (Event UUIDs, the sheet's key — a D1 row id means
+  nothing here). A voided row is grayed whole-row with the Hours Log's Superseded descriptor, so an
+  office reader sees at a glance that it no longer counts. The Worker already excludes voided marks
+  from `Line Qty Received`, so the sheet can never total a line differently from the portal.
+- **Schema back-fill.** A sheet's columns are fixed at CREATE, so every sheet made before 0080 lacks
+  the six. The FIND branch of `ensure_material_receipts_sheet` adds them through
+  `smartsheet_client.ensure_columns` (the `material_list` back-fill, best-effort). Each row mirrored
+  before 0080 is then re-written ONCE, its blank `Entry Status` becoming `Active` — a one-time
+  per-row write on the first cycle after the back-fill, steady again from the next.
 - **ONE-WAY-UP ONLY.** The mark is authored IN THE PORTAL (the daily report's receipt region and the
   per-job Materials page); this mirror is read-only reflection UP. No down-sync, no
   `smartsheet_row_id` reverse link.
@@ -50,6 +68,7 @@ is the daemon's `portal_client`.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from progress_reports import hours_log
@@ -86,13 +105,31 @@ COL_BOL = "BOL"                        # the shipment's BOL / load number when t
 COL_NOTE = "Note"                      # the marker's note (required on not_delivered)
 COL_RECEIVED_BY = "Received By"        # DISPLAY NAME (personnel.name) — NEVER a username (Reflex §5)
 COL_EVENT_DATE = "Event Date"          # DATE (the day the delivery happened)
+# 0080 void annotation. APPENDED at the end of the schema rather than slotted beside a logical
+# neighbour: `ensure_columns` back-fills pre-existing sheets by APPENDING, so keeping the creation
+# order identical is what stops the two sheet populations diverging visually forever.
+COL_ENTRY_STATUS = "Entry Status"      # Active | Voided — TEXT controlled-vocab, NOT a PICKLIST
+COL_VOIDED_BY = "Voided By"            # DISPLAY NAME, else the role label (D6) — NEVER a username
+COL_VOIDED_AT = "Voided At"            # Pacific wall-clock 'YYYY-MM-DD HH:MM' (pre-formatted)
+COL_VOID_REASON = "Void Reason"        # the voider's required reason
+COL_SUPERSEDES = "Supersedes"          # Event UUID of the voided mark this correction replaces
+COL_SUPERSEDED_BY = "Superseded By"    # Event UUID of the correction that replaced this mark
+
+# Controlled vocabulary (TEXT cells, NOT picklist — avoids the REGISTRY-parity footgun; mirrors
+# hours_log's Status choice).
+ENTRY_ACTIVE = "Active"
+ENTRY_VOIDED = "Voided"
 
 # Data columns compared for CHANGE-ONLY upsert (Event UUID is the key; it does not participate in
 # change detection). A receipt event's own fields are immutable; `Line Status` and
-# `Line Qty Received` are the DERIVED pair that legitimately change as later events land.
+# `Line Qty Received` are the DERIVED pair that legitimately change as later events land, and the
+# six void columns change when the mark is voided or a correction is linked to it — a void can come
+# days after the mark, so without them here a voided row would never be re-written.
 _TRACKED_COLS: tuple[str, ...] = (
     COL_MATERIAL, COL_KIND, COL_QTY, COL_UNIT, COL_PART_NUMBER, COL_LINE_UUID, COL_LINE_STATUS,
     COL_LINE_QTY_EXPECTED, COL_LINE_QTY_RECEIVED, COL_BOL, COL_NOTE, COL_RECEIVED_BY, COL_EVENT_DATE,
+    COL_ENTRY_STATUS, COL_VOIDED_BY, COL_VOIDED_AT, COL_VOID_REASON, COL_SUPERSEDES,
+    COL_SUPERSEDED_BY,
 )
 
 # Schema passed to create_sheet_in_folder. Order = left-to-right UI order. Exactly one primary
@@ -112,12 +149,36 @@ MATERIAL_RECEIPTS_COLUMNS: list[dict[str, Any]] = [
     {"title": COL_NOTE, "type": "TEXT_NUMBER"},
     {"title": COL_RECEIVED_BY, "type": "TEXT_NUMBER"},
     {"title": COL_EVENT_DATE, "type": "DATE"},
+    # 0080 — keep these LAST (see the column-title block): back-fill appends.
+    {"title": COL_ENTRY_STATUS, "type": "TEXT_NUMBER"},
+    {"title": COL_VOIDED_BY, "type": "TEXT_NUMBER"},
+    {"title": COL_VOIDED_AT, "type": "TEXT_NUMBER"},
+    {"title": COL_VOID_REASON, "type": "TEXT_NUMBER"},
+    {"title": COL_SUPERSEDES, "type": "TEXT_NUMBER"},
+    {"title": COL_SUPERSEDED_BY, "type": "TEXT_NUMBER"},
+]
+
+# What `ensure_material_receipts_sheet` back-fills onto an ALREADY-CREATED sheet: EVERY non-primary
+# column, derived from the creation schema so the two cannot drift (material_list.BACKFILL_COLUMNS'
+# reasoning — a hand-cut tail slice goes silently wrong on the next addition). It costs nothing:
+# `ensure_columns` resolves every title against ONE cached map and makes no API call when none is
+# missing. When some are, they go in ONE call under ONE shared index — a body whose columns carry
+# different indices is rejected (HTTP 400, errorCode 1135, live 2026-08-10).
+BACKFILL_COLUMNS: list[dict[str, Any]] = [
+    c for c in MATERIAL_RECEIPTS_COLUMNS if not c.get("primary")
 ]
 
 # Cosmetic styling — Smartsheet format-descriptor strings (mirror material_incidents' palette).
 # Applied AFTER create, best-effort (the API ignores width/format at POST).
 FMT_PRIMARY = ",,1,,,,,,38,7,,,,,,,"       # bold + dark-green text + light-green bg
 FMT_DATE = ",,,,,,,,,,,,,,,,2"             # MMM_D_YYYY
+# A VOIDED row's per-cell format: the Hours Log's Superseded gray, reused rather than re-typed so
+# the two "struck from the ledger" looks cannot drift. Written on EVERY cell of the row (key
+# included), riding the same `_formats` mechanism hours_log uses on its Status cell. A per-cell
+# format replaces the column's, so the date cell carries the gray AND its date display (field 16 —
+# FMT_DATE's) or it would fall back to the sheet's default date rendering.
+FMT_VOIDED = hours_log.STATUS_SUPERSEDED_FMT  # light-gray bg
+FMT_VOIDED_DATE = ",,,,,,,,,18,,,,,,,2"        # light-gray bg + MMM_D_YYYY
 
 MATERIAL_RECEIPTS_STYLES: list[dict[str, Any]] = [
     {"title": COL_MATERIAL, "width": 220, "format": FMT_PRIMARY},
@@ -134,6 +195,12 @@ MATERIAL_RECEIPTS_STYLES: list[dict[str, Any]] = [
     {"title": COL_NOTE, "width": 300},
     {"title": COL_RECEIVED_BY, "width": 170},
     {"title": COL_EVENT_DATE, "width": 120, "format": FMT_DATE},
+    {"title": COL_ENTRY_STATUS, "width": 100},
+    {"title": COL_VOIDED_BY, "width": 170},
+    {"title": COL_VOIDED_AT, "width": 140},
+    {"title": COL_VOID_REASON, "width": 260},
+    {"title": COL_SUPERSEDES, "width": 90},
+    {"title": COL_SUPERSEDED_BY, "width": 90},
 ]
 
 
@@ -226,18 +293,54 @@ def _warn_on_thin_headroom(sheet_name: str) -> None:
         )
 
 
+def _backfill_columns_best_effort(sheet_id: int, sheet_name: str) -> None:
+    """Add any `BACKFILL_COLUMNS` title missing from an existing sheet. Never raises.
+
+    Best-effort on purpose (the `material_list` back-fill, mirrored). A back-fill failure (breaker
+    OPEN, a 403, an API blip) must NOT stop the mirror: the next cycle retries. Until it succeeds,
+    a row whose write names an absent column fails loudly at the per-event fence (`_resolve_cells`
+    raises `KeyError`) rather than being silently under-written — this closes the common cause, it
+    does not hide the symptom.
+    """
+    try:
+        added = smartsheet_client.ensure_columns(sheet_id, BACKFILL_COLUMNS)
+    except Exception as exc:  # noqa: BLE001 — schema top-up; never block the mirror
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"could not back-fill columns on Material Receipts {sheet_name!r} (sheet {sheet_id}); "
+            f"rows whose write names a missing column will fail per-event until this succeeds: "
+            f"{type(exc).__name__}: {exc!r}",
+            error_code="material_receipts_column_backfill_failed",
+        )
+        return
+    if added:
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"added {len(added)} missing column(s) to Material Receipts {sheet_name!r} "
+            f"(sheet {sheet_id}): {', '.join(added)} — a pre-existing sheet was brought up to the "
+            f"current tracker schema.",
+            error_code="material_receipts_columns_backfilled",
+        )
+
+
 def ensure_material_receipts_sheet(project_name: str) -> int:
     """Find-or-create the job's single standing Material Receipts sheet; return its sheet ID.
 
     Idempotent: a second call returns the same sheet with no write. Race-tolerant at both the folder
     and sheet levels (re-find after create, adopt first, WARN the duplicate). The A1 capacity tripwire
     runs ONLY on the create branch.
+
+    On the FIND branch it also back-fills any missing column (`BACKFILL_COLUMNS`) — the 0080 void
+    columns on every sheet created before them. Costs nothing when nothing is missing (see
+    `smartsheet_client.ensure_columns`), and is best-effort: a back-fill failure WARNs and returns the
+    sheet. Not on the create branch: a sheet created from `MATERIAL_RECEIPTS_COLUMNS` already has them.
     """
     folder_id = _ensure_job_folder(project_name)
     name = material_receipts_sheet_name(project_name)
 
     existing = smartsheet_client.find_sheet_by_name_in_folder(folder_id, name)
     if existing is not None:
+        _backfill_columns_best_effort(existing, name)
         return existing
 
     _warn_on_thin_headroom(name)
@@ -297,6 +400,12 @@ def upsert_receipt_row(
     note: str,
     received_by: str,
     event_date: str,
+    entry_status: str,
+    voided_by: str,
+    voided_at: str,
+    void_reason: str,
+    supersedes: str,
+    superseded_by: str,
     index: smartsheet_client.RowIndex | None = None,
 ) -> int:
     """CHANGE-ONLY find-or-create of one receipt event as a ledger row; return its row ID.
@@ -304,13 +413,17 @@ def upsert_receipt_row(
     - MISS → append a new row and return its id.
     - HIT → compare the incoming values against the row's current cells for the tracked data columns.
       If NOTHING changed, this is a NO-OP that returns the existing row id — so the re-projection does
-      NOT churn the sheet. If ANYTHING changed (in practice the DERIVED pair `Line Status` and
-      `Line Qty Received`, as later events land against the same line), issue an `update_rows`
-      refreshing all tracked cells.
+      NOT churn the sheet. If ANYTHING changed (the DERIVED pair `Line Status` and
+      `Line Qty Received` as later events land against the same line, or the void annotation when
+      the mark is voided or a correction is linked to it), issue an `update_rows` refreshing all
+      tracked cells — IN PLACE, on the same row.
 
     All values are pre-formatted strings; `material` is the primary label (the line's description);
-    `received_by` is the DISPLAY name only. NEVER deletes and NEVER marks a row Removed — a
-    signed-for delivery is a permanent historical event.
+    `received_by` / `voided_by` are DISPLAY names only. The six void values are required on purpose:
+    a caller that forgot them would write a voided mark back as `Active`, putting a struck delivery
+    back in the office's count. NEVER deletes and NEVER marks a row Removed — a signed-for delivery
+    is a permanent historical event, and a VOIDED one (`entry_status == ENTRY_VOIDED`) stays as an
+    annotated, grayed row (`_write_row`).
 
     `index` (D10) is the pass's single read of the ledger (`read_receipt_index`); the upsert keeps it
     truthful about its own writes, so an event repeated in the same pass is FOUND and updated, never
@@ -331,7 +444,14 @@ def upsert_receipt_row(
         COL_NOTE: note,
         COL_RECEIVED_BY: received_by,
         COL_EVENT_DATE: event_date,
+        COL_ENTRY_STATUS: entry_status,
+        COL_VOIDED_BY: voided_by,
+        COL_VOIDED_AT: voided_at,
+        COL_VOID_REASON: void_reason,
+        COL_SUPERSEDES: supersedes,
+        COL_SUPERSEDED_BY: superseded_by,
     }
+    voided = entry_status == ENTRY_VOIDED
 
     if index is None:
         index = read_receipt_index(sheet_id)
@@ -339,7 +459,7 @@ def upsert_receipt_row(
     if existing is None:
         cells = {**desired, COL_EVENT_UUID: event_uuid}
         try:
-            [row_id] = smartsheet_client.add_rows(sheet_id, [cells])
+            [row_id] = _write_row(smartsheet_client.add_rows, sheet_id, cells, voided=voided)
         except Exception:
             # The add may have COMMITTED (no idempotency key), so the index must not offer this event
             # as "absent" again this pass — a repeat raises instead of risking a duplicate ledger row.
@@ -352,14 +472,57 @@ def upsert_receipt_row(
     if _row_matches(existing, desired):
         return row_id  # nothing changed — skip the needless write
 
-    smartsheet_client.update_rows(
-        sheet_id,
-        [{"_row_id": row_id, **desired}],
-    )
+    update: dict[str, Any] = {"_row_id": row_id, **desired}
+    if voided:
+        # The key is written back unchanged so the gray reaches EVERY cell — the whole row reads
+        # struck, not just its data cells.
+        update[COL_EVENT_UUID] = event_uuid
+    _write_row(smartsheet_client.update_rows, sheet_id, update, voided=voided)
     # `existing` IS the index's cached row: keep it equal to the sheet so a same-pass repeat compares
     # against what was just written (exactly what the pre-D10 fresh re-read would have shown).
     existing.update(desired)
     return row_id
+
+
+def _voided_formats(cells: dict[str, Any]) -> dict[str, str]:
+    """The `_formats` meta for a VOIDED row: gray on every written cell (the date keeps its date
+    display — see FMT_VOIDED_DATE). `_`-prefixed meta keys (`_row_id`) are not cells."""
+    return {
+        title: FMT_VOIDED_DATE if title == COL_EVENT_DATE else FMT_VOIDED
+        for title in cells
+        if not title.startswith("_")
+    }
+
+
+def _write_row(
+    write: Callable[[int, list[dict[str, Any]]], Any],
+    sheet_id: int,
+    cells: dict[str, Any],
+    *,
+    voided: bool,
+) -> Any:
+    """Issue ONE `add_rows` / `update_rows` for `cells`; a VOIDED row also carries its gray.
+
+    The gray rides the SAME write as the annotation (hours_log's `_formats` mechanism) rather than a
+    second format-only call, because a cell format is invisible to `get_rows`: a separate call that
+    failed could never be noticed, and change-only would never re-issue it. It is still COSMETIC —
+    the annotation is the record — so it is best-effort: a write REJECTED as invalid (HTTP 400, the
+    class a malformed format descriptor raises) WARNs and is re-issued plain. A 400 means the first
+    write did not commit, so the re-issue cannot double-append. If the plain write is rejected too,
+    the fault is the data, and it propagates to the caller's per-event fence like any other write.
+    """
+    if not voided:
+        return write(sheet_id, [cells])
+    try:
+        return write(sheet_id, [{**cells, "_formats": _voided_formats(cells)}])
+    except smartsheet_client.SmartsheetValidationError as exc:
+        error_log.log(
+            Severity.WARN, SCRIPT_NAME,
+            f"voided-row gray format rejected on Material Receipts sheet {sheet_id}; writing the void "
+            f"annotation without it (cosmetic only): {type(exc).__name__}: {exc!r}",
+            error_code="material_receipts_void_format_failed",
+        )
+        return write(sheet_id, [cells])
 
 
 def _row_matches(existing: dict[str, Any], desired: dict[str, str]) -> bool:

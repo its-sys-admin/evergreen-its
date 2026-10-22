@@ -663,14 +663,23 @@ def get_fieldops_material_receipts(base_url: str, token: str) -> list[dict[str, 
 
     Each dict carries `event_uuid, job_id, project_name, kind, qty, note, event_date, line_uuid,
     material_description, unit, part_number, line_qty_expected, line_status, line_qty_received,
-    bol_number, received_by_display`. `received_by_display` is the DISPLAY name only (never the
-    acting username — House Reflex §5); `event_date` is a naive 'YYYY-MM-DD' Pacific work day.
+    bol_number, received_by_display, voided_at, voided_by_display, void_reason, supersedes_uuid,
+    superseded_by_uuid`. `received_by_display` / `voided_by_display` are DISPLAY names only (never
+    the acting username — House Reflex §5; a voider with no roster link reads as the account's role
+    label, operator decision D6); `event_date` is a naive 'YYYY-MM-DD' Pacific work day.
 
     TWO of those fields are DERIVED and legitimately change after the event is written, which is why
     the mirror re-projects rather than writing once: `line_status` (the referenced line's coarse
     status, which goes 'incident' if a problem is later flagged) and `line_qty_received` (the ledger
-    ROLLUP across every event for that line, recomputed in the Worker's SELECT rather than stored, so
-    it can never drift from the events it summarizes). Every other field is copied from a row.
+    ROLLUP across every COUNTING event for that line — voided marks excluded — recomputed in the
+    Worker's SELECT rather than stored, so it can never drift from the events it summarizes).
+
+    The five 0080 VOID fields change after the event too, which is the other reason to re-project:
+    `voided_at` (epoch seconds; null while the mark counts), `voided_by_display`, `void_reason`, and
+    the correction links `supersedes_uuid` (the voided mark this one replaces) and
+    `superseded_by_uuid` (the mark that replaced this one) — Event UUIDs, never D1 ids, because the
+    sheet is keyed by Event UUID. A voided mark STAYS in this feed: the mirror annotates its row,
+    it never retires it. Every other field is copied from a row.
 
     Like `get_fieldops_material_incidents` — and deliberately UNLIKE
     `get_fieldops_material_list_snapshot` — this is an APPEND-ONLY EVENT LEDGER, not a re-projected

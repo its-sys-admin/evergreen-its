@@ -496,15 +496,34 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 **Checks (in order):**
 - Marking needs cap.materials.receive AND a manager/admin role — a submitter holds the capability but not the role (the same gate the daily report uses).
 - Non-admins only reach the job they are PLACED on (personnel.current_job); a 403 forbidden_job is the designed scope, not a fault.
-- The received total is the SUM over an append-only ledger — open the line's history, which shows every event with its quantity, note, date and who recorded it.
+- The received total is the SUM of every mark that still counts (a VOIDED mark counts for nothing) — open the line's history, which shows every mark with its quantity, note, date and who recorded it.
 - The incident flag is STICKY by design; a delivery mark records the delivery without clearing the flag.
 
 **Resolutions (in order):**
 - Fix the role in Accounts or the placement on the job's crew, per the runbook.
-- A duplicate or mistaken ledger event is corrected by recording a FURTHER event — the ledger is append-only and has no delete path.
-- Correcting a total at source, or clearing a stuck incident flag, is Seth's — escalate.
+- A duplicate or mistaken mark is VOIDED in the portal (never deleted) and, if it was wrong rather than a duplicate, followed by the correct entry — see the next node.
+- Un-voiding or deleting a mark, changing a closed job's delivery history, or clearing a stuck incident flag is Seth's — escalate.
 
 **See also:** runbook `docs/runbooks/job_materials.md`
+
+#### A delivery was recorded by mistake — a double tap, a load that was already marked, or the wrong quantity — and the line's received total (and its Smartsheet rows) now read wrong.
+
+**Resolution class:** Operator-resolvable (solo)
+
+**Signals:** over-received line, duplicate delivery mark, reason_required, invalid_reason, already_voided, job_not_active, supersedes_not_voided, unknown_supersedes, already_corrected, invalid_supersedes_id, delivery row(s) removed because the mark was voided
+
+**Checks (in order):**
+- On the job's Materials tracking page, open the line's delivery history and find the wrong entry (quantity, date, who recorded it). Show voided (N) under the history reveals entries already voided.
+- Who can void is exactly who can mark — a manager placed on the job, or an admin on any job. A submitter account cannot.
+- A void on a closed or archived job is refused ("That job is no longer active…") by design.
+
+**Resolutions (in order):**
+- A manager on the job (or an admin) taps Void beside the wrong entry, types why (required), and taps Confirm void. The entry stays in the history, struck through, and stops counting on every surface.
+- If the mark was WRONG rather than a duplicate, they then tap Record the correct entry on the voided entry (no time limit; each voided entry is corrected once). A good mark voided by mistake is fixed the same way, with its original values.
+- Verify — the page total changes at once; the Material List and Material Receipts sheets follow after one ~90s sync cycle (the Receipts row stays, grayed, Entry Status = Voided). A curated Weekly Production Report week drops the row when read; a week curated before migration 0080 needs the row removed by hand on the weekly report screen, then Compile Now.
+- Escalate — anything asking to un-void or delete a mark, a void refused on a non-active job, a week whose report was already sent, or a Receipts sheet still not showing the void after several cycles with fieldops_sync errors.
+
+**See also:** runbook `docs/runbooks/job_materials.md#voiding-a-mistaken-delivery-mark`
 
 ### fieldops-sync mirrors dirty jobs UP into both Active-Jobs sheets
 
@@ -578,7 +597,7 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **Checks (in order):**
 - The ledger re-projects IN FULL every cycle (no watermark), so a transient fault self-heals on the next cycle — wait one 90s cycle before treating it as a fault.
-- Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption.
+- Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption. The six void columns (Entry Status, Voided By, Voided At, Void Reason, Supersedes, Superseded By) also fill in later when a mark is voided or corrected — a voided row stays on the sheet, grayed, and is never deleted.
 - Check field_ops.fieldops_sync.receipts_enabled, then the error journal for the codes above.
 
 **Resolutions (in order):**

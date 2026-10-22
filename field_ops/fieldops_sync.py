@@ -2264,6 +2264,18 @@ def _fmt_receipt_kind(raw: Any) -> str:
     return _RECEIPT_KIND_DISPLAY.get(key, key)
 
 
+def _fmt_epoch_minute(epoch: Any) -> str:
+    """Epoch seconds → Pacific wall-clock 'YYYY-MM-DD HH:MM' (the receipts `Voided At` column).
+    '' on missing/malformed — the `_fmt_epoch_dt` guard, at the minute precision an office reader
+    wants for "when was this struck" rather than an ISO string with seconds and an offset."""
+    if isinstance(epoch, bool) or not isinstance(epoch, int):
+        return ""
+    try:
+        return datetime.fromtimestamp(epoch, _PACIFIC).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return ""
+
+
 def _group_receipts_by_job(
     rows: list[dict[str, Any]],
 ) -> dict[str, tuple[str, list[dict[str, Any]]]]:
@@ -2336,6 +2348,10 @@ def _reconcile_job_receipts(
 
     for e in rows:
         event_uuid = str(e.get("event_uuid") or "").strip()
+        # 0080: a void is keyed off the PRESENCE of voided_at, not off whether it formats — a mark
+        # whose stamp the formatter cannot render must still read Voided, or a struck delivery
+        # would be put back in the office's count by a timestamp quirk.
+        voided = e.get("voided_at") is not None
         try:
             material_receipts.upsert_receipt_row(
                 sheet_id,
@@ -2359,6 +2375,19 @@ def _reconcile_job_receipts(
                 received_by=str(e.get("received_by_display") or "").strip(),
                 # Already a naive 'YYYY-MM-DD' Pacific work day in D1 — no epoch conversion.
                 event_date=str(e.get("event_date") or "").strip(),
+                # The void annotation — set when the mark is voided and when a correction is linked,
+                # both of which can happen long after the event, so change-only re-writes the row.
+                entry_status=(
+                    material_receipts.ENTRY_VOIDED if voided else material_receipts.ENTRY_ACTIVE
+                ),
+                # The route's DISPLAY value (personnel.name, else the role label — D6). Never read
+                # an actor / username field here: the sheet is office-facing (House Reflex §5).
+                voided_by=str(e.get("voided_by_display") or "").strip(),
+                voided_at=_fmt_epoch_minute(e.get("voided_at")),
+                void_reason=str(e.get("void_reason") or "").strip(),
+                # Event UUIDs, not D1 ids: the sheet is keyed by Event UUID.
+                supersedes=str(e.get("supersedes_uuid") or "").strip(),
+                superseded_by=str(e.get("superseded_by_uuid") or "").strip(),
                 index=index,
             )
             out["upserted"] += 1
@@ -2447,11 +2476,16 @@ def _mirror_material_receipts_pass(base_url: str, bearer: str) -> dict[str, int]
     visited (no sheet is created for it). The count-drops-to-zero / #468 zero-drop class is
     structurally impossible: there is no retire path to wrongly zero.
 
-    Re-projection is not redundant work: two of the sixteen fields (`line_status`,
-    `line_qty_received`) are DERIVED and change as later events land against the same line, so a
-    write-once mirror would go stale. `upsert_receipt_row` is change-only, so a cycle where nothing
-    moved costs ONE read per job ledger (D10 — the index from `material_receipts.read_receipt_index`
-    serves every upsert and the row-cap count; it used to be one full read per receipt) and no writes.
+    Re-projection is not redundant work: two of the sixteen original fields (`line_status`,
+    `line_qty_received`) are DERIVED and change as later events land against the same line, and the
+    five 0080 void fields (`voided_at`, `voided_by_display`, `void_reason`, `supersedes_uuid`,
+    `superseded_by_uuid`) change when a mark is voided or a correction is linked to it — so a
+    write-once mirror would go stale. A VOIDED mark stays in the feed and is ANNOTATED in place
+    (Entry Status=Voided, grayed), never retired: there is still no retire path here, so the #468
+    zero-drop class stays structurally impossible. `upsert_receipt_row` is change-only, so a cycle
+    where nothing moved costs ONE read per job ledger (D10 — the index from
+    `material_receipts.read_receipt_index` serves every upsert and the row-cap count; it used to be
+    one full read per receipt) and no writes.
 
     No throttle: per-cycle change-only re-projection is simple-correct at current scale. A throttle
     is a FUTURE optimization only if the one-read-per-job budget itself bites — do NOT build it now.

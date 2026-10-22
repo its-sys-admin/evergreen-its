@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -64,6 +65,17 @@ def sc(mocker):
         "get_setting": mocker.patch(
             "progress_reports.material_receipts.smartsheet_client.get_setting",
             return_value="15000",
+        ),
+        # The void columns' back-fill (find branch only). Default: nothing was missing.
+        "ensure_columns": mocker.patch(
+            "progress_reports.material_receipts.smartsheet_client.ensure_columns",
+            return_value=[],
+        ),
+        # Never called by this module — patched so a test can PROVE that (a voided mark is
+        # annotated, never deleted).
+        "delete_rows": mocker.patch(
+            "progress_reports.material_receipts.smartsheet_client.delete_rows",
+            return_value=None,
         ),
     }
 
@@ -137,6 +149,9 @@ def _upsert_kwargs(**over: Any) -> dict[str, Any]:
         unit="ea", part_number="7000153", line_uuid="u-10", line_status="partial",
         line_qty_expected="120", line_qty_received="40", bol="BOL-8891",
         note="2 pallets on this load", received_by="Mo Manager", event_date="2026-08-06",
+        # 0080 void annotation — a counting (never-voided, never-linked) mark.
+        entry_status=material_receipts.ENTRY_ACTIVE, voided_by="", voided_at="",
+        void_reason="", supersedes="", superseded_by="",
     )
     kw.update(over)
     return kw
@@ -159,6 +174,12 @@ def _existing_row(**over: Any) -> dict[str, Any]:
         material_receipts.COL_NOTE: "2 pallets on this load",
         material_receipts.COL_RECEIVED_BY: "Mo Manager",
         material_receipts.COL_EVENT_DATE: "2026-08-06",
+        material_receipts.COL_ENTRY_STATUS: material_receipts.ENTRY_ACTIVE,
+        material_receipts.COL_VOIDED_BY: "",
+        material_receipts.COL_VOIDED_AT: "",
+        material_receipts.COL_VOID_REASON: "",
+        material_receipts.COL_SUPERSEDES: "",
+        material_receipts.COL_SUPERSEDED_BY: "",
     }
     row.update(over)
     return row
@@ -254,8 +275,272 @@ def test_event_uuid_is_excluded_from_change_detection():
         material_receipts.COL_LINE_QTY_EXPECTED, material_receipts.COL_LINE_QTY_RECEIVED,
         material_receipts.COL_BOL, material_receipts.COL_NOTE,
         material_receipts.COL_RECEIVED_BY, material_receipts.COL_EVENT_DATE,
+        *_VOID_COLS,
     ):
         assert col in material_receipts._TRACKED_COLS
+
+
+# ---- 0080 VOID annotation: annotate in place, never delete -----------------
+#
+# A void is a further fact ABOUT a mark, not its removal, so the ledger row stays and is annotated.
+# Six TEXT_NUMBER columns carry it, appended LAST so a back-filled sheet and a freshly-created one
+# hold the same columns in the same order (`ensure_columns` appends).
+
+_VOID_COLS: tuple[str, ...] = (
+    "Entry Status", "Voided By", "Voided At", "Void Reason", "Supersedes", "Superseded By",
+)
+
+
+def _voided_kwargs(**over: Any) -> dict[str, Any]:
+    """Synthetic voided-mark kwargs (no real job / vendor / person names — the repo is public)."""
+    return _t_kwargs(
+        "evt-t1",
+        entry_status=material_receipts.ENTRY_VOIDED, voided_by="Test Crew Lead",
+        voided_at="2026-10-21 14:05", void_reason="Counted twice", **over,
+    )
+
+
+def _t_row(**over: Any) -> dict[str, Any]:
+    """The sheet row `_t_kwargs("evt-t1")` writes — a counting mark, all synthetic values."""
+    row = _existing_row(**{
+        material_receipts.COL_EVENT_UUID: "evt-t1", material_receipts.COL_MATERIAL: "Test panel",
+        material_receipts.COL_PART_NUMBER: "TP-0001", material_receipts.COL_LINE_UUID: "u-t1",
+        material_receipts.COL_BOL: "BOL-T0001", material_receipts.COL_NOTE: "",
+        material_receipts.COL_RECEIVED_BY: "Test Crew Lead",
+    })
+    row.update(over)
+    return row
+
+
+def _t_voided_row(**over: Any) -> dict[str, Any]:
+    """The sheet row `_voided_kwargs()` writes — the same mark, annotated."""
+    return _t_row(**{
+        material_receipts.COL_ENTRY_STATUS: "Voided",
+        material_receipts.COL_VOIDED_BY: "Test Crew Lead",
+        material_receipts.COL_VOIDED_AT: "2026-10-21 14:05",
+        material_receipts.COL_VOID_REASON: "Counted twice",
+        **over,
+    })
+
+
+def test_void_columns_are_the_six_appended_last_as_plain_text():
+    tail = material_receipts.MATERIAL_RECEIPTS_COLUMNS[-6:]
+    assert tuple(c["title"] for c in tail) == _VOID_COLS
+    # TEXT_NUMBER, never PICKLIST: a controlled vocabulary in a text cell is the hours_log Status
+    # precedent, and it keeps these columns out of picklist_validation.REGISTRY entirely.
+    assert {c["type"] for c in tail} == {"TEXT_NUMBER"}
+    assert (
+        material_receipts.COL_ENTRY_STATUS, material_receipts.COL_VOIDED_BY,
+        material_receipts.COL_VOIDED_AT, material_receipts.COL_VOID_REASON,
+        material_receipts.COL_SUPERSEDES, material_receipts.COL_SUPERSEDED_BY,
+    ) == _VOID_COLS
+    assert (material_receipts.ENTRY_ACTIVE, material_receipts.ENTRY_VOIDED) == ("Active", "Voided")
+    # Every column has a style entry (a missing one would leave it at the default width).
+    styled = {s["title"] for s in material_receipts.MATERIAL_RECEIPTS_STYLES}
+    assert set(_VOID_COLS) <= styled
+
+
+def test_backfill_set_is_every_non_primary_creation_column():
+    titles = [c["title"] for c in material_receipts.BACKFILL_COLUMNS]
+    assert titles == [
+        c["title"] for c in material_receipts.MATERIAL_RECEIPTS_COLUMNS if not c.get("primary")
+    ]
+    assert set(_VOID_COLS) <= set(titles)
+    assert material_receipts.COL_MATERIAL not in titles  # a sheet's primary is fixed at create
+
+
+def test_ensure_backfills_all_six_void_columns_in_one_call_on_the_find_branch(sc):
+    sc["find_sheet"].return_value = 4242
+    assert material_receipts.ensure_material_receipts_sheet("Job One") == 4242
+    # ONE call carrying every spec — never one call per column — so the six land under the single
+    # shared index `ensure_columns` assigns (a split call is fine for the API but would not be the
+    # material_list shape; a multi-index body is what 400'd live with errorCode 1135).
+    sc["ensure_columns"].assert_called_once_with(4242, material_receipts.BACKFILL_COLUMNS)
+    passed = [c["title"] for c in sc["ensure_columns"].call_args.args[1]]
+    assert passed[-6:] == list(_VOID_COLS)
+    sc["create_sheet"].assert_not_called()
+
+
+def test_ensure_does_not_backfill_on_the_create_branch(sc):
+    material_receipts.ensure_material_receipts_sheet("Job One")
+    sc["create_sheet"].assert_called_once()
+    assert sc["create_sheet"].call_args.args[2] is material_receipts.MATERIAL_RECEIPTS_COLUMNS
+    sc["ensure_columns"].assert_not_called()
+
+
+def test_backfill_logs_what_it_added_and_is_silent_when_nothing_was_missing(sc):
+    sc["find_sheet"].return_value = 4242
+    sc["ensure_columns"].return_value = list(_VOID_COLS)
+    material_receipts.ensure_material_receipts_sheet("Job One")
+    codes = [c.kwargs.get("error_code") for c in sc["log"].call_args_list]
+    assert codes.count("material_receipts_columns_backfilled") == 1
+
+    sc["log"].reset_mock()
+    sc["ensure_columns"].return_value = []
+    material_receipts.ensure_material_receipts_sheet("Job One")
+    assert not sc["log"].call_args_list  # steady state: no WARN every cycle for every job
+
+
+def test_backfill_failure_warns_but_still_returns_the_sheet(sc):
+    sc["find_sheet"].return_value = 4242
+    sc["ensure_columns"].side_effect = material_receipts.smartsheet_client.SmartsheetError("boom")
+    assert material_receipts.ensure_material_receipts_sheet("Job One") == 4242
+    assert any(
+        c.kwargs.get("error_code") == "material_receipts_column_backfill_failed"
+        for c in sc["log"].call_args_list
+    )
+
+
+def test_backfill_through_the_real_ensure_columns_is_one_add_at_one_shared_index(mocker):
+    # Drives the REAL ensure_columns against a pre-void sheet (the 14 PR4 columns), faking only the
+    # SDK client: the six must reach the API as ONE add_columns call whose bodies all carry the SAME
+    # index — the errorCode 1135 shape — in creation order.
+    pre_void = {
+        c["title"]: n for n, c in enumerate(material_receipts.MATERIAL_RECEIPTS_COLUMNS[:-6], 1)
+    }
+    mocker.patch.object(material_receipts.smartsheet_client, "_column_map", return_value=pre_void)
+    mocker.patch.object(material_receipts.smartsheet_client, "invalidate_column_cache")
+    client = MagicMock()
+    mocker.patch.object(material_receipts.smartsheet_client, "get_client", return_value=client)
+    mocker.patch.object(material_receipts.error_log, "log")
+
+    material_receipts._backfill_columns_best_effort(4242, "Job One — Material Receipts")
+
+    client.Sheets.add_columns.assert_called_once()
+    bodies = client.Sheets.add_columns.call_args.args[1]
+    assert tuple(b.title for b in bodies) == _VOID_COLS
+    assert {b.index for b in bodies} == {len(pre_void)}
+
+
+def test_upsert_new_active_row_carries_active_and_blank_void_cells(sc):
+    material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1"))
+    cells = sc["add_rows"].call_args.args[1][0]
+    assert cells[material_receipts.COL_ENTRY_STATUS] == "Active"
+    for col in _VOID_COLS[1:]:
+        assert cells[col] == ""
+    assert "_formats" not in cells  # a counting mark keeps the sheet's ordinary formatting
+
+
+def test_upsert_voids_the_existing_row_in_place_never_deleted(sc):
+    # (C) The mark was first mirrored Active; the route now reports it voided → the SAME row is
+    # updated in place. No add (a second row would read as another delivery), no delete (a void is
+    # annotated, not erased — the signed-for history stays).
+    sc["get_rows"].return_value = [_t_row()]
+    assert material_receipts.upsert_receipt_row(9001, **_voided_kwargs()) == 888
+    sc["add_rows"].assert_not_called()
+    sc["delete_rows"].assert_not_called()
+    sc["update_rows"].assert_called_once()
+    upd = sc["update_rows"].call_args.args[1][0]
+    assert upd["_row_id"] == 888
+    assert upd[material_receipts.COL_ENTRY_STATUS] == "Voided"
+    assert upd[material_receipts.COL_VOIDED_BY] == "Test Crew Lead"
+    assert upd[material_receipts.COL_VOIDED_AT] == "2026-10-21 14:05"
+    assert upd[material_receipts.COL_VOID_REASON] == "Counted twice"
+    # The event's own fields ride along unchanged — the void annotates, it does not rewrite history.
+    assert upd[material_receipts.COL_KIND] == "Partial" and upd[material_receipts.COL_QTY] == "40"
+
+
+def test_voided_row_is_grayed_whole_row_with_the_hours_log_superseded_format(sc):
+    sc["get_rows"].return_value = [_t_row()]
+    material_receipts.upsert_receipt_row(9001, **_voided_kwargs())
+    upd = sc["update_rows"].call_args.args[1][0]
+    fmts = upd["_formats"]
+    # The hours_log Superseded precedent — the SAME descriptor, reused rather than re-typed.
+    assert material_receipts.FMT_VOIDED == material_receipts.hours_log.STATUS_SUPERSEDED_FMT
+    # Every written cell is grayed, the key included, so the whole row reads as struck.
+    written = {k for k in upd if not k.startswith("_")}
+    assert material_receipts.COL_EVENT_UUID in written
+    assert set(fmts) == written
+    assert fmts[material_receipts.COL_ENTRY_STATUS] == material_receipts.FMT_VOIDED
+    # The DATE cell keeps its date display format under the gray (descriptor field 16).
+    date_fmt = fmts[material_receipts.COL_EVENT_DATE].split(",")
+    assert date_fmt[9] == "18" and date_fmt[16] == material_receipts.FMT_DATE.split(",")[16]
+
+
+def test_first_seen_voided_mark_is_appended_already_grayed(sc):
+    # A mark voided before the mirror ever saw it lands as ONE row, already annotated.
+    material_receipts.upsert_receipt_row(9001, **_voided_kwargs())
+    cells = sc["add_rows"].call_args.args[1][0]
+    assert cells[material_receipts.COL_ENTRY_STATUS] == "Voided"
+    assert cells["_formats"][material_receipts.COL_EVENT_UUID] == material_receipts.FMT_VOIDED
+
+
+def test_voided_row_steady_state_is_a_noop(sc):
+    # Once annotated, an identical re-projection writes nothing (format included — it rides the
+    # same write as the annotation, so there is no separate format state to re-assert).
+    sc["get_rows"].return_value = [_t_voided_row()]
+    material_receipts.upsert_receipt_row(9001, **_voided_kwargs())
+    sc["update_rows"].assert_not_called()
+    sc["add_rows"].assert_not_called()
+
+
+def test_upsert_rewrites_a_voided_row_when_its_correction_links_it(sc):
+    # (D) The original was voided cycles ago; the correction lands later and the route now names it
+    # in `superseded_by_uuid` — change-only must see that and re-write the row.
+    sc["get_rows"].return_value = [_t_voided_row()]
+    material_receipts.upsert_receipt_row(9001, **_voided_kwargs(superseded_by="evt-t2"))
+    upd = sc["update_rows"].call_args.args[1][0]
+    assert upd["_row_id"] == 888 and upd[material_receipts.COL_SUPERSEDED_BY] == "evt-t2"
+    assert upd["_formats"]  # still voided → still gray on the re-write
+
+    # ...and the correction itself carries the back-link on its own row.
+    material_receipts.upsert_receipt_row(
+        9001, **_t_kwargs("evt-t2", qty="20", supersedes="evt-t1")
+    )
+    cells = sc["add_rows"].call_args.args[1][0]
+    assert cells[material_receipts.COL_SUPERSEDES] == "evt-t1"
+    assert cells[material_receipts.COL_ENTRY_STATUS] == "Active"
+
+
+def test_a_backfilled_legacy_row_is_rewritten_once_to_active(sc):
+    # A row mirrored before 0080 has blank void cells after the back-fill. It is re-written ONCE to
+    # carry Entry Status=Active (a one-time migration write per row), then is steady again.
+    legacy = _t_row()
+    for col in _VOID_COLS:
+        legacy.pop(col)
+    sc["get_rows"].return_value = [legacy]
+    index = material_receipts.read_receipt_index(9001)
+    material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1"), index=index)
+    upd = sc["update_rows"].call_args.args[1][0]
+    assert upd[material_receipts.COL_ENTRY_STATUS] == "Active" and "_formats" not in upd
+    material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1"), index=index)
+    assert sc["update_rows"].call_count == 1
+
+
+def test_a_rejected_gray_format_never_blocks_the_void_annotation(sc):
+    # The gray is cosmetic; the annotation is the record. A format the API rejects (HTTP 400) WARNs
+    # and the annotation is written plain, in the same upsert.
+    sc["get_rows"].return_value = [_t_row()]
+    sc["update_rows"].side_effect = [
+        material_receipts.smartsheet_client.SmartsheetValidationError("HTTP 400 format"), None,
+    ]
+    assert material_receipts.upsert_receipt_row(9001, **_voided_kwargs()) == 888
+    first, second = (c.args[1][0] for c in sc["update_rows"].call_args_list)
+    assert "_formats" in first and "_formats" not in second
+    assert second[material_receipts.COL_ENTRY_STATUS] == "Voided"
+    assert any(
+        c.kwargs.get("error_code") == "material_receipts_void_format_failed"
+        for c in sc["log"].call_args_list
+    )
+
+
+def test_a_plain_write_failure_still_raises_after_the_format_fallback(sc):
+    # The fallback is for the FORMAT only: if the plain write is rejected too, the cause is the data
+    # and it must reach the caller's per-event fence (→ Review Queue), never be swallowed here.
+    sc["get_rows"].return_value = [_t_row()]
+    sc["update_rows"].side_effect = material_receipts.smartsheet_client.SmartsheetValidationError("x")
+    with pytest.raises(material_receipts.smartsheet_client.SmartsheetValidationError):
+        material_receipts.upsert_receipt_row(9001, **_voided_kwargs())
+    assert sc["update_rows"].call_count == 2
+
+
+def test_an_active_row_write_failure_is_not_retried(sc):
+    # No format → nothing to fall back from: a counting row's rejected write raises at once.
+    sc["get_rows"].return_value = [_t_row()]
+    sc["update_rows"].side_effect = material_receipts.smartsheet_client.SmartsheetValidationError("x")
+    with pytest.raises(material_receipts.smartsheet_client.SmartsheetValidationError):
+        material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1", line_qty_received="120"))
+    assert sc["update_rows"].call_count == 1
 
 
 # ---- find_receipt_row ----------------------------------------------------
