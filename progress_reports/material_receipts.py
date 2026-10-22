@@ -184,6 +184,15 @@ FMT_DATE = ",,,,,,,,,,,,,,,,2"             # MMM_D_YYYY
 # FMT_DATE's) or it would fall back to the sheet's default date rendering.
 FMT_VOIDED = hours_log.STATUS_SUPERSEDED_FMT  # light-gray bg
 FMT_VOIDED_DATE = ",,,,,,,,,18,,,,,,,2"        # light-gray bg + MMM_D_YYYY
+# An ACTIVE row's look, stated explicitly when the row is ADDED. Smartsheet gives a row appended at
+# the bottom the formatting of the row above it, so a correction appended under a voided row came
+# out gray — reading as voided while it counts (2026-10-22 live smoke, the Test job). Two API facts,
+# both verified live that day, shape the descriptors: an EMPTY descriptor field means "leave this
+# unchanged", not "default", so the active look cannot be written as blanks; and of the palette's
+# no-colour entries only index 3 ("transparent") clears an inherited background — index 0 ("none")
+# is treated as unchanged too. Material keeps its column look (FMT_PRIMARY sets its own background).
+FMT_ACTIVE_PLAIN = ",,,,,,,,,3,,,,,,,"          # transparent bg — clears an inherited gray
+FMT_ACTIVE_DATE = ",,,,,,,,,3,,,,,,,2"          # transparent bg + MMM_D_YYYY
 
 MATERIAL_RECEIPTS_STYLES: list[dict[str, Any]] = [
     {"title": COL_MATERIAL, "width": 220, "format": FMT_PRIMARY},
@@ -492,7 +501,9 @@ def upsert_receipt_row(
     if existing is None:
         cells = {**desired, COL_EVENT_UUID: event_uuid}
         try:
-            [row_id] = _write_row(smartsheet_client.add_rows, sheet_id, cells, voided=voided)
+            [row_id] = _write_row(
+                smartsheet_client.add_rows, sheet_id, cells, voided=voided, adding=True
+            )
         except Exception:
             # The add may have COMMITTED (no idempotency key), so the index must not offer this event
             # as "absent" again this pass — a repeat raises instead of risking a duplicate ledger row.
@@ -527,33 +538,57 @@ def _voided_formats(cells: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _active_formats(cells: dict[str, Any]) -> dict[str, str]:
+    """The `_formats` meta for an ACTIVE row being ADDED: its own look on every written cell, so the
+    format Smartsheet copies from the row above (gray, when that row is voided) never sticks."""
+    return {
+        title: (
+            FMT_PRIMARY if title == COL_MATERIAL
+            else FMT_ACTIVE_DATE if title == COL_EVENT_DATE
+            else FMT_ACTIVE_PLAIN
+        )
+        for title in cells
+        if not title.startswith("_")
+    }
+
+
 def _write_row(
     write: Callable[[int, list[dict[str, Any]]], Any],
     sheet_id: int,
     cells: dict[str, Any],
     *,
     voided: bool,
+    adding: bool = False,
 ) -> Any:
-    """Issue ONE `add_rows` / `update_rows` for `cells`; a VOIDED row also carries its gray.
+    """Issue ONE `add_rows` / `update_rows` for `cells`, with the row's look where it needs one.
 
-    The gray rides the SAME write as the annotation (hours_log's `_formats` mechanism) rather than a
+    A VOIDED row always carries its gray. An ACTIVE row carries its own look only when it is ADDED
+    (`adding`): Smartsheet copies the row above's formatting onto an appended row, so without it a
+    mark appended under a voided row reads as voided (see FMT_ACTIVE_PLAIN). An active UPDATE sends
+    no format, so formatting the office applies by hand to a counting row survives re-projection.
+
+    The format rides the SAME write as the values (hours_log's `_formats` mechanism) rather than a
     second format-only call, because a cell format is invisible to `get_rows`: a separate call that
     failed could never be noticed, and change-only would never re-issue it. It is still COSMETIC —
-    the annotation is the record — so it is best-effort: a write REJECTED as invalid (HTTP 400, the
+    the values are the record — so it is best-effort: a write REJECTED as invalid (HTTP 400, the
     class a malformed format descriptor raises) WARNs and is re-issued plain. A 400 means the first
     write did not commit, so the re-issue cannot double-append. If the plain write is rejected too,
     the fault is the data, and it propagates to the caller's per-event fence like any other write.
     """
-    if not voided:
+    if voided:
+        formats, code, what = _voided_formats(cells), "material_receipts_void_format_failed", "void"
+    elif adding:
+        formats, code, what = _active_formats(cells), "material_receipts_active_format_failed", "active"
+    else:
         return write(sheet_id, [cells])
     try:
-        return write(sheet_id, [{**cells, "_formats": _voided_formats(cells)}])
+        return write(sheet_id, [{**cells, "_formats": formats}])
     except smartsheet_client.SmartsheetValidationError as exc:
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
-            f"voided-row gray format rejected on Material Receipts sheet {sheet_id}; writing the void "
-            f"annotation without it (cosmetic only): {type(exc).__name__}: {exc!r}",
-            error_code="material_receipts_void_format_failed",
+            f"{what}-row format rejected on Material Receipts sheet {sheet_id}; writing the row "
+            f"without it (cosmetic only): {type(exc).__name__}: {exc!r}",
+            error_code=code,
         )
         return write(sheet_id, [cells])
 
