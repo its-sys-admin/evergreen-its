@@ -1199,11 +1199,12 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
         //    race must not re-stamp received_* below (they are not purely ledger-derived: the
         //    resolve route stamps them too).
         //
-        //    `active = 1` makes this a no-op on a REMOVED line (D11): its stored projection stays
-        //    as it was at removal. The §51 Material List mirror never reads a removed line, and
-        //    the list read's `removed_lines` derive their rollup from the ledger
-        //    (RECEIPT_ROLLUP_SQL), so the void still shows there; the Receipts mirror's Line Qty
-        //    Received is ledger-derived too, while its Line Status keeps the stored status.
+        //    No `active = 1` here, deliberately (D11 review fix, 2026-10-21): a void is the one
+        //    mutation that reaches a REMOVED line, and its stored projection must follow the
+        //    ledger like any other. `removed_lines`, the void response and the Receipts mirror's
+        //    Line Status all read the STORED status, so skipping removed lines left them saying
+        //    'received' beside a ledger that no longer held a counting mark. The §51 Material List
+        //    mirror reads active lines only, so re-projecting a removed one is invisible there.
         //
         //    received_at / received_by (operator rule): NEVER the voider — a void is not a
         //    receipt. On a flagged line they may be the FLAG's stamp, so they are left alone (the
@@ -1230,7 +1231,7 @@ export function registerExpectedMaterialsRoutes(app: FieldopsApp, gates: Fieldop
                                                 AND ${RECEIPT_ACTIVE_SQL} AND e.note IS NOT NULL
                                               ORDER BY ${RECEIPT_ORDER_SQL} LIMIT 1)
                                        ELSE note END
-              WHERE id = ?1 AND active = 1 AND changes() = 1`,
+              WHERE id = ?1 AND changes() = 1`,
           )
           .bind(target.line_id, target.note),
       ]);

@@ -51,12 +51,13 @@ Design (PORTAL-AUTHORED, ONE-WAY-UP, APPEND-ONLY — the `material_incidents` po
   pass AFTER its index read (`read_receipt_index`), whose `get_rows` seeds the column map, so on an
   up-to-date sheet the back-fill check costs no read at all. If the back-fill fails, or a column is
   still absent after it, the pass skips that job's upserts for the cycle (every one would raise on
-  the absent column) and the back-fill's WARN is the one signal. Each row mirrored before 0080 is
-  then re-written ONCE, its blank `Entry Status` becoming `Active` — a one-time per-row write on the
-  first cycle after the back-fill, steady again from the next.
-- **ONE-WAY-UP ONLY.** The mark is authored IN THE PORTAL (the daily report's receipt region and the
-  per-job Materials page); this mirror is read-only reflection UP. No down-sync, no
-  `smartsheet_row_id` reverse link.
+  the absent column): a transient failure's WARN is the one signal, and a permanent one (a 403, a
+  deleted sheet) is ticketed to the Review Queue. Each row mirrored before 0080 is then re-written
+  ONCE, its blank `Entry Status` becoming `Active` — a one-time per-row write in the same cycle as
+  the back-fill, steady again from the next.
+- **ONE-WAY-UP ONLY.** The mark is authored IN THE PORTAL (the per-job Materials tracking page; the
+  daily form's receipt controls were removed 2026-08-11, #74); this mirror is read-only reflection
+  UP. No down-sync, no `smartsheet_row_id` reverse link.
 - **Progress workspace only**, single-destination. The per-job FOLDER + capacity tripwire are reused
   from `hours_log` so all the per-job trackers share one folder-resolution authority.
 - `check_row_cap` matters MORE here than for the bounded Material List, and arguably more than for
@@ -299,15 +300,21 @@ def _warn_on_thin_headroom(sheet_name: str) -> None:
 
 def backfill_columns(sheet_id: int, sheet_name: str) -> bool:
     """Add any `BACKFILL_COLUMNS` title missing from the sheet; True iff every one is present after.
-    Never raises.
+
+    Raises ONLY the permanent Smartsheet refusals — `SmartsheetPermissionError` (adding a column
+    needs Admin on the sheet, so an Editor share fails here after the read succeeded),
+    `SmartsheetNotFoundError` and `SmartsheetValidationError` — so the caller can ticket them like
+    every other permanent arm of the pass. Retrying those every cycle with a WARN would leave the
+    job unmirrored indefinitely with no Review-Queue row and no one told. Everything else is
+    reported through the return value.
 
     CALL IT AFTER `read_receipt_index`. That read seeds the process column map, so on an up-to-date
     sheet this is a dict lookup with no API call. Called first — as the find branch of
     `ensure_material_receipts_sheet` used to — it ran on a cold map and paid a full-sheet read of
     its own every cycle (fieldops_sync is one-shot per launchd interval, so the map is never warm).
 
-    False means a row write would fail: the add raised (breaker OPEN, a 403, an API blip), or a
-    column is STILL absent afterwards (`smartsheet_client.missing_columns` is the post-condition —
+    False means a row write would fail: the add raised a transient error (breaker OPEN, a rate
+    limit, an API blip), or a column is STILL absent afterwards (`smartsheet_client.missing_columns` is the post-condition —
     after an add it is the re-read the first write would have made anyway, so it costs nothing
     extra). The pass then skips this job's upserts for the cycle: each one names every tracked
     column, so each would raise `KeyError` out of `_resolve_cells` — one ERROR per event, every
@@ -317,7 +324,13 @@ def backfill_columns(sheet_id: int, sheet_name: str) -> bool:
     try:
         added = smartsheet_client.ensure_columns(sheet_id, BACKFILL_COLUMNS)
         absent = smartsheet_client.missing_columns(sheet_id, titles)
-    except Exception as exc:  # noqa: BLE001 — schema top-up; reported via the return, never raised
+    except (
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
+        smartsheet_client.SmartsheetValidationError,
+    ):
+        raise  # permanent — the caller tickets it (see the docstring)
+    except Exception as exc:  # noqa: BLE001 — transient schema top-up; reported via the return
         error_log.log(
             Severity.WARN, SCRIPT_NAME,
             f"could not back-fill columns on Material Receipts {sheet_name!r} (sheet {sheet_id}); "
@@ -576,9 +589,10 @@ def read_row_cap_threshold() -> int:
 
     `get_setting` is an uncached full read of ITS_Config, so reading it inside `check_row_cap` cost
     every job its own ITS_Config read on every cycle — a second full-sheet read per job beside the
-    job's own index read. A failed read WARNs (the per-job check's own code) and returns
-    `DEFAULT_ROW_CAP_WARN`, so the tripwire stays armed at the conservative mark rather than being
-    skipped for the whole pass."""
+    job's own index read. It falls back to `DEFAULT_ROW_CAP_WARN`, so the tripwire stays armed at
+    the conservative mark rather than being skipped for the whole pass. An UNEXPECTED read error
+    WARNs; a missing row, an open breaker or a non-integer value falls back silently (that is
+    `_read_int_setting`'s pre-existing contract)."""
     try:
         return _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
     except Exception as exc:  # noqa: BLE001 — advisory tripwire; never block the mirror

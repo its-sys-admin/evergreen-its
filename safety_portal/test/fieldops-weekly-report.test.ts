@@ -1225,7 +1225,7 @@ describe("weekly report — voided marks (0080, D5)", () => {
     expect(r.deliveries_voided_replaced).toBe(0);
   });
 
-  it("W4: a tip already on the curated list is never duplicated", async () => {
+  it("W4: a tip already on the curated list is never duplicated — and the row it absorbs counts as replaced", async () => {
     const { cookie, a, b, c } = await threeMarks();
     await voidMark(b);
     const fix = await seedCorrection(b, "partial", "2026-08-12", 12);
@@ -1236,17 +1236,20 @@ describe("weekly report — voided marks (0080, D5)", () => {
     expect((await save(cookie, { deliveries: [live[0], voidedRow, live[1], live[2]] })).status).toBe(200);
     const r = await body(await internal());
     expect(r.deliveries.map((d) => d.event_uuid)).toEqual([a, fix, c]);
-    expect(r.deliveries_voided_replaced).toBe(0);
-    expect(r.deliveries_voided_removed).toBe(1);
+    // The correction prints (where it was curated), so the voided row was REPLACED, not lost:
+    // "removed" would tell the office a delivery left the client's report when it did not.
+    expect(r.deliveries_voided_replaced).toBe(1);
+    expect(r.deliveries_voided_removed).toBe(0);
 
-    // Two voided links of ONE chain on the list: the first takes the tip, the second is dropped.
+    // Two voided links of ONE chain on the list: the first takes the tip's slot, the second is
+    // absorbed by it — both replaced, nothing removed.
     await voidMark(fix);
     const fix2 = await seedCorrection(fix, "partial", "2026-08-12", 13);
     expect((await save(cookie, { deliveries: [live[0], voidedRow, live[1], live[2]] })).status).toBe(200);
     const r2 = await body(await internal());
     expect(r2.deliveries.map((d) => d.event_uuid)).toEqual([a, fix2, c]);
-    expect(r2.deliveries_voided_replaced).toBe(1);
-    expect(r2.deliveries_voided_removed).toBe(1);
+    expect(r2.deliveries_voided_replaced).toBe(2);
+    expect(r2.deliveries_voided_removed).toBe(0);
   });
 
   it("W4: another job's voided-and-corrected mark is never matched, so its row is neither dropped nor replaced", async () => {

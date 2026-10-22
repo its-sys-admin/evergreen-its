@@ -198,7 +198,13 @@ move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.
 **Symptoms → repair (all LOW-class unless noted).**
 - `fieldops_receipt_permanent` → a Review-Queue row (workstream `progress_reports`): a permanent
   Smartsheet reject (validation) on one job or event. Read the row's payload (`phase`, `event_uuid`),
-  fix the offending data or sheet, and it re-projects next cycle (idempotent). **Low-class.**
+  fix the offending data or sheet, and it re-projects next cycle (idempotent). **Low-class** for a
+  validation reject. A row whose `error` names `SmartsheetPermissionError` or
+  `SmartsheetNotFoundError` is **not** — ITS lost access to the sheet, or the sheet is gone.
+  `phase = back-fill` with a permission error means ITS can read the sheet but cannot add the six
+  void columns to it (adding a column needs Admin on the sheet, so an Editor share fails exactly
+  here); that job's receipts mirror is paused and a new row lands every cycle until it is fixed.
+  Sharing and access are not a Tier-2 repair: **escalate to Seth**.
 - `fieldops_receipts_fetch_failed`, `fieldops_receipts_sheet_transient`,
   `fieldops_receipt_upsert_transient` → transient (Worker blip / Smartsheet 5xx / Smartsheet rate
   limit — `SmartsheetRateLimitError`, errorCode 4003, which can arrive as an HTTP 403 and is still NOT
@@ -225,19 +231,21 @@ move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.
   portal — ask whoever edits that sheet to leave the columns alone; drag them elsewhere if they are
   in the way.
 - `material_receipts_column_backfill_failed` (WARN) → the mirror could not add the six void columns
-  to one job's Material Receipts sheet (the add failed, or the message says the sheet "still lacks"
-  them after it). **That job's receipts mirror pauses until the top-up
+  to one job's Material Receipts sheet for a TRANSIENT reason (the add failed, or the message says
+  the sheet "still lacks" them after it). A PERMANENT refusal — a 403, a deleted sheet — does not
+  log this code: it files a `fieldops_receipt_permanent` Review-Queue row with `phase = back-fill`
+  (above). **That job's receipts mirror pauses until the top-up
   succeeds**: no new rows and no void annotations reach that sheet, and it is skipped for the cycle
   rather than logging an error per delivery — this WARN, repeating once per cycle, is the one
-  signal. Other jobs and the other mirror passes carry on, and nothing is lost: the ledger
+  signal, and the `field_ops.fieldops_sync` row in `ITS_Daemon_Health` may read DEGRADED while it
+  repeats. Other jobs and the other mirror passes carry on, and nothing is lost: the ledger
   re-projects in full on the first cycle the top-up works. **Low-class:** wait a cycle or two (most
   causes clear by themselves). Check the circuit breaker (the operator dashboard's breaker panel, or
   a watchdog Check J alert — a message naming `SmartsheetCircuitOpenError` means the breaker was
   open and the next cycle after its cooldown retries) and that the `field_ops.fieldops_sync` row in
   `ITS_Daemon_Health` is heartbeating. A message naming `SmartsheetRateLimitError` is rate limiting,
   not a permission fault, even if it mentions 403. **Escalate to Seth** if it persists for several
-  cycles, or if the message names `SmartsheetPermissionError` (a 403 — ITS lost its access to the
-  sheet; sharing and access are not a Tier-2 repair).
+  cycles.
 - `material_receipts_void_format_failed` (WARN, **cosmetic**) → a void was written to the sheet —
   `Entry Status = Voided` and the who/when/why are on the row — but Smartsheet refused the gray, so
   the row is not grayed. The record is correct; read `Entry Status`, not the colour. The mirror does

@@ -180,7 +180,8 @@ export async function flagExpectedMaterialIncident(
 /** Clear a line's problem flag — an explicit human act, never a side effect of a delivery
  *  mark (a delivered-but-damaged pallet is still a problem). note is REQUIRED: the record
  *  of HOW it was resolved is the point. Status lands where the delivery ledger says —
- *  latest event delivered → received, otherwise back to expected. */
+ *  the latest COUNTING (non-voided) mark, by order key, delivered → received, otherwise
+ *  back to expected. */
 export async function resolveExpectedMaterialIncident(
   id: number,
   note: string,

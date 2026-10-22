@@ -547,16 +547,21 @@ describe("D11 — marks on a REMOVED line can still be voided (W2)", () => {
   it("a manager placed on the job voids one, an admin voids another; a void never re-activates the line", async () => {
     const { line, events: [e1, e2] } = await strandedLine(JOB, lead, "Test stranded pair", [3, 3]);
     const res = await voidOk(lead, e1, "Duplicate left on a removed line");
-    expect(await res.json()).toMatchObject({ ok: true, event_id: e1, line_id: line });
+    // The STORED projection follows the ledger on a removed line too: removed_lines, this
+    // response and the Receipts mirror's Line Status all read it (review fix, 2026-10-21).
+    expect(await res.json()).toMatchObject({ ok: true, event_id: e1, line_id: line, status: "received", qty_received: 3 });
+    expect(await lineRow(line)).toMatchObject({ status: "received", qty_received: 3 });
     expect((await eventRow(e1)).voided_by).toBe(LEAD_USER);
     await voidOk(admin, e2); // the admin is placed nowhere: the bypass reaches removed lines too
     expect(await audits("material_receipt_void")).toHaveLength(2);
-    expect((await lineRow(line)).active).toBe(0);
+    expect(await lineRow(line)).toMatchObject({ active: 0, status: "expected", qty_received: null });
     // Both marks gone from the rollup the "Removed from the list" group reads.
     const { body } = await readList(admin);
     const removed = body.removed_lines.find((r) => r.id === line)!;
     expect(removed.qty_received_total).toBeNull();
     expect(removed.receipt_status).toBeNull();
+    expect(removed.status).toBe("expected");
+    expect(removed.qty_received).toBeNull();
   });
 
   it("the job scope still binds (cross-job manager 403), and a closed job is still frozen (409)", async () => {

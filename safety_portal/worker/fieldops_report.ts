@@ -829,9 +829,15 @@ async function buildReportData(
         const verdict = d.event_uuid === undefined ? undefined : verdicts.get(d.event_uuid);
         if (verdict === undefined) {
           effective.push(d);
-        } else if (verdict !== null && !onList.has(verdict.uuid)) {
-          effective.push(verdict.row);
-          onList.add(verdict.uuid);
+        } else if (verdict !== null) {
+          // The correction prints either way — here, in the voided row's slot, or where it already
+          // sits on the list (curated too, or taken by an earlier row of the same chain). Both are
+          // "replaced": counting the second as "removed" would tell the office a delivery left the
+          // report when it did not (review nit, 2026-10-21).
+          if (!onList.has(verdict.uuid)) {
+            effective.push(verdict.row);
+            onList.add(verdict.uuid);
+          }
           deliveriesVoidedReplaced += 1;
         } else {
           deliveriesVoidedRemoved += 1;

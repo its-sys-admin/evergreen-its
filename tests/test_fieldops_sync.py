@@ -2407,13 +2407,14 @@ def test_receipts_pass_back_fills_a_pre_void_sheet_then_settles_to_one_read(_api
 
 
 def test_receipts_failed_back_fill_skips_the_job_with_one_warn_not_one_error_per_event(_api):
-    # P3: the six columns cannot be added (a 403 here). Every upsert names them, so each would raise
-    # KeyError — one ERROR per event, every cycle, for one cause. The job is skipped instead; the
-    # back-fill WARN is the one log row, and the cycle counts ONE error for the skipped job.
+    # P3: the six columns cannot be added (a rate limit here — transient). Every upsert names them,
+    # so each would raise KeyError — one ERROR per event, every cycle, for one cause. The job is
+    # skipped instead; the back-fill WARN is the one log row, and the cycle counts ONE error for the
+    # skipped job.
     api = _api["api"]
     _rcp_place(api, _T_PROJECT_1, 7101, 801, _RCP_PRE_VOID, [_rcp_sheet_row("evt-t1", pre_void=True)])
     _rcp_place(api, _T_PROJECT_2, 7102, 802, _RCP_ALL, [])
-    api.add_columns_error = _sdk_403(1004)
+    api.add_columns_error = _sdk_403(4003)
     _api["receipts"].return_value = [
         _t_receipt("evt-t1"), _t_void("evt-t2"), _t_receipt("evt-t3"),
         _t_receipt("evt-t10", project=_T_PROJECT_2),
@@ -2429,6 +2430,35 @@ def test_receipts_failed_back_fill_skips_the_job_with_one_warn_not_one_error_per
     assert codes.count("material_receipts_column_backfill_failed") == 1
     assert "fieldops_receipt_upsert_transient" not in codes
     assert not any(str(c).endswith("_permanent") for c in codes)
+
+
+def test_receipts_permanent_back_fill_refusal_is_ticketed_not_retried_silently(_api, mocker):
+    # A 403 on the column ADD after the read succeeded: adding a column needs Admin on the sheet, so
+    # an Editor share reads fine and fails here, every cycle, for good. A WARN alone would leave the
+    # job unmirrored with nobody told — it is ticketed like every other permanent arm of the pass,
+    # the job's upserts are still skipped, and the row-cap count still runs.
+    api = _api["api"]
+    _rcp_place(api, _T_PROJECT_1, 7101, 801, _RCP_PRE_VOID, [_rcp_sheet_row("evt-t1", pre_void=True)])
+    _rcp_place(api, _T_PROJECT_2, 7102, 802, _RCP_ALL, [])
+    api.add_columns_error = _sdk_403(1004)
+    _api["receipts"].return_value = [
+        _t_receipt("evt-t1"), _t_void("evt-t2"),
+        _t_receipt("evt-t10", project=_T_PROJECT_2),
+    ]
+    row_cap = mocker.spy(fieldops_sync.material_receipts, "check_row_cap")
+
+    out = fieldops_sync._mirror_material_receipts_pass("https://portal.test", "tok")
+
+    assert [s for s, _ in api.added + api.updated] == [7102]
+    assert out == {"upserted": 1, "reviewed": 1, "errors": 0}
+    _api["review"].assert_called_once()
+    assert _api["review"].call_args.kwargs["payload"]["phase"] == "back-fill"
+    assert _api["review"].call_args.kwargs["payload"]["job_id"] == "JOB-T0001"
+    codes = [c.kwargs.get("error_code") for c in _api["log"].call_args_list]
+    assert "fieldops_receipt_permanent" in codes
+    assert "material_receipts_column_backfill_failed" not in codes
+    assert "fieldops_receipt_upsert_transient" not in codes
+    assert sorted(c.args[0] for c in row_cap.call_args_list) == [7101, 7102]
 
 
 _ML_ALL = [c["title"] for c in fieldops_sync.material_list.MATERIAL_LIST_COLUMNS]

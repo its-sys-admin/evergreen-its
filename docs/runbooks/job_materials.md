@@ -12,7 +12,7 @@ status: active
 > **In the troubleshooting tree** ([printable guide](../troubleshooting/troubleshooting_guide.md) · dashboard `/troubleshoot`). This runbook resolves:
 >   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → A job / hours / materials record is created or edited in the portal → “A manager cannot mark a delivery on a job's Materials page, or a line shows the wrong received total, or a line still shows a problem after the goods arrived.”
 >   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → A job / hours / materials record is created or edited in the portal → “A delivery was recorded by mistake — a double tap, a load that was already marked, or the wrong quantity — and the line's received total (and its Smartsheet rows) now read wrong.”
->   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → A job / hours / materials record is created or edited in the portal → “A material line cannot be removed from a job's list ("This line has deliveries recorded. Void them first, then remove the line."), or a "Removed from the list" group shows on the job's Materials page.”
+>   - Field-ops sync — portal job/hours/materials/equipment/incidents to Smartsheet → A job / hours / materials record is created or edited in the portal → “A material line cannot be removed from a job's list ("This line has delivery marks recorded. Void them first, then remove the line."), or a "Removed from the list" group shows on the job's Materials page.”
 <!-- END TREE-XREF -->
 
 > §43 successor-remediation skeleton. Companion to `material_catalog_admin.md` (the material
@@ -144,10 +144,11 @@ anyway?" instead.
 
 ## Removing a line, and the "Removed from the list" group
 
-**A line that still has deliveries that count cannot be removed.** **Remove** on it is refused
-with "This line has deliveries recorded. Void them first, then remove the line."
-(`line_has_deliveries`). A removed line drops off this page's list and the Material List sheet, but
-its deliveries would keep counting on the Material Receipts sheet and the weekly report — a delivery
+**A line that still has a delivery mark that counts cannot be removed** — a "Not delivered" report
+included, since that is a field record too. **Remove** on it is refused with "This line has delivery
+marks recorded. Void them first, then remove the line." (`line_has_deliveries`). A removed line
+drops off this page's list (its Material List sheet row stays, marked `On List = Removed`), but its
+deliveries would keep counting on the Material Receipts sheet and the weekly report — a delivery
 nobody could see or fix. So: if the deliveries really were mistakes, void each one (step one above),
 then remove the line. A line whose deliveries are **all voided** can be removed; its scheduled loads
 go with it, as before. If the deliveries are real, the line is not finished with — leave it on the
@@ -162,8 +163,8 @@ after its deliveries were voided shows there too, with nothing left counting.
 - A manager placed on the job, or an admin, can **Void** a delivery there exactly as above.
 - Nothing else: there is no mark button and no **Record the correct entry** on a removed line. If a
   delivery belongs to a line still on the list, void it here and mark it on that line.
-- A void there drops the delivery from the Material Receipts sheet's `Line Qty Received` and from the
-  weekly report, on the next sync cycle and compile. The **Material List** row for a removed line
+- A void there drops the delivery from the Material Receipts sheet's `Line Qty Received` (and moves
+  its `Line Status` to match) and from the weekly report, on the next sync cycle and compile. The **Material List** row for a removed line
   reads `On List = Removed` and is no longer updated, so it keeps the totals it had when the line was
   removed.
 - Whether those old deliveries are real is the office's call, not the Successor-Operator's. Point
@@ -221,11 +222,11 @@ job's sheet on the first sync cycle after the production tree pulls main (see
 | "The entry being corrected couldn't be identified — refresh to see the history." (`invalid_supersedes_id`) | The page sent a broken reference — a stale or damaged page, not something the person did | Refresh and try again from the voided entry. If it keeps happening, escalate |
 | The Material Receipts sheet still shows a voided delivery | Working as designed. The sheet keeps every mark; a voided one stays, grayed, with `Entry Status = Voided` and who/when/why filled in | Not a fault. Read `Entry Status`, not just the row's presence. Totals on the sheet (`Line Qty Received`) already leave it out |
 | The Material Receipts sheet does not show a void yet | The sheet follows on the next sync cycle (about 90 seconds), and only while the receipts mirror is on | Wait a cycle or two. Then check `field_ops.fieldops_sync.receipts_enabled` in ITS_Config and the receipts-mirror symptoms in [fieldops_sync.md](fieldops_sync.md) Symptom G. Still missing after several cycles with `fieldops_sync` errors in `ITS_Errors` — escalate |
-| One job's Material Receipts sheet has stopped updating, and `ITS_Errors` shows `material_receipts_column_backfill_failed` for it | The mirror cannot add the six void columns to that sheet, so it pauses that job's receipts rows until it can. Other jobs carry on, and nothing is lost | Follow [fieldops_sync.md](fieldops_sync.md) Symptom G for that code: wait a cycle or two, check the circuit breaker and the `fieldops_sync` heartbeat, escalate if it persists or names a permission refusal |
+| One job's Material Receipts sheet has stopped updating, and `ITS_Errors` shows `material_receipts_column_backfill_failed` for it — or `ITS_Review_Queue` has a `fieldops_receipt_permanent` row with `phase = back-fill` | The mirror cannot add the six void columns to that sheet, so it pauses that job's receipts rows until it can. Other jobs carry on, and nothing is lost | Follow [fieldops_sync.md](fieldops_sync.md) Symptom G for that code: wait a cycle or two, check the circuit breaker and the `fieldops_sync` heartbeat, escalate if it persists. The Review-Queue form is a permission refusal: escalate straight away |
 | Six new columns (`Entry Status` … `Superseded By`) appeared at the far right of a Material Receipts sheet | `material_receipts_columns_backfilled` — a sheet created before migration 0080 was brought up to date, once | Not a fault. Drag the columns if you prefer them elsewhere |
 | The weekly report screen shows a gold notice — "1 delivery row was replaced with the corrected entry." and/or "2 delivery rows were removed because their marks were voided." (the numbers vary) | Working as designed. The office curated that week's delivery list, and one or more of those rows came from a mark that has since been voided. Where the correct entry is a delivery dated inside the same week, it took the row's place; otherwise the row is left off the client's report | Not a fault — the notice is informational. Tick **Compile Now** on the week sheet so the PDF matches. If the week's report was already sent, see the escalation list |
 | A voided delivery still prints on a curated week of the Weekly Production Report | The row was curated **before** migration 0080 and carries no link back to its mark, so the void cannot find it | Open that week on the weekly report screen, **Remove** the row, tap **Save weekly report inputs**, then tick **Compile Now** |
-| "This line has deliveries recorded. Void them first, then remove the line." (`line_has_deliveries`) | A line with deliveries that still count cannot be removed — its deliveries would keep counting where nobody can see them | If the deliveries were mistakes, void each one, then remove the line. If they are real, the line stays on the list. See [Removing a line](#removing-a-line-and-the-removed-from-the-list-group) |
+| "This line has delivery marks recorded. Void them first, then remove the line." (`line_has_deliveries`) | A line with a delivery mark that still counts (a "Not delivered" report included) cannot be removed — its deliveries would keep counting where nobody can see them | If the deliveries were mistakes, void each one, then remove the line. If they are real, the line stays on the list. See [Removing a line](#removing-a-line-and-the-removed-from-the-list-group) |
 | A **Removed from the list** group appears on the Materials page | Removed lines that have delivery history — usually lines removed before the rule above, whose deliveries may still count. The group lists them with their history | Not a fault. The office decides whether those deliveries are real; a manager on the job (or an admin) can **Void** any that are not. The group has no mark or correction buttons by design |
 | A job's **Material List** Smartsheet has no **Part Number / Category / Expected Ship Date** columns | The sheet was created before those columns existed. The mirror back-fills them automatically on its next cycle for that job — a sheet's columns are fixed at create, so pre-existing sheets are topped up rather than rebuilt | Wait one sync cycle and re-open the sheet. `ITS_Errors` records `material_list_columns_backfilled` naming exactly what was added. If instead you see `material_list_column_backfill_failed` repeatedly, the top-up cannot write — escalate |
 | The new columns appear at the **far right**, not beside `Expected Date` | Deliberate. Back-filled columns can only be appended, so the creation schema appends them too — otherwise back-filled and newly-created sheets would show the same columns in a different order forever | Not a fault. Drag the columns in Smartsheet if you prefer them elsewhere; column order is display-only and the mirror does not depend on it |

@@ -33,8 +33,10 @@
 --
 -- CHANGED 0078 SEMANTICS (operator decision D5, 2026-10-21). 0078 says a curated WPR delivery
 -- row "survives any later change to the ledger". A VOID is the exception: a curated row that
--- carries a voided event's uuid is dropped at read time, and the screen says how many were
--- dropped. The stored snapshot is not rewritten. Curated rows saved before this migration carry
+-- carries a voided event's uuid is resolved at read time: REPLACED by the live tip of its
+-- correction chain when that tip counts and falls in the report week, otherwise DROPPED. The
+-- screen says how many rows were replaced and how many dropped. The stored snapshot is not
+-- rewritten. Curated rows saved before this migration carry
 -- no uuid and cannot be matched, so they stay until the office re-curates.
 --
 -- ORDER DEPENDENCY: apply to the live D1 BEFORE the Worker that reads these columns deploys.

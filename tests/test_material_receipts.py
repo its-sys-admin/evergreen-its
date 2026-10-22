@@ -402,6 +402,20 @@ def test_backfill_failure_warns_once_and_reports_false(sc):
     assert codes == ["material_receipts_column_backfill_failed"]
 
 
+@pytest.mark.parametrize("exc_name", [
+    "SmartsheetPermissionError", "SmartsheetNotFoundError", "SmartsheetValidationError",
+])
+def test_backfill_raises_the_permanent_refusals_for_the_caller_to_ticket(sc, exc_name):
+    # Retrying these every cycle behind a WARN would leave the job unmirrored for good with no
+    # ticket — they propagate, and the pass routes them to the Review Queue.
+    exc_type = getattr(material_receipts.smartsheet_client, exc_name)
+    sc["ensure_columns"].side_effect = exc_type("refused")
+    with pytest.raises(exc_type):
+        material_receipts.backfill_columns(4242, "Job One — Material Receipts")
+    codes = [c.kwargs.get("error_code") for c in sc["log"].call_args_list]
+    assert "material_receipts_column_backfill_failed" not in codes
+
+
 def test_backfill_reports_false_when_a_column_is_still_absent_after_it(sc):
     # The add "succeeded" but the post-condition does not hold — the same outcome for the upserts
     # (every write would KeyError), so the same one WARN and the same skip.

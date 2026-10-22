@@ -37,6 +37,13 @@ before the scope check can run.
 incident of a manager editing the wrong job's list; escalate to [CUTOVER-BLOCKING]-equivalent
 priority if manifest COMMIT misuse is ever observed.
 
+**2026-10-21 addendum (receipt void, D11):** `/delete` now refuses a line whose marks still count
+with `409 line_has_deliveries`. Because the route still has no job scope, that refusal is also a
+small cross-job ORACLE: a manager placed elsewhere can learn that a foreign job's line carries
+counting marks (a bare foreign line is, as before, simply removed). The adversarial review of the
+void PR confirmed both by probe. Same fix as above — resolving the line's job_id and calling
+`requireJobScope` before the batch closes the oracle and the write together.
+
 ## WPR site-photo registration captions carry no field-label prefix [OPEN 2026-08-27, low]
 
 The photos-pdf-grouping PR threads each photo FIELD's label through to the submission PDF
@@ -3308,7 +3315,8 @@ named: `tests/test_material_list.py`, `tests/test_material_receipts.py`,
 `safety_portal/src/pages/__tests__/JobMaterialsPage.test.tsx`,
 `safety_portal/src/pages/__tests__/WeeklyReportPage.test.tsx`. The void build's new tests use synthetic
 fixtures; it did not rewrite the existing ones (out of scope, and a rename touches many assertions).
-Rewriting the tree does not remove what git history already published.
+Rewriting the tree does not remove what git history already published. Beyond fixtures, an older
+entry in this file names a real-looking job in its prose; treat it in the same sweep.
 
 **Tag:** `tests`, `privacy`, `public-repo`.
 
@@ -3331,3 +3339,37 @@ nothing, so it fails safe, but it reads as a broken button.
 inline reason + Confirm + Cancel shape.
 
 Surfaced: 2026-10-21, receipt-event void build.
+
+## [OPEN 2026-10-21, low] Material List back-fill failure is not handled like the receipts one
+
+`progress_reports/material_receipts.backfill_columns` skips a job's upserts when its column top-up
+fails (one WARN per job per cycle instead of one ERROR per event) and raises a permanent refusal so
+`fieldops_sync` tickets it to the Review Queue. `material_list.backfill_columns` does neither: it
+always WARNs and returns, and every upsert that WRITES then raises `KeyError` at its per-line fence —
+one ERROR per changed line per cycle for one cause, with no ticket for a 403. Nothing is lost
+silently either way (every failure is logged), but the noise and the missing ticket differ.
+
+**Tag:** `field-ops`, `smartsheet`, `observability`.
+
+**Revisit when:** a Material List back-fill failure is first seen in `ITS_Errors`, or the next change
+to the Material List mirror — port the receipts handling (return a bool, skip the upserts on False,
+re-raise Permission/NotFound/Validation and route through the pass's permanent arm).
+
+Surfaced: 2026-10-21, receipt-void ops-stds re-review.
+
+## [OPEN 2026-10-21, low] The materials list read caps `removed_lines` and receipt events without saying so
+
+`GET /api/fieldops/expected-materials` reads `removed_lines` with `LIMIT 200` and receipt events with
+`LIMIT 2000 … ORDER BY e.line_id ASC`. Neither response carries a truncated flag (the weekly report
+has `deliveries_truncated`; this read has nothing). Under D11 a removed line's marks are voidable
+only if the read returns them, and the events cap drops the highest line ids first, so on a very
+large job a stranded mark could silently be un-voidable from the page. Production holds 2 removed
+lines and 3 marks, so this is theoretical today.
+
+**Tag:** `safety-portal`, `field-ops`, `no-silent-caps`.
+
+**Revisit when:** any job approaches 1,000 receipt events, or the next change to the list read — add
+`removed_lines_truncated` / `receipt_events_truncated` booleans (rows >= cap) and surface them on the
+page, or order the events read so marks on removed lines are never the ones dropped.
+
+Surfaced: 2026-10-21, receipt-void Worker security re-review.

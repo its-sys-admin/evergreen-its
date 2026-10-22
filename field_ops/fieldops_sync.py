@@ -1656,7 +1656,9 @@ def _mirror_material_list_pass(base_url: str, bearer: str) -> dict[str, int]:
     Read-load DID bite — one read per line drew Smartsheet rate limiting on 2026-10-21. The one
     exception is the cycle that back-fills a missing column: three reads of that sheet (the index,
     `ensure_columns`' pre-add duplicate-title re-read, and the first write's re-read of the
-    post-add map), once per sheet lifetime.
+    post-add map), once per sheet lifetime. A back-fill that keeps FAILING is not once: it costs
+    two reads of that sheet every cycle (the index and the pre-add re-read) plus its WARN's
+    ITS_Errors write, until the cause is fixed.
 
     No throttle: per-cycle change-only re-projection is simple-correct at current scale (an upsert
     with no change issues no write, and retire skips already-Removed rows). A throttle is a FUTURE
@@ -2374,13 +2376,26 @@ def _reconcile_job_receipts(
     # Schema top-up on the map the read just seeded — no API call unless a column is missing (P2).
     # False = the six 0080 void columns (or any tracked column) could not be made to exist. Every
     # upsert names all of them, so each would raise KeyError at `_resolve_cells` — one ERROR per
-    # event, every cycle, for ONE cause (P3). Skip the job's upserts instead: `backfill_columns`
-    # already WARNed (`material_receipts_column_backfill_failed`, the one signal), the cycle counts
-    # one error for the job, and the next cycle retries the back-fill. Nothing is lost — the ledger
+    # event, every cycle, for ONE cause (P3). Skip the job's upserts instead. A TRANSIENT failure
+    # already WARNed inside `backfill_columns` (`material_receipts_column_backfill_failed`, the one
+    # signal), counts one error for the job, and the next cycle retries. A PERMANENT one (most
+    # likely a 403: adding a column needs Admin on the sheet, so an Editor share reads fine and
+    # fails here) is ticketed like every other permanent arm of this pass — a WARN alone would
+    # leave the job unmirrored forever with nobody told. Nothing is lost either way: the ledger
     # re-projects in full once the columns exist.
-    if not material_receipts.backfill_columns(sheet_id, sheet_name):
-        out["errors"] += 1
-    else:
+    try:
+        backfilled = material_receipts.backfill_columns(sheet_id, sheet_name)
+        if not backfilled:
+            out["errors"] += 1
+    except (
+        smartsheet_client.SmartsheetPermissionError,
+        smartsheet_client.SmartsheetNotFoundError,
+        smartsheet_client.SmartsheetValidationError,
+    ) as exc:
+        backfilled = False
+        out["reviewed"] += 1
+        _route_receipt_to_review(job_id, project_name, exc, correlation_id, phase="back-fill")
+    if backfilled:
         _upsert_job_receipts(
             sheet_id, index, job_id, project_name, rows, correlation_id, out
         )
@@ -2543,7 +2558,10 @@ def _mirror_material_receipts_pass(base_url: str, bearer: str) -> dict[str, int]
     the folder's sheets) — listings, no rows. The one exception is the cycle that back-fills a
     missing column (every pre-0080 ledger, once): three reads of that sheet — the index,
     `ensure_columns`' pre-add duplicate-title re-read, and the back-fill's post-condition re-read
-    of the post-add map, which then serves the writes.
+    of the post-add map, which then serves the writes. A back-fill that keeps FAILING is not once:
+    a transient failure costs two reads of that sheet every cycle (the index and the pre-add
+    re-read) plus its WARN's ITS_Errors write; a permanent one costs the same plus a Review-Queue
+    row per cycle, as every permanent arm of this pass does.
 
     No throttle: per-cycle change-only re-projection is simple-correct at current scale. A throttle
     is a FUTURE optimization only if the one-read-per-job budget itself bites — do NOT build it now.

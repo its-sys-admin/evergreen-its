@@ -259,7 +259,7 @@ export const ERROR_COPY: Record<string, string> = {
   // 409 from remove-line (D11): a line whose deliveries still COUNT cannot leave the list — the
   // client report and the Receipts mirror would go on counting material against a line nobody
   // can see. Voiding is the way out, so the copy names it rather than offering a retry.
-  line_has_deliveries: "This line has deliveries recorded. Void them first, then remove the line.",
+  line_has_deliveries: "This line has delivery marks recorded. Void them first, then remove the line.",
   invalid_category: "The category is too long (64 characters max).",
   invalid_expected_ship_date: "That isn't a valid expected ship date.",
   invalid_bol_number: "The BOL / load number is too long (64 characters max).",

@@ -40,7 +40,7 @@ describe("void + correction error copy", () => {
 describe("remove-line refusal copy (D11)", () => {
   it("line_has_deliveries tells the office to void the marks first", () => {
     expect(errorText("line_has_deliveries")).toBe(
-      "This line has deliveries recorded. Void them first, then remove the line.",
+      "This line has delivery marks recorded. Void them first, then remove the line.",
     );
   });
 });

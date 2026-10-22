@@ -979,7 +979,7 @@ describe("JobMaterialsPage — removing a line that still has deliveries (S12)",
     fireEvent.click(getByLabelText(`Remove ${VTITLE}`));
     fireEvent.click(getByLabelText(`Confirm Remove ${VTITLE}`));
     const alert = await findByRole("alert");
-    expect(alert.textContent).toBe("This line has deliveries recorded. Void them first, then remove the line.");
+    expect(alert.textContent).toBe("This line has delivery marks recorded. Void them first, then remove the line.");
     // At the line, not only in the page banner thousands of pixels above a long BOM.
     expect(alert.closest(".dash-card")?.textContent ?? "").toContain(VTITLE);
   });

@@ -263,10 +263,11 @@ def backfill_columns(sheet_id: int, sheet_name: str) -> None:
     Best-effort on purpose. A back-fill failure (breaker OPEN, a 403, an API blip) must NOT stop the
     pass, and the next cycle retries. What it costs meanwhile: the retire still runs (it writes only
     `On List`, which every sheet has had since create), but each line upsert names every tracked
-    column, so on a sheet still missing one, every upsert raises `KeyError` out of `_resolve_cells`
-    and fails loudly at its per-line fence — never silently under-written. (The receipts mirror
-    skips its upserts on a failed back-fill, so its WARN is the job's one signal; this pass does not
-    — a known asymmetry, not a deliberate contrast.)
+    column, so on a sheet still missing one, every upsert that WRITES raises `KeyError` out of
+    `_resolve_cells` and fails loudly at its per-line fence — never silently under-written (a row
+    whose new columns are blank on both sides matches and writes nothing). (The receipts mirror
+    skips its upserts on a failed back-fill and tickets a permanent one, so its WARN is the job's
+    one signal; this pass does neither — a known asymmetry, tracked in docs/tech_debt.md.)
     """
     try:
         added = smartsheet_client.ensure_columns(sheet_id, BACKFILL_COLUMNS)
@@ -545,9 +546,10 @@ def read_row_cap_threshold() -> int:
 
     `get_setting` is an uncached full read of ITS_Config, so reading it inside `check_row_cap` cost
     every job its own ITS_Config read on every cycle — a second full-sheet read per job beside the
-    job's own index read. A failed read WARNs (the per-job check's own code) and returns
-    `DEFAULT_ROW_CAP_WARN`, so the tripwire stays armed at the conservative mark rather than being
-    skipped for the whole pass."""
+    job's own index read. It falls back to `DEFAULT_ROW_CAP_WARN`, so the tripwire stays armed at
+    the conservative mark rather than being skipped for the whole pass. An UNEXPECTED read error
+    WARNs; a missing row, an open breaker or a non-integer value falls back silently (that is
+    `_read_int_setting`'s pre-existing contract)."""
     try:
         return _read_int_setting(CFG_ROW_CAP_WARN, DEFAULT_ROW_CAP_WARN)
     except Exception as exc:  # noqa: BLE001 — advisory tripwire; never block the mirror

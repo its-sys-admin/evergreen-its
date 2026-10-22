@@ -42,47 +42,34 @@ The **Expected materials** section on a job's detail (Job Tracker) is the per-jo
 that job is waiting on (`job_expected_materials`, migration 0031). The office
 (`cap.materials.manage`, admin) adds rows — picked from this catalog or typed free-text — with
 qty/unit/expected date, edits them while still *Expected*, reorders, and removes (a soft
-deactivate; history is kept — refused with "This line has deliveries recorded. Void them first,
+deactivate; history is kept — refused with "This line has delivery marks recorded. Void them first,
 then remove the line." while any delivery on the line still counts; see `job_materials.md` →
 "Removing a line, and the "Removed from the list" group"). Once migration 0079 is applied
 **managers hold `cap.materials.manage` too**, so the same authoring controls are theirs. Field PMs
 (`cap.materials.receive` only) see the list **read-only**. Marking a delivery happens on the job's **Materials tracking** page — NOT in the
 daily form, whose per-line receipt controls were removed on 2026-08-11 (#74).
 
-### Manager receipt flow — the daily form (Material receipts M2)
+### The daily form's Expected materials card (Material receipts M2)
 
-The manager's action surface is the **Daily tab** (My Tasks → Daily): the daily report form
-(catalog-current `daily-report`; the `expected_materials` section is value-bearing since **v7**,
-which also files the day's snapshot into the PDF) carries an **Expected materials** section in
-the D.13 deliveries region that renders the placed job's pending rows live. Both actions are
-send-free D1 writes through the routes below (per-job ownership-scoped). Read
-`safety_portal/catalog.json` for the current form code — never this file.
+The daily report form's **Expected materials** section is a **summary card**, not a list of
+actions: one line giving the job's shape ("N lines on this job's list · N still expected · N
+flagged", or "No expected materials for this job.") and a **Materials tracking →** button. It
+files no form values of its own.
 
-> **Changed 2026-08-07 (materials tracking, migration 0059).** "Confirm receipt" is no longer a
-> one-shot flip. It appends to an **append-only delivery ledger** (`material_receipt_events`), so
-> **a repeat is a legal second event returning 200 — not a 409.** That guard was exactly what made
-> a *partial* delivery impossible to finish: one part number routinely arrives across several
-> truckloads. The line's displayed state is now a ROLLUP over the ledger and `qty_received` is the
-> running SUM. The fuller three-way mark (Delivered / Partially delivered / Not delivered, each
-> with a note) lives on the new per-job **Materials tracking** page — see
-> `docs/runbooks/job_materials.md`.
+**Every receipt action lives on the job's Materials tracking page**, not in the daily form:
+marking a line Delivered / Partially delivered / Not delivered, **Report a problem**, and voiding
+a mistaken mark. The daily form's per-line "Confirm receipt" and "Report a problem →" buttons were
+removed on 2026-08-11 (#74). See `docs/runbooks/job_materials.md` for that page. A Material
+Incident Report can still be filed directly from Submit-a-Form (category: Progress).
 
-- **Confirm receipt** — flips the row *Expected → Received* (stamps who/when) **and appends a
-  row to the form's "Deliveries Received" table** (`item_material` = the material,
-  `condition` = "Received OK", `notes` = qty/unit), so the **filed daily PDF records the
-  receipt**. The append behaves like typed work (draft-persisted; editable before submit).
-- **Report a problem →** — prompts for a short **required** note, flips the row
-  *Expected → Incident*, then opens the **Material Incident Report** form pre-filled with the
-  material and expected qty (job/date carried automatically). The incident files as its own
-  submission; the daily form shows a live "Filed ✓" indicator for it once filed.
-
-Received/Incident rows show status pills + who/when. A job with no expected materials shows
-"No expected materials for this job." — the daily form is otherwise unaffected. The
-material-incident form is also normally pickable from Submit-a-Form (category: Progress).
+Deliveries are an **append-only ledger** (`material_receipt_events`, migration 0059): a second mark
+on the same line is a legal second event, not a conflict, because one part number routinely
+arrives across several truckloads. A line's displayed state is a rollup over its marks that still
+count, and `qty_received` is their running sum.
 
 ### Incident → material line reference (M3 Slice 1)
 
-When a manager taps **Report a problem →** the deep-linked Material Incident Report carries a
+When a manager taps **Report a problem** on the Materials tracking page, the deep-linked Material Incident Report carries a
 hidden reference to the exact expected-materials line that was flagged (the line's stable
 `line_uuid`, a submission VALUE — NOT a visible form field). The Worker `/api/submit` validates it:
 a present `line_uuid` MUST be an **active** expected-materials line of **that job**, else the
@@ -97,14 +84,13 @@ page refresh dropped the in-memory reference). This ships **dark** on the existi
 |---|---|---|
 | "Expected materials" section missing from a job's detail | The account holds neither `cap.materials.manage` nor `cap.materials.receive` | Confirm the account's role in Accounts (all three roles hold `receive`; admin holds `manage`, and manager too once migration 0079 is applied — check `role_capabilities`, not this table) |
 | A field PM sees "Failed to load expected materials" on a job (403 `forbidden_job` in the network tab) | Anyone without `cap.jobtracker.manage` reads only the job they are **placed on** (`personnel.current_job`). `cap.materials.manage` does **not** bypass this — it was removed from the bypass set on 2026-08-25, so a manager holding it is still confined to their placement | Check the person's placement on the Personnel page / job crew — place them on the job (this is the designed scope, not a fault) |
-| "already_actioned" (409) when **flagging an incident** | The row was already flagged by someone else | No repair — the first flag won; the row shows who and when. Since 0059 this no longer applies to **confirming a receipt**: repeats are legal and append a second ledger event |
-| A manager confirms a receipt twice and BOTH are recorded | **Expected since 0059** — receipts are an append-only ledger so a partial delivery can be completed later | Not a fault. Open the job's **Materials tracking** page to see every event with its qty, note, date and who recorded it. If one of the two is a mistake, a manager on the job (or an admin) **voids** it there — it is kept, struck through, and stops counting (migration 0080); see `docs/runbooks/job_materials.md` → "Voiding a mistaken delivery mark". Marks are never deleted |
+| "already_actioned" (409) when **flagging an incident** | The row was already flagged by someone else | No repair — the first flag won; the row shows who and when. This never applies to **marking a delivery**: repeats are legal and append a second ledger event |
+| A delivery is marked twice on a line and BOTH are recorded | **Expected since 0059** — receipts are an append-only ledger so a partial delivery can be completed later | Not a fault. Open the job's **Materials tracking** page to see every event with its qty, note, date and who recorded it. If one of the two is a mistake, a manager on the job (or an admin) **voids** it there — it is kept, struck through, and stops counting (migration 0080); see `docs/runbooks/job_materials.md` → "Voiding a mistaken delivery mark". Marks are never deleted |
 | A row can't be edited ("not_editable", 409) | Received/incident rows are receipt **records** — content edits are locked | Expected behavior. If the record itself is wrong, escalate |
 | The catalog picker fails but free-text add works | The catalog read failed (transient) | Retry; if persistent check the Materials Catalog page loads |
 | The daily form shows "Couldn't load this job's expected materials" | A transient read failure — the form stays fillable (never silent) | Tap **Retry** next to the warning; if persistent, check the job's Expected materials section loads on the Job Tracker detail |
-| No "Expected materials" section in the manager's daily form | The job has no expected rows → the section shows the explicit empty copy; if even THAT is absent, the read failed (see the Retry warn) or the account isn't a placed manager | Confirm placement + that the office added expected rows on the job's detail |
-| "Confirm receipt" errors with "already received" | **Pre-0059 behaviour — should no longer occur** | If it is still seen, the deployed Worker predates migration 0059. Check the deploy; escalate if the deployed code is current |
-| The manager cancelled the incident prompt / form but the row already shows *Incident* | The flag lands **before** the incident form files (deliberate — the D1 record carries the note either way) | File the Material Incident Report from Submit-a-Form (it prefills nothing then, but job/date/details can be re-entered); the row's note already says what's wrong |
+| No "Expected materials" card in the manager's daily form | The job has no expected rows → the card shows "No expected materials for this job."; if even THAT is absent, the read failed (see the Retry warn) or the account isn't a placed manager | Confirm placement + that the office added expected rows on the job's detail |
+| The manager cancelled the incident prompt / form (Materials tracking → **Report a problem**) but the row already shows *Incident* | The flag lands **before** the incident form files (deliberate — the D1 record carries the note either way) | File the Material Incident Report from Submit-a-Form (it prefills nothing then, but job/date/details can be re-entered); the row's note already says what's wrong |
 | A valid Material Incident Report is refused **`422 unknown_material_line`** | The incident is trying to reference a specific expected-materials line, but that line is not an **active** line of the same job (it was removed/soft-deactivated, or the wrong job is selected) | Confirm the line still shows on the job's **Expected materials** list (active) and the incident's job matches. If the operator wants an **unlinked** incident, file the Material Incident Report from **Submit-a-Form** (no line reference is carried) — it files cleanly. If a genuinely active line is still refused, **escalate** |
 
 ### Escalate to Seth (Developer-Operator) — high-capability-class
