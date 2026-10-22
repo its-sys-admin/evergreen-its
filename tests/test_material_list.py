@@ -277,6 +277,95 @@ def test_find_line_row_matches_by_uuid(sc):
     assert material_list.find_line_row(9001, "") is None
 
 
+# ---- read-once index (D10: one full-sheet read per pass, not one per line) ----
+#
+# Before D10 every upsert re-read the WHOLE sheet to find its row — ~190 lines meant ~190 full reads
+# per 90 s cycle, which is what drove the production Smartsheet rate limiting. The pass now reads
+# the sheet ONCE and hands the index to every upsert + the retire.
+
+
+def _t_kwargs(line_uuid: str, **over: Any) -> dict[str, Any]:
+    """Synthetic upsert kwargs (no real job / vendor / person names — the repo is public)."""
+    return _upsert_kwargs(
+        line_uuid=line_uuid, line="TEST-PANEL-01", material="TEST-PANEL-01",
+        description="Test panel", **over,
+    )
+
+
+def test_read_line_index_is_one_read_and_first_match_wins(sc):
+    sc["get_rows"].return_value = [
+        {"_row_id": 1, material_list.COL_LINE_UUID: "u-t1"},
+        # A duplicate key (a historical race) — the pre-index linear scan returned the FIRST hit,
+        # so the index must too, or the same sheet would resolve to a different row after D10.
+        {"_row_id": 2, material_list.COL_LINE_UUID: " u-t1 "},
+        {"_row_id": 3, material_list.COL_LINE_UUID: ""},
+    ]
+    index = material_list.read_line_index(9001)
+    assert material_list.find_line_row(9001, "u-t1", index=index)["_row_id"] == 1
+    assert material_list.find_line_row(9001, "", index=index) is None
+    assert material_list.find_line_row(9001, "u-t9", index=index) is None
+    assert sc["get_rows"].call_count == 1  # a lookup through the index never re-reads
+    assert len(index.rows) == 3            # every row kept (retire + row-cap need them all)
+
+
+def test_upserts_through_one_index_read_the_sheet_once(sc):
+    sc["get_rows"].return_value = [_existing_row(**{material_list.COL_LINE_UUID: "u-t0"})]
+    index = material_list.read_line_index(9001)
+    for n in range(5):
+        material_list.upsert_line_row(9001, **_t_kwargs(f"u-t{n}"), index=index)
+    assert sc["get_rows"].call_count == 1
+
+
+def test_same_pass_repeat_key_updates_never_double_appends(sc):
+    sc["get_rows"].return_value = []
+    index = material_list.read_line_index(9001)
+    assert material_list.upsert_line_row(9001, **_t_kwargs("u-t1", qty="10"), index=index) == 555
+    # The SAME line again in the same pass, changed: the index learned the appended row, so this
+    # is an UPDATE of row 555 — not a second append the sheet would carry forever (never-delete).
+    assert material_list.upsert_line_row(9001, **_t_kwargs("u-t1", qty="12"), index=index) == 555
+    sc["add_rows"].assert_called_once()
+    sc["update_rows"].assert_called_once()
+    upd = sc["update_rows"].call_args.args[1][0]
+    assert upd["_row_id"] == 555 and upd[material_list.COL_QTY] == "12"
+    # ...and the index tracked the update too: an identical third pass-item is a no-op write.
+    material_list.upsert_line_row(9001, **_t_kwargs("u-t1", qty="12"), index=index)
+    assert sc["update_rows"].call_count == 1
+    assert sc["get_rows"].call_count == 1
+
+
+def test_add_with_unknown_outcome_is_not_re_added_in_the_same_pass(sc):
+    # A failed add_rows may have COMMITTED (no idempotency key — see smartsheet_client's
+    # _NON_IDEMPOTENT_SUFFIX). Re-adding the same key from the stale index could duplicate it, so a
+    # repeat of that key in the same pass refuses; the next pass's fresh read settles the truth.
+    sc["get_rows"].return_value = []
+    sc["add_rows"].side_effect = material_list.smartsheet_client.SmartsheetError("timed out")
+    index = material_list.read_line_index(9001)
+    with pytest.raises(material_list.smartsheet_client.SmartsheetError, match="timed out"):
+        material_list.upsert_line_row(9001, **_t_kwargs("u-t1"), index=index)
+    sc["add_rows"].side_effect = None
+    with pytest.raises(material_list.smartsheet_client.SmartsheetError, match="UNKNOWN"):
+        material_list.upsert_line_row(9001, **_t_kwargs("u-t1"), index=index)
+    sc["add_rows"].assert_called_once()
+    # A DIFFERENT key is unaffected by its neighbour's unknown outcome.
+    assert material_list.upsert_line_row(9001, **_t_kwargs("u-t2"), index=index) == 555
+
+
+def test_retire_through_the_index_reads_nothing_and_spares_appended_rows(sc):
+    sc["get_rows"].return_value = [
+        {"_row_id": 1, material_list.COL_LINE_UUID: "u-told",
+         material_list.COL_ON_LIST: material_list.ON_LIST_ACTIVE},
+    ]
+    index = material_list.read_line_index(9001)
+    material_list.upsert_line_row(9001, **_t_kwargs("u-tnew"), index=index)  # appended as 555
+    assert material_list.retire_removed(9001, {"u-tnew"}, index=index) == 1
+    upd = sc["update_rows"].call_args.args[1]
+    assert [u["_row_id"] for u in upd] == [1]  # only the stale row; the appended one is on the list
+    assert sc["get_rows"].call_count == 1
+    assert len(index.rows) == 2  # the row-cap count the pass reads includes the append
+    # The index reflects the retire, so it never contradicts the sheet it stands in for.
+    assert index.rows[0][material_list.COL_ON_LIST] == material_list.ON_LIST_REMOVED
+
+
 # ---- check_row_cap (§51 A5 row-cap watchdog, SoR-safe WARN-only) ----------
 
 

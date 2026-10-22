@@ -187,9 +187,10 @@ move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.
   Smartsheet reject (validation) on one job or event. Read the row's payload (`phase`, `event_uuid`),
   fix the offending data or sheet, and it re-projects next cycle (idempotent). **Low-class.**
 - `fieldops_receipts_fetch_failed`, `fieldops_receipts_sheet_transient`,
-  `fieldops_receipt_upsert_transient` → transient (Worker blip / Smartsheet 5xx); the ledger
-  re-projects every cycle, so these **self-heal** — no action unless sustained. **Low-class**
-  (re-run `sync_once` from a worktree venv to confirm recovery).
+  `fieldops_receipt_upsert_transient` → transient (Worker blip / Smartsheet 5xx / Smartsheet rate
+  limit — `SmartsheetRateLimitError`, errorCode 4003, which can arrive as an HTTP 403 and is still NOT
+  a permission fault); the ledger re-projects every cycle, so these **self-heal** — no action unless
+  sustained. **Low-class** (re-run `sync_once` from a worktree venv to confirm recovery).
 - `fieldops_receipt_row_malformed` → a WARN (never silent): an event row missing
   event_uuid/job_id/project_name is skipped. Usually a Worker payload defect — escalate if it
   persists.
