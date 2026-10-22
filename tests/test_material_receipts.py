@@ -473,7 +473,10 @@ def test_upsert_new_active_row_carries_active_and_blank_void_cells(sc):
     assert cells[material_receipts.COL_ENTRY_STATUS] == "Active"
     for col in _VOID_COLS[1:]:
         assert cells[col] == ""
-    assert "_formats" not in cells  # a counting mark keeps the sheet's ordinary formatting
+    # A counting mark is written with the sheet's ordinary look, stated explicitly — never gray. (It
+    # used to carry no format, and so inherited the gray of a voided row above it.)
+    assert material_receipts.FMT_VOIDED not in cells["_formats"].values()
+    assert cells["_formats"][material_receipts.COL_ENTRY_STATUS] == material_receipts.FMT_ACTIVE_PLAIN
 
 
 def test_upsert_voids_the_existing_row_in_place_never_deleted(sc):
@@ -518,6 +521,45 @@ def test_first_seen_voided_mark_is_appended_already_grayed(sc):
     cells = sc["add_rows"].call_args.args[1][0]
     assert cells[material_receipts.COL_ENTRY_STATUS] == "Voided"
     assert cells["_formats"][material_receipts.COL_EVENT_UUID] == material_receipts.FMT_VOIDED
+
+
+def test_an_appended_active_row_states_its_own_look_so_it_never_inherits_the_gray(sc):
+    # Smartsheet copies the row above's formatting onto an appended row, so a correction appended
+    # under a voided row came out gray (2026-10-22 live smoke). The add states the active look on
+    # every cell: Material its column look, the date its display, everything else a TRANSPARENT
+    # background — an empty descriptor field means "unchanged" and index 0 "none" did not clear it
+    # (both verified live), so the background must be index 3.
+    material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t2", supersedes="evt-t1"))
+    cells = sc["add_rows"].call_args.args[1][0]
+    fmts = dict(cells["_formats"])
+    assert set(fmts) == {k for k in cells if not k.startswith("_")}
+    assert fmts.pop(material_receipts.COL_MATERIAL) == material_receipts.FMT_PRIMARY
+    date_fmt = fmts.pop(material_receipts.COL_EVENT_DATE).split(",")
+    assert date_fmt[9] == "3" and date_fmt[16] == material_receipts.FMT_DATE.split(",")[16]
+    assert set(fmts.values()) == {material_receipts.FMT_ACTIVE_PLAIN}
+    assert material_receipts.FMT_ACTIVE_PLAIN.split(",")[9] == "3"
+    assert len(material_receipts.FMT_ACTIVE_PLAIN.split(",")) == len(material_receipts.FMT_VOIDED.split(","))
+
+
+def test_an_active_update_sends_no_format_so_office_formatting_survives(sc):
+    sc["get_rows"].return_value = [_t_row()]
+    material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t1", line_qty_received="120"))
+    upd = sc["update_rows"].call_args.args[1][0]
+    assert "_formats" not in upd
+
+
+def test_a_rejected_active_format_never_blocks_the_add(sc):
+    sc["add_rows"].side_effect = [
+        material_receipts.smartsheet_client.SmartsheetValidationError("HTTP 400 format"), [777],
+    ]
+    assert material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t9")) == 777
+    first, second = (c.args[1][0] for c in sc["add_rows"].call_args_list)
+    assert "_formats" in first and "_formats" not in second
+    assert second[material_receipts.COL_ENTRY_STATUS] == "Active"
+    assert any(
+        c.kwargs.get("error_code") == "material_receipts_active_format_failed"
+        for c in sc["log"].call_args_list
+    )
 
 
 def test_voided_row_steady_state_is_a_noop(sc):
@@ -590,7 +632,7 @@ def test_a_plain_write_failure_still_raises_after_the_format_fallback(sc):
 
 
 def test_an_active_row_write_failure_is_not_retried(sc):
-    # No format → nothing to fall back from: a counting row's rejected write raises at once.
+    # An active UPDATE sends no format → nothing to fall back from: its rejected write raises at once.
     sc["get_rows"].return_value = [_t_row()]
     sc["update_rows"].side_effect = material_receipts.smartsheet_client.SmartsheetValidationError("x")
     with pytest.raises(material_receipts.smartsheet_client.SmartsheetValidationError):

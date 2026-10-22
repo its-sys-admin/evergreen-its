@@ -610,13 +610,13 @@ The portal is the writer of record for jobs and field capture; fieldops-sync mir
 
 **Resolution class:** Operator-resolvable (solo)
 
-**Signals:** material_receipts_perjob_failed, material_receipts_row_cap_check_failed, material_receipts_sheet_race_duplicate, material_receipts_column_backfill_failed, material_receipts_columns_backfilled, material_receipts_void_format_failed, receipts pass gate off
+**Signals:** material_receipts_perjob_failed, material_receipts_row_cap_check_failed, material_receipts_sheet_race_duplicate, material_receipts_column_backfill_failed, material_receipts_columns_backfilled, material_receipts_void_format_failed, material_receipts_active_format_failed, receipts pass gate off
 
 **Checks (in order):**
 - The ledger re-projects IN FULL every cycle (no watermark), so a transient fault self-heals on the next cycle — wait one 90s cycle before treating it as a fault.
 - Two columns (Line Status, Line Qty Received) are DERIVED and legitimately change after an event lands; a moving value is the rollup working, not corruption. The six void columns (Entry Status, Voided By, Voided At, Void Reason, Supersedes, Superseded By) also fill in later when a mark is voided or corrected — a voided row stays on the sheet, grayed, and is never deleted.
 - Check field_ops.fieldops_sync.receipts_enabled, then the error journal for the codes above.
-- material_receipts_column_backfill_failed means that ONE job's receipts mirror is paused (no new rows, no void annotations) until the six void columns can be added; it repeats once per cycle and other jobs carry on. A permanent refusal (a 403 — adding a column needs Admin on the sheet) files a fieldops_receipt_permanent Review-Queue row with phase back-fill instead, and escalates. material_receipts_columns_backfilled (once per sheet) and material_receipts_void_format_failed (a void written but not grayed) are informational / cosmetic.
+- material_receipts_column_backfill_failed means that ONE job's receipts mirror is paused (no new rows, no void annotations) until the six void columns can be added; it repeats once per cycle and other jobs carry on. A permanent refusal (a 403 — adding a column needs Admin on the sheet) files a fieldops_receipt_permanent Review-Queue row with phase back-fill instead, and escalates. material_receipts_columns_backfilled (once per sheet) material_receipts_void_format_failed (a void written but not grayed) and material_receipts_active_format_failed (a new counting row written without its own colours, so it may look gray under a voided row — Entry Status is the truth) are informational / cosmetic.
 
 **Resolutions (in order):**
 - Gate off → flip it back on (no documented precondition); rows catch up on the first cycle back. A permanent per-event failure opens a Review Queue row naming the job — follow it.
