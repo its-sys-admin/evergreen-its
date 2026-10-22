@@ -259,8 +259,10 @@ move-failed repair in [hours_log_sync.md](hours_log_sync.md) Fault F.
   colour. **No action** for an occasional one; you may clear the row's background by hand. If
   **every** new mark logs it, **escalate to Seth** (a code change).
 - An **Active** row that looks gray (with no `material_receipts_active_format_failed` logged) → it
-  was added before the 2026-10-22 fix, directly under a voided row, and picked up that row's gray.
-  `Entry Status = Active` is the truth. **Low-class:** clear the row's background colour by hand.
+  was added before the 2026-10-22 fixes, directly under a voided row, and picked up that row's gray.
+  A row gray in its **Material** cell only dates from between the day's two fixes, and has the same
+  cause. `Entry Status = Active` is the truth. **Low-class:** clear the row's background colour by
+  hand (for the Material cell, set it back to the column's light green).
 - A `Kind` cell showing a raw lower-case value (e.g. `returned` rather than `Not delivered`) → the D1
   `kind` CHECK constraint grew a value the mirror's display map does not know. Harmless to the data
   (the mark is still recorded verbatim rather than blanked), but it means code and schema have

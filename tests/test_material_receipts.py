@@ -533,12 +533,30 @@ def test_an_appended_active_row_states_its_own_look_so_it_never_inherits_the_gra
     cells = sc["add_rows"].call_args.args[1][0]
     fmts = dict(cells["_formats"])
     assert set(fmts) == {k for k in cells if not k.startswith("_")}
-    assert fmts.pop(material_receipts.COL_MATERIAL) == material_receipts.FMT_PRIMARY
+    assert fmts.pop(material_receipts.COL_MATERIAL) == material_receipts.FMT_ACTIVE_PRIMARY
     date_fmt = fmts.pop(material_receipts.COL_EVENT_DATE).split(",")
     assert date_fmt[9] == "3" and date_fmt[16] == material_receipts.FMT_DATE.split(",")[16]
     assert set(fmts.values()) == {material_receipts.FMT_ACTIVE_PLAIN}
     assert material_receipts.FMT_ACTIVE_PLAIN.split(",")[9] == "3"
     assert len(material_receipts.FMT_ACTIVE_PLAIN.split(",")) == len(material_receipts.FMT_VOIDED.split(","))
+
+
+def test_an_appended_material_cell_never_sends_the_column_format_verbatim(sc):
+    # On an ADD, a cell format identical to the column's format is dropped and the inherited gray
+    # kept (2026-10-22 sandbox probe), so the Material add look must DIFFER from the column format as
+    # a string while rendering the same: FMT_PRIMARY with only fontFamily (field 0) stated as 0, the
+    # palette's Arial, which an empty field already renders.
+    material_receipts.upsert_receipt_row(9001, **_t_kwargs("evt-t3", supersedes="evt-t1"))
+    sent = sc["add_rows"].call_args.args[1][0]["_formats"][material_receipts.COL_MATERIAL]
+    column_fmt = next(
+        s["format"] for s in material_receipts.MATERIAL_RECEIPTS_STYLES
+        if s["title"] == material_receipts.COL_MATERIAL
+    )
+    assert sent != column_fmt
+    fields, primary = sent.split(","), material_receipts.FMT_PRIMARY.split(",")
+    assert len(fields) == len(primary)
+    assert fields[0] == "0" and primary[0] == ""
+    assert fields[1:] == primary[1:]
 
 
 def test_an_active_update_sends_no_format_so_office_formatting_survives(sc):
